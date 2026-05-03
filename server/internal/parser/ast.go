@@ -19,6 +19,17 @@ type UseDatabaseStatement struct {
 	DatabaseName string
 }
 
+type ShowDatabasesStatement struct{}
+
+type ShowTablesStatement struct {
+	DatabaseName string // empty means current session database
+}
+
+type DescribeTableStatement struct {
+	TableName    string
+	DatabaseName string // empty means current session database
+}
+
 type ColumnDef struct {
 	Name       string
 	DataType   string // INT, FLOAT, BOOL, TEXT, VARCHAR
@@ -39,6 +50,9 @@ type SelectStatement struct {
 	Columns   []string // empty means '*'
 	TableName string
 	Where     Expression
+	Limit     int
+	HasLimit  bool
+	CountAll  bool
 }
 
 type InsertStatement struct {
@@ -66,6 +80,9 @@ type DeleteStatement struct {
 func (*CreateDatabaseStatement) statementNode() {}
 func (*DropDatabaseStatement) statementNode()   {}
 func (*UseDatabaseStatement) statementNode()    {}
+func (*ShowDatabasesStatement) statementNode()  {}
+func (*ShowTablesStatement) statementNode()     {}
+func (*DescribeTableStatement) statementNode()  {}
 func (*CreateTableStatement) statementNode()    {}
 func (*DropTableStatement) statementNode()      {}
 func (*SelectStatement) statementNode()         {}
@@ -76,6 +93,9 @@ func (*DeleteStatement) statementNode()         {}
 func (*CreateDatabaseStatement) StatementType() string { return "CREATE_DATABASE" }
 func (*DropDatabaseStatement) StatementType() string   { return "DROP_DATABASE" }
 func (*UseDatabaseStatement) StatementType() string    { return "USE_DATABASE" }
+func (*ShowDatabasesStatement) StatementType() string  { return "SHOW_DATABASES" }
+func (*ShowTablesStatement) StatementType() string     { return "SHOW_TABLES" }
+func (*DescribeTableStatement) StatementType() string  { return "DESCRIBE_TABLE" }
 func (*CreateTableStatement) StatementType() string    { return "CREATE_TABLE" }
 func (*DropTableStatement) StatementType() string      { return "DROP_TABLE" }
 func (*SelectStatement) StatementType() string         { return "SELECT" }

@@ -3,6 +3,7 @@ package executor
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"pixeldb/internal/parser"
 	"pixeldb/internal/storage"
@@ -43,6 +44,83 @@ func (c *UseDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	*ctx.CurrentDB = c.stmt.DatabaseName
 	return &Result{Type: "message", Message: fmt.Sprintf("Using database '%s'.", c.stmt.DatabaseName)}, nil
+}
+
+type ShowDatabasesCommand struct {
+	stmt *parser.ShowDatabasesStatement
+}
+
+func (c *ShowDatabasesCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	names, err := ctx.Storage.ListDatabases()
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([][]string, 0, len(names))
+	for _, name := range names {
+		rows = append(rows, []string{name})
+	}
+	return &Result{Type: "rows", Columns: []string{"database"}, Rows: rows}, nil
+}
+
+type ShowTablesCommand struct {
+	stmt *parser.ShowTablesStatement
+}
+
+func (c *ShowTablesCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := resolveDatabase(ctx, c.stmt.DatabaseName)
+	if err != nil {
+		return nil, err
+	}
+
+	tables, err := ctx.Storage.ListTables(dbName)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([][]string, 0, len(tables))
+	for _, table := range tables {
+		rows = append(rows, []string{table.Name, fmt.Sprintf("%d", table.RowCount)})
+	}
+	return &Result{Type: "rows", Columns: []string{"table", "rows"}, Rows: rows}, nil
+}
+
+type DescribeTableCommand struct {
+	stmt *parser.DescribeTableStatement
+}
+
+func (c *DescribeTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := resolveDatabase(ctx, c.stmt.DatabaseName)
+	if err != nil {
+		return nil, err
+	}
+	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
+	}
+
+	schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, err
+	}
+
+	createdAt := ""
+	if !schema.CreatedAt.IsZero() {
+		createdAt = schema.CreatedAt.Format(time.RFC3339)
+	}
+	rows := make([][]string, 0, len(schema.Columns))
+	for _, column := range schema.Columns {
+		rows = append(rows, []string{
+			column.Name,
+			formatColumnType(column),
+			"YES",
+			createdAt,
+		})
+	}
+	return &Result{
+		Type:    "rows",
+		Columns: []string{"column", "type", "nullable", "created_at"},
+		Rows:    rows,
+	}, nil
 }
 
 type CreateTableCommand struct {
@@ -120,6 +198,32 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 
+	if c.stmt.CountAll {
+		count := 0
+		for _, row := range rows {
+			ok, err := evalExpr(c.stmt.Where, row, schema)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				count++
+			}
+		}
+		return &Result{
+			Type:    "rows",
+			Columns: []string{"count"},
+			Rows:    [][]string{{fmt.Sprintf("%d", count)}},
+		}, nil
+	}
+
+	if c.stmt.HasLimit && c.stmt.Limit == 0 {
+		return &Result{
+			Type:    "rows",
+			Columns: projectColumns,
+			Rows:    [][]string{},
+		}, nil
+	}
+
 	resultRows := make([][]string, 0, len(rows))
 	for _, row := range rows {
 		ok, err := evalExpr(c.stmt.Where, row, schema)
@@ -135,6 +239,9 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			projected[i] = valueToString(row[idx])
 		}
 		resultRows = append(resultRows, projected)
+		if c.stmt.HasLimit && len(resultRows) >= c.stmt.Limit {
+			break
+		}
 	}
 
 	return &Result{
@@ -342,6 +449,23 @@ func requireCurrentDB(ctx *ExecutionContext) (string, error) {
 		return "", fmt.Errorf("no active database selected; use USE <database>; first")
 	}
 	return *ctx.CurrentDB, nil
+}
+
+func resolveDatabase(ctx *ExecutionContext, requested string) (string, error) {
+	if strings.TrimSpace(requested) == "" {
+		return requireCurrentDB(ctx)
+	}
+	if !ctx.Storage.DatabaseExists(requested) {
+		return "", fmt.Errorf("database '%s' does not exist", requested)
+	}
+	return requested, nil
+}
+
+func formatColumnType(column storage.ColumnSchema) string {
+	if column.Type == "VARCHAR" && column.VarcharLen > 0 {
+		return fmt.Sprintf("VARCHAR(%d)", column.VarcharLen)
+	}
+	return column.Type
 }
 
 func resolveProjection(schema *storage.TableSchema, requested []string) ([]int, []string, error) {

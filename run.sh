@@ -6,7 +6,7 @@ PORT="${2:-5432}"
 DATA_DIR="./data"
 
 echo "╔════════════════════════════════════════╗"
-echo "║  PixelDB  - Entering the Dungeon...    ║"
+echo "║          PixelDB  is starting          ║"
 echo "╚════════════════════════════════════════╝"
 
 if [ ! -f "./build/pixeldb-server" ]; then

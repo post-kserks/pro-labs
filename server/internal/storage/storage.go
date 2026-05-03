@@ -24,6 +24,12 @@ type TableSchema struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 
+// TableInfo is lightweight metadata used by clients that browse a database.
+type TableInfo struct {
+	Name     string
+	RowCount int
+}
+
 // StorageEngine is the abstraction used by executor.
 type StorageEngine interface {
 	CreateDatabase(name string) error
@@ -34,10 +40,12 @@ type StorageEngine interface {
 	CreateTable(dbName string, schema TableSchema) error
 	DropTable(dbName, tableName string) error
 	TableExists(dbName, tableName string) bool
+	ListTables(dbName string) ([]TableInfo, error)
 	GetTableSchema(dbName, tableName string) (*TableSchema, error)
 
 	InsertRows(dbName, tableName string, rows []Row) (int, error)
 	SelectRows(dbName, tableName string) ([]Row, error)
+	CountRows(dbName, tableName string) (int, error)
 	UpdateRows(dbName, tableName string, indices []int, updates map[string]Value) (int, error)
 	DeleteRows(dbName, tableName string, indices []int) (int, error)
 }

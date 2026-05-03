@@ -72,6 +72,22 @@ func TestTableLifecycleAndDataOperations(t *testing.T) {
 		t.Fatalf("expected 2 inserted rows, got %d", inserted)
 	}
 
+	tables, err := store.ListTables("mydb")
+	if err != nil {
+		t.Fatalf("ListTables failed: %v", err)
+	}
+	if len(tables) != 1 || tables[0].Name != "heroes" || tables[0].RowCount != 2 {
+		t.Fatalf("unexpected table list: %#v", tables)
+	}
+
+	count, err := store.CountRows("mydb", "heroes")
+	if err != nil {
+		t.Fatalf("CountRows failed: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected row count 2, got %d", count)
+	}
+
 	rows, err := store.SelectRows("mydb", "heroes")
 	if err != nil {
 		t.Fatalf("SelectRows failed: %v", err)

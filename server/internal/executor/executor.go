@@ -53,6 +53,12 @@ func CommandFactory(stmt parser.Statement) (Command, error) {
 		return &DropDatabaseCommand{stmt: s}, nil
 	case *parser.UseDatabaseStatement:
 		return &UseDatabaseCommand{stmt: s}, nil
+	case *parser.ShowDatabasesStatement:
+		return &ShowDatabasesCommand{stmt: s}, nil
+	case *parser.ShowTablesStatement:
+		return &ShowTablesCommand{stmt: s}, nil
+	case *parser.DescribeTableStatement:
+		return &DescribeTableCommand{stmt: s}, nil
 	case *parser.CreateTableStatement:
 		return &CreateTableCommand{stmt: s}, nil
 	case *parser.DropTableStatement:

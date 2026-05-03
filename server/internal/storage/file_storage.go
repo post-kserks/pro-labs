@@ -118,6 +118,39 @@ func (s *FileStorageEngine) ListDatabases() ([]string, error) {
 	return names, nil
 }
 
+func (s *FileStorageEngine) ListTables(dbName string) ([]TableInfo, error) {
+	s.globalMu.RLock()
+	dbPath := s.dbDir(dbName)
+	if !dirExists(dbPath) {
+		s.globalMu.RUnlock()
+		return nil, fmt.Errorf("database '%s' does not exist", dbName)
+	}
+
+	entries, err := os.ReadDir(dbPath)
+	s.globalMu.RUnlock()
+	if err != nil {
+		return nil, fmt.Errorf("read database '%s' directory: %w", dbName, err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+
+	tables := make([]TableInfo, 0, len(names))
+	for _, name := range names {
+		count, err := s.CountRows(dbName, name)
+		if err != nil {
+			return nil, err
+		}
+		tables = append(tables, TableInfo{Name: name, RowCount: count})
+	}
+	return tables, nil
+}
+
 func (s *FileStorageEngine) CreateTable(dbName string, schema TableSchema) error {
 	s.globalMu.Lock()
 	defer s.globalMu.Unlock()
@@ -262,6 +295,22 @@ func (s *FileStorageEngine) SelectRows(dbName, tableName string) ([]Row, error) 
 	}
 
 	return rows, nil
+}
+
+func (s *FileStorageEngine) CountRows(dbName, tableName string) (int, error) {
+	lock := s.getTableLock(dbName, tableName)
+	lock.RLock()
+	defer lock.RUnlock()
+
+	schema, err := s.readSchema(dbName, tableName)
+	if err != nil {
+		return 0, err
+	}
+	data, err := s.readData(dbName, tableName, schema)
+	if err != nil {
+		return 0, err
+	}
+	return len(data.Rows), nil
 }
 
 func (s *FileStorageEngine) UpdateRows(dbName, tableName string, indices []int, updates map[string]Value) (int, error) {

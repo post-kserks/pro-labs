@@ -24,6 +24,11 @@ const (
 	TOKEN_DATABASE
 	TOKEN_TABLE
 	TOKEN_USE
+	TOKEN_SHOW
+	TOKEN_DATABASES
+	TOKEN_TABLES
+	TOKEN_DESCRIBE
+	TOKEN_LIMIT
 	TOKEN_AND
 	TOKEN_OR
 	TOKEN_NOT
@@ -300,31 +305,36 @@ func isDigit(ch rune) bool {
 }
 
 var keywords = map[string]TokenType{
-	"SELECT":   TOKEN_SELECT,
-	"INSERT":   TOKEN_INSERT,
-	"UPDATE":   TOKEN_UPDATE,
-	"DELETE":   TOKEN_DELETE,
-	"FROM":     TOKEN_FROM,
-	"INTO":     TOKEN_INTO,
-	"WHERE":    TOKEN_WHERE,
-	"SET":      TOKEN_SET,
-	"VALUES":   TOKEN_VALUES,
-	"CREATE":   TOKEN_CREATE,
-	"DROP":     TOKEN_DROP,
-	"DATABASE": TOKEN_DATABASE,
-	"TABLE":    TOKEN_TABLE,
-	"USE":      TOKEN_USE,
-	"AND":      TOKEN_AND,
-	"OR":       TOKEN_OR,
-	"NOT":      TOKEN_NOT,
-	"NULL":     TOKEN_NULL,
-	"TRUE":     TOKEN_TRUE,
-	"FALSE":    TOKEN_FALSE,
-	"INT":      TOKEN_INT,
-	"FLOAT":    TOKEN_FLOAT_TYPE,
-	"BOOL":     TOKEN_BOOL,
-	"TEXT":     TOKEN_TEXT,
-	"VARCHAR":  TOKEN_VARCHAR,
+	"SELECT":    TOKEN_SELECT,
+	"INSERT":    TOKEN_INSERT,
+	"UPDATE":    TOKEN_UPDATE,
+	"DELETE":    TOKEN_DELETE,
+	"FROM":      TOKEN_FROM,
+	"INTO":      TOKEN_INTO,
+	"WHERE":     TOKEN_WHERE,
+	"SET":       TOKEN_SET,
+	"VALUES":    TOKEN_VALUES,
+	"CREATE":    TOKEN_CREATE,
+	"DROP":      TOKEN_DROP,
+	"DATABASE":  TOKEN_DATABASE,
+	"TABLE":     TOKEN_TABLE,
+	"USE":       TOKEN_USE,
+	"SHOW":      TOKEN_SHOW,
+	"DATABASES": TOKEN_DATABASES,
+	"TABLES":    TOKEN_TABLES,
+	"DESCRIBE":  TOKEN_DESCRIBE,
+	"LIMIT":     TOKEN_LIMIT,
+	"AND":       TOKEN_AND,
+	"OR":        TOKEN_OR,
+	"NOT":       TOKEN_NOT,
+	"NULL":      TOKEN_NULL,
+	"TRUE":      TOKEN_TRUE,
+	"FALSE":     TOKEN_FALSE,
+	"INT":       TOKEN_INT,
+	"FLOAT":     TOKEN_FLOAT_TYPE,
+	"BOOL":      TOKEN_BOOL,
+	"TEXT":      TOKEN_TEXT,
+	"VARCHAR":   TOKEN_VARCHAR,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -364,6 +374,16 @@ func (t TokenType) String() string {
 		return "TABLE"
 	case TOKEN_USE:
 		return "USE"
+	case TOKEN_SHOW:
+		return "SHOW"
+	case TOKEN_DATABASES:
+		return "DATABASES"
+	case TOKEN_TABLES:
+		return "TABLES"
+	case TOKEN_DESCRIBE:
+		return "DESCRIBE"
+	case TOKEN_LIMIT:
+		return "LIMIT"
 	case TOKEN_AND:
 		return "AND"
 	case TOKEN_OR:

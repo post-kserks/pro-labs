@@ -61,6 +61,10 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 		return p.parseDrop()
 	case lexer.TOKEN_USE:
 		return p.parseUse()
+	case lexer.TOKEN_SHOW:
+		return p.parseShow()
+	case lexer.TOKEN_DESCRIBE:
+		return p.parseDescribe()
 	case lexer.TOKEN_SELECT:
 		return p.parseSelect()
 	case lexer.TOKEN_INSERT:
@@ -72,6 +76,50 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 	default:
 		return nil, p.expectedError("a statement", p.current())
 	}
+}
+
+func (p *sqlParser) parseShow() (Statement, error) {
+	p.advance() // SHOW
+
+	switch p.current().Type {
+	case lexer.TOKEN_DATABASES:
+		p.advance()
+		return &ShowDatabasesStatement{}, nil
+	case lexer.TOKEN_TABLES:
+		p.advance()
+		stmt := &ShowTablesStatement{}
+		if p.current().Type == lexer.TOKEN_FROM {
+			p.advance()
+			dbName, err := p.consumeIdent("database name")
+			if err != nil {
+				return nil, err
+			}
+			stmt.DatabaseName = dbName
+		}
+		return stmt, nil
+	default:
+		return nil, p.expectedError("DATABASES or TABLES", p.current())
+	}
+}
+
+func (p *sqlParser) parseDescribe() (Statement, error) {
+	p.advance() // DESCRIBE
+
+	tableName, err := p.consumeIdent("table name")
+	if err != nil {
+		return nil, err
+	}
+
+	stmt := &DescribeTableStatement{TableName: tableName}
+	if p.current().Type == lexer.TOKEN_FROM {
+		p.advance()
+		dbName, err := p.consumeIdent("database name")
+		if err != nil {
+			return nil, err
+		}
+		stmt.DatabaseName = dbName
+	}
+	return stmt, nil
 }
 
 func (p *sqlParser) parseCreate() (Statement, error) {
@@ -209,7 +257,20 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 	p.advance() // SELECT
 
 	columns := make([]string, 0, 8)
-	if p.current().Type == lexer.TOKEN_STAR {
+	countAll := false
+	if p.current().Type == lexer.TOKEN_IDENT && strings.EqualFold(p.current().Literal, "COUNT") && p.peek().Type == lexer.TOKEN_LPAREN {
+		p.advance() // COUNT
+		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+			return nil, err
+		}
+		if err := p.consume(lexer.TOKEN_STAR, "'*'"); err != nil {
+			return nil, err
+		}
+		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+			return nil, err
+		}
+		countAll = true
+	} else if p.current().Type == lexer.TOKEN_STAR {
 		p.advance()
 	} else {
 		list, err := p.parseIdentifierList("column name")
@@ -237,7 +298,23 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 		}
 	}
 
-	return &SelectStatement{Columns: columns, TableName: tableName, Where: where}, nil
+	stmt := &SelectStatement{Columns: columns, TableName: tableName, Where: where, CountAll: countAll}
+	if p.current().Type == lexer.TOKEN_LIMIT {
+		p.advance()
+		limitTok := p.current()
+		if limitTok.Type != lexer.TOKEN_INT_LIT {
+			return nil, p.expectedError("LIMIT value", limitTok)
+		}
+		limit, err := strconv.Atoi(limitTok.Literal)
+		if err != nil || limit < 0 {
+			return nil, p.syntaxError(limitTok, "LIMIT must be a non-negative integer")
+		}
+		p.advance()
+		stmt.Limit = limit
+		stmt.HasLimit = true
+	}
+
+	return stmt, nil
 }
 
 func (p *sqlParser) parseInsert() (Statement, error) {
@@ -579,6 +656,13 @@ func (p *sqlParser) current() lexer.Token {
 		return lexer.Token{Type: lexer.TOKEN_EOF}
 	}
 	return p.tokens[p.pos]
+}
+
+func (p *sqlParser) peek() lexer.Token {
+	if p.pos+1 >= len(p.tokens) {
+		return lexer.Token{Type: lexer.TOKEN_EOF}
+	}
+	return p.tokens[p.pos+1]
 }
 
 func (p *sqlParser) advance() {

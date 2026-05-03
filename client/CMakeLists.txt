@@ -28,7 +28,9 @@ target_link_libraries(pixeldb-shell PRIVATE pixeldb)
 
 target_include_directories(pixeldb-shell PRIVATE lib/include)
 
-install(TARGETS pixeldb pixeldb-shell
+add_subdirectory(tui)
+
+install(TARGETS pixeldb pixeldb-shell pixeldb-tui
     LIBRARY DESTINATION ${CMAKE_BINARY_DIR}/output
     RUNTIME DESTINATION ${CMAKE_BINARY_DIR}/output
     ARCHIVE DESTINATION ${CMAKE_BINARY_DIR}/output

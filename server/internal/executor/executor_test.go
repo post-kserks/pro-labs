@@ -52,6 +52,41 @@ func TestSelectWithoutWhere(t *testing.T) {
 	}
 }
 
+func TestSelectLimitAndCount(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	limited := executeSQL(t, session, "SELECT * FROM heroes LIMIT 2;")
+	if len(limited.Rows) != 2 {
+		t.Fatalf("expected 2 limited rows, got %d", len(limited.Rows))
+	}
+
+	counted := executeSQL(t, session, "SELECT COUNT(*) FROM heroes WHERE alive = TRUE;")
+	if len(counted.Rows) != 1 || counted.Rows[0][0] != "3" {
+		t.Fatalf("expected count 3, got %#v", counted.Rows)
+	}
+}
+
+func TestMetadataCommands(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	databases := executeSQL(t, session, "SHOW DATABASES;")
+	if len(databases.Rows) != 1 || databases.Rows[0][0] != "mydb" {
+		t.Fatalf("unexpected databases: %#v", databases.Rows)
+	}
+
+	tables := executeSQL(t, session, "SHOW TABLES FROM mydb;")
+	if len(tables.Rows) != 1 || tables.Rows[0][0] != "heroes" || tables.Rows[0][1] != "4" {
+		t.Fatalf("unexpected tables: %#v", tables.Rows)
+	}
+
+	schema := executeSQL(t, session, "DESCRIBE heroes FROM mydb;")
+	if len(schema.Rows) != 6 || schema.Rows[1][0] != "name" || schema.Rows[1][1] != "VARCHAR(100)" {
+		t.Fatalf("unexpected schema: %#v", schema.Rows)
+	}
+}
+
 func TestSelectWithWhereAndOrNot(t *testing.T) {
 	session := setupSession(t)
 	seedHeroes(t, session)

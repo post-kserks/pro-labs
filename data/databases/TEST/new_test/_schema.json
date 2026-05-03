@@ -1,0 +1,11 @@
+{
+  "name": "new_test",
+  "database": "TEST",
+  "columns": [
+    {
+      "name": "id",
+      "type": "INT"
+    }
+  ],
+  "created_at": "2026-05-03T13:48:24.196879Z"
+}

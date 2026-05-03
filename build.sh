@@ -71,12 +71,14 @@ cmake --build client/build -- -j"$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 
 mkdir -p client/build/output
 cp client/build/libpixeldb* client/build/output/ 2>/dev/null || true
 cp client/build/pixeldb-shell client/build/output/
+cp client/build/tui/pixeldb-tui client/build/output/
 
 cp client/build/output/libpixeldb* build/ 2>/dev/null || true
 cp client/build/output/pixeldb-shell build/
-echo "[OK] Client built: build/libpixeldb*, build/pixeldb-shell"
+cp client/build/output/pixeldb-tui build/
+echo "[OK] Client built: build/libpixeldb*, build/pixeldb-shell, build/pixeldb-tui"
 
 echo ""
 echo "╔════════════════════════════════╗"
-echo "║  [BUILD COMPLETE]  ⚔ ⚔ ⚔     ║"
+echo "║  [BUILD COMPLETE]  ⚔ ⚔ ⚔       ║"
 echo "╚════════════════════════════════╝"
