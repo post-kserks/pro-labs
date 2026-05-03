@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 enum class EditorState {
     Ready,
@@ -68,4 +68,4 @@ private:
     std::string queryWithCursor() const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

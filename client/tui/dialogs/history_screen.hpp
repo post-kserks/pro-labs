@@ -7,7 +7,7 @@
 
 #include <string>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 class HistoryScreen {
 public:
@@ -27,4 +27,4 @@ private:
     void clampSelection(const History& history);
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cctype>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 
@@ -138,4 +138,4 @@ void HistoryScreen::clampSelection(const History& history) {
     }
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

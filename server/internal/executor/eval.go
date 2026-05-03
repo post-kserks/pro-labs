@@ -5,8 +5,8 @@ import (
 	"math"
 	"strings"
 
-	"pixeldb/internal/parser"
-	"pixeldb/internal/storage"
+	"vaultdb/internal/parser"
+	"vaultdb/internal/storage"
 )
 
 func evalExpr(expr parser.Expression, row storage.Row, schema *storage.TableSchema) (bool, error) {

@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 struct TreeLine {
     std::string text;
@@ -19,4 +19,4 @@ public:
     ftxui::Element render(const std::vector<TreeLine>& lines) const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

@@ -1,6 +1,6 @@
 #include "dialogs/help_screen.hpp"
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 void HelpScreen::open() {
     open_ = true;
@@ -22,7 +22,7 @@ ftxui::Element HelpScreen::render() const {
     using namespace ftxui;
     return vbox({
                hbox({
-                   text("PIXEL DB HELP") | bold | color(Color::Yellow),
+                   text("VAULT DB HELP") | bold | color(Color::Yellow),
                    filler(),
                    text("[Esc] Close") | color(Color::GrayDark),
                }),
@@ -75,4 +75,4 @@ ftxui::Element HelpScreen::render() const {
            border | bgcolor(Color::Black) | size(WIDTH, GREATER_THAN, 68);
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

@@ -5,11 +5,11 @@
 
 #include <string>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 class ConnectionErrorScreen {
 public:
     ftxui::Element render(const std::string& host, int port, const std::string& message) const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

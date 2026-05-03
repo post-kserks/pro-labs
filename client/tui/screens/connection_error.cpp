@@ -1,6 +1,6 @@
 #include "screens/connection_error.hpp"
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 ftxui::Element ConnectionErrorScreen::render(const std::string& host, int port, const std::string& message) const {
     using namespace ftxui;
@@ -19,4 +19,4 @@ ftxui::Element ConnectionErrorScreen::render(const std::string& host, int port, 
            bgcolor(Color::Black);
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

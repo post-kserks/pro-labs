@@ -1,5 +1,5 @@
-#include "pixeldb/result.hpp"
+#include "vaultdb/result.hpp"
 
-namespace pixeldb {
+namespace vaultdb {
 // Result is a POD-like structure; implementation unit kept for stable build target.
 }

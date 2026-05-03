@@ -3,8 +3,8 @@ package executor
 import (
 	"testing"
 
-	"pixeldb/internal/parser"
-	"pixeldb/internal/storage"
+	"vaultdb/internal/parser"
+	"vaultdb/internal/storage"
 )
 
 func executeSQL(t *testing.T, session *Session, sql string) *Result {

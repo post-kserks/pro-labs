@@ -1,8 +1,8 @@
 package executor
 
 import (
-	"pixeldb/internal/parser"
-	"pixeldb/internal/storage"
+	"vaultdb/internal/parser"
+	"vaultdb/internal/storage"
 )
 
 type Session struct {

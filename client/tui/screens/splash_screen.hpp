@@ -4,11 +4,11 @@
 
 #include <string>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 class SplashScreen {
 public:
     ftxui::Element render(const std::string& host, int port) const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

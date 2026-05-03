@@ -2,7 +2,7 @@
 
 #include <ftxui/dom/elements.hpp>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 class MainScreenFrame {
 public:
@@ -13,4 +13,4 @@ public:
                           ftxui::Element status) const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

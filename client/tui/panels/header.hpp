@@ -4,7 +4,7 @@
 
 #include <string>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 class HeaderPanel {
 public:
@@ -14,4 +14,4 @@ public:
                           bool connected) const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

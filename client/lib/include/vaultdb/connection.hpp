@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <string>
 
-namespace pixeldb {
+namespace vaultdb {
 
 class Connection {
 public:
@@ -31,4 +31,4 @@ private:
     Result parseResponse(const std::string& json);
 };
 
-} // namespace pixeldb
+} // namespace vaultdb

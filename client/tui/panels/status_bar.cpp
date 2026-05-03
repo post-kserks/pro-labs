@@ -1,6 +1,6 @@
 #include "panels/status_bar.hpp"
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 
@@ -56,4 +56,4 @@ ftxui::Element StatusBar::render(FocusArea focus,
            bgcolor(Color::Black) | color(Color::White);
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

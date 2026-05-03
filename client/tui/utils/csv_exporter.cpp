@@ -2,7 +2,7 @@
 
 #include <sstream>
 
-namespace pixeldb::tui::utils {
+namespace vaultdb::tui::utils {
 
 namespace {
 
@@ -54,4 +54,4 @@ std::string toCsv(const std::vector<std::string>& columns,
     return out.str();
 }
 
-} // namespace pixeldb::tui::utils
+} // namespace vaultdb::tui::utils

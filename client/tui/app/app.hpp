@@ -12,7 +12,7 @@
 #include "panels/navigator.hpp"
 #include "panels/results.hpp"
 #include "panels/status_bar.hpp"
-#include "pixeldb/pixeldb.hpp"
+#include "vaultdb/vaultdb.hpp"
 #include "screens/connection_error.hpp"
 #include "screens/main_screen.hpp"
 #include "screens/splash_screen.hpp"
@@ -23,7 +23,7 @@
 
 #include <string>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 class App {
 public:
@@ -38,7 +38,7 @@ private:
     };
 
     Config config_;
-    pixeldb::Connection connection_;
+    vaultdb::Connection connection_;
     History history_;
 
     Mode mode_ = Mode::Splash;
@@ -73,7 +73,7 @@ private:
 
     void attemptConnect();
     void executeEditorQuery();
-    pixeldb::Result executeSql(const std::string& sql, std::string title, bool addHistory);
+    vaultdb::Result executeSql(const std::string& sql, std::string title, bool addHistory);
     void selectDatabase(const std::string& db);
     void previewTable(const std::string& db, const std::string& table);
     void showSchema(const std::string& db, const std::string& table);
@@ -82,8 +82,8 @@ private:
     void dropConfirmed();
     void refreshNavigator();
     void switchFocus();
-    void maybeUpdateActiveDbFromQuery(const std::string& sql, const pixeldb::Result& result);
+    void maybeUpdateActiveDbFromQuery(const std::string& sql, const vaultdb::Result& result);
     CompletionContext completionContext() const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

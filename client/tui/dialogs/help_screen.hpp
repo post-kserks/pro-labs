@@ -3,7 +3,7 @@
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 class HelpScreen {
 public:
@@ -16,4 +16,4 @@ private:
     bool open_ = false;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

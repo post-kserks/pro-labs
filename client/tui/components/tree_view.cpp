@@ -1,6 +1,6 @@
 #include "components/tree_view.hpp"
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 ftxui::Element TreeView::render(const std::vector<TreeLine>& lines) const {
     using namespace ftxui;
@@ -33,4 +33,4 @@ ftxui::Element TreeView::render(const std::vector<TreeLine>& lines) const {
     return vbox(std::move(rows));
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

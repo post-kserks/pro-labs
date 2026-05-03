@@ -15,7 +15,7 @@ if(NOT TARGET ftxui::screen)
     FetchContent_MakeAvailable(ftxui)
 endif()
 
-set(PIXELDB_TUI_SOURCES
+set(VAULTDB_TUI_SOURCES
     main.cpp
     app/app.cpp
     screens/splash_screen.cpp
@@ -43,18 +43,18 @@ set(PIXELDB_TUI_SOURCES
     utils/csv_exporter.cpp
 )
 
-add_executable(pixeldb-tui ${PIXELDB_TUI_SOURCES})
+add_executable(vaultdb-tui ${VAULTDB_TUI_SOURCES})
 
-target_include_directories(pixeldb-tui
+target_include_directories(vaultdb-tui
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib/include
 )
 
-target_link_libraries(pixeldb-tui
+target_link_libraries(vaultdb-tui
     PRIVATE
         ftxui::screen
         ftxui::dom
         ftxui::component
-        pixeldb
+        vaultdb
 )

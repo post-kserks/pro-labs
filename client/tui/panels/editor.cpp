@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cctype>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 
@@ -361,4 +361,4 @@ std::string EditorPanel::queryWithCursor() const {
     return visible;
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

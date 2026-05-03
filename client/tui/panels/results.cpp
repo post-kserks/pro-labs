@@ -5,7 +5,7 @@
 
 #include <algorithm>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 bool isCtrl(ftxui::Event event, char key) {
@@ -15,7 +15,7 @@ bool isCtrl(ftxui::Event event, char key) {
 }
 } // namespace
 
-void ResultsPanel::display(const pixeldb::Result& result, int durationMs, std::string title) {
+void ResultsPanel::display(const vaultdb::Result& result, int durationMs, std::string title) {
     result_ = result;
     durationMs_ = durationMs;
     title_ = std::move(title);
@@ -254,4 +254,4 @@ ftxui::Element ResultsPanel::renderFilterPopup() const {
            border | bgcolor(Color::Black) | size(WIDTH, GREATER_THAN, 42);
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

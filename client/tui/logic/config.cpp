@@ -7,12 +7,12 @@
 #include <regex>
 #include <sstream>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 
 std::filesystem::path configPath() {
-    return std::filesystem::path(utils::pixeldbDirectory()) / "config.json";
+    return std::filesystem::path(utils::vaultdbDirectory()) / "config.json";
 }
 
 std::string readFile(const std::filesystem::path& path) {
@@ -87,4 +87,4 @@ void Config::saveDefaultIfMissing() const {
         << "}\n";
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 ftxui::Element AutocompletePopup::render(const std::vector<std::string>& suggestions, int selected) const {
     using namespace ftxui;
@@ -40,4 +40,4 @@ ftxui::Element AutocompletePopup::render(const std::vector<std::string>& suggest
     return vbox(std::move(rows)) | border | color(Color::Cyan) | bgcolor(Color::Black);
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

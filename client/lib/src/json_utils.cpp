@@ -6,7 +6,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace pixeldb::json {
+namespace vaultdb::json {
 namespace {
 
 class Parser {
@@ -346,4 +346,4 @@ std::string valueToString(const Value& value) {
     return {};
 }
 
-} // namespace pixeldb::json
+} // namespace vaultdb::json

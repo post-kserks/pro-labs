@@ -2,7 +2,7 @@
 set -e
 
 echo "╔════════════════════════════════╗"
-echo "║  PixelDB Build System v1.0     ║"
+echo "║  VaultDB Build System v1.0     ║"
 echo "╚════════════════════════════════╝"
 
 OS="$(uname -s)"
@@ -58,25 +58,25 @@ echo "[OK] All dependencies present."
 
 mkdir -p build
 
-echo "[*] Building PixelDB server (Go)..."
+echo "[*] Building VaultDB server (Go)..."
 cd server
-GOCACHE="${GOCACHE:-/tmp/go-cache}" GOMODCACHE="${GOMODCACHE:-/tmp/go-mod-cache}" go build -o ../build/pixeldb-server ./cmd/pixeldb-server
+GOCACHE="${GOCACHE:-/tmp/go-cache}" GOMODCACHE="${GOMODCACHE:-/tmp/go-mod-cache}" go build -o ../build/vaultdb-server ./cmd/vaultdb-server
 cd ..
-echo "[OK] Server built: build/pixeldb-server"
+echo "[OK] Server built: build/vaultdb-server"
 
-echo "[*] Building PixelDB client (C++)..."
+echo "[*] Building VaultDB client (C++)..."
 cmake -S client -B client/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=. -Wno-dev
 cmake --build client/build -- -j"$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 4)"
 
 mkdir -p client/build/output
-cp client/build/libpixeldb* client/build/output/ 2>/dev/null || true
-cp client/build/pixeldb-shell client/build/output/
-cp client/build/tui/pixeldb-tui client/build/output/
+cp client/build/libvaultdb* client/build/output/ 2>/dev/null || true
+cp client/build/vaultdb-shell client/build/output/
+cp client/build/tui/vaultdb-tui client/build/output/
 
-cp client/build/output/libpixeldb* build/ 2>/dev/null || true
-cp client/build/output/pixeldb-shell build/
-cp client/build/output/pixeldb-tui build/
-echo "[OK] Client built: build/libpixeldb*, build/pixeldb-shell, build/pixeldb-tui"
+cp client/build/output/libvaultdb* build/ 2>/dev/null || true
+cp client/build/output/vaultdb-shell build/
+cp client/build/output/vaultdb-tui build/
+echo "[OK] Client built: build/libvaultdb*, build/vaultdb-shell, build/vaultdb-tui"
 
 echo ""
 echo "╔════════════════════════════════╗"

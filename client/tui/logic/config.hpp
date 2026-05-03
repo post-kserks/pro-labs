@@ -3,12 +3,12 @@
 #include <cstddef>
 #include <string>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 struct Config {
     std::string host = "127.0.0.1";
     int port = 5432;
-    std::string theme = "pixel";
+    std::string theme = "vault";
     std::size_t historySize = 500;
     bool autocomplete = true;
 
@@ -16,4 +16,4 @@ struct Config {
     void saveDefaultIfMissing() const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

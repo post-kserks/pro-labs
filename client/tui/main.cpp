@@ -8,7 +8,7 @@
 namespace {
 
 void printHelp(const char* binary) {
-    std::cout << "PixelDB TUI client\n"
+    std::cout << "VaultDB TUI client\n"
               << "\n"
               << "Usage:\n"
               << "  " << binary << " [--host HOST] [--port PORT]\n"
@@ -34,12 +34,12 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (arg == "--version") {
-            std::cout << "pixeldb-tui 1.0.0\n";
+            std::cout << "vaultdb-tui 1.0.0\n";
             return 0;
         }
     }
 
-    pixeldb::tui::Config config = pixeldb::tui::Config::load();
+    vaultdb::tui::Config config = vaultdb::tui::Config::load();
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    pixeldb::tui::App app(config);
+    vaultdb::tui::App app(config);
     app.run();
     return 0;
 }

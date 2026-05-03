@@ -7,12 +7,12 @@
 #include <regex>
 #include <sstream>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 
 std::filesystem::path historyPath() {
-    return std::filesystem::path(utils::pixeldbDirectory()) / "history.json";
+    return std::filesystem::path(utils::vaultdbDirectory()) / "history.json";
 }
 
 std::string escapeJson(const std::string& value) {
@@ -182,4 +182,4 @@ std::vector<std::size_t> History::filter(const std::string& needle) const {
     return indices;
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

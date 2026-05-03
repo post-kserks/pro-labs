@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 struct CreateTableColumnDraft {
     std::string name;
@@ -41,4 +41,4 @@ private:
     void cycleType(int direction);
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

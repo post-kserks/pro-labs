@@ -5,7 +5,7 @@
 
 #include <string>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 enum class DropTargetKind {
     Database,
@@ -52,4 +52,4 @@ private:
     bool submitted_ = false;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

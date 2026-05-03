@@ -5,7 +5,7 @@
 
 #include <string>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 class CreateDbDialog {
 public:
@@ -25,4 +25,4 @@ private:
     std::string name_;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

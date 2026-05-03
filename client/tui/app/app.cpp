@@ -7,12 +7,12 @@
 #include <regex>
 #include <thread>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 
-pixeldb::Result errorResult(const std::string& message) {
-    pixeldb::Result result;
+vaultdb::Result errorResult(const std::string& message) {
+    vaultdb::Result result;
     result.success = false;
     result.type = "error";
     result.message = message;
@@ -45,7 +45,7 @@ bool isCtrl(ftxui::Event event, char key) {
     return event == ftxui::Event::Special(std::string(1, static_cast<char>(upper - 'A' + 1)));
 }
 
-std::vector<std::string> columnsFromDescribe(const pixeldb::Result& result) {
+std::vector<std::string> columnsFromDescribe(const vaultdb::Result& result) {
     std::vector<std::string> columns;
     for (const auto& row : result.rows) {
         if (!row.empty()) {
@@ -310,12 +310,12 @@ void App::executeEditorQuery() {
     focus_ = FocusArea::Results;
 }
 
-pixeldb::Result App::executeSql(const std::string& sql, std::string title, bool addHistory) {
+vaultdb::Result App::executeSql(const std::string& sql, std::string title, bool addHistory) {
     const std::string normalized = utils::ensureSemicolon(sql);
     editor_.setState(EditorState::Running);
     const auto start = std::chrono::steady_clock::now();
 
-    pixeldb::Result result;
+    vaultdb::Result result;
     try {
         result = connection_.execute(normalized);
     } catch (const std::exception& ex) {
@@ -417,7 +417,7 @@ void App::switchFocus() {
     }
 }
 
-void App::maybeUpdateActiveDbFromQuery(const std::string& sql, const pixeldb::Result& result) {
+void App::maybeUpdateActiveDbFromQuery(const std::string& sql, const vaultdb::Result& result) {
     if (result.isError()) {
         return;
     }
@@ -435,4 +435,4 @@ CompletionContext App::completionContext() const {
     return context;
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

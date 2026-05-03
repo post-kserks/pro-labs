@@ -3,8 +3,8 @@ package executor
 import (
 	"fmt"
 
-	"pixeldb/internal/parser"
-	"pixeldb/internal/storage"
+	"vaultdb/internal/parser"
+	"vaultdb/internal/storage"
 )
 
 // Command is the Command pattern abstraction.

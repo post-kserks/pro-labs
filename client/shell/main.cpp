@@ -1,4 +1,4 @@
-#include "pixeldb/pixeldb.hpp"
+#include "vaultdb/vaultdb.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "╔══════════════════════════════════════════════╗\n";
-    std::cout << "║           ⚔  PIXEL DB  ⚔                    ║\n";
+    std::cout << "║           ⚔  VAULT DB  ⚔                    ║\n";
     std::cout << "║      A DATABASE FROM ANOTHER DIMENSION      ║\n";
     std::cout << "║                                              ║\n";
     std::cout << "║  Version 1.0.0  |  Press Ctrl+C to quit     ║\n";
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
 
     std::cout << "[QUEST LOG] Connecting to dungeon at " << host << ':' << port << "...\n";
 
-    pixeldb::Connection connection(host, port);
+    vaultdb::Connection connection(host, port);
     if (!connection.connect()) {
         std::cerr << "[GAME OVER]  Failed to connect to server.\n";
         return 1;
@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
 
     std::string query;
     while (true) {
-        std::cout << "PixelDB> " << std::flush;
+        std::cout << "VaultDB> " << std::flush;
         if (!std::getline(std::cin, query)) {
             break;
         }
@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
         }
 
         try {
-            const pixeldb::Result result = connection.execute(query);
+            const vaultdb::Result result = connection.execute(query);
 
             if (result.isError()) {
                 std::cout << "[GAME OVER]  " << result.message << "\n";

@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 
@@ -20,7 +20,7 @@ std::string tableLine(const NavigatorTable& table, bool last) {
 
 } // namespace
 
-void NavigatorPanel::refresh(pixeldb::Connection& connection) {
+void NavigatorPanel::refresh(vaultdb::Connection& connection) {
     lastError_.clear();
     try {
         const auto result = connection.execute("SHOW DATABASES;");
@@ -58,7 +58,7 @@ void NavigatorPanel::refresh(pixeldb::Connection& connection) {
 }
 
 bool NavigatorPanel::handleEvent(ftxui::Event event,
-                                 pixeldb::Connection& connection,
+                                 vaultdb::Connection& connection,
                                  const std::string& activeDb,
                                  const NavigatorCallbacks& callbacks) {
     using ftxui::Event;
@@ -297,7 +297,7 @@ void NavigatorPanel::clampSelection() {
     selectedIndex_ = std::max(0, std::min(selectedIndex_, count - 1));
 }
 
-void NavigatorPanel::loadTables(pixeldb::Connection& connection, std::size_t dbIndex) {
+void NavigatorPanel::loadTables(vaultdb::Connection& connection, std::size_t dbIndex) {
     if (dbIndex >= databases_.size()) {
         return;
     }
@@ -330,7 +330,7 @@ void NavigatorPanel::loadTables(pixeldb::Connection& connection, std::size_t dbI
     }
 }
 
-void NavigatorPanel::handleSelectedAction(pixeldb::Connection& connection,
+void NavigatorPanel::handleSelectedAction(vaultdb::Connection& connection,
                                           const std::string&,
                                           const NavigatorCallbacks& callbacks,
                                           bool previewTable) {
@@ -377,4 +377,4 @@ ftxui::Element NavigatorPanel::renderContextMenu(const std::string& title) const
     return vbox(std::move(rows)) | border | bgcolor(Color::Black);
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

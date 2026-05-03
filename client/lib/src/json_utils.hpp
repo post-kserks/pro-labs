@@ -4,7 +4,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace pixeldb::json {
+namespace vaultdb::json {
 
 enum class Type {
     Null,
@@ -32,4 +32,4 @@ Value parse(const std::string& input);
 std::string escape(const std::string& input);
 std::string valueToString(const Value& value);
 
-} // namespace pixeldb::json
+} // namespace vaultdb::json

@@ -1,6 +1,6 @@
 #include "screens/main_screen.hpp"
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 ftxui::Element MainScreenFrame::render(ftxui::Element header,
                                        ftxui::Element navigator,
@@ -26,4 +26,4 @@ ftxui::Element MainScreenFrame::render(ftxui::Element header,
            bgcolor(Color::Black);
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

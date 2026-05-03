@@ -1,7 +1,7 @@
 #pragma once
 
 #include "components/tree_view.hpp"
-#include "pixeldb/pixeldb.hpp"
+#include "vaultdb/vaultdb.hpp"
 
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 struct NavigatorTable {
     std::string name;
@@ -37,9 +37,9 @@ struct NavigatorCallbacks {
 
 class NavigatorPanel {
 public:
-    void refresh(pixeldb::Connection& connection);
+    void refresh(vaultdb::Connection& connection);
     bool handleEvent(ftxui::Event event,
-                     pixeldb::Connection& connection,
+                     vaultdb::Connection& connection,
                      const std::string& activeDb,
                      const NavigatorCallbacks& callbacks);
     ftxui::Element render(const std::string& activeDb, bool focused) const;
@@ -70,12 +70,12 @@ private:
 
     std::vector<VisibleItem> visibleItems() const;
     void clampSelection();
-    void loadTables(pixeldb::Connection& connection, std::size_t dbIndex);
-    void handleSelectedAction(pixeldb::Connection& connection,
+    void loadTables(vaultdb::Connection& connection, std::size_t dbIndex);
+    void handleSelectedAction(vaultdb::Connection& connection,
                               const std::string& activeDb,
                               const NavigatorCallbacks& callbacks,
                               bool previewTable);
     ftxui::Element renderContextMenu(const std::string& title) const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

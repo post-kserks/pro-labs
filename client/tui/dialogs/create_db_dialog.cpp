@@ -4,7 +4,7 @@
 
 #include <cctype>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 void CreateDbDialog::open() {
     open_ = true;
@@ -73,4 +73,4 @@ bool CreateDbDialog::consumeCanceled() {
     return value;
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

@@ -4,7 +4,7 @@
 
 #include <string>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 class Highlighter {
 public:
@@ -15,4 +15,4 @@ private:
     bool isKeyword(const std::string& word) const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

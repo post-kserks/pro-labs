@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 class RowDetail {
 public:
@@ -15,4 +15,4 @@ public:
                           int rowCount) const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

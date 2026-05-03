@@ -8,9 +8,9 @@ import (
 	"log"
 	"net"
 
-	"pixeldb/internal/executor"
-	"pixeldb/internal/parser"
-	"pixeldb/internal/storage"
+	"vaultdb/internal/executor"
+	"vaultdb/internal/parser"
+	"vaultdb/internal/storage"
 )
 
 type Request struct {
@@ -42,7 +42,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("[PixelDB] Server started on %s\n", addr)
+	fmt.Printf("[VaultDB] Server started on %s\n", addr)
 
 	for {
 		conn, err := ln.Accept()

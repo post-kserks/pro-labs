@@ -1,4 +1,4 @@
-#include "pixeldb/connection.hpp"
+#include "vaultdb/connection.hpp"
 
 #include "json_utils.hpp"
 
@@ -10,7 +10,7 @@
 #include <cstring>
 #include <stdexcept>
 
-namespace pixeldb {
+namespace vaultdb {
 
 Connection::Connection(const std::string& host, int port)
     : host_(host), port_(port), sockfd_(-1), requestId_(0) {}
@@ -172,4 +172,4 @@ Result Connection::parseResponse(const std::string& rawJson) {
     return result;
 }
 
-} // namespace pixeldb
+} // namespace vaultdb

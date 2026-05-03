@@ -2,7 +2,7 @@
 
 #include "utils/string_utils.hpp"
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 ftxui::Element RowDetail::render(const std::vector<std::string>& columns,
                                  const std::vector<std::string>& row,
@@ -26,4 +26,4 @@ ftxui::Element RowDetail::render(const std::vector<std::string>& columns,
     return vbox(std::move(lines)) | border | size(WIDTH, GREATER_THAN, 44) | bgcolor(Color::Black);
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

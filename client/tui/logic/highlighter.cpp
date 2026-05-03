@@ -6,7 +6,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 
@@ -130,4 +130,4 @@ bool Highlighter::isKeyword(const std::string& word) const {
     return kKeywords.find(utils::toUpper(word)) != kKeywords.end();
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

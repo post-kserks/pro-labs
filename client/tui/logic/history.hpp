@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 struct HistoryEntry {
     std::string timestamp;
@@ -31,4 +31,4 @@ private:
     std::vector<HistoryEntry> entries_;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

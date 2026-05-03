@@ -8,7 +8,7 @@
 #include <filesystem>
 #include <sstream>
 
-namespace pixeldb::tui::utils {
+namespace vaultdb::tui::utils {
 
 std::string trim(const std::string& value) {
     std::size_t begin = 0;
@@ -135,8 +135,8 @@ std::string homeDirectory() {
     return ".";
 }
 
-std::string pixeldbDirectory() {
-    const std::filesystem::path path = std::filesystem::path(homeDirectory()) / ".pixeldb";
+std::string vaultdbDirectory() {
+    const std::filesystem::path path = std::filesystem::path(homeDirectory()) / ".vaultdb";
     std::error_code ignored;
     std::filesystem::create_directories(path, ignored);
     return path.string();
@@ -169,4 +169,4 @@ std::string shellEscapeSingleQuoted(const std::string& value) {
     return escaped;
 }
 
-} // namespace pixeldb::tui::utils
+} // namespace vaultdb::tui::utils

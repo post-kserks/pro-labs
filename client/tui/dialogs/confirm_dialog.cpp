@@ -1,6 +1,6 @@
 #include "dialogs/confirm_dialog.hpp"
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 void ConfirmDropDialog::openDatabase(std::string database) {
     open_ = true;
@@ -123,7 +123,7 @@ bool ConfirmExitDialog::handleEvent(ftxui::Event event) {
 ftxui::Element ConfirmExitDialog::render() const {
     using namespace ftxui;
     return vbox({
-               text("Exit PixelDB TUI?") | bold | color(Color::Yellow),
+               text("Exit VaultDB TUI?") | bold | color(Color::Yellow),
                separator(),
                paragraph("The editor still contains a query."),
                text("[Enter/Y] Quit   [Esc/N] Cancel") | color(Color::GrayDark),
@@ -137,4 +137,4 @@ bool ConfirmExitDialog::consumeSubmitted() {
     return value;
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-namespace pixeldb::tui::utils {
+namespace vaultdb::tui::utils {
 
 std::string trim(const std::string& value);
 std::string toLower(std::string value);
@@ -19,8 +19,8 @@ bool isIdentifier(const std::string& value);
 std::string ensureSemicolon(std::string query);
 std::pair<std::size_t, std::size_t> wordBoundsAt(const std::string& value, std::size_t cursor);
 std::string homeDirectory();
-std::string pixeldbDirectory();
+std::string vaultdbDirectory();
 std::string isoTimestampNow();
 std::string shellEscapeSingleQuoted(const std::string& value);
 
-} // namespace pixeldb::tui::utils
+} // namespace vaultdb::tui::utils

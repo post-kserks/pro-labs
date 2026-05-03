@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 struct CompletionContext {
     std::vector<std::string> tables;
@@ -27,4 +27,4 @@ private:
     std::vector<std::string> keywordSuggestions(const std::string& prefix) const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

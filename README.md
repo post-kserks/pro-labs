@@ -1,11 +1,11 @@
-# PixelDB
+# VaultDB
 
-PixelDB is an educational SQL database with a retro RPG terminal style.
+VaultDB is an educational SQL database with a retro RPG terminal style.
 
 ## Components
 
 - `server/` — Go TCP server with SQL lexer/parser, command executor, and JSON file storage.
-- `client/` — C++17 shared library (`libpixeldb`), line shell (`pixeldb-shell`), and fullscreen FTXUI client (`pixeldb-tui`).
+- `client/` — C++17 shared library (`libvaultdb`), line shell (`vaultdb-shell`), and fullscreen FTXUI client (`vaultdb-tui`).
 
 ## Supported SQL
 
@@ -24,10 +24,10 @@ PixelDB is an educational SQL database with a retro RPG terminal style.
 
 Artifacts are placed into `build/`:
 
-- `build/pixeldb-server`
-- `build/libpixeldb*`
-- `build/pixeldb-shell`
-- `build/pixeldb-tui`
+- `build/vaultdb-server`
+- `build/libvaultdb*`
+- `build/vaultdb-shell`
+- `build/vaultdb-tui`
 
 ## Run server
 
@@ -39,15 +39,15 @@ Artifacts are placed into `build/`:
 ## Run shell client
 
 ```bash
-./build/pixeldb-shell
-./build/pixeldb-shell 127.0.0.1 5432
+./build/vaultdb-shell
+./build/vaultdb-shell 127.0.0.1 5432
 ```
 
 ## Run TUI client
 
 ```bash
-./build/pixeldb-tui
-./build/pixeldb-tui --host 127.0.0.1 --port 5432
+./build/vaultdb-tui
+./build/vaultdb-tui --host 127.0.0.1 --port 5432
 ```
 
 ## Tests

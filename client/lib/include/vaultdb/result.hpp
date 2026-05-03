@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace pixeldb {
+namespace vaultdb {
 
 struct Result {
     bool success = false;
@@ -20,4 +20,4 @@ struct Result {
     bool isError() const { return !success; }
 };
 
-} // namespace pixeldb
+} // namespace vaultdb

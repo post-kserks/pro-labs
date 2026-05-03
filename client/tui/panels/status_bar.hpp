@@ -4,7 +4,7 @@
 
 #include <string>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 enum class FocusArea {
     Navigator,
@@ -20,4 +20,4 @@ public:
                           bool connected) const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

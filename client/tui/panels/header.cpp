@@ -1,6 +1,6 @@
 #include "panels/header.hpp"
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 ftxui::Element HeaderPanel::render(const std::string& activeDb,
                                    const std::string& host,
@@ -10,7 +10,7 @@ ftxui::Element HeaderPanel::render(const std::string& activeDb,
     const std::string database_name = activeDb.empty() ? "<none>" : activeDb;
     const std::string status = connected ? "Connected" : "Disconnected";
     return hbox({
-               text(" PixelDB TUI ") | bold | color(Color::Yellow),
+               text(" VaultDB TUI ") | bold | color(Color::Yellow),
                separator(),
                text(" Database: " + database_name + " ") | color(Color::Cyan),
                separator(),
@@ -21,4 +21,4 @@ ftxui::Element HeaderPanel::render(const std::string& activeDb,
            bgcolor(Color::Black);
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 class TableView {
 public:
@@ -17,4 +17,4 @@ public:
                           int maxRows = 14) const;
 };
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

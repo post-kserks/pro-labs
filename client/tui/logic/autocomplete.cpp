@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <unordered_set>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 
@@ -84,4 +84,4 @@ std::vector<std::string> Autocomplete::keywordSuggestions(const std::string& pre
     return filterByPrefix(kKeywords, prefix);
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

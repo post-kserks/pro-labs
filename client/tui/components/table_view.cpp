@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 
@@ -109,4 +109,4 @@ ftxui::Element TableView::render(const std::vector<std::string>& columns,
     return vbox(std::move(lines));
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui

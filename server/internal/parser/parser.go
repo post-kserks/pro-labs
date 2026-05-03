@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"pixeldb/internal/lexer"
+	"vaultdb/internal/lexer"
 )
 
 // Parse parses one SQL statement terminated by ';'.

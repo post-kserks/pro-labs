@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cctype>
 
-namespace pixeldb::tui {
+namespace vaultdb::tui {
 
 namespace {
 
@@ -236,4 +236,4 @@ void CreateTableDialog::cycleType(int direction) {
     type = kTypes[static_cast<std::size_t>(index)];
 }
 
-} // namespace pixeldb::tui
+} // namespace vaultdb::tui
