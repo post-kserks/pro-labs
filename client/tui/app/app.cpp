@@ -168,7 +168,10 @@ bool App::handleEvent(ftxui::Event event) {
         historyScreen_.open();
         return true;
     }
-    if (event == Event::F5 || isCtrl(event, 'R')) {
+    if (event == Event::F5 || isCtrl(event, 'R') || 
+        event == ftxui::Event::Special("\x1b\x0d") || 
+        event == ftxui::Event::Special("\x1b\x0a") ||
+        event == ftxui::Event::Special("\x1b[13;5u")) {
         executeEditorQuery();
         return true;
     }

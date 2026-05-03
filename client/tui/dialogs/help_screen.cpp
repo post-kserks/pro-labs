@@ -39,7 +39,7 @@ ftxui::Element HelpScreen::render() const {
                    separator(),
                    vbox({
                        text("SQL SHORTCUTS") | bold | color(Color::Cyan),
-                       text("F5 / Ctrl+Enter  Execute"),
+                       text("F5 / ^R / Ctrl+Enter  Execute"),
                        text("Tab              Autocomplete"),
                        text("Ctrl+K           Clear editor"),
                        text("Ctrl+Z           Undo"),
