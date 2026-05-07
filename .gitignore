@@ -1,8 +1,8 @@
 build/
 client/build/
-data/*
-!data/databases/
-!data/databases/.gitkeep
+data/**/*
+!data/**/
+!data/**/.gitkeep
 *.dylib
 *.so
 *.a
