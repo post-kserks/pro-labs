@@ -14,6 +14,7 @@ struct Result {
 
     int affected = 0;
     std::string message;
+    std::string asOfNote;
 
     bool isRows() const { return type == "rows"; }
     bool isAffected() const { return type == "affected"; }

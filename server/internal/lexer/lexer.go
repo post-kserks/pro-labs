@@ -29,6 +29,14 @@ const (
 	TOKEN_TABLES
 	TOKEN_DESCRIBE
 	TOKEN_LIMIT
+	TOKEN_EXPLAIN
+	TOKEN_ANALYZE
+	TOKEN_AS
+	TOKEN_OF
+	TOKEN_TIMESTAMP
+	TOKEN_VERSION
+	TOKEN_HISTORY
+	TOKEN_KEY
 	TOKEN_AND
 	TOKEN_OR
 	TOKEN_NOT
@@ -324,6 +332,14 @@ var keywords = map[string]TokenType{
 	"TABLES":    TOKEN_TABLES,
 	"DESCRIBE":  TOKEN_DESCRIBE,
 	"LIMIT":     TOKEN_LIMIT,
+	"EXPLAIN":   TOKEN_EXPLAIN,
+	"ANALYZE":   TOKEN_ANALYZE,
+	"AS":        TOKEN_AS,
+	"OF":        TOKEN_OF,
+	"TIMESTAMP": TOKEN_TIMESTAMP,
+	"VERSION":   TOKEN_VERSION,
+	"HISTORY":   TOKEN_HISTORY,
+	"KEY":       TOKEN_KEY,
 	"AND":       TOKEN_AND,
 	"OR":        TOKEN_OR,
 	"NOT":       TOKEN_NOT,
@@ -384,6 +400,22 @@ func (t TokenType) String() string {
 		return "DESCRIBE"
 	case TOKEN_LIMIT:
 		return "LIMIT"
+	case TOKEN_EXPLAIN:
+		return "EXPLAIN"
+	case TOKEN_ANALYZE:
+		return "ANALYZE"
+	case TOKEN_AS:
+		return "AS"
+	case TOKEN_OF:
+		return "OF"
+	case TOKEN_TIMESTAMP:
+		return "TIMESTAMP"
+	case TOKEN_VERSION:
+		return "VERSION"
+	case TOKEN_HISTORY:
+		return "HISTORY"
+	case TOKEN_KEY:
+		return "KEY"
 	case TOKEN_AND:
 		return "AND"
 	case TOKEN_OR:

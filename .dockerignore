@@ -1,0 +1,19 @@
+# Build artifacts and runtime data
+build/
+client/
+data/
+
+# VCS
+.git/
+.gitignore
+.gitattributes
+
+# Docs and local scripts
+*.md
+*.sh
+
+# Local configs and temp files
+.vscode/
+.idea/
+*.tmp
+*.log

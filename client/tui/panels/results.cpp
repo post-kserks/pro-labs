@@ -151,11 +151,33 @@ bool ResultsPanel::handleEvent(ftxui::Event event, std::string& clipboard) {
     return false;
 }
 
+bool ResultsPanel::canOpenHistory() const {
+    if (!result_.isRows()) {
+        return false;
+    }
+    const auto rows = filteredRows();
+    if (rows.empty() || result_.columns.empty()) {
+        return false;
+    }
+    return selectedRow_ >= 0 && selectedRow_ < static_cast<int>(rows.size()) && !rows[static_cast<std::size_t>(selectedRow_)].empty();
+}
+
+std::string ResultsPanel::selectedPrimaryKey() const {
+    if (!canOpenHistory()) {
+        return "";
+    }
+    const auto rows = filteredRows();
+    return rows[static_cast<std::size_t>(selectedRow_)][0];
+}
+
 ftxui::Element ResultsPanel::render(bool focused) const {
     using namespace ftxui;
-    const std::string status = result_.isRows()
+    std::string status = result_.isRows()
         ? std::to_string(filteredRows().size()) + " rows | " + std::to_string(durationMs_) + "ms"
         : std::to_string(durationMs_) + "ms";
+    if (!result_.asOfNote.empty()) {
+        status += " | " + result_.asOfNote;
+    }
 
     Element content;
     if (result_.isRows()) {

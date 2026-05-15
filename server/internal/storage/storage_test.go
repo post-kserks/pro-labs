@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 func testSchema(dbName string) TableSchema {
@@ -189,5 +192,111 @@ func TestParallelInsertRows(t *testing.T) {
 	}
 	if len(rows) != 20 {
 		t.Fatalf("expected 20 rows, got %d", len(rows))
+	}
+}
+
+func TestTimeTravelVersionRead(t *testing.T) {
+	store := NewFileStorageEngine(t.TempDir())
+	if err := store.CreateDatabase("mydb"); err != nil {
+		t.Fatalf("CreateDatabase failed: %v", err)
+	}
+	if err := store.CreateTable("mydb", testSchema("mydb")); err != nil {
+		t.Fatalf("CreateTable failed: %v", err)
+	}
+
+	if _, err := store.InsertRows("mydb", "heroes", []Row{{int64(1), "Aragorn", int64(10), true}}); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+	if _, err := store.UpdateRows("mydb", "heroes", []int{0}, map[string]Value{"level": int64(11)}); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	current, err := store.ReadCurrentRows("mydb", "heroes")
+	if err != nil {
+		t.Fatalf("ReadCurrentRows failed: %v", err)
+	}
+	if len(current) != 1 || current[0][2].(int64) != 11 {
+		t.Fatalf("unexpected current rows: %#v", current)
+	}
+
+	history, err := store.RowHistory("mydb", "heroes", int64(1))
+	if err != nil {
+		t.Fatalf("RowHistory failed: %v", err)
+	}
+	if len(history) == 0 {
+		t.Fatalf("expected non-empty history")
+	}
+
+	older, err := store.ReadRowsAsOf("mydb", "heroes", history[0].CreatedTx)
+	if err != nil {
+		t.Fatalf("ReadRowsAsOf failed: %v", err)
+	}
+	if len(older) != 1 || older[0][2].(int64) != 10 {
+		t.Fatalf("unexpected historical rows: %#v", older)
+	}
+}
+
+func TestRowHistory(t *testing.T) {
+	store := NewFileStorageEngine(t.TempDir())
+	if err := store.CreateDatabase("mydb"); err != nil {
+		t.Fatalf("CreateDatabase failed: %v", err)
+	}
+	if err := store.CreateTable("mydb", testSchema("mydb")); err != nil {
+		t.Fatalf("CreateTable failed: %v", err)
+	}
+
+	if _, err := store.InsertRows("mydb", "heroes", []Row{{int64(1), "Aragorn", int64(10), true}}); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+	if _, err := store.UpdateRows("mydb", "heroes", []int{0}, map[string]Value{"name": "Elessar"}); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	history, err := store.RowHistory("mydb", "heroes", int64(1))
+	if err != nil {
+		t.Fatalf("RowHistory failed: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 versions, got %d", len(history))
+	}
+	if history[0].DeletedTx == 0 {
+		t.Fatalf("expected first version to be closed")
+	}
+	if history[1].DeletedTx != 0 {
+		t.Fatalf("expected last version to be current")
+	}
+}
+
+func TestWALRecoveryAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	store := NewFileStorageEngine(root)
+	if err := store.CreateDatabase("mydb"); err != nil {
+		t.Fatalf("CreateDatabase failed: %v", err)
+	}
+	if err := store.CreateTable("mydb", testSchema("mydb")); err != nil {
+		t.Fatalf("CreateTable failed: %v", err)
+	}
+	if _, err := store.InsertRows("mydb", "heroes", []Row{{int64(1), "Aragorn", int64(10), true}}); err != nil {
+		t.Fatalf("InsertRows failed: %v", err)
+	}
+
+	// Simulate crash: keep WAL entries by rewriting a copy and avoid checkpoint.
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	walPath := filepath.Join(root, "wal", "vaultdb.wal")
+	if _, err := os.Stat(walPath); err != nil {
+		t.Fatalf("expected wal file: %v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	store2 := NewFileStorageEngine(root)
+	rows, err := store2.ReadCurrentRows("mydb", "heroes")
+	if err != nil {
+		t.Fatalf("ReadCurrentRows failed: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row after restart, got %d", len(rows))
 	}
 }

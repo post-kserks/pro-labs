@@ -50,3 +50,34 @@ func TestLexerStringLiteral(t *testing.T) {
 		}
 	}
 }
+
+func TestLexerExplainAndTimeTravelTokens(t *testing.T) {
+	sql := "EXPLAIN ANALYZE SELECT * FROM heroes AS OF TIMESTAMP '2025-08-01 12:00:00' WHERE id = 1;"
+	l := New(sql)
+
+	want := []TokenType{
+		TOKEN_EXPLAIN,
+		TOKEN_ANALYZE,
+		TOKEN_SELECT,
+		TOKEN_STAR,
+		TOKEN_FROM,
+		TOKEN_IDENT,
+		TOKEN_AS,
+		TOKEN_OF,
+		TOKEN_TIMESTAMP,
+		TOKEN_STRING_LIT,
+		TOKEN_WHERE,
+		TOKEN_IDENT,
+		TOKEN_EQ,
+		TOKEN_INT_LIT,
+		TOKEN_SEMICOLON,
+		TOKEN_EOF,
+	}
+
+	for i, tokenType := range want {
+		tok := l.NextToken()
+		if tok.Type != tokenType {
+			t.Fatalf("token[%d]: expected %s, got %s (%q)", i, tokenType, tok.Type, tok.Literal)
+		}
+	}
+}

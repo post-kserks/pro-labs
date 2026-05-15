@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -187,5 +189,59 @@ func TestInsertWrongValuesCount(t *testing.T) {
 	_, err = session.Execute(stmt)
 	if err == nil {
 		t.Fatal("expected insert error for wrong values count")
+	}
+}
+
+func TestExplainAnalyze(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	result := executeSQL(t, session, "EXPLAIN ANALYZE SELECT * FROM heroes WHERE alive = TRUE;")
+	if result.Type != "message" {
+		t.Fatalf("expected message result, got %s", result.Type)
+	}
+	if !strings.Contains(result.Message, "QUERY PLAN") {
+		t.Fatalf("expected query plan output, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "Rows matched") {
+		t.Fatalf("expected stats in explain analyze output, got: %s", result.Message)
+	}
+}
+
+func TestTimeTravelAsOf(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "INSERT INTO heroes VALUES (1, 'Aragorn', 10, TRUE, 9.8, 'King');")
+
+	time.Sleep(10 * time.Millisecond)
+	marker := time.Now().UTC().Format(time.RFC3339Nano)
+	time.Sleep(10 * time.Millisecond)
+
+	executeSQL(t, session, "UPDATE heroes SET level = 11 WHERE id = 1;")
+
+	current := executeSQL(t, session, "SELECT level FROM heroes WHERE id = 1;")
+	if len(current.Rows) != 1 || current.Rows[0][0] != "11" {
+		t.Fatalf("expected current level=11, got %#v", current.Rows)
+	}
+
+	historical := executeSQL(t, session, "SELECT level FROM heroes AS OF TIMESTAMP '"+marker+"' WHERE id = 1;")
+	if len(historical.Rows) != 1 || historical.Rows[0][0] != "10" {
+		t.Fatalf("expected historical level=10, got %#v", historical.Rows)
+	}
+	if historical.AsOfNote == "" {
+		t.Fatalf("expected as_of_note in result")
+	}
+}
+
+func TestHistoryCommand(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "INSERT INTO heroes VALUES (1, 'Aragorn', 10, TRUE, 9.8, 'King');")
+	executeSQL(t, session, "UPDATE heroes SET level = 11 WHERE id = 1;")
+
+	history := executeSQL(t, session, "HISTORY heroes KEY 1;")
+	if history.Type != "rows" {
+		t.Fatalf("expected rows result, got %s", history.Type)
+	}
+	if len(history.Rows) < 2 {
+		t.Fatalf("expected at least 2 history rows, got %d", len(history.Rows))
 	}
 }

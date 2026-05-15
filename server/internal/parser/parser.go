@@ -65,6 +65,10 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 		return p.parseShow()
 	case lexer.TOKEN_DESCRIBE:
 		return p.parseDescribe()
+	case lexer.TOKEN_EXPLAIN:
+		return p.parseExplain()
+	case lexer.TOKEN_HISTORY:
+		return p.parseHistory()
 	case lexer.TOKEN_SELECT:
 		return p.parseSelect()
 	case lexer.TOKEN_INSERT:
@@ -76,6 +80,53 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 	default:
 		return nil, p.expectedError("a statement", p.current())
 	}
+}
+
+func (p *sqlParser) parseExplain() (Statement, error) {
+	p.advance() // EXPLAIN
+
+	analyze := false
+	if p.current().Type == lexer.TOKEN_ANALYZE {
+		analyze = true
+		p.advance()
+	}
+
+	stmt, err := p.parseSelect()
+	if err != nil {
+		return nil, err
+	}
+
+	selectStmt, ok := stmt.(*SelectStatement)
+	if !ok {
+		return nil, p.expectedError("SELECT statement after EXPLAIN", p.current())
+	}
+
+	return &ExplainStatement{
+		Inner:   selectStmt,
+		Analyze: analyze,
+	}, nil
+}
+
+func (p *sqlParser) parseHistory() (Statement, error) {
+	p.advance() // HISTORY
+
+	tableName, err := p.consumeIdent("table name")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_KEY, "KEY"); err != nil {
+		return nil, err
+	}
+
+	key, err := p.parseLiteralValue()
+	if err != nil {
+		return nil, err
+	}
+
+	return &HistoryStatement{
+		TableName: tableName,
+		Key:       key,
+	}, nil
 }
 
 func (p *sqlParser) parseShow() (Statement, error) {
@@ -289,6 +340,42 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 		return nil, err
 	}
 
+	var asOf *AsOfClause
+	switch p.current().Type {
+	case lexer.TOKEN_AS:
+		p.advance() // AS
+		if err := p.consume(lexer.TOKEN_OF, "OF"); err != nil {
+			return nil, err
+		}
+		if err := p.consume(lexer.TOKEN_TIMESTAMP, "TIMESTAMP"); err != nil {
+			return nil, err
+		}
+		tsToken := p.current()
+		if tsToken.Type != lexer.TOKEN_STRING_LIT {
+			return nil, p.expectedError("timestamp string literal", tsToken)
+		}
+		p.advance()
+		asOf = &AsOfClause{
+			Timestamp:  tsToken.Literal,
+			UseVersion: false,
+		}
+	case lexer.TOKEN_VERSION:
+		p.advance()
+		verTok := p.current()
+		if verTok.Type != lexer.TOKEN_INT_LIT {
+			return nil, p.expectedError("VERSION number", verTok)
+		}
+		ver, err := strconv.ParseUint(verTok.Literal, 10, 64)
+		if err != nil {
+			return nil, p.syntaxError(verTok, "VERSION must be a positive integer")
+		}
+		p.advance()
+		asOf = &AsOfClause{
+			Version:    ver,
+			UseVersion: true,
+		}
+	}
+
 	var where Expression
 	if p.current().Type == lexer.TOKEN_WHERE {
 		p.advance()
@@ -298,7 +385,13 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 		}
 	}
 
-	stmt := &SelectStatement{Columns: columns, TableName: tableName, Where: where, CountAll: countAll}
+	stmt := &SelectStatement{
+		Columns:   columns,
+		TableName: tableName,
+		Where:     where,
+		CountAll:  countAll,
+		AsOf:      asOf,
+	}
 	if p.current().Type == lexer.TOKEN_LIMIT {
 		p.advance()
 		limitTok := p.current()

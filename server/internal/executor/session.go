@@ -21,3 +21,7 @@ func (s *Session) Execute(stmt parser.Statement) (*Result, error) {
 func (s *Session) CurrentDatabase() string {
 	return s.currentDB
 }
+
+func (s *Session) SetCurrentDatabase(name string) {
+	s.currentDB = name
+}

@@ -59,6 +59,7 @@ ftxui::Element HelpScreen::render() const {
                    vbox({
                        text("RESULTS") | bold | color(Color::Cyan),
                        text("e         Expand row"),
+                       text("H         Row history"),
                        text("c/C       Copy row/all CSV"),
                        text("f         Filter results"),
                        text("h/l       Horizontal scroll"),

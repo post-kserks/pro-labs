@@ -139,6 +139,9 @@ Result Connection::parseResponse(const std::string& rawJson) {
     if (const json::Value* message = findField("message"); message != nullptr && message->type == json::Type::String) {
         result.message = message->stringValue;
     }
+    if (const json::Value* asOf = findField("as_of_note"); asOf != nullptr && asOf->type == json::Type::String) {
+        result.asOfNote = asOf->stringValue;
+    }
 
     if (const json::Value* columns = findField("columns"); columns != nullptr && columns->isArray()) {
         result.columns.reserve(columns->arrayValue.size());

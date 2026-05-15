@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  vaultdb:
+    image: vaultdb/vaultdb:1.0.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: "1.0.0"
+    container_name: vaultdb
+    restart: unless-stopped
+
+    ports:
+      - "${VAULTDB_HOST:-127.0.0.1}:5432:5432"
+      - "${VAULTDB_HOST:-127.0.0.1}:8080:8080"
+      - "127.0.0.1:5433:5433"
+
+    volumes:
+      - vaultdb-data:/data
+      - ./vaultdb.yaml:/etc/vaultdb/vaultdb.yaml:ro
+
+    environment:
+      VAULTDB_LOG_LEVEL: "${VAULTDB_LOG_LEVEL:-info}"
+      VAULTDB_AUTH_ENABLED: "${VAULTDB_AUTH_ENABLED:-true}"
+      VAULTDB_API_TOKENS: "${VAULTDB_API_TOKENS:-vdb_sk_local_dev}"
+
+    healthcheck:
+      test: ["/vaultdb-server", "--health-check", "--monitor-port", "5433"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+volumes:
+  vaultdb-data:
+    driver: local

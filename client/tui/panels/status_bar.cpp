@@ -11,7 +11,7 @@ std::string shortcuts(FocusArea focus) {
     case FocusArea::Editor:
         return "[Tab]Switch/Complete [F5/^R]Run [^K]Clear [^Z]Undo [Up/Down]History";
     case FocusArea::Results:
-        return "[Tab]Switch [Up/Down]Scroll [e]Expand [c]Copy [C]CopyAll [f]Filter [PgUp/^U]Page";
+        return "[Tab]Switch [Up/Down]Scroll [e]Expand [H]History [c]Copy [C]CopyAll [f]Filter [PgUp/^U]Page";
     }
     return "";
 }

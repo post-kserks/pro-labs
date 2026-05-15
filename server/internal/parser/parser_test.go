@@ -20,6 +20,11 @@ func TestParseValidStatements(t *testing.T) {
 		"SELECT id, name FROM heroes WHERE level > 5;",
 		"SELECT * FROM heroes WHERE alive = TRUE AND level >= 3;",
 		"SELECT * FROM heroes WHERE NOT (level < 2) OR name = 'Gimli';",
+		"SELECT * FROM heroes VERSION 5;",
+		"SELECT * FROM heroes AS OF TIMESTAMP '2025-08-01 12:00:00';",
+		"EXPLAIN SELECT * FROM heroes;",
+		"EXPLAIN ANALYZE SELECT * FROM heroes WHERE level > 5;",
+		"HISTORY heroes KEY 1;",
 		"INSERT INTO heroes VALUES (1, 'Aragorn', 10);",
 		"INSERT INTO heroes (id, name) VALUES (1, 'test'), (2, 'test2');",
 		"UPDATE heroes SET level = 11 WHERE id = 1;",
@@ -54,6 +59,21 @@ func TestParseSelectShape(t *testing.T) {
 	}
 	if sel.Where == nil {
 		t.Fatal("expected WHERE expression")
+	}
+}
+
+func TestParseTimeTravelShape(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM heroes VERSION 42;")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	sel, ok := stmt.(*SelectStatement)
+	if !ok {
+		t.Fatalf("expected *SelectStatement, got %T", stmt)
+	}
+	if sel.AsOf == nil || !sel.AsOf.UseVersion || sel.AsOf.Version != 42 {
+		t.Fatalf("unexpected as_of clause: %#v", sel.AsOf)
 	}
 }
 

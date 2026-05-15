@@ -19,6 +19,8 @@ public:
     ftxui::Element render(bool focused) const;
 
     const vaultdb::Result& result() const { return result_; }
+    bool canOpenHistory() const;
+    std::string selectedPrimaryKey() const;
 
 private:
     vaultdb::Result result_;

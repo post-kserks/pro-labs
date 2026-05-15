@@ -6,6 +6,12 @@ type Statement interface {
 	StatementType() string
 }
 
+type AsOfClause struct {
+	Timestamp  string
+	Version    uint64
+	UseVersion bool
+}
+
 // DDL.
 type CreateDatabaseStatement struct {
 	DatabaseName string
@@ -53,6 +59,17 @@ type SelectStatement struct {
 	Limit     int
 	HasLimit  bool
 	CountAll  bool
+	AsOf      *AsOfClause
+}
+
+type ExplainStatement struct {
+	Inner   *SelectStatement
+	Analyze bool
+}
+
+type HistoryStatement struct {
+	TableName string
+	Key       Value
 }
 
 type InsertStatement struct {
@@ -86,6 +103,8 @@ func (*DescribeTableStatement) statementNode()  {}
 func (*CreateTableStatement) statementNode()    {}
 func (*DropTableStatement) statementNode()      {}
 func (*SelectStatement) statementNode()         {}
+func (*ExplainStatement) statementNode()        {}
+func (*HistoryStatement) statementNode()        {}
 func (*InsertStatement) statementNode()         {}
 func (*UpdateStatement) statementNode()         {}
 func (*DeleteStatement) statementNode()         {}
@@ -99,6 +118,8 @@ func (*DescribeTableStatement) StatementType() string  { return "DESCRIBE_TABLE"
 func (*CreateTableStatement) StatementType() string    { return "CREATE_TABLE" }
 func (*DropTableStatement) StatementType() string      { return "DROP_TABLE" }
 func (*SelectStatement) StatementType() string         { return "SELECT" }
+func (*ExplainStatement) StatementType() string        { return "EXPLAIN" }
+func (*HistoryStatement) StatementType() string        { return "HISTORY" }
 func (*InsertStatement) StatementType() string         { return "INSERT" }
 func (*UpdateStatement) StatementType() string         { return "UPDATE" }
 func (*DeleteStatement) StatementType() string         { return "DELETE" }

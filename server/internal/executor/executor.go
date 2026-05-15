@@ -19,6 +19,7 @@ type Result struct {
 	Rows     [][]string
 	Affected int
 	Message  string
+	AsOfNote string
 }
 
 // ExecutionContext carries mutable session state and dependencies.
@@ -65,6 +66,10 @@ func CommandFactory(stmt parser.Statement) (Command, error) {
 		return &DropTableCommand{stmt: s}, nil
 	case *parser.SelectStatement:
 		return &SelectCommand{stmt: s}, nil
+	case *parser.ExplainStatement:
+		return &ExplainCommand{stmt: s}, nil
+	case *parser.HistoryStatement:
+		return &HistoryCommand{stmt: s}, nil
 	case *parser.InsertStatement:
 		return &InsertCommand{stmt: s}, nil
 	case *parser.UpdateStatement:

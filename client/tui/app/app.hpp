@@ -46,6 +46,7 @@ private:
     std::string statusMessage_;
     std::string connectionError_;
     std::string clipboard_;
+    std::string lastResultTable_;
 
     HeaderPanel header_;
     NavigatorPanel navigator_;
@@ -82,6 +83,7 @@ private:
     void dropConfirmed();
     void refreshNavigator();
     void switchFocus();
+    void openRowHistory();
     void maybeUpdateActiveDbFromQuery(const std::string& sql, const vaultdb::Result& result);
     CompletionContext completionContext() const;
 };

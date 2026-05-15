@@ -188,7 +188,7 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 
-	rows, err := ctx.Storage.SelectRows(dbName, c.stmt.TableName)
+	rows, asOfNote, err := c.resolveRows(ctx, dbName)
 	if err != nil {
 		return nil, err
 	}
@@ -210,17 +210,19 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			}
 		}
 		return &Result{
-			Type:    "rows",
-			Columns: []string{"count"},
-			Rows:    [][]string{{fmt.Sprintf("%d", count)}},
+			Type:     "rows",
+			Columns:  []string{"count"},
+			Rows:     [][]string{{fmt.Sprintf("%d", count)}},
+			AsOfNote: asOfNote,
 		}, nil
 	}
 
 	if c.stmt.HasLimit && c.stmt.Limit == 0 {
 		return &Result{
-			Type:    "rows",
-			Columns: projectColumns,
-			Rows:    [][]string{},
+			Type:     "rows",
+			Columns:  projectColumns,
+			Rows:     [][]string{},
+			AsOfNote: asOfNote,
 		}, nil
 	}
 
@@ -245,9 +247,174 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	return &Result{
+		Type:     "rows",
+		Columns:  projectColumns,
+		Rows:     resultRows,
+		AsOfNote: asOfNote,
+	}, nil
+}
+
+func (c *SelectCommand) resolveRows(ctx *ExecutionContext, dbName string) ([]storage.Row, string, error) {
+	if c.stmt.AsOf == nil {
+		rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+		return rows, "", err
+	}
+
+	if c.stmt.AsOf.UseVersion {
+		rows, err := ctx.Storage.ReadRowsAsOf(dbName, c.stmt.TableName, c.stmt.AsOf.Version)
+		return rows, fmt.Sprintf("AS OF VERSION %d", c.stmt.AsOf.Version), err
+	}
+
+	txID, err := ctx.Storage.TxIDAtTimestamp(dbName, c.stmt.AsOf.Timestamp)
+	if err != nil {
+		return nil, "", err
+	}
+	rows, err := ctx.Storage.ReadRowsAsOf(dbName, c.stmt.TableName, txID)
+	if err != nil {
+		return nil, "", err
+	}
+	return rows, fmt.Sprintf("AS OF %s", c.stmt.AsOf.Timestamp), nil
+}
+
+func (c *SelectCommand) executeWithStats(ctx *ExecutionContext) (*PlanStats, *Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+		return nil, nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
+	}
+
+	schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	rows, asOfNote, err := c.resolveRows(ctx, dbName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	stats := &PlanStats{
+		RowsTotal:   len(rows),
+		RowsScanned: len(rows),
+	}
+
+	projectIndices, projectColumns, err := resolveProjection(schema, c.stmt.Columns)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resultRows := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		ok, err := evalExpr(c.stmt.Where, row, schema)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !ok {
+			stats.RowsFiltered++
+			continue
+		}
+		stats.RowsMatched++
+
+		projected := make([]string, len(projectIndices))
+		for i, idx := range projectIndices {
+			projected[i] = valueToString(row[idx])
+		}
+
+		if !c.stmt.HasLimit || len(resultRows) < c.stmt.Limit {
+			resultRows = append(resultRows, projected)
+		}
+	}
+
+	return stats, &Result{
+		Type:     "rows",
+		Columns:  projectColumns,
+		Rows:     resultRows,
+		AsOfNote: asOfNote,
+	}, nil
+}
+
+type ExplainCommand struct {
+	stmt *parser.ExplainStatement
+}
+
+func (c *ExplainCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	planStart := time.Now()
+	plan, err := buildPlan(ctx, dbName, c.stmt.Inner)
+	if err != nil {
+		return nil, err
+	}
+	plan.PlanningMs = float64(time.Since(planStart).Microseconds()) / 1000.0
+
+	if !c.stmt.Analyze {
+		return formatPlan(plan), nil
+	}
+
+	execStart := time.Now()
+	selectCmd := &SelectCommand{stmt: c.stmt.Inner}
+	stats, _, err := selectCmd.executeWithStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stats.ExecutionMs = float64(time.Since(execStart).Microseconds()) / 1000.0
+	plan.Root.Stats = stats
+
+	return formatPlan(plan), nil
+}
+
+type HistoryCommand struct {
+	stmt *parser.HistoryStatement
+}
+
+func (c *HistoryCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
+	}
+
+	schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, err
+	}
+
+	history, err := ctx.Storage.RowHistory(dbName, c.stmt.TableName, parserValueToRaw(c.stmt.Key))
+	if err != nil {
+		return nil, err
+	}
+
+	columns := []string{"created_tx", "deleted_tx"}
+	for _, col := range schema.Columns {
+		columns = append(columns, col.Name)
+	}
+
+	rows := make([][]string, 0, len(history))
+	for _, version := range history {
+		row := make([]string, 0, 2+len(version.Data))
+		row = append(row, fmt.Sprintf("%d", version.CreatedTx))
+		if version.DeletedTx == 0 {
+			row = append(row, "CURRENT")
+		} else {
+			row = append(row, fmt.Sprintf("%d", version.DeletedTx))
+		}
+		for _, value := range version.Data {
+			row = append(row, valueToString(value))
+		}
+		rows = append(rows, row)
+	}
+
+	return &Result{
 		Type:    "rows",
-		Columns: projectColumns,
-		Rows:    resultRows,
+		Columns: columns,
+		Rows:    rows,
 	}, nil
 }
 
@@ -355,7 +522,7 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := ctx.Storage.SelectRows(dbName, c.stmt.TableName)
+	rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +588,7 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := ctx.Storage.SelectRows(dbName, c.stmt.TableName)
+	rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 	if err != nil {
 		return nil, err
 	}

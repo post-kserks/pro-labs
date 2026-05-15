@@ -55,6 +55,45 @@ std::vector<std::string> columnsFromDescribe(const vaultdb::Result& result) {
     return columns;
 }
 
+std::string tableNameFromQuery(const std::string& sql) {
+    const std::regex pattern(
+        "^\\s*(?:explain\\s+(?:analyze\\s+)?)?select[\\s\\S]*?\\bfrom\\s+([A-Za-z_][A-Za-z0-9_]*)",
+        std::regex::icase);
+    std::smatch match;
+    if (std::regex_search(sql, match, pattern)) {
+        return match[1].str();
+    }
+    return "";
+}
+
+std::string sqlLiteralFromCell(const std::string& value) {
+    if (value == "NULL") {
+        return "NULL";
+    }
+    if (utils::iequals(value, "true")) {
+        return "TRUE";
+    }
+    if (utils::iequals(value, "false")) {
+        return "FALSE";
+    }
+
+    const std::regex numericPattern("^-?[0-9]+(?:\\.[0-9]+)?$");
+    if (std::regex_match(value, numericPattern)) {
+        return value;
+    }
+
+    std::string escaped;
+    escaped.reserve(value.size() + 4);
+    for (char ch : value) {
+        if (ch == '\'') {
+            escaped += "\\'";
+        } else {
+            escaped.push_back(ch);
+        }
+    }
+    return "'" + escaped + "'";
+}
+
 } // namespace
 
 App::App(Config config)
@@ -229,6 +268,10 @@ bool App::handleMainEvent(ftxui::Event event) {
     }
 
     if (focus_ == FocusArea::Results) {
+        if (event == ftxui::Event::Character('H')) {
+            openRowHistory();
+            return true;
+        }
         return results_.handleEvent(event, clipboard_);
     }
 
@@ -333,6 +376,12 @@ vaultdb::Result App::executeSql(const std::string& sql, std::string title, bool 
         history_.add(normalized, !result.isError(), duration);
     }
     maybeUpdateActiveDbFromQuery(normalized, result);
+    if (!result.isError() && result.isRows()) {
+        const std::string table = tableNameFromQuery(normalized);
+        if (!table.empty()) {
+            lastResultTable_ = table;
+        }
+    }
 
     if (!result.isError() && isMutatingOrMetadataQuery(normalized)) {
         refreshNavigator();
@@ -415,6 +464,22 @@ void App::switchFocus() {
         focus_ = FocusArea::Navigator;
         break;
     }
+}
+
+void App::openRowHistory() {
+    if (lastResultTable_.empty()) {
+        statusMessage_ = "History unavailable: no source table detected";
+        return;
+    }
+    if (!results_.canOpenHistory()) {
+        statusMessage_ = "History unavailable: no selected row";
+        return;
+    }
+
+    const std::string keyLiteral = sqlLiteralFromCell(results_.selectedPrimaryKey());
+    const std::string query = "HISTORY " + lastResultTable_ + " KEY " + keyLiteral + ";";
+    executeSql(query, "History: " + lastResultTable_, false);
+    focus_ = FocusArea::Results;
 }
 
 void App::maybeUpdateActiveDbFromQuery(const std::string& sql, const vaultdb::Result& result) {

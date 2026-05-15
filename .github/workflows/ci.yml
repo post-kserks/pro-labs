@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go-checks:
+    name: Go (fmt, vet, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: true
+
+      - name: Check gofmt
+        run: |
+          files="$(find . -type f -name '*.go')"
+          unformatted="$(gofmt -l ${files})"
+          if [ -n "${unformatted}" ]; then
+            echo "These files are not gofmt-formatted:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Go test
+        run: go test ./...
+
+  cpp-build:
+    name: C++ client build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ make
+
+      - name: Configure CMake
+        run: cmake -S client -B client/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=.
+
+      - name: Build C++ targets
+        run: cmake --build client/build -- -j"$(nproc)"
+
+  docker-smoke:
+    name: Docker build and smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build --build-arg VERSION=ci -t vaultdb-ci:latest .
+
+      - name: Run container
+        run: |
+          docker run -d --name vaultdb-ci \
+            -p 15432:5432 -p 18080:8080 -p 15433:5433 \
+            -e VAULTDB_AUTH_ENABLED=false \
+            vaultdb-ci:latest
+
+      - name: Wait for health endpoint
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:15433/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Health endpoint did not become ready in time"
+          docker logs vaultdb-ci || true
+          exit 1
+
+      - name: Smoke query over HTTP
+        run: |
+          curl -fsS -H "Content-Type: application/json" \
+            -d '{"database":"ci_db","query":"CREATE DATABASE ci_db;"}' \
+            http://127.0.0.1:18080/api/query >/dev/null
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f vaultdb-ci || true
