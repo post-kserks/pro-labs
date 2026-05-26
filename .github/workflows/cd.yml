@@ -152,6 +152,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: false
 
   release:
     name: GitHub release (tags)
@@ -167,6 +168,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: all_assets
+          pattern: vaultdb-*
           merge-multiple: true
 
       - name: Create release
