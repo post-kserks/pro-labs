@@ -12,9 +12,9 @@ type Request struct {
 }
 
 type Response struct {
-	ID      string   `json:"id"`
-	Status  string   `json:"status"`
-	Message string   `json:"message"`
+	ID      string `json:"id"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
 }
 
 func main() {

@@ -50,7 +50,7 @@ func TestTransactions(t *testing.T) {
 
 	executeSQL(t, session, "BEGIN;")
 	executeSQL(t, session, "INSERT INTO heroes VALUES (5, 'Gandalf', 20, TRUE, 10.0, 'Wizard');")
-	
+
 	// Should not be visible to other sessions or even this session before commit?
 	// Actually in our implementation it's buffered, so it shouldn't be visible in SelectRows.
 	res := executeSQL(t, session, "SELECT * FROM heroes WHERE id = 5;")
@@ -84,7 +84,7 @@ func TestPreparedStatements(t *testing.T) {
 	seedHeroes(t, session)
 
 	executeSQL(t, session, "PREPARE get_hero AS SELECT name FROM heroes WHERE id = $1;")
-	
+
 	result := executeSQL(t, session, "EXECUTE get_hero(1);")
 	if len(result.Rows) != 1 || result.Rows[0][0] != "Aragorn" {
 		t.Fatalf("expected Aragorn, got %#v", result.Rows)
