@@ -69,18 +69,18 @@ type ExplainStatement struct {
 
 type HistoryStatement struct {
 	TableName string
-	Key       Value
+	Key       Expression
 }
 
 type InsertStatement struct {
 	TableName string
 	Columns   []string // empty means all columns in schema order
-	Rows      [][]Value
+	Rows      [][]Expression
 }
 
 type Assignment struct {
 	Column string
-	Value  Value
+	Value  Expression
 }
 
 type UpdateStatement struct {
@@ -92,6 +92,46 @@ type UpdateStatement struct {
 type DeleteStatement struct {
 	TableName string
 	Where     Expression
+}
+
+type VacuumStatement struct {
+	TableName string // empty means vacuum all tables in current DB
+	Analyze   bool   // true = VACUUM ANALYZE: show statistics
+}
+
+// Index statements
+type CreateIndexStatement struct {
+	IndexName string
+	TableName string
+	Column    string
+}
+
+type DropIndexStatement struct {
+	IndexName string
+}
+
+type ShowIndexesStatement struct {
+	TableName string
+}
+
+// Transaction statements
+type BeginStatement struct{}
+type CommitStatement struct{}
+type RollbackStatement struct{}
+
+// Prepared statements
+type PrepareStatement struct {
+	Name  string
+	Query Statement
+}
+
+type ExecuteStatement struct {
+	Name   string
+	Params []Value
+}
+
+type DeallocateStatement struct {
+	Name string
 }
 
 func (*CreateDatabaseStatement) statementNode() {}
@@ -108,6 +148,16 @@ func (*HistoryStatement) statementNode()        {}
 func (*InsertStatement) statementNode()         {}
 func (*UpdateStatement) statementNode()         {}
 func (*DeleteStatement) statementNode()         {}
+func (*VacuumStatement) statementNode()         {}
+func (*CreateIndexStatement) statementNode()    {}
+func (*DropIndexStatement) statementNode()      {}
+func (*ShowIndexesStatement) statementNode()    {}
+func (*BeginStatement) statementNode()          {}
+func (*CommitStatement) statementNode()         {}
+func (*RollbackStatement) statementNode()       {}
+func (*PrepareStatement) statementNode()        {}
+func (*ExecuteStatement) statementNode()        {}
+func (*DeallocateStatement) statementNode()     {}
 
 func (*CreateDatabaseStatement) StatementType() string { return "CREATE_DATABASE" }
 func (*DropDatabaseStatement) StatementType() string   { return "DROP_DATABASE" }
@@ -123,6 +173,16 @@ func (*HistoryStatement) StatementType() string        { return "HISTORY" }
 func (*InsertStatement) StatementType() string         { return "INSERT" }
 func (*UpdateStatement) StatementType() string         { return "UPDATE" }
 func (*DeleteStatement) StatementType() string         { return "DELETE" }
+func (*VacuumStatement) StatementType() string         { return "VACUUM" }
+func (*CreateIndexStatement) StatementType() string    { return "CREATE_INDEX" }
+func (*DropIndexStatement) StatementType() string      { return "DROP_INDEX" }
+func (*ShowIndexesStatement) StatementType() string    { return "SHOW_INDEXES" }
+func (*BeginStatement) StatementType() string          { return "BEGIN" }
+func (*CommitStatement) StatementType() string         { return "COMMIT" }
+func (*RollbackStatement) StatementType() string       { return "ROLLBACK" }
+func (*PrepareStatement) StatementType() string        { return "PREPARE" }
+func (*ExecuteStatement) StatementType() string        { return "EXECUTE" }
+func (*DeallocateStatement) StatementType() string     { return "DEALLOCATE" }
 
 // Expression is the root interface for all WHERE expressions.
 type Expression interface {
@@ -164,9 +224,15 @@ type NotExpr struct {
 	Expr Expression
 }
 
+// ParamRef references a prepared statement parameter ($1, $2, ...).
+type ParamRef struct {
+	Index int // 1-based
+}
+
 func (Value) expressionNode()       {}
 func (*ColumnRef) expressionNode()  {}
 func (*BinaryExpr) expressionNode() {}
 func (*AndExpr) expressionNode()    {}
 func (*OrExpr) expressionNode()     {}
 func (*NotExpr) expressionNode()    {}
+func (*ParamRef) expressionNode()   {}

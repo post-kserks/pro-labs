@@ -41,6 +41,11 @@ func evalExpr(expr parser.Expression, row storage.Row, schema *storage.TableSche
 			return false, fmt.Errorf("WHERE literal '%s' must be boolean", e.Type)
 		}
 		return e.BoolVal, nil
+	case *parser.Value:
+		if e.Type != "bool" {
+			return false, fmt.Errorf("WHERE literal '%s' must be boolean", e.Type)
+		}
+		return e.BoolVal, nil
 	case *parser.ColumnRef:
 		value, err := resolveColumn(row, schema, e.Name)
 		if err != nil {
@@ -73,6 +78,8 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 	switch e := expr.(type) {
 	case parser.Value:
 		return parserValueToRaw(e), nil
+	case *parser.Value:
+		return parserValueToRaw(*e), nil
 	case *parser.ColumnRef:
 		return resolveColumn(row, schema, e.Name)
 	case *parser.BinaryExpr, *parser.AndExpr, *parser.OrExpr, *parser.NotExpr:

@@ -7,6 +7,7 @@ import (
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/txmanager"
 )
 
 func executeSQL(t *testing.T, session *Session, sql string) *Result {
@@ -24,8 +25,9 @@ func executeSQL(t *testing.T, session *Session, sql string) *Result {
 
 func setupSession(t *testing.T) *Session {
 	t.Helper()
-	store := storage.NewFileStorageEngine(t.TempDir())
-	session := NewSession(store)
+	store := storage.NewFileStorageEngine(t.TempDir(), nil)
+	txm := txmanager.NewManager()
+	session := NewSession(store, nil, txm)
 
 	executeSQL(t, session, "CREATE DATABASE mydb;")
 	executeSQL(t, session, "USE mydb;")
@@ -165,8 +167,9 @@ func TestDeleteWithWhere(t *testing.T) {
 }
 
 func TestSelectFromMissingTable(t *testing.T) {
-	store := storage.NewFileStorageEngine(t.TempDir())
-	session := NewSession(store)
+	store := storage.NewFileStorageEngine(t.TempDir(), nil)
+	txm := txmanager.NewManager()
+	session := NewSession(store, nil, txm)
 	executeSQL(t, session, "CREATE DATABASE mydb;")
 	executeSQL(t, session, "USE mydb;")
 

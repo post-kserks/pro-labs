@@ -2,7 +2,10 @@ package executor
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
+	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -26,24 +29,43 @@ type Result struct {
 type ExecutionContext struct {
 	Storage   storage.StorageEngine
 	CurrentDB *string
+	Session   *Session
 }
 
 type Executor struct {
 	storage storage.StorageEngine
+	metrics *metrics.Collector
 }
 
-func New(store storage.StorageEngine) *Executor {
-	return &Executor{storage: store}
+func New(store storage.StorageEngine, m *metrics.Collector) *Executor {
+	return &Executor{storage: store, metrics: m}
 }
 
-func (e *Executor) Run(stmt parser.Statement, currentDB *string) (*Result, error) {
+func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
+	start := time.Now()
 	cmd, err := CommandFactory(stmt)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx := &ExecutionContext{Storage: e.storage, CurrentDB: currentDB}
-	return cmd.Execute(ctx)
+	ctx := &ExecutionContext{
+		Storage:   e.storage,
+		CurrentDB: &sess.currentDB,
+		Session:   sess,
+	}
+	result, err := cmd.Execute(ctx)
+
+	if e.metrics != nil {
+		duration := time.Since(start)
+		queryType := strings.ToLower(stmt.StatementType())
+		status := "ok"
+		if err != nil {
+			status = "error"
+		}
+		e.metrics.RecordQuery(queryType, status, duration)
+	}
+
+	return result, err
 }
 
 func CommandFactory(stmt parser.Statement) (Command, error) {
@@ -76,6 +98,26 @@ func CommandFactory(stmt parser.Statement) (Command, error) {
 		return &UpdateCommand{stmt: s}, nil
 	case *parser.DeleteStatement:
 		return &DeleteCommand{stmt: s}, nil
+	case *parser.VacuumStatement:
+		return &VacuumCommand{stmt: s}, nil
+	case *parser.CreateIndexStatement:
+		return &CreateIndexCommand{stmt: s}, nil
+	case *parser.DropIndexStatement:
+		return &DropIndexCommand{stmt: s}, nil
+	case *parser.ShowIndexesStatement:
+		return &ShowIndexesCommand{stmt: s}, nil
+	case *parser.BeginStatement:
+		return &BeginCommand{stmt: s}, nil
+	case *parser.CommitStatement:
+		return &CommitCommand{stmt: s}, nil
+	case *parser.RollbackStatement:
+		return &RollbackCommand{stmt: s}, nil
+	case *parser.PrepareStatement:
+		return &PrepareCommand{stmt: s}, nil
+	case *parser.ExecuteStatement:
+		return &ExecutePreparedCommand{stmt: s}, nil
+	case *parser.DeallocateStatement:
+		return &DeallocateCommand{stmt: s}, nil
 	default:
 		return nil, fmt.Errorf("unknown statement type: %T", stmt)
 	}

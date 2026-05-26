@@ -13,11 +13,12 @@ type QueryPlan struct {
 }
 
 type PlanNode struct {
-	NodeType string
-	Table    string
-	Filter   parser.Expression
-	Children []PlanNode
-	Stats    *PlanStats
+	NodeType  string
+	Table     string
+	IndexName string
+	Filter    parser.Expression
+	Children  []PlanNode
+	Stats     *PlanStats
 }
 
 type PlanStats struct {
@@ -26,17 +27,35 @@ type PlanStats struct {
 	RowsMatched  int
 	RowsFiltered int
 	ExecutionMs  float64
+	UsedIndex    bool
 }
 
 func buildPlan(ctx *ExecutionContext, dbName string, stmt *parser.SelectStatement) (QueryPlan, error) {
 	if !ctx.Storage.TableExists(dbName, stmt.TableName) {
 		return QueryPlan{}, fmt.Errorf("table '%s' does not exist", stmt.TableName)
 	}
+
+	nodeType := "Sequential Scan"
+	indexName := ""
+
+	// Try to detect if index would be used
+	if stmt.Where != nil && stmt.AsOf == nil {
+		if cmp, ok := stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "=" {
+			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
+				if idxName, found := ctx.Storage.FindIndexForColumn(dbName, stmt.TableName, col.Name); found {
+					nodeType = "Index Scan"
+					indexName = idxName
+				}
+			}
+		}
+	}
+
 	return QueryPlan{
 		Root: PlanNode{
-			NodeType: "Sequential Scan",
-			Table:    stmt.TableName,
-			Filter:   stmt.Where,
+			NodeType:  nodeType,
+			Table:     stmt.TableName,
+			IndexName: indexName,
+			Filter:    stmt.Where,
 		},
 	}, nil
 }
@@ -67,7 +86,12 @@ func formatPlan(plan QueryPlan) *Result {
 func renderPlanNode(b *strings.Builder, node PlanNode, depth int) {
 	indent := strings.Repeat("  ", depth)
 
-	b.WriteString(fmt.Sprintf("%s%s", indent, node.NodeType))
+	if node.NodeType == "Index Scan" && node.IndexName != "" {
+		b.WriteString(fmt.Sprintf(`%sIndex Scan using "%s"`, indent, node.IndexName))
+	} else {
+		b.WriteString(fmt.Sprintf("%s%s", indent, node.NodeType))
+	}
+
 	if node.Table != "" {
 		b.WriteString(fmt.Sprintf(` on "%s"`, node.Table))
 	}

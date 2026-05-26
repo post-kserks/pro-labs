@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"vaultdb/internal/index"
+	"vaultdb/internal/metrics"
 	"vaultdb/internal/wal"
 )
 
@@ -25,6 +27,10 @@ type FileStorageEngine struct {
 
 	globalMu sync.RWMutex
 
+	indexes   map[string]*index.IndexManager
+	indexesMu sync.RWMutex
+
+	metrics            *metrics.Collector
 	wal                *wal.WAL
 	walErr             error
 	opsSinceCheckpoint int
@@ -105,10 +111,17 @@ type walDeletePayload struct {
 	Ts      string `json:"ts"`
 }
 
-func NewFileStorageEngine(rootDir string) *FileStorageEngine {
+type walVacuumPayload struct {
+	DB    string `json:"db"`
+	Table string `json:"table"`
+}
+
+func NewFileStorageEngine(rootDir string, m *metrics.Collector) *FileStorageEngine {
 	s := &FileStorageEngine{
 		rootDir:            rootDir,
 		tableLocks:         make(map[string]*sync.RWMutex),
+		indexes:            make(map[string]*index.IndexManager),
+		metrics:            m,
 		checkpointInterval: 100,
 		opsSinceCheckpoint: 0,
 	}
@@ -360,7 +373,7 @@ func (s *FileStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		return 0, err
 	}
 
-	affected, err := s.applyInsertLocked(data, normalizedRows, txID, false)
+	affected, err := s.applyInsertLocked(dbName, tableName, data, normalizedRows, txID, false)
 	if err != nil {
 		return 0, err
 	}
@@ -434,6 +447,34 @@ func (s *FileStorageEngine) ReadRowsAsOf(dbName, tableName string, txID uint64) 
 	return rows, nil
 }
 
+func (s *FileStorageEngine) ReadRowsByPositions(dbName, tableName string, positions []int) ([]Row, error) {
+	lock := s.getTableLock(dbName, tableName)
+	lock.RLock()
+	defer lock.RUnlock()
+
+	schema, err := s.readSchema(dbName, tableName)
+	if err != nil {
+		return nil, err
+	}
+	data, err := s.readVersionedData(dbName, tableName, schema)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]Row, 0, len(positions))
+	for _, pos := range positions {
+		if pos < 0 || pos >= len(data.Rows) {
+			continue
+		}
+		vrow := data.Rows[pos]
+		if vrow.DeletedTx != 0 {
+			continue
+		}
+		rows = append(rows, interfaceSliceToRow(vrow.Data))
+	}
+	return rows, nil
+}
+
 func (s *FileStorageEngine) CountRows(dbName, tableName string) (int, error) {
 	rows, err := s.ReadCurrentRows(dbName, tableName)
 	if err != nil {
@@ -478,7 +519,7 @@ func (s *FileStorageEngine) UpdateRows(dbName, tableName string, indices []int, 
 		return 0, err
 	}
 
-	affected, err := s.applyUpdateLocked(data, schema, indices, normalizedUpdates, txID, false)
+	affected, err := s.applyUpdateLocked(dbName, tableName, data, schema, indices, normalizedUpdates, txID, false)
 	if err != nil {
 		return 0, err
 	}
@@ -528,7 +569,7 @@ func (s *FileStorageEngine) DeleteRows(dbName, tableName string, indices []int) 
 		return 0, err
 	}
 
-	affected, err := s.applyDeleteLocked(data, indices, txID, false)
+	affected, err := s.applyDeleteLocked(dbName, tableName, data, indices, txID, false)
 	if err != nil {
 		return 0, err
 	}
@@ -612,6 +653,311 @@ func (s *FileStorageEngine) RowHistory(dbName, tableName string, pkValue interfa
 
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedTx < out[j].CreatedTx })
 	return out, nil
+}
+
+func (s *FileStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, error) {
+	lock := s.getTableLock(dbName, tableName)
+	lock.Lock()
+	defer lock.Unlock()
+
+	start := time.Now()
+
+	schema, err := s.readSchema(dbName, tableName)
+	if err != nil {
+		return nil, err
+	}
+
+	dataPath := s.dataPath(dbName, tableName)
+	statBefore, err := os.Stat(dataPath)
+	if err != nil {
+		return nil, fmt.Errorf("vacuum: stat: %w", err)
+	}
+
+	data, err := s.readVersionedData(dbName, tableName, schema)
+	if err != nil {
+		return nil, fmt.Errorf("vacuum: load: %w", err)
+	}
+
+	rowsBefore := len(data.Rows)
+
+	var liveRows []versionedRowDisk
+	for _, row := range data.Rows {
+		if row.DeletedTx == 0 {
+			liveRows = append(liveRows, row)
+		}
+	}
+
+	data.Rows = liveRows
+
+	if err := s.writeVersionedData(dbName, tableName, data); err != nil {
+		return nil, fmt.Errorf("vacuum: write: %w", err)
+	}
+
+	// Rebuild indices after vacuum
+	if mgr := s.getOrCreateIndexManager(dbName, tableName); mgr != nil {
+		rows := s.diskToIndexableRows(data)
+		for _, idx := range mgr.All() {
+			idx.Rebuild(rows)
+		}
+	}
+
+	if _, err := s.appendWAL(wal.OpVacuum, walVacuumPayload{
+		DB:    dbName,
+		Table: tableName,
+	}); err != nil {
+		return nil, err
+	}
+
+	statAfter, _ := os.Stat(dataPath)
+
+	return &VacuumStats{
+		TableName:      tableName,
+		RowsBefore:     rowsBefore,
+		RowsAfter:      len(liveRows),
+		ReclaimedRows:  rowsBefore - len(liveRows),
+		FileSizeBefore: statBefore.Size(),
+		FileSizeAfter:  statAfter.Size(),
+		DurationMs:     float64(time.Since(start).Microseconds()) / 1000.0,
+	}, nil
+}
+
+func (s *FileStorageEngine) TableVersionStats(dbName, tableName string) (*TableVersionStats, error) {
+	lock := s.getTableLock(dbName, tableName)
+	lock.RLock()
+	defer lock.RUnlock()
+
+	schema, err := s.readSchema(dbName, tableName)
+	if err != nil {
+		return nil, err
+	}
+	data, err := s.readVersionedData(dbName, tableName, schema)
+	if err != nil {
+		return nil, err
+	}
+
+	total := len(data.Rows)
+	dead := 0
+	for _, row := range data.Rows {
+		if row.DeletedTx != 0 {
+			dead++
+		}
+	}
+
+	return &TableVersionStats{
+		TotalRows: total,
+		DeadRows:  dead,
+	}, nil
+}
+
+func (s *FileStorageEngine) TableModifiedSince(db, table string, txID uint64) (bool, error) {
+	log, err := s.readTxLog(db)
+	if err != nil {
+		return false, err
+	}
+
+	for _, entry := range log.Entries {
+		if strings.EqualFold(entry.Table, table) && entry.TxID > txID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *FileStorageEngine) CreateIndex(dbName, tableName, indexName, column string) error {
+	lock := s.getTableLock(dbName, tableName)
+	lock.Lock()
+	defer lock.Unlock()
+
+	schema, err := s.readSchema(dbName, tableName)
+	if err != nil {
+		return err
+	}
+
+	colIdx := -1
+	for i, col := range schema.Columns {
+		if strings.EqualFold(col.Name, column) {
+			colIdx = i
+			break
+		}
+	}
+	if colIdx == -1 {
+		return fmt.Errorf("column '%s' not found in table '%s'", column, tableName)
+	}
+
+	mgr := s.getOrCreateIndexManager(dbName, tableName)
+	if _, ok := mgr.FindForColumn(column); ok {
+		// MVP: only one index per column
+		return fmt.Errorf("index already exists for column '%s' in table '%s'", column, tableName)
+	}
+
+	idx := index.New(indexName, column, colIdx)
+	data, err := s.readVersionedData(dbName, tableName, schema)
+	if err != nil {
+		return err
+	}
+
+	idx.Rebuild(s.diskToIndexableRows(data))
+	mgr.Add(idx)
+
+	return s.saveIndexesMetadata(dbName, tableName, mgr)
+}
+
+func (s *FileStorageEngine) DropIndex(dbName, indexName string) error {
+	s.indexesMu.Lock()
+	// Try memory first
+	for key, mgr := range s.indexes {
+		if !strings.HasPrefix(key, dbName+"/") {
+			continue
+		}
+		if mgr.Has(indexName) {
+			s.indexesMu.Unlock()
+			tableName := strings.TrimPrefix(key, dbName+"/")
+			lock := s.getTableLock(dbName, tableName)
+			lock.Lock()
+			defer lock.Unlock()
+
+			mgr.Remove(indexName)
+			return s.saveIndexesMetadata(dbName, tableName, mgr)
+		}
+	}
+	s.indexesMu.Unlock()
+
+	// Also check tables on disk that are not in memory yet
+	tables, err := s.ListTables(dbName)
+	if err == nil {
+		for _, t := range tables {
+			mgr := s.getOrCreateIndexManager(dbName, t.Name)
+			if mgr.Has(indexName) {
+				lock := s.getTableLock(dbName, t.Name)
+				lock.Lock()
+				defer lock.Unlock()
+
+				mgr.Remove(indexName)
+				return s.saveIndexesMetadata(dbName, t.Name, mgr)
+			}
+		}
+	}
+
+	return fmt.Errorf("index '%s' not found", indexName)
+}
+
+func (s *FileStorageEngine) ListIndexes(dbName, tableName string) ([]string, error) {
+	mgr := s.getOrCreateIndexManager(dbName, tableName)
+	indexes := mgr.All()
+	names := make([]string, len(indexes))
+	for i, idx := range indexes {
+		names[i] = idx.Name()
+	}
+	return names, nil
+}
+
+func (s *FileStorageEngine) FindIndexForColumn(dbName, tableName, column string) (string, bool) {
+	mgr := s.getOrCreateIndexManager(dbName, tableName)
+	idx, ok := mgr.FindForColumn(column)
+	if !ok {
+		return "", false
+	}
+	return idx.Name(), true
+}
+
+func (s *FileStorageEngine) IndexLookup(dbName, tableName, column, value string) ([]int, bool) {
+	mgr := s.getOrCreateIndexManager(dbName, tableName)
+	idx, ok := mgr.FindForColumn(column)
+	if !ok {
+		if s.metrics != nil {
+			s.metrics.IncIndexMiss()
+		}
+		return nil, false
+	}
+	res, found := idx.Lookup(value)
+	if s.metrics != nil {
+		if found {
+			s.metrics.IncIndexHit()
+		} else {
+			s.metrics.IncIndexMiss()
+		}
+	}
+	return res, found
+}
+
+func (s *FileStorageEngine) getOrCreateIndexManager(db, table string) *index.IndexManager {
+	key := tableLockKey(db, table)
+	s.indexesMu.Lock()
+	defer s.indexesMu.Unlock()
+	if mgr, ok := s.indexes[key]; ok {
+		return mgr
+	}
+	mgr := index.NewManager()
+	s.indexes[key] = mgr
+	// Try to load existing indexes metadata
+	_ = s.loadIndexesMetadata(db, table, mgr)
+	return mgr
+}
+
+type indexMeta struct {
+	Name     string `json:"name"`
+	Column   string `json:"column"`
+	ColIndex int    `json:"col_index"`
+}
+
+type indexesMetadata struct {
+	Indexes []indexMeta `json:"indexes"`
+}
+
+func (s *FileStorageEngine) loadIndexesMetadata(db, table string, mgr *index.IndexManager) error {
+	path := filepath.Join(s.tableDir(db, table), ".indexes.json")
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var meta indexesMetadata
+	if err := json.Unmarshal(bytes, &meta); err != nil {
+		return err
+	}
+
+	schema, _ := s.readSchema(db, table)
+	data, _ := s.readVersionedData(db, table, schema)
+	rows := s.diskToIndexableRows(data)
+
+	for _, m := range meta.Indexes {
+		idx := index.New(m.Name, m.Column, m.ColIndex)
+		idx.Rebuild(rows)
+		mgr.Add(idx)
+	}
+	return nil
+}
+
+func (s *FileStorageEngine) saveIndexesMetadata(db, table string, mgr *index.IndexManager) error {
+	var meta indexesMetadata
+	for _, idx := range mgr.All() {
+		meta.Indexes = append(meta.Indexes, indexMeta{
+			Name:     idx.Name(),
+			Column:   idx.Column(),
+			ColIndex: idx.ColIndex(),
+		})
+	}
+
+	path := filepath.Join(s.tableDir(db, table), ".indexes.json")
+	return writeJSONAtomic(path, meta)
+}
+
+func (s *FileStorageEngine) diskToIndexableRows(data *tableDataDisk) []index.IndexableRow {
+	res := make([]index.IndexableRow, len(data.Rows))
+	for i, r := range data.Rows {
+		res[i] = index.IndexableRow{
+			DeletedTx: r.DeletedTx,
+			Data:      r.Data,
+		}
+	}
+	return res
+}
+
+func (s *FileStorageEngine) CurrentTxID() uint64 {
+	if s.wal != nil {
+		return s.wal.CurrentTxID()
+	}
+	return s.fallbackTxID.Load()
 }
 
 func (s *FileStorageEngine) FinalCheckpoint() error {
@@ -716,9 +1062,21 @@ func (s *FileStorageEngine) replayWALEntry(entry wal.Entry) error {
 		}
 		return s.replayDelete(entry.TxID, p)
 
+	case wal.OpVacuum:
+		var p walVacuumPayload
+		if err := json.Unmarshal(entry.Payload, &p); err != nil {
+			return err
+		}
+		return s.replayVacuum(p)
+
 	default:
 		return fmt.Errorf("unknown WAL op: 0x%02X", entry.OpType)
 	}
+}
+
+func (s *FileStorageEngine) replayVacuum(p walVacuumPayload) error {
+	_, err := s.Vacuum(p.DB, p.Table)
+	return err
 }
 
 func (s *FileStorageEngine) replayInsert(txID uint64, p walInsertPayload) error {
@@ -741,7 +1099,7 @@ func (s *FileStorageEngine) replayInsert(txID uint64, p walInsertPayload) error 
 		}
 	}
 
-	affected, err := s.applyInsertLocked(data, p.Rows, txID, true)
+	affected, err := s.applyInsertLocked(p.DB, p.Table, data, p.Rows, txID, true)
 	if err != nil {
 		return err
 	}
@@ -773,7 +1131,7 @@ func (s *FileStorageEngine) replayUpdate(txID uint64, p walUpdatePayload) error 
 	if err != nil {
 		return err
 	}
-	affected, err := s.applyUpdateLocked(data, schema, p.Indices, normalizedUpdates, txID, true)
+	affected, err := s.applyUpdateLocked(p.DB, p.Table, data, schema, p.Indices, normalizedUpdates, txID, true)
 	if err != nil {
 		return err
 	}
@@ -801,7 +1159,7 @@ func (s *FileStorageEngine) replayDelete(txID uint64, p walDeletePayload) error 
 		return err
 	}
 
-	affected, err := s.applyDeleteLocked(data, p.Indices, txID, true)
+	affected, err := s.applyDeleteLocked(p.DB, p.Table, data, p.Indices, txID, true)
 	if err != nil {
 		return err
 	}
@@ -815,7 +1173,7 @@ func (s *FileStorageEngine) replayDelete(txID uint64, p walDeletePayload) error 
 	return s.appendTxLog(p.DB, TxLogEntry{TxID: txID, Timestamp: ts, Op: "DELETE", Table: p.Table})
 }
 
-func (s *FileStorageEngine) applyInsertLocked(data *tableDataDisk, rows [][]interface{}, txID uint64, idempotent bool) (int, error) {
+func (s *FileStorageEngine) applyInsertLocked(db, table string, data *tableDataDisk, rows [][]interface{}, txID uint64, idempotent bool) (int, error) {
 	if idempotent {
 		for _, row := range data.Rows {
 			if row.CreatedTx == txID {
@@ -824,12 +1182,28 @@ func (s *FileStorageEngine) applyInsertLocked(data *tableDataDisk, rows [][]inte
 		}
 	}
 
+	startPos := len(data.Rows)
 	for _, row := range rows {
 		data.Rows = append(data.Rows, versionedRowDisk{
 			CreatedTx: txID,
 			DeletedTx: 0,
 			Data:      append([]interface{}(nil), row...),
 		})
+	}
+
+	// Update indices
+	if mgr := s.getOrCreateIndexManager(db, table); mgr != nil {
+		for i, row := range rows {
+			for _, idx := range mgr.All() {
+				if idx.ColIndex() < len(row) {
+					key := index.ValueToIndexKey(row[idx.ColIndex()])
+					idx.Insert(key, startPos+i)
+					if s.metrics != nil {
+						s.metrics.IncIndexHit()
+					}
+				}
+			}
+		}
 	}
 
 	if data.NextSeq <= 0 {
@@ -840,6 +1214,7 @@ func (s *FileStorageEngine) applyInsertLocked(data *tableDataDisk, rows [][]inte
 }
 
 func (s *FileStorageEngine) applyUpdateLocked(
+	db, table string,
 	data *tableDataDisk,
 	schema *TableSchema,
 	indices []int,
@@ -860,9 +1235,21 @@ func (s *FileStorageEngine) applyUpdateLocked(
 		return 0, err
 	}
 
+	mgr := s.getOrCreateIndexManager(db, table)
+
 	for _, physicalIdx := range targets {
 		old := &data.Rows[physicalIdx]
 		old.DeletedTx = txID
+
+		// Remove from index
+		if mgr != nil {
+			for _, idx := range mgr.All() {
+				idx.Delete(physicalIdx)
+				if s.metrics != nil {
+					s.metrics.IncIndexHit()
+				}
+			}
+		}
 
 		newData := append([]interface{}(nil), old.Data...)
 		for colIdx, value := range updates {
@@ -872,17 +1259,31 @@ func (s *FileStorageEngine) applyUpdateLocked(
 			newData[colIdx] = value
 		}
 
+		newPhysicalIdx := len(data.Rows)
 		data.Rows = append(data.Rows, versionedRowDisk{
 			CreatedTx: txID,
 			DeletedTx: 0,
 			Data:      newData,
 		})
+
+		// Add to index
+		if mgr != nil {
+			for _, idx := range mgr.All() {
+				if idx.ColIndex() < len(newData) {
+					key := index.ValueToIndexKey(newData[idx.ColIndex()])
+					idx.Insert(key, newPhysicalIdx)
+					if s.metrics != nil {
+						s.metrics.IncIndexHit()
+					}
+				}
+			}
+		}
 	}
 
 	return len(targets), nil
 }
 
-func (s *FileStorageEngine) applyDeleteLocked(data *tableDataDisk, indices []int, txID uint64, idempotent bool) (int, error) {
+func (s *FileStorageEngine) applyDeleteLocked(db, table string, data *tableDataDisk, indices []int, txID uint64, idempotent bool) (int, error) {
 	if idempotent {
 		for _, row := range data.Rows {
 			if row.DeletedTx == txID {
@@ -896,8 +1297,19 @@ func (s *FileStorageEngine) applyDeleteLocked(data *tableDataDisk, indices []int
 		return 0, err
 	}
 
+	mgr := s.getOrCreateIndexManager(db, table)
+
 	for _, physicalIdx := range targets {
 		data.Rows[physicalIdx].DeletedTx = txID
+		// Remove from index
+		if mgr != nil {
+			for _, idx := range mgr.All() {
+				idx.Delete(physicalIdx)
+				if s.metrics != nil {
+					s.metrics.IncIndexHit()
+				}
+			}
+		}
 	}
 
 	return len(targets), nil
@@ -1051,6 +1463,9 @@ func (s *FileStorageEngine) dropTableInternal(dbName, tableName string) error {
 }
 
 func (s *FileStorageEngine) appendWAL(opType byte, payload interface{}) (uint64, error) {
+	if s.metrics != nil {
+		s.metrics.IncWALEntries()
+	}
 	if s.wal != nil {
 		txID, err := s.wal.Append(opType, payload)
 		if err != nil {
@@ -1074,6 +1489,9 @@ func (s *FileStorageEngine) maybeCheckpoint() {
 	if err := s.wal.Checkpoint(); err != nil {
 		slog.Warn("WAL checkpoint failed", "error", err)
 		return
+	}
+	if s.metrics != nil {
+		s.metrics.IncCheckpoints()
 	}
 	s.opsSinceCheckpoint = 0
 }

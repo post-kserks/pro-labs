@@ -44,6 +44,21 @@ type TxLogEntry struct {
 	Table     string    `json:"table"`
 }
 
+type VacuumStats struct {
+	TableName      string
+	RowsBefore     int   // строк до vacuum (включая все версии)
+	RowsAfter      int   // строк после vacuum (только актуальные)
+	ReclaimedRows  int   // удалено устаревших версий
+	FileSizeBefore int64 // байт до
+	FileSizeAfter  int64 // байт после
+	DurationMs     float64
+}
+
+type TableVersionStats struct {
+	TotalRows int
+	DeadRows  int
+}
+
 // StorageEngine is the abstraction used by executor.
 type StorageEngine interface {
 	CreateDatabase(name string) error
@@ -61,11 +76,23 @@ type StorageEngine interface {
 	SelectRows(dbName, tableName string) ([]Row, error)
 	ReadCurrentRows(dbName, tableName string) ([]Row, error)
 	ReadRowsAsOf(dbName, tableName string, txID uint64) ([]Row, error)
+	ReadRowsByPositions(dbName, tableName string, positions []int) ([]Row, error)
 	CountRows(dbName, tableName string) (int, error)
 	UpdateRows(dbName, tableName string, indices []int, updates map[string]Value) (int, error)
 	DeleteRows(dbName, tableName string, indices []int) (int, error)
 	TxIDAtTimestamp(dbName, ts string) (uint64, error)
 	RowHistory(dbName, tableName string, pkValue interface{}) ([]VersionedRow, error)
+	Vacuum(dbName, tableName string) (*VacuumStats, error)
+	TableVersionStats(dbName, tableName string) (*TableVersionStats, error)
+	TableModifiedSince(db, table string, txID uint64) (bool, error)
+	CurrentTxID() uint64
+
+	CreateIndex(dbName, tableName, indexName, column string) error
+	DropIndex(dbName, indexName string) error
+	ListIndexes(dbName, tableName string) ([]string, error)
+	FindIndexForColumn(dbName, tableName, column string) (string, bool)
+	IndexLookup(dbName, tableName, column, value string) ([]int, bool)
+
 	FinalCheckpoint() error
 	Close() error
 }

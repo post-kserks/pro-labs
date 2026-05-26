@@ -21,8 +21,10 @@ import (
 	"vaultdb/internal/auth"
 	"vaultdb/internal/executor"
 	"vaultdb/internal/httpserver"
+	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/txmanager"
 )
 
 var (
@@ -61,7 +63,8 @@ func main() {
 		os.Exit(runHealthCheck(*monitorPort))
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	slog.SetDefault(logger)
 	logger.Info("starting vaultdb server",
 		"version", version,
 		"build_date", buildDate,
@@ -72,19 +75,42 @@ func main() {
 		"data_dir", *dataDir,
 		"config", *configPath)
 
-	store := storage.NewFileStorageEngine(*dataDir)
+	metricsCollector := metrics.New()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	store := storage.NewFileStorageEngine(*dataDir, metricsCollector)
 	defer func() {
 		if err := store.Close(); err != nil {
 			logger.Warn("storage close failed", "error", err)
 		}
 	}()
 
+	txm := txmanager.NewManager()
+
 	var activeConnections atomic.Int64
+
+	// Start storage metrics background updater
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				updateStorageMetrics(store, metricsCollector)
+			}
+		}
+	}()
+
+	// Start autovacuum
+	av := storage.NewAutoVacuum(store, 0.2, 1*time.Minute, logger)
+	go av.Run(ctx)
+
 	authEnabled := envBool("VAULTDB_AUTH_ENABLED", true)
 	authManager := auth.New(authEnabled, tokensFromEnv())
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	httpSrv := httpserver.New(httpserver.Config{
 		Host:        *host,
@@ -94,6 +120,7 @@ func main() {
 		Storage:     store,
 		Auth:        authManager,
 		Logger:      logger,
+		Metrics:     metricsCollector,
 		ActiveConnections: func() int64 {
 			return activeConnections.Load()
 		},
@@ -136,11 +163,13 @@ func main() {
 			}
 
 			activeConnections.Add(1)
+			metricsCollector.IncConnections()
 			wg.Add(1)
 			go func(c net.Conn) {
 				defer wg.Done()
 				defer activeConnections.Add(-1)
-				handleConnection(c, store, logger)
+				defer metricsCollector.DecConnections()
+				handleConnection(c, store, metricsCollector, txm, logger)
 			}(conn)
 		}
 	}()
@@ -180,10 +209,18 @@ func runHealthCheck(monitorPort int) int {
 	return 0
 }
 
-func handleConnection(conn net.Conn, store storage.StorageEngine, logger *slog.Logger) {
+func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, logger *slog.Logger) {
 	defer conn.Close()
 
-	session := executor.NewSession(store)
+	session := executor.NewSession(store, m, txm)
+	defer func() {
+		if session.IsInTx() {
+			logger.Warn("connection closed with active transaction, rolling back",
+				"tx_id", session.ActiveTx.ID)
+			session.ActiveTx.Rollback()
+		}
+	}()
+
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -299,4 +336,20 @@ func tokensFromEnv() map[string]string {
 		return nil
 	}
 	return tokens
+}
+
+func updateStorageMetrics(s storage.StorageEngine, m *metrics.Collector) {
+	dbs, err := s.ListDatabases()
+	if err != nil {
+		return
+	}
+	for _, db := range dbs {
+		tables, err := s.ListTables(db)
+		if err != nil {
+			continue
+		}
+		for _, t := range tables {
+			m.UpdateStorageRows(db, t.Name, int64(t.RowCount))
+		}
+	}
 }

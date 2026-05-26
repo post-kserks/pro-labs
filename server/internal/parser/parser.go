@@ -77,6 +77,20 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 		return p.parseUpdate()
 	case lexer.TOKEN_DELETE:
 		return p.parseDelete()
+	case lexer.TOKEN_VACUUM:
+		return p.parseVacuum()
+	case lexer.TOKEN_BEGIN:
+		return p.parseBegin()
+	case lexer.TOKEN_COMMIT:
+		return p.parseCommit()
+	case lexer.TOKEN_ROLLBACK:
+		return p.parseRollback()
+	case lexer.TOKEN_PREPARE:
+		return p.parsePrepare()
+	case lexer.TOKEN_EXECUTE:
+		return p.parseExecute()
+	case lexer.TOKEN_DEALLOCATE:
+		return p.parseDeallocate()
 	default:
 		return nil, p.expectedError("a statement", p.current())
 	}
@@ -107,6 +121,113 @@ func (p *sqlParser) parseExplain() (Statement, error) {
 	}, nil
 }
 
+func (p *sqlParser) parseVacuum() (Statement, error) {
+	p.advance() // VACUUM
+
+	analyze := false
+	if p.current().Type == lexer.TOKEN_ANALYZE {
+		analyze = true
+		p.advance()
+	}
+
+	tableName := ""
+	if p.current().Type == lexer.TOKEN_IDENT {
+		name, err := p.consumeIdent("table name")
+		if err != nil {
+			return nil, err
+		}
+		tableName = name
+	}
+
+	return &VacuumStatement{
+		TableName: tableName,
+		Analyze:   analyze,
+	}, nil
+}
+
+func (p *sqlParser) parseBegin() (Statement, error) {
+	p.advance()
+	return &BeginStatement{}, nil
+}
+
+func (p *sqlParser) parseCommit() (Statement, error) {
+	p.advance()
+	return &CommitStatement{}, nil
+}
+
+func (p *sqlParser) parseRollback() (Statement, error) {
+	p.advance()
+	return &RollbackStatement{}, nil
+}
+
+func (p *sqlParser) parsePrepare() (Statement, error) {
+	p.advance() // PREPARE
+
+	name, err := p.consumeIdent("statement name")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := p.consume(lexer.TOKEN_AS, "AS"); err != nil {
+		return nil, err
+	}
+
+	query, err := p.parseStatement()
+	if err != nil {
+		return nil, err
+	}
+
+	return &PrepareStatement{
+		Name:  name,
+		Query: query,
+	}, nil
+}
+
+func (p *sqlParser) parseExecute() (Statement, error) {
+	p.advance() // EXECUTE
+
+	name, err := p.consumeIdent("statement name")
+	if err != nil {
+		return nil, err
+	}
+
+	params := make([]Value, 0)
+	if p.current().Type == lexer.TOKEN_LPAREN {
+		p.advance()
+		if p.current().Type != lexer.TOKEN_RPAREN {
+			for {
+				val, err := p.parseLiteralValue()
+				if err != nil {
+					return nil, err
+				}
+				params = append(params, val)
+				if p.current().Type == lexer.TOKEN_COMMA {
+					p.advance()
+					continue
+				}
+				break
+			}
+		}
+		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+			return nil, err
+		}
+	}
+
+	return &ExecuteStatement{
+		Name:   name,
+		Params: params,
+	}, nil
+}
+
+func (p *sqlParser) parseDeallocate() (Statement, error) {
+	p.advance() // DEALLOCATE
+	name, err := p.consumeIdent("statement name")
+	if err != nil {
+		return nil, err
+	}
+	return &DeallocateStatement{Name: name}, nil
+}
+
 func (p *sqlParser) parseHistory() (Statement, error) {
 	p.advance() // HISTORY
 
@@ -118,7 +239,7 @@ func (p *sqlParser) parseHistory() (Statement, error) {
 		return nil, err
 	}
 
-	key, err := p.parseLiteralValue()
+	key, err := p.parseExpression()
 	if err != nil {
 		return nil, err
 	}
@@ -148,8 +269,18 @@ func (p *sqlParser) parseShow() (Statement, error) {
 			stmt.DatabaseName = dbName
 		}
 		return stmt, nil
+	case lexer.TOKEN_INDEXES:
+		p.advance()
+		if err := p.consume(lexer.TOKEN_ON, "ON"); err != nil {
+			return nil, err
+		}
+		tableName, err := p.consumeIdent("table name")
+		if err != nil {
+			return nil, err
+		}
+		return &ShowIndexesStatement{TableName: tableName}, nil
 	default:
-		return nil, p.expectedError("DATABASES or TABLES", p.current())
+		return nil, p.expectedError("DATABASES, TABLES or INDEXES", p.current())
 	}
 }
 
@@ -185,8 +316,36 @@ func (p *sqlParser) parseCreate() (Statement, error) {
 		return &CreateDatabaseStatement{DatabaseName: name}, nil
 	case lexer.TOKEN_TABLE:
 		return p.parseCreateTable()
+	case lexer.TOKEN_INDEX:
+		p.advance()
+		indexName, err := p.consumeIdent("index name")
+		if err != nil {
+			return nil, err
+		}
+		if err := p.consume(lexer.TOKEN_ON, "ON"); err != nil {
+			return nil, err
+		}
+		tableName, err := p.consumeIdent("table name")
+		if err != nil {
+			return nil, err
+		}
+		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+			return nil, err
+		}
+		column, err := p.consumeIdent("column name")
+		if err != nil {
+			return nil, err
+		}
+		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+			return nil, err
+		}
+		return &CreateIndexStatement{
+			IndexName: indexName,
+			TableName: tableName,
+			Column:    column,
+		}, nil
 	default:
-		return nil, p.expectedError("DATABASE or TABLE", p.current())
+		return nil, p.expectedError("DATABASE, TABLE or INDEX", p.current())
 	}
 }
 
@@ -290,8 +449,15 @@ func (p *sqlParser) parseDrop() (Statement, error) {
 			return nil, err
 		}
 		return &DropTableStatement{TableName: name}, nil
+	case lexer.TOKEN_INDEX:
+		p.advance()
+		name, err := p.consumeIdent("index name")
+		if err != nil {
+			return nil, err
+		}
+		return &DropIndexStatement{IndexName: name}, nil
 	default:
-		return nil, p.expectedError("DATABASE or TABLE", p.current())
+		return nil, p.expectedError("DATABASE, TABLE or INDEX", p.current())
 	}
 }
 
@@ -437,7 +603,7 @@ func (p *sqlParser) parseInsert() (Statement, error) {
 		return nil, err
 	}
 
-	rows := make([][]Value, 0, 4)
+	rows := make([][]Expression, 0, 4)
 	for {
 		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
 			return nil, err
@@ -485,12 +651,12 @@ func (p *sqlParser) parseUpdate() (Statement, error) {
 		if err := p.consume(lexer.TOKEN_EQ, "'='"); err != nil {
 			return nil, err
 		}
-
-		value, err := p.parseLiteralValue()
+		val, err := p.parseExpression()
 		if err != nil {
 			return nil, err
 		}
-		assignments = append(assignments, Assignment{Column: column, Value: value})
+
+		assignments = append(assignments, Assignment{Column: column, Value: val})
 
 		if p.current().Type != lexer.TOKEN_COMMA {
 			break
@@ -621,6 +787,13 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 	case lexer.TOKEN_IDENT:
 		p.advance()
 		return &ColumnRef{Name: tok.Literal}, nil
+	case lexer.TOKEN_PARAM:
+		p.advance()
+		idx, err := strconv.Atoi(tok.Literal)
+		if err != nil {
+			return nil, p.syntaxError(tok, "invalid parameter index")
+		}
+		return &ParamRef{Index: idx}, nil
 	case lexer.TOKEN_INT_LIT, lexer.TOKEN_FLOAT_LIT, lexer.TOKEN_STRING_LIT, lexer.TOKEN_TRUE, lexer.TOKEN_FALSE, lexer.TOKEN_NULL:
 		value, err := tokenToValue(tok)
 		if err != nil {
@@ -679,10 +852,10 @@ func (p *sqlParser) parseIdentifierListUntilRParen(context string) ([]string, er
 	return items, nil
 }
 
-func (p *sqlParser) parseValueListUntilRParen() ([]Value, error) {
-	items := make([]Value, 0, 4)
+func (p *sqlParser) parseValueListUntilRParen() ([]Expression, error) {
+	items := make([]Expression, 0, 4)
 	for {
-		value, err := p.parseLiteralValue()
+		value, err := p.parseExpression()
 		if err != nil {
 			return nil, err
 		}

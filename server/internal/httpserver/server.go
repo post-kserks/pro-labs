@@ -8,14 +8,15 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"vaultdb/internal/auth"
 	"vaultdb/internal/executor"
+	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/txmanager"
 )
 
 //go:embed web/dist/*
@@ -29,12 +30,16 @@ type Config struct {
 	Storage           storage.StorageEngine
 	Auth              *auth.Manager
 	Logger            *slog.Logger
+	Metrics           *metrics.Collector
+	TxManager         *txmanager.Manager
 	ActiveConnections func() int64
 }
 
 type Server struct {
 	cfg       Config
 	startedAt time.Time
+	metrics   *metrics.Collector
+	txm       *txmanager.Manager
 }
 
 func New(cfg Config) *Server {
@@ -47,9 +52,19 @@ func New(cfg Config) *Server {
 	if cfg.ActiveConnections == nil {
 		cfg.ActiveConnections = func() int64 { return 0 }
 	}
+	m := cfg.Metrics
+	if m == nil {
+		m = metrics.New()
+	}
+	txm := cfg.TxManager
+	if txm == nil {
+		txm = txmanager.NewManager()
+	}
 	return &Server{
 		cfg:       cfg,
 		startedAt: time.Now().UTC(),
+		metrics:   m,
+		txm:       txm,
 	}
 }
 
@@ -157,7 +172,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session := executor.NewSession(s.cfg.Storage)
+	session := executor.NewSession(s.cfg.Storage, s.metrics, s.txm)
 	if req.Database != "" {
 		session.SetCurrentDatabase(req.Database)
 	}
@@ -299,20 +314,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
-	uptime := int(time.Since(s.startedAt).Seconds())
-	body := strings.Join([]string{
-		"# HELP vaultdb_uptime_seconds Process uptime in seconds.",
-		"# TYPE vaultdb_uptime_seconds gauge",
-		"vaultdb_uptime_seconds " + strconv.Itoa(uptime),
-		"# HELP vaultdb_active_connections Current active TCP connections.",
-		"# TYPE vaultdb_active_connections gauge",
-		"vaultdb_active_connections " + strconv.FormatInt(s.cfg.ActiveConnections(), 10),
-		"",
-	}, "\n")
-
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(body))
+	fmt.Fprint(w, s.metrics.Render())
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

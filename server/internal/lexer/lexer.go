@@ -33,6 +33,7 @@ const (
 	TOKEN_ANALYZE
 	TOKEN_AS
 	TOKEN_OF
+	TOKEN_ON
 	TOKEN_TIMESTAMP
 	TOKEN_VERSION
 	TOKEN_HISTORY
@@ -43,6 +44,16 @@ const (
 	TOKEN_NULL
 	TOKEN_TRUE
 	TOKEN_FALSE
+
+	TOKEN_VACUUM
+	TOKEN_INDEX
+	TOKEN_INDEXES
+	TOKEN_BEGIN
+	TOKEN_COMMIT
+	TOKEN_ROLLBACK
+	TOKEN_PREPARE
+	TOKEN_EXECUTE
+	TOKEN_DEALLOCATE
 
 	// Data types
 	TOKEN_INT
@@ -70,6 +81,7 @@ const (
 	TOKEN_RPAREN
 	TOKEN_STAR
 	TOKEN_MINUS
+	TOKEN_PARAM
 
 	TOKEN_EOF
 	TOKEN_ILLEGAL
@@ -151,6 +163,18 @@ func (l *Lexer) NextToken() Token {
 	case '*':
 		tok = l.newToken(TOKEN_STAR, "*", start)
 		l.readChar()
+	case '$':
+		l.readChar() // skip $
+		startNum := l.position
+		for isDigit(l.ch) {
+			l.readChar()
+		}
+		if l.position == startNum {
+			tok = l.newToken(TOKEN_ILLEGAL, "$", start)
+		} else {
+			tok = l.newToken(TOKEN_PARAM, string(l.input[startNum:l.position]), start)
+		}
+		return tok
 	case '-':
 		if isDigit(l.peekChar()) {
 			lit, isFloat := l.readNumber()
@@ -313,44 +337,54 @@ func isDigit(ch rune) bool {
 }
 
 var keywords = map[string]TokenType{
-	"SELECT":    TOKEN_SELECT,
-	"INSERT":    TOKEN_INSERT,
-	"UPDATE":    TOKEN_UPDATE,
-	"DELETE":    TOKEN_DELETE,
-	"FROM":      TOKEN_FROM,
-	"INTO":      TOKEN_INTO,
-	"WHERE":     TOKEN_WHERE,
-	"SET":       TOKEN_SET,
-	"VALUES":    TOKEN_VALUES,
-	"CREATE":    TOKEN_CREATE,
-	"DROP":      TOKEN_DROP,
-	"DATABASE":  TOKEN_DATABASE,
-	"TABLE":     TOKEN_TABLE,
-	"USE":       TOKEN_USE,
-	"SHOW":      TOKEN_SHOW,
-	"DATABASES": TOKEN_DATABASES,
-	"TABLES":    TOKEN_TABLES,
-	"DESCRIBE":  TOKEN_DESCRIBE,
-	"LIMIT":     TOKEN_LIMIT,
-	"EXPLAIN":   TOKEN_EXPLAIN,
-	"ANALYZE":   TOKEN_ANALYZE,
-	"AS":        TOKEN_AS,
-	"OF":        TOKEN_OF,
-	"TIMESTAMP": TOKEN_TIMESTAMP,
-	"VERSION":   TOKEN_VERSION,
-	"HISTORY":   TOKEN_HISTORY,
-	"KEY":       TOKEN_KEY,
-	"AND":       TOKEN_AND,
-	"OR":        TOKEN_OR,
-	"NOT":       TOKEN_NOT,
-	"NULL":      TOKEN_NULL,
-	"TRUE":      TOKEN_TRUE,
-	"FALSE":     TOKEN_FALSE,
-	"INT":       TOKEN_INT,
-	"FLOAT":     TOKEN_FLOAT_TYPE,
-	"BOOL":      TOKEN_BOOL,
-	"TEXT":      TOKEN_TEXT,
-	"VARCHAR":   TOKEN_VARCHAR,
+	"SELECT":     TOKEN_SELECT,
+	"INSERT":     TOKEN_INSERT,
+	"UPDATE":     TOKEN_UPDATE,
+	"DELETE":     TOKEN_DELETE,
+	"FROM":       TOKEN_FROM,
+	"INTO":       TOKEN_INTO,
+	"WHERE":      TOKEN_WHERE,
+	"SET":        TOKEN_SET,
+	"VALUES":     TOKEN_VALUES,
+	"CREATE":     TOKEN_CREATE,
+	"DROP":       TOKEN_DROP,
+	"DATABASE":   TOKEN_DATABASE,
+	"TABLE":      TOKEN_TABLE,
+	"USE":        TOKEN_USE,
+	"SHOW":       TOKEN_SHOW,
+	"DATABASES":  TOKEN_DATABASES,
+	"TABLES":     TOKEN_TABLES,
+	"DESCRIBE":   TOKEN_DESCRIBE,
+	"LIMIT":      TOKEN_LIMIT,
+	"EXPLAIN":    TOKEN_EXPLAIN,
+	"ANALYZE":    TOKEN_ANALYZE,
+	"AS":         TOKEN_AS,
+	"OF":         TOKEN_OF,
+	"ON":         TOKEN_ON,
+	"TIMESTAMP":  TOKEN_TIMESTAMP,
+	"VERSION":    TOKEN_VERSION,
+	"HISTORY":    TOKEN_HISTORY,
+	"KEY":        TOKEN_KEY,
+	"AND":        TOKEN_AND,
+	"OR":         TOKEN_OR,
+	"NOT":        TOKEN_NOT,
+	"NULL":       TOKEN_NULL,
+	"TRUE":       TOKEN_TRUE,
+	"FALSE":      TOKEN_FALSE,
+	"INT":        TOKEN_INT,
+	"FLOAT":      TOKEN_FLOAT_TYPE,
+	"BOOL":       TOKEN_BOOL,
+	"TEXT":       TOKEN_TEXT,
+	"VARCHAR":    TOKEN_VARCHAR,
+	"VACUUM":     TOKEN_VACUUM,
+	"INDEX":      TOKEN_INDEX,
+	"INDEXES":    TOKEN_INDEXES,
+	"BEGIN":      TOKEN_BEGIN,
+	"COMMIT":     TOKEN_COMMIT,
+	"ROLLBACK":   TOKEN_ROLLBACK,
+	"PREPARE":    TOKEN_PREPARE,
+	"EXECUTE":    TOKEN_EXECUTE,
+	"DEALLOCATE": TOKEN_DEALLOCATE,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -408,6 +442,8 @@ func (t TokenType) String() string {
 		return "AS"
 	case TOKEN_OF:
 		return "OF"
+	case TOKEN_ON:
+		return "ON"
 	case TOKEN_TIMESTAMP:
 		return "TIMESTAMP"
 	case TOKEN_VERSION:
@@ -438,6 +474,24 @@ func (t TokenType) String() string {
 		return "TEXT"
 	case TOKEN_VARCHAR:
 		return "VARCHAR"
+	case TOKEN_VACUUM:
+		return "VACUUM"
+	case TOKEN_INDEX:
+		return "INDEX"
+	case TOKEN_INDEXES:
+		return "INDEXES"
+	case TOKEN_BEGIN:
+		return "BEGIN"
+	case TOKEN_COMMIT:
+		return "COMMIT"
+	case TOKEN_ROLLBACK:
+		return "ROLLBACK"
+	case TOKEN_PREPARE:
+		return "PREPARE"
+	case TOKEN_EXECUTE:
+		return "EXECUTE"
+	case TOKEN_DEALLOCATE:
+		return "DEALLOCATE"
 	case TOKEN_IDENT:
 		return "IDENT"
 	case TOKEN_INT_LIT:
@@ -470,6 +524,8 @@ func (t TokenType) String() string {
 		return "*"
 	case TOKEN_MINUS:
 		return "-"
+	case TOKEN_PARAM:
+		return "PARAM"
 	case TOKEN_EOF:
 		return "EOF"
 	case TOKEN_ILLEGAL:

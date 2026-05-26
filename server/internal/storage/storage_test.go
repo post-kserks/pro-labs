@@ -22,7 +22,7 @@ func testSchema(dbName string) TableSchema {
 }
 
 func TestDatabaseLifecycle(t *testing.T) {
-	store := NewFileStorageEngine(t.TempDir())
+	store := NewFileStorageEngine(t.TempDir(), nil)
 
 	if store.DatabaseExists("mydb") {
 		t.Fatal("database should not exist")
@@ -51,7 +51,7 @@ func TestDatabaseLifecycle(t *testing.T) {
 }
 
 func TestTableLifecycleAndDataOperations(t *testing.T) {
-	store := NewFileStorageEngine(t.TempDir())
+	store := NewFileStorageEngine(t.TempDir(), nil)
 	if err := store.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestTableLifecycleAndDataOperations(t *testing.T) {
 func TestPersistenceAcrossInstances(t *testing.T) {
 	root := t.TempDir()
 
-	store1 := NewFileStorageEngine(root)
+	store1 := NewFileStorageEngine(root, nil)
 	if err := store1.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestPersistenceAcrossInstances(t *testing.T) {
 		t.Fatalf("InsertRows failed: %v", err)
 	}
 
-	store2 := NewFileStorageEngine(root)
+	store2 := NewFileStorageEngine(root, nil)
 	rows, err := store2.SelectRows("mydb", "heroes")
 	if err != nil {
 		t.Fatalf("SelectRows failed: %v", err)
@@ -164,7 +164,7 @@ func TestPersistenceAcrossInstances(t *testing.T) {
 }
 
 func TestParallelInsertRows(t *testing.T) {
-	store := NewFileStorageEngine(t.TempDir())
+	store := NewFileStorageEngine(t.TempDir(), nil)
 	if err := store.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestParallelInsertRows(t *testing.T) {
 }
 
 func TestTimeTravelVersionRead(t *testing.T) {
-	store := NewFileStorageEngine(t.TempDir())
+	store := NewFileStorageEngine(t.TempDir(), nil)
 	if err := store.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestTimeTravelVersionRead(t *testing.T) {
 }
 
 func TestRowHistory(t *testing.T) {
-	store := NewFileStorageEngine(t.TempDir())
+	store := NewFileStorageEngine(t.TempDir(), nil)
 	if err := store.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestRowHistory(t *testing.T) {
 
 func TestWALRecoveryAfterRestart(t *testing.T) {
 	root := t.TempDir()
-	store := NewFileStorageEngine(root)
+	store := NewFileStorageEngine(root, nil)
 	if err := store.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestWALRecoveryAfterRestart(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	store2 := NewFileStorageEngine(root)
+	store2 := NewFileStorageEngine(root, nil)
 	rows, err := store2.ReadCurrentRows("mydb", "heroes")
 	if err != nil {
 		t.Fatalf("ReadCurrentRows failed: %v", err)

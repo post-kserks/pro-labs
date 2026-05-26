@@ -21,6 +21,7 @@ const (
 	OpDropDatabase   byte = 0x11
 	OpCreateTable    byte = 0x12
 	OpDropTable      byte = 0x13
+	OpVacuum         byte = 0x14
 	OpCheckpoint     byte = 0xF0
 )
 
@@ -120,6 +121,10 @@ func (w *WAL) Close() error {
 	err := w.file.Close()
 	w.file = nil
 	return err
+}
+
+func (w *WAL) CurrentTxID() uint64 {
+	return w.nextTxID.Load()
 }
 
 func (w *WAL) appendBytesLocked(opType byte, payload []byte) (uint64, error) {
