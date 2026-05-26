@@ -118,6 +118,10 @@ GOCACHE="${GOCACHE:-/tmp/go-cache}" GOMODCACHE="${GOMODCACHE:-/tmp/go-mod-cache}
 cd ..
 log "[OK] Server built: build/vaultdb-server"
 
+log "[*] Building VaultDB benchmark tool..."
+GOCACHE="${GOCACHE:-/tmp/go-cache}" GOMODCACHE="${GOMODCACHE:-/tmp/go-mod-cache}" go build -o build/benchmark tools/benchmark/main.go
+log "[OK] Benchmark tool built: build/benchmark"
+
 log "[*] Building VaultDB client (C++)..."
 cmake -S client -B client/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=. -Wno-dev
 cmake --build client/build -- -j"$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 4)"
