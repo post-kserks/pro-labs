@@ -153,7 +153,7 @@ std::string Connection::recvPacket() {
             if (err == EINTR_ERR) {
                 continue;
             }
-            if (err == EAGAIN_ERR || err == WSAEWOULDBLOCK) {
+            if (err == EAGAIN_ERR) {
                 throw NetworkError("recv timeout: server did not respond");
             }
             throw NetworkError(
