@@ -3845,3 +3845,23 @@
 {"time":"2026-05-26T13:13:10.940511+03:00","level":"INFO","msg":"ReadCurrentRows: data read done","dur":"153.958µs"}
 {"time":"2026-05-26T13:13:10.940611+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"254.416µs","row_count":100}
 {"time":"2026-05-26T13:13:10.940579+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"220.542µs","row_count":100}
+{"time":"2026-05-26T13:13:40.940781+03:00","level":"INFO","msg":"ReadCurrentRows: data read done","dur":"196.333µs"}
+{"time":"2026-05-26T13:13:40.940932+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"353.958µs","row_count":100}
+{"time":"2026-05-26T13:14:10.940773+03:00","level":"INFO","msg":"ReadCurrentRows: data read done","dur":"230.583µs"}
+{"time":"2026-05-26T13:14:10.940763+03:00","level":"INFO","msg":"ReadCurrentRows: data read done","dur":"214.125µs"}
+{"time":"2026-05-26T13:14:10.941002+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"458.916µs","row_count":100}
+{"time":"2026-05-26T13:14:10.940935+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"392.25µs","row_count":100}
+{"time":"2026-05-26T13:14:40.940714+03:00","level":"INFO","msg":"ReadCurrentRows: data read done","dur":"177.667µs"}
+{"time":"2026-05-26T13:14:40.940856+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"325.792µs","row_count":100}
+{"time":"2026-05-26T13:15:10.940978+03:00","level":"INFO","msg":"ReadCurrentRows: data read done","dur":"206.667µs"}
+{"time":"2026-05-26T13:15:10.940992+03:00","level":"INFO","msg":"ReadCurrentRows: data read done","dur":"169.209µs"}
+{"time":"2026-05-26T13:15:10.941126+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"357.875µs","row_count":100}
+{"time":"2026-05-26T13:15:10.941193+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"368.959µs","row_count":100}
+{"time":"2026-05-26T13:15:40.940797+03:00","level":"INFO","msg":"ReadCurrentRows: data read done","dur":"513.958µs"}
+{"time":"2026-05-26T13:15:40.941123+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"844.5µs","row_count":100}
+{"time":"2026-05-26T13:16:10.942412+03:00","level":"INFO","msg":"ReadCurrentRows: data read done","dur":"207.25µs"}
+{"time":"2026-05-26T13:16:10.94247+03:00","level":"INFO","msg":"ReadCurrentRows: data read done","dur":"230.625µs"}
+{"time":"2026-05-26T13:16:10.942626+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"428.666µs","row_count":100}
+{"time":"2026-05-26T13:16:10.942568+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"370.708µs","row_count":100}
+{"time":"2026-05-26T13:16:40.943396+03:00","level":"INFO","msg":"ReadCurrentRows: data read done","dur":"1.385292ms"}
+{"time":"2026-05-26T13:16:40.943719+03:00","level":"INFO","msg":"ReadCurrentRows: total done","dur":"1.761667ms","row_count":100}
