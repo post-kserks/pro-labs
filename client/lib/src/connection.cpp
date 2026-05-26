@@ -2,10 +2,25 @@
 
 #include "json_utils.hpp"
 
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/tcp.h>
-#include <unistd.h>
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #pragma comment(lib, "ws2_32.lib")
+    #define CLOSE_SOCKET closesocket
+    #define SOCK_ERR WSAGetLastError()
+    #define EINTR_ERR WSAEINTR
+    #define EAGAIN_ERR WSAEWOULDBLOCK
+#else
+    #include <arpa/inet.h>
+    #include <sys/socket.h>
+    #include <netinet/tcp.h>
+    #include <unistd.h>
+    #define CLOSE_SOCKET close
+    #define SOCK_ERR errno
+    #define EINTR_ERR EINTR
+    #define EAGAIN_ERR EAGAIN
+    #define INVALID_SOCKET -1
+#endif
 
 #include <cerrno>
 #include <cstring>
@@ -14,10 +29,10 @@
 namespace vaultdb {
 
 Connection::Connection(const ConnectionOptions& opts)
-    : opts_(opts), sockfd_(-1), requestId_(0) {}
+    : opts_(opts), sockfd_(INVALID_SOCKET), requestId_(0) {}
 
 Connection::Connection(const std::string& host, int port)
-    : sockfd_(-1), requestId_(0) {
+    : sockfd_(INVALID_SOCKET), requestId_(0) {
     opts_.host = host;
     opts_.port = port;
 }
@@ -31,36 +46,48 @@ bool Connection::connect() {
         return true;
     }
 
+#ifdef _WIN32
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return false;
+    }
+#endif
+
     sockfd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd_ < 0) {
+    if (sockfd_ == INVALID_SOCKET) {
         return false;
     }
 
     // Таймаут на чтение и запись
+#ifdef _WIN32
+    DWORD timeout = opts_.timeout_ms;
+    ::setsockopt(sockfd_, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+    ::setsockopt(sockfd_, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
+#else
     struct timeval tv{};
     tv.tv_sec  = opts_.timeout_ms / 1000;
     tv.tv_usec = (opts_.timeout_ms % 1000) * 1000;
-
     ::setsockopt(sockfd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     ::setsockopt(sockfd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
 
     // TCP_NODELAY: отключить алгоритм Nagle для низкой латентности
     int flag = 1;
-    ::setsockopt(sockfd_, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    ::setsockopt(sockfd_, IPPROTO_TCP, TCP_NODELAY, (const char*)&flag, sizeof(flag));
 
     sockaddr_in addr {};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(static_cast<uint16_t>(opts_.port));
 
     if (::inet_pton(AF_INET, opts_.host.c_str(), &addr.sin_addr) <= 0) {
-        ::close(sockfd_);
-        sockfd_ = -1;
+        CLOSE_SOCKET(sockfd_);
+        sockfd_ = INVALID_SOCKET;
         return false;
     }
 
     if (::connect(sockfd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-        ::close(sockfd_);
-        sockfd_ = -1;
+        CLOSE_SOCKET(sockfd_);
+        sockfd_ = INVALID_SOCKET;
         return false;
     }
 
@@ -72,12 +99,15 @@ void Connection::disconnect() {
         return;
     }
 
-    ::close(sockfd_);
-    sockfd_ = -1;
+    CLOSE_SOCKET(sockfd_);
+    sockfd_ = INVALID_SOCKET;
+#ifdef _WIN32
+    WSACleanup();
+#endif
 }
 
 bool Connection::isConnected() const {
-    return sockfd_ >= 0;
+    return sockfd_ != INVALID_SOCKET;
 }
 
 void Connection::sendPacket(const std::string& data) {
@@ -86,8 +116,8 @@ void Connection::sendPacket(const std::string& data) {
     size_t remaining  = data.size();
 
     while (remaining > 0) {
-        ssize_t n = ::send(sockfd_, ptr + total_sent, remaining,
-#ifdef MSG_NOSIGNAL
+        ssize_t n = ::send(sockfd_, ptr + total_sent, static_cast<int>(remaining),
+#if defined(MSG_NOSIGNAL)
                            MSG_NOSIGNAL
 #else
                            0
@@ -95,9 +125,9 @@ void Connection::sendPacket(const std::string& data) {
         );
 
         if (n < 0) {
-            if (errno == EINTR) continue;
+            if (SOCK_ERR == EINTR_ERR) continue;
             throw NetworkError(
-                std::string("send failed: ") + strerror(errno));
+                std::string("send failed: ") + std::to_string(SOCK_ERR));
         }
 
         total_sent += static_cast<size_t>(n);
@@ -119,14 +149,15 @@ std::string Connection::recvPacket() {
         ssize_t n = ::recv(sockfd_, buf, sizeof(buf), 0);
 
         if (n < 0) {
-            if (errno == EINTR) {
+            int err = SOCK_ERR;
+            if (err == EINTR_ERR) {
                 continue;
             }
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (err == EAGAIN_ERR || err == WSAEWOULDBLOCK) {
                 throw NetworkError("recv timeout: server did not respond");
             }
             throw NetworkError(
-                std::string("recv failed: ") + strerror(errno));
+                std::string("recv failed: ") + std::to_string(err));
         }
 
         if (n == 0) {

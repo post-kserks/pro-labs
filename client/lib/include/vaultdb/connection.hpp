@@ -6,6 +6,17 @@
 #include <string>
 #include <stdexcept>
 
+#ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    typedef SOCKET socket_t;
+#else
+    typedef int socket_t;
+#endif
+
 namespace vaultdb {
 
 class NetworkError : public std::runtime_error {
@@ -37,7 +48,7 @@ public:
 
 private:
     ConnectionOptions opts_;
-    int sockfd_;
+    socket_t sockfd_;
     std::uint64_t requestId_;
     std::string buffer_;
 
