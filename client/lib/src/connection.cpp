@@ -10,6 +10,7 @@
     #define SOCK_ERR WSAGetLastError()
     #define EINTR_ERR WSAEINTR
     #define EAGAIN_ERR WSAEWOULDBLOCK
+    typedef SSIZE_T ssize_t;
 #else
     #include <arpa/inet.h>
     #include <sys/socket.h>
