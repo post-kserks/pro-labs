@@ -30,6 +30,14 @@ type FileStorageEngine struct {
 	indexes   map[string]*index.IndexManager
 	indexesMu sync.RWMutex
 
+	// dataCache holds the parsed, coerced contents of each table's _data.json
+	// keyed by tableLockKey(db, table). It removes the per-operation cost of
+	// reading and JSON-decoding the entire table file on every read/insert/
+	// lookup. Entry contents are mutated only while the caller holds the
+	// per-table lock; the map itself is guarded by dataCacheMu.
+	dataCache   map[string]*tableDataDisk
+	dataCacheMu sync.RWMutex
+
 	metrics            *metrics.Collector
 	wal                *wal.WAL
 	walErr             error
@@ -121,6 +129,7 @@ func NewFileStorageEngine(rootDir string, m *metrics.Collector) *FileStorageEngi
 		rootDir:            rootDir,
 		tableLocks:         make(map[string]*sync.RWMutex),
 		indexes:            make(map[string]*index.IndexManager),
+		dataCache:          make(map[string]*tableDataDisk),
 		metrics:            m,
 		checkpointInterval: 100,
 		opsSinceCheckpoint: 0,
@@ -1405,6 +1414,7 @@ func (s *FileStorageEngine) dropDatabaseInternal(name string) error {
 		return fmt.Errorf("drop database '%s': %w", name, err)
 	}
 
+	s.cacheEvictDatabase(name)
 	s.tableLocksMu.Lock()
 	for key := range s.tableLocks {
 		if strings.HasPrefix(key, name+"/") {
@@ -1456,6 +1466,7 @@ func (s *FileStorageEngine) dropTableInternal(dbName, tableName string) error {
 		return fmt.Errorf("drop table '%s': %w", tableName, err)
 	}
 
+	s.cacheEvict(dbName, tableName)
 	s.tableLocksMu.Lock()
 	delete(s.tableLocks, tableLockKey(dbName, tableName))
 	s.tableLocksMu.Unlock()
@@ -1593,6 +1604,14 @@ func (s *FileStorageEngine) readSchema(dbName, tableName string) (*TableSchema, 
 }
 
 func (s *FileStorageEngine) readVersionedData(dbName, tableName string, schema *TableSchema) (*tableDataDisk, error) {
+	key := tableLockKey(dbName, tableName)
+	s.dataCacheMu.RLock()
+	cached := s.dataCache[key]
+	s.dataCacheMu.RUnlock()
+	if cached != nil {
+		return cached, nil
+	}
+
 	path := s.dataPath(dbName, tableName)
 	bytes, err := os.ReadFile(path)
 	if err != nil {
@@ -1614,6 +1633,7 @@ func (s *FileStorageEngine) readVersionedData(dbName, tableName string, schema *
 			}
 			data.Rows[i].Data = rowToInterfaceSlice(coerced)
 		}
+		s.cacheStore(key, &data)
 		return &data, nil
 	}
 
@@ -1641,7 +1661,35 @@ func (s *FileStorageEngine) readVersionedData(dbName, tableName string, schema *
 	if converted.NextSeq <= 0 {
 		converted.NextSeq = len(converted.Rows) + 1
 	}
+	s.cacheStore(key, converted)
 	return converted, nil
+}
+
+// cacheStore records the table's parsed data under the given lock key.
+// Callers hold the per-table lock, so the entry contents stay consistent.
+func (s *FileStorageEngine) cacheStore(key string, data *tableDataDisk) {
+	s.dataCacheMu.Lock()
+	s.dataCache[key] = data
+	s.dataCacheMu.Unlock()
+}
+
+// cacheEvict drops a single table's cached data (used when the table is dropped).
+func (s *FileStorageEngine) cacheEvict(dbName, tableName string) {
+	s.dataCacheMu.Lock()
+	delete(s.dataCache, tableLockKey(dbName, tableName))
+	s.dataCacheMu.Unlock()
+}
+
+// cacheEvictDatabase drops every cached table belonging to a database.
+func (s *FileStorageEngine) cacheEvictDatabase(dbName string) {
+	prefix := dbName + "/"
+	s.dataCacheMu.Lock()
+	for key := range s.dataCache {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.dataCache, key)
+		}
+	}
+	s.dataCacheMu.Unlock()
 }
 
 func (s *FileStorageEngine) writeVersionedData(dbName, tableName string, data *tableDataDisk) error {
@@ -1654,6 +1702,7 @@ func (s *FileStorageEngine) writeVersionedData(dbName, tableName string, data *t
 	if err := writeJSONAtomic(s.dataPath(dbName, tableName), data); err != nil {
 		return fmt.Errorf("write table data: %w", err)
 	}
+	s.cacheStore(tableLockKey(dbName, tableName), data)
 	return nil
 }
 
