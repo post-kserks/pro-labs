@@ -9,7 +9,7 @@ RUN go mod download && go mod verify
 
 COPY server/ .
 
-ARG VERSION=1.0.0
+ARG VERSION=1.0.2
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build \
     -trimpath \
