@@ -1,0 +1,39 @@
+# ── Build artifacts ──────────────────────────────────────────────
+build/
+client/build/
+*.dylib
+*.so
+*.a
+
+# Compiled Go binaries
+medvault-gateway
+medvault-seed
+vaultdb-server
+
+# ── VaultDB runtime data (keep dir placeholders) ─────────────────
+data/**/*
+!data/**/
+!data/**/.gitkeep
+server/tmp_data/
+tmp_data/
+
+# ── Node / frontend ──────────────────────────────────────────────
+node_modules/
+frontend/dist/
+*.local
+
+# ── Environment files (keep *.example) ───────────────────────────
+.env
+.env.*
+!.env*.example
+
+# ── Logs & temporary files ───────────────────────────────────────
+*.log
+**/tmp_*.txt
+
+# ── OS / editor junk ─────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+Thumbs.db
+.idea/
+.vscode/

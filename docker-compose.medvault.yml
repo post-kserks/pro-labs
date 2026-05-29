@@ -1,0 +1,103 @@
+# MedVault full stack: VaultDB + API Gateway + Seed + Frontend.
+# Usage:
+#   docker compose -f docker-compose.medvault.yml up -d --build
+#   docker compose -f docker-compose.medvault.yml run --rm seed   # if not auto-seeded
+name: medvault
+
+services:
+
+  # ─── VaultDB (built from this repo's server/) ─────────────────────
+  vaultdb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: "1.0.1"
+    image: vaultdb/vaultdb:1.0.1
+    container_name: medvault-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"   # SQL TCP (used by gateway, seed, crash-test, two-terminal demo)
+      - "8080:8080"   # VaultDB Web UI + HTTP API
+      - "5433:5433"   # health + metrics
+    volumes:
+      - vaultdb-data:/data
+    environment:
+      VAULTDB_LOG_LEVEL: "${VAULTDB_LOG_LEVEL:-info}"
+      VAULTDB_AUTH_ENABLED: "${VAULTDB_AUTH_ENABLED:-true}"
+      VAULTDB_API_TOKENS: "${VAULTDB_TOKEN:-vdb_sk_local_dev}"
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "5432"
+      - "--http-port"
+      - "8080"
+      - "--monitor-port"
+      - "5433"
+      - "--data"
+      - "/data"
+    healthcheck:
+      test: ["CMD", "/vaultdb-server", "--health-check", "--monitor-port", "5433"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ─── Seed (runs once, idempotent) ─────────────────────────────────
+  seed:
+    build:
+      context: ./tools/seed
+      dockerfile: Dockerfile
+    image: medvault/seed:1.0.0
+    container_name: medvault-seed
+    environment:
+      VAULTDB_HOST: "vaultdb"
+      VAULTDB_PORT: "5432"
+      SEED_PATIENTS: "${SEED_PATIENTS:-50}"
+      SEED_DOCTORS: "${SEED_DOCTORS:-10}"
+    depends_on:
+      vaultdb:
+        condition: service_healthy
+    restart: "no"
+
+  # ─── API Gateway ──────────────────────────────────────────────────
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    image: medvault/gateway:1.0.0
+    container_name: medvault-gateway
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: "4000"
+      VAULTDB_HOST: "vaultdb"
+      VAULTDB_PORT: "5432"
+      VAULTDB_MONITOR_PORT: "5433"
+      MEDVAULT_DB: "medvault"
+      JWT_SECRET: "${JWT_SECRET:-medvault_jwt_dev_secret}"
+      JWT_TTL_HOURS: "${JWT_TTL_HOURS:-24}"
+    depends_on:
+      vaultdb:
+        condition: service_healthy
+
+  # ─── Frontend (Nginx-served React build) ──────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: "${VITE_API_URL:-http://localhost:4000}"
+    image: medvault/frontend:1.0.0
+    container_name: medvault-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - gateway
+
+volumes:
+  vaultdb-data:
+    driver: local

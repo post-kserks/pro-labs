@@ -1,0 +1,19 @@
+{
+  "name": "users",
+  "database": "bench_db",
+  "columns": [
+    {
+      "name": "id",
+      "type": "INT"
+    },
+    {
+      "name": "name",
+      "type": "TEXT"
+    },
+    {
+      "name": "age",
+      "type": "INT"
+    }
+  ],
+  "created_at": "2026-05-24T19:56:28.301706Z"
+}
