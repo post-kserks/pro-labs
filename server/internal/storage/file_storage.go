@@ -30,10 +30,37 @@ type FileStorageEngine struct {
 	indexes   map[string]*index.IndexManager
 	indexesMu sync.RWMutex
 
+	// dataCache holds the parsed, coerced contents of each table's _data.json
+	// keyed by tableLockKey(db, table). It removes the per-operation cost of
+	// reading and JSON-decoding the entire table file on every read/insert/
+	// lookup. Entry contents are mutated only while the caller holds the
+	// per-table lock; the map itself is guarded by dataCacheMu.
+	//
+	// dataDirty marks tables whose cached contents have not yet been written
+	// to disk. Disk writes are deferred to checkpoint time (flushDataDirty)
+	// so a stream of single-row inserts costs O(rows) total instead of
+	// O(rows^2) — the WAL is the durable record between checkpoints.
+	dataCache   map[string]*tableDataDisk
+	dataDirty   map[string]bool
+	dataCacheMu sync.RWMutex
+
+	// txLogCache caches each database's _tx_log.json so appends are O(1)
+	// (tx IDs are monotonic, so entries stay sorted) instead of rewriting the
+	// whole log on every mutation. txLogDirty mirrors dataDirty for the log.
+	txLogCache map[string]*txLogDisk
+	txLogDirty map[string]bool
+	txLogMu    sync.Mutex
+
+	// walGate serializes WAL truncation against in-flight WAL-logged ops.
+	// Each mutation holds RLock across append→apply→mark-dirty; a checkpoint
+	// takes Lock so that, once it runs, every appended record's effect is
+	// marked dirty and can be flushed to disk before the WAL is truncated.
+	walGate sync.RWMutex
+
 	metrics            *metrics.Collector
 	wal                *wal.WAL
 	walErr             error
-	opsSinceCheckpoint int
+	opsSinceCheckpoint atomic.Int64
 	checkpointInterval int
 	fallbackTxID       atomic.Uint64
 }
@@ -121,9 +148,12 @@ func NewFileStorageEngine(rootDir string, m *metrics.Collector) *FileStorageEngi
 		rootDir:            rootDir,
 		tableLocks:         make(map[string]*sync.RWMutex),
 		indexes:            make(map[string]*index.IndexManager),
+		dataCache:          make(map[string]*tableDataDisk),
+		dataDirty:          make(map[string]bool),
+		txLogCache:         make(map[string]*txLogDisk),
+		txLogDirty:         make(map[string]bool),
 		metrics:            m,
 		checkpointInterval: 100,
-		opsSinceCheckpoint: 0,
 	}
 
 	_ = os.MkdirAll(s.databasesDir(), 0o755)
@@ -368,29 +398,45 @@ func (s *FileStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		Rows:  normalizedRows,
 		Ts:    ts.Format(time.RFC3339Nano),
 	}
-	txID, err := s.appendWAL(wal.OpInsert, payload)
+	affected, err := s.withWALGate(func() (int, error) {
+		txID, err := s.appendWAL(wal.OpInsert, payload)
+		if err != nil {
+			return 0, err
+		}
+		affected, err := s.applyInsertLocked(dbName, tableName, data, normalizedRows, txID, false)
+		if err != nil {
+			return 0, err
+		}
+		if err := s.writeVersionedData(dbName, tableName, data); err != nil {
+			return 0, err
+		}
+		if err := s.appendTxLog(dbName, TxLogEntry{
+			TxID:      txID,
+			Timestamp: ts,
+			Op:        "INSERT",
+			Table:     tableName,
+		}); err != nil {
+			return 0, err
+		}
+		return affected, nil
+	})
 	if err != nil {
-		return 0, err
-	}
-
-	affected, err := s.applyInsertLocked(dbName, tableName, data, normalizedRows, txID, false)
-	if err != nil {
-		return 0, err
-	}
-	if err := s.writeVersionedData(dbName, tableName, data); err != nil {
-		return 0, err
-	}
-	if err := s.appendTxLog(dbName, TxLogEntry{
-		TxID:      txID,
-		Timestamp: ts,
-		Op:        "INSERT",
-		Table:     tableName,
-	}); err != nil {
 		return 0, err
 	}
 
 	s.maybeCheckpoint()
 	return affected, nil
+}
+
+// withWALGate runs fn while holding walGate.RLock, the section spanning a
+// mutation's WAL append, in-memory apply, and mark-dirty. Holding RLock across
+// these steps lets a concurrent checkpoint (walGate.Lock) know that every
+// appended WAL record's effect is already cached and dirty before it flushes
+// and truncates the log.
+func (s *FileStorageEngine) withWALGate(fn func() (int, error)) (int, error) {
+	s.walGate.RLock()
+	defer s.walGate.RUnlock()
+	return fn()
 }
 
 func (s *FileStorageEngine) SelectRows(dbName, tableName string) ([]Row, error) {
@@ -514,24 +560,29 @@ func (s *FileStorageEngine) UpdateRows(dbName, tableName string, indices []int, 
 		Updates: updatesForWAL,
 		Ts:      ts.Format(time.RFC3339Nano),
 	}
-	txID, err := s.appendWAL(wal.OpUpdate, payload)
+	affected, err := s.withWALGate(func() (int, error) {
+		txID, err := s.appendWAL(wal.OpUpdate, payload)
+		if err != nil {
+			return 0, err
+		}
+		affected, err := s.applyUpdateLocked(dbName, tableName, data, schema, indices, normalizedUpdates, txID, false)
+		if err != nil {
+			return 0, err
+		}
+		if err := s.writeVersionedData(dbName, tableName, data); err != nil {
+			return 0, err
+		}
+		if err := s.appendTxLog(dbName, TxLogEntry{
+			TxID:      txID,
+			Timestamp: ts,
+			Op:        "UPDATE",
+			Table:     tableName,
+		}); err != nil {
+			return 0, err
+		}
+		return affected, nil
+	})
 	if err != nil {
-		return 0, err
-	}
-
-	affected, err := s.applyUpdateLocked(dbName, tableName, data, schema, indices, normalizedUpdates, txID, false)
-	if err != nil {
-		return 0, err
-	}
-	if err := s.writeVersionedData(dbName, tableName, data); err != nil {
-		return 0, err
-	}
-	if err := s.appendTxLog(dbName, TxLogEntry{
-		TxID:      txID,
-		Timestamp: ts,
-		Op:        "UPDATE",
-		Table:     tableName,
-	}); err != nil {
 		return 0, err
 	}
 
@@ -564,24 +615,29 @@ func (s *FileStorageEngine) DeleteRows(dbName, tableName string, indices []int) 
 		Indices: append([]int(nil), indices...),
 		Ts:      ts.Format(time.RFC3339Nano),
 	}
-	txID, err := s.appendWAL(wal.OpDelete, payload)
+	affected, err := s.withWALGate(func() (int, error) {
+		txID, err := s.appendWAL(wal.OpDelete, payload)
+		if err != nil {
+			return 0, err
+		}
+		affected, err := s.applyDeleteLocked(dbName, tableName, data, indices, txID, false)
+		if err != nil {
+			return 0, err
+		}
+		if err := s.writeVersionedData(dbName, tableName, data); err != nil {
+			return 0, err
+		}
+		if err := s.appendTxLog(dbName, TxLogEntry{
+			TxID:      txID,
+			Timestamp: ts,
+			Op:        "DELETE",
+			Table:     tableName,
+		}); err != nil {
+			return 0, err
+		}
+		return affected, nil
+	})
 	if err != nil {
-		return 0, err
-	}
-
-	affected, err := s.applyDeleteLocked(dbName, tableName, data, indices, txID, false)
-	if err != nil {
-		return 0, err
-	}
-	if err := s.writeVersionedData(dbName, tableName, data); err != nil {
-		return 0, err
-	}
-	if err := s.appendTxLog(dbName, TxLogEntry{
-		TxID:      txID,
-		Timestamp: ts,
-		Op:        "DELETE",
-		Table:     tableName,
-	}); err != nil {
 		return 0, err
 	}
 
@@ -601,6 +657,7 @@ func (s *FileStorageEngine) TxIDAtTimestamp(dbName, ts string) (uint64, error) {
 	}
 
 	var maxTx uint64
+	s.txLogMu.Lock()
 	for _, entry := range log.Entries {
 		entryTs, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
 		if err != nil {
@@ -610,6 +667,7 @@ func (s *FileStorageEngine) TxIDAtTimestamp(dbName, ts string) (uint64, error) {
 			maxTx = entry.TxID
 		}
 	}
+	s.txLogMu.Unlock()
 	return maxTx, nil
 }
 
@@ -687,10 +745,26 @@ func (s *FileStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		}
 	}
 
-	data.Rows = liveRows
+	if _, err := s.withWALGate(func() (int, error) {
+		data.Rows = liveRows
+		if err := s.writeVersionedData(dbName, tableName, data); err != nil {
+			return 0, fmt.Errorf("vacuum: write: %w", err)
+		}
+		if _, err := s.appendWAL(wal.OpVacuum, walVacuumPayload{
+			DB:    dbName,
+			Table: tableName,
+		}); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}); err != nil {
+		return nil, err
+	}
 
-	if err := s.writeVersionedData(dbName, tableName, data); err != nil {
-		return nil, fmt.Errorf("vacuum: write: %w", err)
+	// Persist immediately so the reclaimed file size is reflected on disk
+	// (VACUUM reports it) rather than waiting for the next checkpoint.
+	if err := s.flushTable(dbName, tableName); err != nil {
+		return nil, fmt.Errorf("vacuum: flush: %w", err)
 	}
 
 	// Rebuild indices after vacuum
@@ -699,13 +773,6 @@ func (s *FileStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		for _, idx := range mgr.All() {
 			idx.Rebuild(rows)
 		}
-	}
-
-	if _, err := s.appendWAL(wal.OpVacuum, walVacuumPayload{
-		DB:    dbName,
-		Table: tableName,
-	}); err != nil {
-		return nil, err
 	}
 
 	statAfter, _ := os.Stat(dataPath)
@@ -755,6 +822,8 @@ func (s *FileStorageEngine) TableModifiedSince(db, table string, txID uint64) (b
 		return false, err
 	}
 
+	s.txLogMu.Lock()
+	defer s.txLogMu.Unlock()
 	for _, entry := range log.Entries {
 		if strings.EqualFold(entry.Table, table) && entry.TxID > txID {
 			return true, nil
@@ -964,6 +1033,14 @@ func (s *FileStorageEngine) FinalCheckpoint() error {
 	if s.wal == nil {
 		return nil
 	}
+	s.walGate.Lock()
+	defer s.walGate.Unlock()
+	if err := s.flushDataDirty(); err != nil {
+		return err
+	}
+	if err := s.flushTxLogDirty(); err != nil {
+		return err
+	}
 	return s.wal.Checkpoint()
 }
 
@@ -971,6 +1048,16 @@ func (s *FileStorageEngine) Close() error {
 	if s.wal == nil {
 		return nil
 	}
+	// Persist any deferred writes before closing. The WAL is left intact (not
+	// truncated), so anything not yet flushed is still recoverable on restart.
+	s.walGate.Lock()
+	if err := s.flushDataDirty(); err != nil {
+		slog.Warn("flush data on close failed", "error", err)
+	}
+	if err := s.flushTxLogDirty(); err != nil {
+		slog.Warn("flush tx log on close failed", "error", err)
+	}
+	s.walGate.Unlock()
 	return s.wal.Close()
 }
 
@@ -998,6 +1085,16 @@ func (s *FileStorageEngine) recoverFromWAL() error {
 		replayed++
 	}
 
+	// Replay only marks tables/tx logs dirty in the cache; flush them to disk
+	// before truncating the WAL, otherwise recovered data would be lost.
+	if err := s.flushDataDirty(); err != nil {
+		slog.Warn("flush data after recovery failed", "error", err)
+		return nil
+	}
+	if err := s.flushTxLogDirty(); err != nil {
+		slog.Warn("flush tx log after recovery failed", "error", err)
+		return nil
+	}
 	_ = s.wal.Checkpoint()
 	slog.Info("WAL recovery complete", "total_entries", len(entries), "replayed", replayed)
 	return nil
@@ -1405,6 +1502,7 @@ func (s *FileStorageEngine) dropDatabaseInternal(name string) error {
 		return fmt.Errorf("drop database '%s': %w", name, err)
 	}
 
+	s.cacheEvictDatabase(name)
 	s.tableLocksMu.Lock()
 	for key := range s.tableLocks {
 		if strings.HasPrefix(key, name+"/") {
@@ -1456,6 +1554,7 @@ func (s *FileStorageEngine) dropTableInternal(dbName, tableName string) error {
 		return fmt.Errorf("drop table '%s': %w", tableName, err)
 	}
 
+	s.cacheEvict(dbName, tableName)
 	s.tableLocksMu.Lock()
 	delete(s.tableLocks, tableLockKey(dbName, tableName))
 	s.tableLocksMu.Unlock()
@@ -1476,16 +1575,36 @@ func (s *FileStorageEngine) appendWAL(opType byte, payload interface{}) (uint64,
 	return s.fallbackTxID.Add(1), nil
 }
 
+// maybeCheckpoint flushes deferred writes and truncates the WAL once enough
+// operations have accumulated. It must be called outside the walGate RLock
+// section (the caller's per-table lock may still be held — flushing does not
+// acquire per-table locks). Taking walGate.Lock guarantees no mutation is
+// mid-flight, so every appended WAL record's effect is already marked dirty and
+// is persisted by the flush before the WAL is truncated.
 func (s *FileStorageEngine) maybeCheckpoint() {
 	if s.wal == nil {
 		return
 	}
 
-	s.opsSinceCheckpoint++
-	if s.opsSinceCheckpoint < s.checkpointInterval {
+	if s.opsSinceCheckpoint.Add(1) < int64(s.checkpointInterval) {
 		return
 	}
 
+	s.walGate.Lock()
+	defer s.walGate.Unlock()
+
+	if s.opsSinceCheckpoint.Load() < int64(s.checkpointInterval) {
+		return // another goroutine already checkpointed
+	}
+
+	if err := s.flushDataDirty(); err != nil {
+		slog.Warn("flush data before checkpoint failed", "error", err)
+		return
+	}
+	if err := s.flushTxLogDirty(); err != nil {
+		slog.Warn("flush tx log before checkpoint failed", "error", err)
+		return
+	}
 	if err := s.wal.Checkpoint(); err != nil {
 		slog.Warn("WAL checkpoint failed", "error", err)
 		return
@@ -1493,15 +1612,33 @@ func (s *FileStorageEngine) maybeCheckpoint() {
 	if s.metrics != nil {
 		s.metrics.IncCheckpoints()
 	}
-	s.opsSinceCheckpoint = 0
+	s.opsSinceCheckpoint.Store(0)
 }
 
+// readTxLog returns the database's tx log, loading and caching it from disk on
+// the first access. The returned pointer is shared with the cache, so callers
+// that iterate Entries must hold txLogMu (see TxIDAtTimestamp / TableModifiedSince).
 func (s *FileStorageEngine) readTxLog(dbName string) (*txLogDisk, error) {
+	s.txLogMu.Lock()
+	if cached := s.txLogCache[dbName]; cached != nil {
+		s.txLogMu.Unlock()
+		return cached, nil
+	}
+	s.txLogMu.Unlock()
+
 	path := s.txLogPath(dbName)
 	bytes, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &txLogDisk{Entries: []txLogEntryDisk{}}, nil
+			log := &txLogDisk{Entries: []txLogEntryDisk{}}
+			s.txLogMu.Lock()
+			if cached := s.txLogCache[dbName]; cached != nil {
+				log = cached
+			} else {
+				s.txLogCache[dbName] = log
+			}
+			s.txLogMu.Unlock()
+			return log, nil
 		}
 		return nil, fmt.Errorf("read tx log: %w", err)
 	}
@@ -1513,18 +1650,36 @@ func (s *FileStorageEngine) readTxLog(dbName string) (*txLogDisk, error) {
 	if log.Entries == nil {
 		log.Entries = []txLogEntryDisk{}
 	}
-	return &log, nil
+
+	s.txLogMu.Lock()
+	result := &log
+	if cached := s.txLogCache[dbName]; cached != nil {
+		result = cached
+	} else {
+		s.txLogCache[dbName] = result
+	}
+	s.txLogMu.Unlock()
+	return result, nil
 }
 
+// appendTxLog adds an entry to the cached tx log and marks it dirty. The disk
+// write is deferred to the next checkpoint (flushTxLogDirty). Tx IDs are
+// monotonic so the common path is an O(1) append that keeps Entries sorted; a
+// linear de-dup scan runs only for out-of-order ids (WAL replay).
 func (s *FileStorageEngine) appendTxLog(dbName string, entry TxLogEntry) error {
 	log, err := s.readTxLog(dbName)
 	if err != nil {
 		return err
 	}
 
-	for _, existing := range log.Entries {
-		if existing.TxID == entry.TxID {
-			return nil
+	s.txLogMu.Lock()
+	defer s.txLogMu.Unlock()
+
+	if n := len(log.Entries); n > 0 && entry.TxID <= log.Entries[n-1].TxID {
+		for _, existing := range log.Entries {
+			if existing.TxID == entry.TxID {
+				return nil
+			}
 		}
 	}
 
@@ -1534,9 +1689,11 @@ func (s *FileStorageEngine) appendTxLog(dbName string, entry TxLogEntry) error {
 		Op:        entry.Op,
 		Table:     entry.Table,
 	})
-	sort.Slice(log.Entries, func(i, j int) bool { return log.Entries[i].TxID < log.Entries[j].TxID })
-
-	return writeJSONAtomic(s.txLogPath(dbName), log)
+	if n := len(log.Entries); n >= 2 && log.Entries[n-1].TxID < log.Entries[n-2].TxID {
+		sort.Slice(log.Entries, func(i, j int) bool { return log.Entries[i].TxID < log.Entries[j].TxID })
+	}
+	s.txLogDirty[dbName] = true
+	return nil
 }
 
 func (s *FileStorageEngine) databasesDir() string {
@@ -1593,6 +1750,14 @@ func (s *FileStorageEngine) readSchema(dbName, tableName string) (*TableSchema, 
 }
 
 func (s *FileStorageEngine) readVersionedData(dbName, tableName string, schema *TableSchema) (*tableDataDisk, error) {
+	key := tableLockKey(dbName, tableName)
+	s.dataCacheMu.RLock()
+	cached := s.dataCache[key]
+	s.dataCacheMu.RUnlock()
+	if cached != nil {
+		return cached, nil
+	}
+
 	path := s.dataPath(dbName, tableName)
 	bytes, err := os.ReadFile(path)
 	if err != nil {
@@ -1614,6 +1779,7 @@ func (s *FileStorageEngine) readVersionedData(dbName, tableName string, schema *
 			}
 			data.Rows[i].Data = rowToInterfaceSlice(coerced)
 		}
+		s.cacheStore(key, &data)
 		return &data, nil
 	}
 
@@ -1641,9 +1807,49 @@ func (s *FileStorageEngine) readVersionedData(dbName, tableName string, schema *
 	if converted.NextSeq <= 0 {
 		converted.NextSeq = len(converted.Rows) + 1
 	}
+	s.cacheStore(key, converted)
 	return converted, nil
 }
 
+// cacheStore records the table's parsed data under the given lock key.
+// Callers hold the per-table lock, so the entry contents stay consistent.
+func (s *FileStorageEngine) cacheStore(key string, data *tableDataDisk) {
+	s.dataCacheMu.Lock()
+	s.dataCache[key] = data
+	s.dataCacheMu.Unlock()
+}
+
+// cacheEvict drops a single table's cached data (used when the table is dropped).
+func (s *FileStorageEngine) cacheEvict(dbName, tableName string) {
+	key := tableLockKey(dbName, tableName)
+	s.dataCacheMu.Lock()
+	delete(s.dataCache, key)
+	delete(s.dataDirty, key)
+	s.dataCacheMu.Unlock()
+}
+
+// cacheEvictDatabase drops every cached table and the tx log belonging to a database.
+func (s *FileStorageEngine) cacheEvictDatabase(dbName string) {
+	prefix := dbName + "/"
+	s.dataCacheMu.Lock()
+	for key := range s.dataCache {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.dataCache, key)
+			delete(s.dataDirty, key)
+		}
+	}
+	s.dataCacheMu.Unlock()
+
+	s.txLogMu.Lock()
+	delete(s.txLogCache, dbName)
+	delete(s.txLogDirty, dbName)
+	s.txLogMu.Unlock()
+}
+
+// writeVersionedData records a table's new contents in the cache and marks it
+// dirty. The actual disk write is deferred to the next checkpoint
+// (flushDataDirty); the WAL holds the durable record in the meantime. Callers
+// run inside the per-table lock and the walGate RLock section.
 func (s *FileStorageEngine) writeVersionedData(dbName, tableName string, data *tableDataDisk) error {
 	if data.Version == 0 {
 		data.Version = 2
@@ -1651,8 +1857,82 @@ func (s *FileStorageEngine) writeVersionedData(dbName, tableName string, data *t
 	if data.NextSeq <= 0 {
 		data.NextSeq = 1
 	}
+	key := tableLockKey(dbName, tableName)
+	s.dataCacheMu.Lock()
+	s.dataCache[key] = data
+	s.dataDirty[key] = true
+	s.dataCacheMu.Unlock()
+	return nil
+}
+
+// flushDataDirty writes every dirty table to disk and clears the dirty set.
+// It must run with no concurrent table mutation in progress — either holding
+// walGate.Lock (runtime checkpoint) or during single-threaded recovery — so the
+// cached pointers it marshals are stable.
+func (s *FileStorageEngine) flushDataDirty() error {
+	s.dataCacheMu.Lock()
+	pending := make(map[string]*tableDataDisk, len(s.dataDirty))
+	for key := range s.dataDirty {
+		if d := s.dataCache[key]; d != nil {
+			pending[key] = d
+		}
+	}
+	s.dataDirty = make(map[string]bool)
+	s.dataCacheMu.Unlock()
+
+	for key, data := range pending {
+		dbName, tableName := splitLockKey(key)
+		if err := writeJSONAtomic(s.dataPath(dbName, tableName), data); err != nil {
+			s.dataCacheMu.Lock()
+			s.dataDirty[key] = true // retry on the next checkpoint
+			s.dataCacheMu.Unlock()
+			return fmt.Errorf("flush table data %q: %w", key, err)
+		}
+	}
+	return nil
+}
+
+// flushTable writes a single table's cached data to disk immediately and clears
+// its dirty flag. Used where the on-disk file must be current right away (e.g.
+// VACUUM reporting reclaimed file size). Caller holds the per-table lock.
+func (s *FileStorageEngine) flushTable(dbName, tableName string) error {
+	key := tableLockKey(dbName, tableName)
+	s.dataCacheMu.Lock()
+	data := s.dataCache[key]
+	delete(s.dataDirty, key)
+	s.dataCacheMu.Unlock()
+	if data == nil {
+		return nil
+	}
 	if err := writeJSONAtomic(s.dataPath(dbName, tableName), data); err != nil {
-		return fmt.Errorf("write table data: %w", err)
+		s.dataCacheMu.Lock()
+		s.dataDirty[key] = true
+		s.dataCacheMu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// flushTxLogDirty writes every dirty tx log to disk and clears the dirty set.
+// Same concurrency contract as flushDataDirty.
+func (s *FileStorageEngine) flushTxLogDirty() error {
+	s.txLogMu.Lock()
+	pending := make(map[string]*txLogDisk, len(s.txLogDirty))
+	for dbName := range s.txLogDirty {
+		if l := s.txLogCache[dbName]; l != nil {
+			pending[dbName] = l
+		}
+	}
+	s.txLogDirty = make(map[string]bool)
+	s.txLogMu.Unlock()
+
+	for dbName, log := range pending {
+		if err := writeJSONAtomic(s.txLogPath(dbName), log); err != nil {
+			s.txLogMu.Lock()
+			s.txLogDirty[dbName] = true
+			s.txLogMu.Unlock()
+			return fmt.Errorf("flush tx log %q: %w", dbName, err)
+		}
 	}
 	return nil
 }
@@ -1889,4 +2169,12 @@ func dirExists(path string) bool {
 
 func tableLockKey(dbName, tableName string) string {
 	return dbName + "/" + tableName
+}
+
+func splitLockKey(key string) (dbName, tableName string) {
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) != 2 {
+		return key, ""
+	}
+	return parts[0], parts[1]
 }
