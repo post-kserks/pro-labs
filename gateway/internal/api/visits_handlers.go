@@ -70,6 +70,10 @@ func (h *Handler) CreateVisit(w http.ResponseWriter, r *http.Request, _ Params) 
 		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid body")
 		return
 	}
+	if req.PatientID <= 0 || req.DoctorID <= 0 {
+		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "patient_id and doctor_id are required")
+		return
+	}
 	id, err := h.nextID("visits")
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "VAULTDB_ERROR", err.Error())
@@ -119,6 +123,15 @@ func (h *Handler) CompleteVisit(w http.ResponseWriter, r *http.Request, ps Param
 		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid body")
 		return
 	}
+	doctorID, apiErr := clinicalDoctorID(r, req.DoctorID)
+	if apiErr != nil {
+		WriteError(w, apiErr.status, apiErr.code, apiErr.message)
+		return
+	}
+	if req.PatientID <= 0 {
+		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "patient_id is required")
+		return
+	}
 
 	// Allocate ids before opening the transaction (buffered inserts are not
 	// visible to SELECT until COMMIT).
@@ -154,7 +167,7 @@ func (h *Handler) CompleteVisit(w http.ResponseWriter, r *http.Request, ps Param
 	for _, d := range req.Diagnoses {
 		if err := tx.Exec(fmt.Sprintf(
 			"INSERT INTO diagnoses VALUES (%d, %d, %d, %d, %s, %s, %s, %s, true);",
-			diagID, visitID, req.PatientID, req.DoctorID,
+			diagID, visitID, req.PatientID, doctorID,
 			sqlStr(d.ICDCode), sqlStr(d.Description), sqlStr(severityOrDefault(d.Severity)), sqlStr(now))); err != nil {
 			WriteError(w, http.StatusInternalServerError, "TX_FAILED", "rolled back: "+err.Error())
 			return
@@ -166,7 +179,7 @@ func (h *Handler) CompleteVisit(w http.ResponseWriter, r *http.Request, ps Param
 	for _, p := range req.Prescriptions {
 		if err := tx.Exec(fmt.Sprintf(
 			"INSERT INTO prescriptions VALUES (%d, %d, %d, %d, %s, %s, %s, %s, %s, %s, true);",
-			presID, visitID, req.PatientID, req.DoctorID,
+			presID, visitID, req.PatientID, doctorID,
 			sqlStr(p.DrugName), sqlStr(p.Dosage), sqlStr(p.Frequency),
 			sqlStr(p.Duration), sqlStr(p.Instructions), sqlStr(now))); err != nil {
 			WriteError(w, http.StatusInternalServerError, "TX_FAILED", "rolled back: "+err.Error())

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -28,6 +29,33 @@ func parseBool(s string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+type roleError struct {
+	status  int
+	code    string
+	message string
+}
+
+func clinicalDoctorID(r *http.Request, requested int) (int, *roleError) {
+	user := currentUser(r)
+	switch user.Role {
+	case "doctor":
+		if user.DoctorID <= 0 {
+			return 0, &roleError{status: http.StatusForbidden, code: "FORBIDDEN", message: "doctor account is not linked to a doctor record"}
+		}
+		if requested != 0 && requested != user.DoctorID {
+			return 0, &roleError{status: http.StatusForbidden, code: "FORBIDDEN", message: "doctor can write only under their own doctor record"}
+		}
+		return user.DoctorID, nil
+	case "admin":
+		if requested <= 0 {
+			return 0, &roleError{status: http.StatusBadRequest, code: "INVALID_REQUEST", message: "doctor_id is required"}
+		}
+		return requested, nil
+	default:
+		return 0, &roleError{status: http.StatusForbidden, code: "FORBIDDEN", message: "operation requires doctor or admin role"}
 	}
 }
 

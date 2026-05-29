@@ -2,12 +2,12 @@ version: "3.9"
 
 services:
   vaultdb:
-    image: vaultdb/vaultdb:1.0.0
+    image: vaultdb/vaultdb:1.0.2
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        VERSION: "1.0.0"
+        VERSION: "1.0.2"
     container_name: vaultdb
     restart: unless-stopped
 

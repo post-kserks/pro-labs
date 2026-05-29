@@ -56,6 +56,15 @@ export interface Diagnosis {
   doctor_name?: string;
 }
 
+export interface CreateDiagnosisPayload {
+  visit_id: number;
+  patient_id: number;
+  doctor_id: number;
+  icd_code: string;
+  description: string;
+  severity: string;
+}
+
 export interface Prescription {
   id: number;
   visit_id: number;
@@ -68,6 +77,17 @@ export interface Prescription {
   instructions: string;
   prescribed_at: string;
   is_active: boolean;
+}
+
+export interface CreatePrescriptionPayload {
+  visit_id: number;
+  patient_id: number;
+  doctor_id: number;
+  drug_name: string;
+  dosage: string;
+  frequency: string;
+  duration: string;
+  instructions: string;
 }
 
 export interface LabResult {

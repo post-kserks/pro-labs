@@ -9,7 +9,7 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
-    -ldflags="-s -w -X main.version=1.0.0" \
+    -ldflags="-s -w -X main.version=1.0.2" \
     -o medvault-gateway \
     ./cmd/gateway
 

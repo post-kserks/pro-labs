@@ -18,7 +18,7 @@ import (
 	"medvault-gateway/internal/vaultdb"
 )
 
-var version = "1.0.0"
+var version = "1.0.2"
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))

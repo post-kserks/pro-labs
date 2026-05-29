@@ -2,6 +2,8 @@ import axios from 'axios';
 import type {
   AdminStats,
   Allergy,
+  CreateDiagnosisPayload,
+  CreatePrescriptionPayload,
   Diagnosis,
   DiagnosisHistoryResponse,
   Doctor,
@@ -113,6 +115,26 @@ export async function getPatientSnapshot(id: number, at: string): Promise<Patien
 
 export async function getDiagnosisHistory(diagnosisId: number): Promise<DiagnosisHistoryResponse> {
   const { data } = await client.get(`/api/v1/diagnoses/${diagnosisId}/history`);
+  return data;
+}
+
+export async function createDiagnosis(payload: CreateDiagnosisPayload): Promise<{ id: number }> {
+  const { data } = await client.post('/api/v1/diagnoses', payload);
+  return data;
+}
+
+export async function deleteDiagnosis(id: number): Promise<{ id: number; status: string }> {
+  const { data } = await client.delete(`/api/v1/diagnoses/${id}`);
+  return data;
+}
+
+export async function createPrescription(payload: CreatePrescriptionPayload): Promise<{ id: number }> {
+  const { data } = await client.post('/api/v1/prescriptions', payload);
+  return data;
+}
+
+export async function deletePrescription(id: number): Promise<{ id: number; status: string }> {
+  const { data } = await client.delete(`/api/v1/prescriptions/${id}`);
   return data;
 }
 

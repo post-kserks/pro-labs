@@ -12,8 +12,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        VERSION: "1.0.1"
-    image: vaultdb/vaultdb:1.0.1
+        VERSION: "1.0.2"
+    image: vaultdb/vaultdb:1.0.2
     container_name: medvault-db
     restart: unless-stopped
     ports:
@@ -49,7 +49,7 @@ services:
     build:
       context: ./tools/seed
       dockerfile: Dockerfile
-    image: medvault/seed:1.0.0
+    image: medvault/seed:1.0.2
     container_name: medvault-seed
     environment:
       VAULTDB_HOST: "vaultdb"
@@ -66,7 +66,7 @@ services:
     build:
       context: ./gateway
       dockerfile: Dockerfile
-    image: medvault/gateway:1.0.0
+    image: medvault/gateway:1.0.2
     container_name: medvault-gateway
     restart: unless-stopped
     ports:
@@ -90,7 +90,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: "${VITE_API_URL:-http://localhost:4000}"
-    image: medvault/frontend:1.0.0
+    image: medvault/frontend:1.0.2
     container_name: medvault-frontend
     restart: unless-stopped
     ports:

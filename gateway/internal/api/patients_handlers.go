@@ -153,6 +153,9 @@ func (h *Handler) PatientDiagnoses(w http.ResponseWriter, r *http.Request, ps Pa
 	out := make([]models.Diagnosis, 0, len(rows))
 	for _, m := range rows {
 		d := toDiagnosis(m)
+		if !d.IsActive {
+			continue
+		}
 		d.DoctorName = docs[d.DoctorID]
 		out = append(out, d)
 	}
@@ -170,7 +173,11 @@ func (h *Handler) PatientPrescriptions(w http.ResponseWriter, r *http.Request, p
 	}
 	out := make([]models.Prescription, 0, len(rows))
 	for _, m := range rows {
-		out = append(out, toPrescription(m))
+		p := toPrescription(m)
+		if !p.IsActive {
+			continue
+		}
+		out = append(out, p)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].PrescribedAt > out[j].PrescribedAt })
 	WriteJSON(w, http.StatusOK, map[string]interface{}{"prescriptions": out})

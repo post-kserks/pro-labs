@@ -1,7 +1,7 @@
 .PHONY: docker-build docker-run docker-stop docker-clean docker-logs docker-health
 
 IMAGE   := vaultdb/vaultdb
-VERSION := 1.0.0
+VERSION := 1.0.2
 TAG     := $(IMAGE):$(VERSION)
 
 docker-build:

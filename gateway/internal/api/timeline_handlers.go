@@ -117,11 +117,17 @@ func (h *Handler) PatientSnapshot(w http.ResponseWriter, r *http.Request, ps Par
 	}
 	diagnoses := make([]models.Diagnosis, 0, len(diagRows))
 	for _, m := range diagRows {
-		diagnoses = append(diagnoses, toDiagnosis(m))
+		d := toDiagnosis(m)
+		if d.IsActive {
+			diagnoses = append(diagnoses, d)
+		}
 	}
 	prescriptions := make([]models.Prescription, 0, len(presRows))
 	for _, m := range presRows {
-		prescriptions = append(prescriptions, toPrescription(m))
+		p := toPrescription(m)
+		if p.IsActive {
+			prescriptions = append(prescriptions, p)
+		}
 	}
 	visits := make([]models.Visit, 0, len(visitRows))
 	for _, m := range visitRows {

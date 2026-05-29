@@ -21,6 +21,15 @@ func (h *Handler) CreateDiagnosis(w http.ResponseWriter, r *http.Request, _ Para
 		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid body")
 		return
 	}
+	doctorID, apiErr := clinicalDoctorID(r, req.DoctorID)
+	if apiErr != nil {
+		WriteError(w, apiErr.status, apiErr.code, apiErr.message)
+		return
+	}
+	if req.VisitID <= 0 || req.PatientID <= 0 || req.ICDCode == "" || req.Description == "" {
+		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "visit_id, patient_id, icd_code and description are required")
+		return
+	}
 	id, err := h.nextID("diagnoses")
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "VAULTDB_ERROR", err.Error())
@@ -29,7 +38,7 @@ func (h *Handler) CreateDiagnosis(w http.ResponseWriter, r *http.Request, _ Para
 	now := time.Now().UTC().Format(time.RFC3339)
 	sql := fmt.Sprintf(
 		"INSERT INTO diagnoses VALUES (%d, %d, %d, %d, %s, %s, %s, %s, true);",
-		id, req.VisitID, req.PatientID, req.DoctorID,
+		id, req.VisitID, req.PatientID, doctorID,
 		sqlStr(req.ICDCode), sqlStr(req.Description), sqlStr(severityOrDefault(req.Severity)), sqlStr(now))
 	if err := h.DB.Exec(sql); err != nil {
 		WriteError(w, http.StatusInternalServerError, "VAULTDB_ERROR", err.Error())

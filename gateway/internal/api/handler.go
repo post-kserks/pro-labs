@@ -56,13 +56,14 @@ func (h *Handler) Routes() *Router {
 	r.Handle(http.MethodGet, "/api/v1/visits", h.auth(h.ListVisits))
 	r.Handle(http.MethodPost, "/api/v1/visits", h.auth(h.CreateVisit))
 	r.Handle(http.MethodGet, "/api/v1/visits/:id", h.auth(h.GetVisit))
-	r.Handle(http.MethodPost, "/api/v1/visits/:id/complete", h.auth(h.CompleteVisit))
+	r.Handle(http.MethodPost, "/api/v1/visits/:id/complete", h.authRoles(h.CompleteVisit, "doctor", "admin"))
 
 	// Diagnoses / prescriptions write paths
-	r.Handle(http.MethodPost, "/api/v1/diagnoses", h.auth(h.CreateDiagnosis))
-	r.Handle(http.MethodPut, "/api/v1/diagnoses/:id", h.auth(h.UpdateDiagnosis))
-	r.Handle(http.MethodDelete, "/api/v1/diagnoses/:id", h.auth(h.DeactivateDiagnosis))
-	r.Handle(http.MethodPost, "/api/v1/prescriptions", h.auth(h.CreatePrescription))
+	r.Handle(http.MethodPost, "/api/v1/diagnoses", h.authRoles(h.CreateDiagnosis, "doctor", "admin"))
+	r.Handle(http.MethodPut, "/api/v1/diagnoses/:id", h.authRoles(h.UpdateDiagnosis, "doctor", "admin"))
+	r.Handle(http.MethodDelete, "/api/v1/diagnoses/:id", h.authRoles(h.DeactivateDiagnosis, "doctor", "admin"))
+	r.Handle(http.MethodPost, "/api/v1/prescriptions", h.authRoles(h.CreatePrescription, "doctor", "admin"))
+	r.Handle(http.MethodDelete, "/api/v1/prescriptions/:id", h.authRoles(h.DeactivatePrescription, "doctor", "admin"))
 
 	// Admin
 	r.Handle(http.MethodGet, "/api/v1/admin/stats", h.auth(h.AdminStats))
@@ -102,6 +103,19 @@ func (h *Handler) auth(next HandlerFunc) HandlerFunc {
 		ctx := context.WithValue(r.Context(), userCtxKey, auth.UserFromClaims(claims))
 		next(w, r.WithContext(ctx), ps)
 	}
+}
+
+func (h *Handler) authRoles(next HandlerFunc, roles ...string) HandlerFunc {
+	return h.auth(func(w http.ResponseWriter, r *http.Request, ps Params) {
+		user := currentUser(r)
+		for _, role := range roles {
+			if user.Role == role {
+				next(w, r, ps)
+				return
+			}
+		}
+		WriteError(w, http.StatusForbidden, "FORBIDDEN", "operation requires doctor or admin role")
+	})
 }
 
 func bearer(r *http.Request) string {
