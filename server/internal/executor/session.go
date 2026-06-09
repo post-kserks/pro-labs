@@ -11,8 +11,9 @@ type Session struct {
 	executor  *Executor
 	currentDB string
 
-	ActiveTx  *txmanager.Transaction
-	TxManager *txmanager.Manager
+	ActiveTx    *txmanager.Transaction
+	TxManager   *txmanager.Manager
+	Broadcaster *Broadcaster
 
 	PreparedStatements map[string]*PreparedStatement
 }
@@ -22,10 +23,11 @@ type PreparedStatement struct {
 	Query parser.Statement
 }
 
-func NewSession(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager) *Session {
+func NewSession(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Session {
 	return &Session{
-		executor:           New(store, m),
+		executor:           New(store, m, txm, b),
 		TxManager:          txm,
+		Broadcaster:        b,
 		PreparedStatements: make(map[string]*PreparedStatement),
 	}
 }

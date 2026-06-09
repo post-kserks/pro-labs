@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	version   = "1.0.2"
+	version   = "1.2.0"
 	buildDate = "unknown"
 )
 
@@ -88,6 +88,7 @@ func main() {
 	}()
 
 	txm := txmanager.NewManager()
+	br := executor.NewBroadcaster()
 
 	var activeConnections atomic.Int64
 
@@ -121,9 +122,11 @@ func main() {
 		Auth:        authManager,
 		Logger:      logger,
 		Metrics:     metricsCollector,
+		TxManager:   txm,
 		ActiveConnections: func() int64 {
 			return activeConnections.Load()
 		},
+		Broadcaster: br,
 	})
 
 	httpErrCh := make(chan error, 1)
@@ -169,7 +172,7 @@ func main() {
 				defer wg.Done()
 				defer activeConnections.Add(-1)
 				defer metricsCollector.DecConnections()
-				handleConnection(c, store, metricsCollector, txm, logger)
+				handleConnection(c, store, metricsCollector, txm, br, logger)
 			}(conn)
 		}
 	}()
@@ -209,10 +212,10 @@ func runHealthCheck(monitorPort int) int {
 	return 0
 }
 
-func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, logger *slog.Logger) {
+func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, logger *slog.Logger) {
 	defer conn.Close()
 
-	session := executor.NewSession(store, m, txm)
+	session := executor.NewSession(store, m, txm, br)
 	defer func() {
 		if session.IsInTx() {
 			logger.Warn("connection closed with active transaction, rolling back",

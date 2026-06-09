@@ -8,6 +8,7 @@ import (
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/txmanager"
 )
 
 // Command is the Command pattern abstraction.
@@ -27,18 +28,23 @@ type Result struct {
 
 // ExecutionContext carries mutable session state and dependencies.
 type ExecutionContext struct {
-	Storage   storage.StorageEngine
-	CurrentDB *string
-	Session   *Session
+	Storage     storage.StorageEngine
+	CurrentDB   *string
+	Session     *Session
+	Metrics     *metrics.Collector
+	TxManager   *txmanager.Manager
+	Broadcaster *Broadcaster
 }
 
 type Executor struct {
-	storage storage.StorageEngine
-	metrics *metrics.Collector
+	storage     storage.StorageEngine
+	metrics     *metrics.Collector
+	txm         *txmanager.Manager
+	broadcaster *Broadcaster
 }
 
-func New(store storage.StorageEngine, m *metrics.Collector) *Executor {
-	return &Executor{storage: store, metrics: m}
+func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Executor {
+	return &Executor{storage: store, metrics: m, txm: txm, broadcaster: b}
 }
 
 func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
@@ -49,9 +55,12 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	}
 
 	ctx := &ExecutionContext{
-		Storage:   e.storage,
-		CurrentDB: &sess.currentDB,
-		Session:   sess,
+		Storage:     e.storage,
+		CurrentDB:   &sess.currentDB,
+		Session:     sess,
+		Metrics:     e.metrics,
+		TxManager:   e.txm,
+		Broadcaster: e.broadcaster,
 	}
 	result, err := cmd.Execute(ctx)
 
@@ -74,6 +83,8 @@ func CommandFactory(stmt parser.Statement) (Command, error) {
 		return &CreateDatabaseCommand{stmt: s}, nil
 	case *parser.DropDatabaseStatement:
 		return &DropDatabaseCommand{stmt: s}, nil
+	case *parser.AlterTableStatement:
+		return &AlterTableCommand{stmt: s}, nil
 	case *parser.UseDatabaseStatement:
 		return &UseDatabaseCommand{stmt: s}, nil
 	case *parser.ShowDatabasesStatement:
@@ -118,6 +129,14 @@ func CommandFactory(stmt parser.Statement) (Command, error) {
 		return &ExecutePreparedCommand{stmt: s}, nil
 	case *parser.DeallocateStatement:
 		return &DeallocateCommand{stmt: s}, nil
+	case *parser.SetOperationStatement:
+		return &SetOperationCommand{stmt: s}, nil
+	case *parser.MigrationStatement:
+		return &MigrationCommand{stmt: s}, nil
+	case *parser.CreatePolicyStatement:
+		return &CreatePolicyCommand{stmt: s}, nil
+	case *parser.EnableRlsStatement:
+		return &EnableRlsCommand{stmt: s}, nil
 	default:
 		return nil, fmt.Errorf("unknown statement type: %T", stmt)
 	}

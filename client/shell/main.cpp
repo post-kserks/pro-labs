@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
     std::cout << "║           ⚔  VAULT DB  ⚔                    ║\n";
     std::cout << "║      A DATABASE FROM ANOTHER DIMENSION      ║\n";
     std::cout << "║                                              ║\n";
-    std::cout << "║  Version 1.0.2  |  Press Ctrl+C to quit     ║\n";
+    std::cout << "║  Version 1.2.0  |  Press Ctrl+C to quit     ║\n";
     std::cout << "╚══════════════════════════════════════════════╝\n\n";
 
     std::cout << "[QUEST LOG] Connecting to dungeon at " << host << ':' << port << "...\n";

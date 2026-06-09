@@ -22,6 +22,7 @@ const (
 	OpCreateTable    byte = 0x12
 	OpDropTable      byte = 0x13
 	OpVacuum         byte = 0x14
+	OpAlterTable     byte = 0x15
 	OpCheckpoint     byte = 0xF0
 )
 

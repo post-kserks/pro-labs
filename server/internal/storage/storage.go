@@ -13,8 +13,10 @@ type Row []Value
 type ColumnSchema struct {
 	Name       string `json:"name"`
 	Type       string `json:"type"`
-	VarcharLen int    `json:"length,omitempty"`
+	VarcharLen int    `json:"varchar_len,omitempty"`
+	IsComputed bool   `json:"is_computed,omitempty"`
 }
+
 
 // TableSchema describes a table.
 type TableSchema struct {
@@ -71,6 +73,11 @@ type StorageEngine interface {
 	TableExists(dbName, tableName string) bool
 	ListTables(dbName string) ([]TableInfo, error)
 	GetTableSchema(dbName, tableName string) (*TableSchema, error)
+
+	AlterTableAddColumn(dbName, tableName string, col ColumnSchema, defaultVal Value) error
+	AlterTableDropColumn(dbName, tableName string, colName string) error
+	AlterTableRenameColumn(dbName, tableName, oldName, newName string) error
+	AlterTableRenameTable(dbName, oldName, newName string) error
 
 	InsertRows(dbName, tableName string, rows []Row) (int, error)
 	SelectRows(dbName, tableName string) ([]Row, error)

@@ -45,7 +45,59 @@ const (
 	TOKEN_TRUE
 	TOKEN_FALSE
 
+	TOKEN_ORDER
+	TOKEN_BY
+	TOKEN_ASC
+	TOKEN_DESC
+	TOKEN_OFFSET
+	TOKEN_GROUP
+	TOKEN_HAVING
+	TOKEN_JOIN
+	TOKEN_INNER
+	TOKEN_LEFT
+	TOKEN_RIGHT
+	TOKEN_FULL
+	TOKEN_CROSS
+	TOKEN_UNION
+	TOKEN_INTERSECT
+	TOKEN_EXCEPT
+	TOKEN_FOR
+	TOKEN_USING
+	TOKEN_OVER
+	TOKEN_PARTITION
+	TOKEN_ROWS
+	TOKEN_RANGE
+	TOKEN_UNBOUNDED
+	TOKEN_PRECEDING
+	TOKEN_FOLLOWING
+	TOKEN_CURRENT
+	TOKEN_ROW
+	TOKEN_BETWEEN
+	TOKEN_IN
+	TOKEN_IS
+	TOKEN_LIKE
+	TOKEN_SEMANTIC_MATCH
+	TOKEN_FTS_MATCH
+	TOKEN_ALTER
+	TOKEN_ADD
+	TOKEN_COLUMN
+	TOKEN_RENAME
+	TOKEN_TO
+	TOKEN_TYPE
+	TOKEN_DEFAULT
+	TOKEN_CAST
+	TOKEN_CASE
+	TOKEN_WHEN
+	TOKEN_THEN
+	TOKEN_ELSE
+	TOKEN_END
+	TOKEN_COALESCE
+
 	TOKEN_VACUUM
+	TOKEN_MIGRATION
+	TOKEN_POLICY
+	TOKEN_ENABLE
+	TOKEN_RLS
 	TOKEN_INDEX
 	TOKEN_INDEXES
 	TOKEN_BEGIN
@@ -54,6 +106,8 @@ const (
 	TOKEN_PREPARE
 	TOKEN_EXECUTE
 	TOKEN_DEALLOCATE
+	TOKEN_APPLY
+	TOKEN_PREVIEW
 
 	// Data types
 	TOKEN_INT
@@ -61,6 +115,17 @@ const (
 	TOKEN_BOOL
 	TOKEN_TEXT
 	TOKEN_VARCHAR
+	TOKEN_DATE
+	TOKEN_TIME
+	TOKEN_DECIMAL
+	TOKEN_ENUM
+	TOKEN_ARRAY
+	TOKEN_VECTOR
+	TOKEN_FLEXIBLE
+	TOKEN_INFER
+	TOKEN_GENERATED
+	TOKEN_ALWAYS
+	TOKEN_SCHEMA
 
 	// Literals and identifiers
 	TOKEN_IDENT
@@ -76,11 +141,16 @@ const (
 	TOKEN_LTE
 	TOKEN_GTE
 	TOKEN_COMMA
+	TOKEN_DOT
+	TOKEN_ARROW
+	TOKEN_DBL_ARROW
 	TOKEN_SEMICOLON
 	TOKEN_LPAREN
 	TOKEN_RPAREN
 	TOKEN_STAR
 	TOKEN_MINUS
+	TOKEN_PLUS
+	TOKEN_SLASH
 	TOKEN_PARAM
 
 	TOKEN_EOF
@@ -151,6 +221,9 @@ func (l *Lexer) NextToken() Token {
 	case ',':
 		tok = l.newToken(TOKEN_COMMA, ",", start)
 		l.readChar()
+	case '.':
+		tok = l.newToken(TOKEN_DOT, ".", start)
+		l.readChar()
 	case ';':
 		tok = l.newToken(TOKEN_SEMICOLON, ";", start)
 		l.readChar()
@@ -162,6 +235,12 @@ func (l *Lexer) NextToken() Token {
 		l.readChar()
 	case '*':
 		tok = l.newToken(TOKEN_STAR, "*", start)
+		l.readChar()
+	case '+':
+		tok = l.newToken(TOKEN_PLUS, "+", start)
+		l.readChar()
+	case '/':
+		tok = l.newToken(TOKEN_SLASH, "/", start)
 		l.readChar()
 	case '$':
 		l.readChar() // skip $
@@ -185,8 +264,20 @@ func (l *Lexer) NextToken() Token {
 			}
 			return tok
 		}
+		if l.peekChar() == '>' {
+			l.readChar() // consume first '>'
+			if l.peekChar() == '>' {
+				l.readChar() // consume second '>'
+				tok = l.newToken(TOKEN_DBL_ARROW, "->>", start)
+			} else {
+				tok = l.newToken(TOKEN_ARROW, "->", start)
+			}
+			l.readChar() // advance past the last '>'
+			return tok
+		}
 		tok = l.newToken(TOKEN_MINUS, "-", start)
 		l.readChar()
+		return tok
 	case '\'':
 		lit, ok := l.readString()
 		if !ok {
@@ -371,12 +462,75 @@ var keywords = map[string]TokenType{
 	"NULL":       TOKEN_NULL,
 	"TRUE":       TOKEN_TRUE,
 	"FALSE":      TOKEN_FALSE,
+	"ORDER":      TOKEN_ORDER,
+	"BY":         TOKEN_BY,
+	"ASC":        TOKEN_ASC,
+	"DESC":       TOKEN_DESC,
+	"OFFSET":     TOKEN_OFFSET,
+	"GROUP":      TOKEN_GROUP,
+	"HAVING":     TOKEN_HAVING,
+	"JOIN":       TOKEN_JOIN,
+	"INNER":      TOKEN_INNER,
+	"LEFT":       TOKEN_LEFT,
+	"RIGHT":      TOKEN_RIGHT,
+	"FULL":       TOKEN_FULL,
+	"CROSS":      TOKEN_CROSS,
+	"UNION":      TOKEN_UNION,
+	"INTERSECT":  TOKEN_INTERSECT,
+	"EXCEPT":     TOKEN_EXCEPT,
+	"FOR":        TOKEN_FOR,
+	"USING":      TOKEN_USING,
+	"OVER":       TOKEN_OVER,
+	"PARTITION":  TOKEN_PARTITION,
+	"ROWS":       TOKEN_ROWS,
+	"RANGE":      TOKEN_RANGE,
+	"UNBOUNDED":  TOKEN_UNBOUNDED,
+	"PRECEDING":  TOKEN_PRECEDING,
+	"FOLLOWING":  TOKEN_FOLLOWING,
+	"CURRENT":    TOKEN_CURRENT,
+	"ROW":        TOKEN_ROW,
+	"BETWEEN":    TOKEN_BETWEEN,
+	"IN":         TOKEN_IN,
+	"IS":         TOKEN_IS,
+	"LIKE":           TOKEN_LIKE,
+	"SEMANTIC_MATCH": TOKEN_SEMANTIC_MATCH,
+	"FTS_MATCH":      TOKEN_FTS_MATCH,
+	"ALTER":          TOKEN_ALTER,
+
+	"ADD":        TOKEN_ADD,
+	"COLUMN":     TOKEN_COLUMN,
+	"RENAME":     TOKEN_RENAME,
+	"TO":         TOKEN_TO,
+	"TYPE":       TOKEN_TYPE,
+	"DEFAULT":    TOKEN_DEFAULT,
+	"CAST":       TOKEN_CAST,
+	"CASE":       TOKEN_CASE,
+	"WHEN":       TOKEN_WHEN,
+	"THEN":       TOKEN_THEN,
+	"ELSE":       TOKEN_ELSE,
+	"END":        TOKEN_END,
+	"COALESCE":   TOKEN_COALESCE,
 	"INT":        TOKEN_INT,
 	"FLOAT":      TOKEN_FLOAT_TYPE,
 	"BOOL":       TOKEN_BOOL,
 	"TEXT":       TOKEN_TEXT,
 	"VARCHAR":    TOKEN_VARCHAR,
+	"DATE":       TOKEN_DATE,
+	"TIME":       TOKEN_TIME,
+	"DECIMAL":    TOKEN_DECIMAL,
+	"ENUM":       TOKEN_ENUM,
+	"ARRAY":      TOKEN_ARRAY,
+	"VECTOR":     TOKEN_VECTOR,
+	"FLEXIBLE":   TOKEN_FLEXIBLE,
+	"INFER":      TOKEN_INFER,
+	"GENERATED":  TOKEN_GENERATED,
+	"ALWAYS":     TOKEN_ALWAYS,
+	"SCHEMA":     TOKEN_SCHEMA,
 	"VACUUM":     TOKEN_VACUUM,
+	"MIGRATION":  TOKEN_MIGRATION,
+	"POLICY":     TOKEN_POLICY,
+	"ENABLE":     TOKEN_ENABLE,
+	"RLS":        TOKEN_RLS,
 	"INDEX":      TOKEN_INDEX,
 	"INDEXES":    TOKEN_INDEXES,
 	"BEGIN":      TOKEN_BEGIN,
@@ -385,6 +539,8 @@ var keywords = map[string]TokenType{
 	"PREPARE":    TOKEN_PREPARE,
 	"EXECUTE":    TOKEN_EXECUTE,
 	"DEALLOCATE": TOKEN_DEALLOCATE,
+	"APPLY":      TOKEN_APPLY,
+	"PREVIEW":    TOKEN_PREVIEW,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -464,6 +620,74 @@ func (t TokenType) String() string {
 		return "TRUE"
 	case TOKEN_FALSE:
 		return "FALSE"
+	case TOKEN_ORDER:
+		return "ORDER"
+	case TOKEN_BY:
+		return "BY"
+	case TOKEN_ASC:
+		return "ASC"
+	case TOKEN_DESC:
+		return "DESC"
+	case TOKEN_OFFSET:
+		return "OFFSET"
+	case TOKEN_GROUP:
+		return "GROUP"
+	case TOKEN_HAVING:
+		return "HAVING"
+	case TOKEN_JOIN:
+		return "JOIN"
+	case TOKEN_INNER:
+		return "INNER"
+	case TOKEN_LEFT:
+		return "LEFT"
+	case TOKEN_RIGHT:
+		return "RIGHT"
+	case TOKEN_FULL:
+		return "FULL"
+	case TOKEN_CROSS:
+		return "CROSS"
+	case TOKEN_UNION:
+		return "UNION"
+	case TOKEN_INTERSECT:
+		return "INTERSECT"
+	case TOKEN_EXCEPT:
+		return "EXCEPT"
+	case TOKEN_OVER:
+		return "OVER"
+	case TOKEN_PARTITION:
+		return "PARTITION"
+	case TOKEN_ROWS:
+		return "ROWS"
+	case TOKEN_PRECEDING:
+		return "PRECEDING"
+	case TOKEN_FOLLOWING:
+		return "FOLLOWING"
+	case TOKEN_CURRENT:
+		return "CURRENT"
+	case TOKEN_ROW:
+		return "ROW"
+	case TOKEN_BETWEEN:
+		return "BETWEEN"
+	case TOKEN_IN:
+		return "IN"
+	case TOKEN_IS:
+		return "IS"
+	case TOKEN_LIKE:
+		return "LIKE"
+	case TOKEN_ALTER:
+		return "ALTER"
+	case TOKEN_ADD:
+		return "ADD"
+	case TOKEN_COLUMN:
+		return "COLUMN"
+	case TOKEN_RENAME:
+		return "RENAME"
+	case TOKEN_TO:
+		return "TO"
+	case TOKEN_TYPE:
+		return "TYPE"
+	case TOKEN_DEFAULT:
+		return "DEFAULT"
 	case TOKEN_INT:
 		return "INT"
 	case TOKEN_FLOAT_TYPE:
@@ -474,6 +698,18 @@ func (t TokenType) String() string {
 		return "TEXT"
 	case TOKEN_VARCHAR:
 		return "VARCHAR"
+	case TOKEN_DATE:
+		return "DATE"
+	case TOKEN_TIME:
+		return "TIME"
+	case TOKEN_DECIMAL:
+		return "DECIMAL"
+	case TOKEN_ENUM:
+		return "ENUM"
+	case TOKEN_ARRAY:
+		return "ARRAY"
+	case TOKEN_VECTOR:
+		return "VECTOR"
 	case TOKEN_VACUUM:
 		return "VACUUM"
 	case TOKEN_INDEX:
@@ -514,6 +750,8 @@ func (t TokenType) String() string {
 		return ">="
 	case TOKEN_COMMA:
 		return ","
+	case TOKEN_DOT:
+		return "."
 	case TOKEN_SEMICOLON:
 		return ";"
 	case TOKEN_LPAREN:
@@ -524,6 +762,10 @@ func (t TokenType) String() string {
 		return "*"
 	case TOKEN_MINUS:
 		return "-"
+	case TOKEN_PLUS:
+		return "+"
+	case TOKEN_SLASH:
+		return "/"
 	case TOKEN_PARAM:
 		return "PARAM"
 	case TOKEN_EOF:

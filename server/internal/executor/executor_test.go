@@ -27,7 +27,7 @@ func setupSession(t *testing.T) *Session {
 	t.Helper()
 	store := storage.NewFileStorageEngine(t.TempDir(), nil)
 	txm := txmanager.NewManager()
-	session := NewSession(store, nil, txm)
+	session := NewSession(store, nil, txm, nil)
 
 	executeSQL(t, session, "CREATE DATABASE mydb;")
 	executeSQL(t, session, "USE mydb;")
@@ -68,6 +68,354 @@ func TestSelectLimitAndCount(t *testing.T) {
 	counted := executeSQL(t, session, "SELECT COUNT(*) FROM heroes WHERE alive = TRUE;")
 	if len(counted.Rows) != 1 || counted.Rows[0][0] != "3" {
 		t.Fatalf("expected count 3, got %#v", counted.Rows)
+	}
+}
+
+func TestAggregateFunctions(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// SUM, AVG, MIN, MAX
+	res := executeSQL(t, session, "SELECT SUM(level), AVG(score), MIN(level), MAX(level) FROM heroes;")
+	if len(res.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(res.Rows))
+	}
+	// Aragorn (10), Legolas (9), Gimli (8), Boromir (5) -> SUM = 32, AVG = (9.8+9.5+8.2+7.1)/4 = 34.6/4 = 8.65, MIN = 5, MAX = 10
+	if res.Rows[0][0] != "32" {
+		t.Fatalf("expected SUM=32, got %s", res.Rows[0][0])
+	}
+	if res.Rows[0][1] != "8.65" {
+		t.Fatalf("expected AVG=8.65, got %s", res.Rows[0][1])
+	}
+	if res.Rows[0][2] != "5" {
+		t.Fatalf("expected MIN=5, got %s", res.Rows[0][2])
+	}
+	if res.Rows[0][3] != "10" {
+		t.Fatalf("expected MAX=10, got %s", res.Rows[0][3])
+	}
+}
+
+func TestArithmeticProjection(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// SELECT name, level * 2 as double_level FROM heroes WHERE id = 1;
+	res := executeSQL(t, session, "SELECT name, level * 2 as double_level FROM heroes WHERE id = 1;")
+	if len(res.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(res.Rows))
+	}
+	if res.Rows[0][1] != "20" {
+		t.Fatalf("expected double_level=20, got %s", res.Rows[0][1])
+	}
+	if res.Columns[1] != "double_level" {
+		t.Fatalf("expected column name double_level, got %s", res.Columns[1])
+	}
+}
+
+func TestGroupBy(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+	executeSQL(t, session, "INSERT INTO heroes (id, name, level, alive) VALUES (5, 'Faramir', 5, TRUE);")
+
+	// GROUP BY level
+	res := executeSQL(t, session, "SELECT level, COUNT(*) as cnt FROM heroes GROUP BY level ORDER BY level DESC;")
+	// level 10: 1 (Aragorn)
+	// level 9: 1 (Legolas)
+	// level 8: 1 (Gimli)
+	// level 5: 2 (Boromir, Faramir)
+	if len(res.Rows) != 4 {
+		t.Fatalf("expected 4 groups, got %d", len(res.Rows))
+	}
+	if res.Rows[3][0] != "5" || res.Rows[3][1] != "2" {
+		t.Fatalf("expected level 5 group to have count 2, got level=%s cnt=%s", res.Rows[3][0], res.Rows[3][1])
+	}
+}
+func TestHaving(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+	executeSQL(t, session, "INSERT INTO heroes (id, name, level, alive) VALUES (5, 'Faramir', 5, TRUE);")
+
+	// GROUP BY level HAVING COUNT(*) > 1
+	res := executeSQL(t, session, "SELECT level, COUNT(*) as cnt FROM heroes GROUP BY level HAVING cnt > 1;")
+	if len(res.Rows) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(res.Rows))
+	}
+	if res.Rows[0][0] != "5" || res.Rows[0][1] != "2" {
+		t.Fatalf("expected level 5 group with count 2, got level=%s cnt=%s", res.Rows[0][0], res.Rows[0][1])
+	}
+}
+func TestJoin(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+	executeSQL(t, session, "CREATE TABLE weapons (hero_id INT, model VARCHAR(50));")
+	executeSQL(t, session, "INSERT INTO weapons VALUES (1, 'Anduril'), (2, 'Galadhrim Bow'), (3, 'Axe of Durin');")
+
+	// INNER JOIN
+	res := executeSQL(t, session, "SELECT heroes.name, weapons.model FROM heroes JOIN weapons ON heroes.id = weapons.hero_id;")
+	if len(res.Rows) != 3 {
+		t.Fatalf("expected 3 joined rows, got %d", len(res.Rows))
+	}
+	// Aragorn - Anduril
+	// Legolas - Galadhrim Bow
+	// Gimli - Axe of Durin
+	found := false
+	for _, row := range res.Rows {
+		if row[0] == "Aragorn" && row[1] == "Anduril" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("Aragorn with Anduril not found in join results: %#v", res.Rows)
+	}
+}
+
+func TestSetOperations(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// UNION: heroes with level 10 + heroes with level 9
+	res := executeSQL(t, session, "SELECT name FROM heroes WHERE level = 10 UNION SELECT name FROM heroes WHERE level = 9;")
+	if len(res.Rows) != 2 {
+		t.Fatalf("expected 2 rows for UNION, got %d", len(res.Rows))
+	}
+
+	// INTERSECT: heroes with level > 8 and heroes with level < 10
+	res = executeSQL(t, session, "SELECT name FROM heroes WHERE level > 8 INTERSECT SELECT name FROM heroes WHERE level < 10;")
+	if len(res.Rows) != 1 || res.Rows[0][0] != "Legolas" {
+		t.Fatalf("expected Legolas for INTERSECT, got %#v", res.Rows)
+	}
+
+	// EXCEPT: all heroes EXCEPT those with level > 8
+	res = executeSQL(t, session, "SELECT name FROM heroes EXCEPT SELECT name FROM heroes WHERE level > 8;")
+	if len(res.Rows) != 2 { // Gimli (8), Boromir (5)
+		t.Fatalf("expected 2 rows for EXCEPT, got %d", len(res.Rows))
+	}
+}
+
+func TestSubqueries(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// Scalar subquery: SELECT name FROM heroes WHERE level > (SELECT AVG(level) FROM heroes);
+	// Levels: 10, 9, 8, 5 -> AVG = 32/4 = 8.0
+	// Greater than 8.0: Aragorn (10), Legolas (9)
+	res := executeSQL(t, session, "SELECT name FROM heroes WHERE level > (SELECT AVG(level) FROM heroes) ORDER BY level DESC;")
+	if len(res.Rows) != 2 {
+		t.Fatalf("expected 2 rows for scalar subquery, got %d", len(res.Rows))
+	}
+	if res.Rows[0][0] != "Aragorn" || res.Rows[1][0] != "Legolas" {
+		t.Fatalf("unexpected scalar subquery results: %#v", res.Rows)
+	}
+
+	// IN subquery: SELECT name FROM heroes WHERE id IN (SELECT id FROM heroes WHERE level >= 9);
+	// id IN (1, 2) -> Aragorn, Legolas
+	res = executeSQL(t, session, "SELECT name FROM heroes WHERE id IN (SELECT id FROM heroes WHERE level >= 9) ORDER BY id;")
+	if len(res.Rows) != 2 {
+		t.Fatalf("expected 2 rows for IN subquery, got %d", len(res.Rows))
+	}
+	if res.Rows[0][0] != "Aragorn" || res.Rows[1][0] != "Legolas" {
+		t.Fatalf("unexpected IN subquery results: %#v", res.Rows)
+	}
+}
+
+func TestWindowFunctions(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// ROW_NUMBER() OVER (ORDER BY level DESC)
+	res := executeSQL(t, session, "SELECT name, level, ROW_NUMBER() OVER (ORDER BY level DESC) as rn FROM heroes;")
+	if len(res.Rows) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(res.Rows))
+	}
+	// Aragorn (10) -> 1
+	// Legolas (9) -> 2
+	// Gimli (8) -> 3
+	// Boromir (5) -> 4
+	if res.Rows[0][2] != "1" || res.Rows[3][2] != "4" {
+		t.Fatalf("unexpected row numbers: %#v", res.Rows)
+	}
+
+	// SUM(level) OVER (ORDER BY level ASC) -- Running total
+	// Boromir (5) -> 5
+	// Gimli (8) -> 13
+	// Legolas (9) -> 22
+	// Aragorn (10) -> 32
+	res = executeSQL(t, session, "SELECT name, SUM(level) OVER (ORDER BY level ASC) as total FROM heroes;")
+	found := false
+	for _, row := range res.Rows {
+		if row[0] == "Gimli" && row[1] == "13" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("running total for Gimli (13) not found: %#v", res.Rows)
+	}
+}
+
+func TestAlterTable(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE TABLE t_alter (id INT, val TEXT);")
+	executeSQL(t, session, "INSERT INTO t_alter VALUES (1, 'old');")
+
+	// ADD COLUMN
+	executeSQL(t, session, "ALTER TABLE t_alter ADD COLUMN score FLOAT DEFAULT 0.0;")
+	res := executeSQL(t, session, "SELECT * FROM t_alter;")
+	if len(res.Columns) != 3 || res.Rows[0][2] != "0" {
+		t.Fatalf("expected 3 columns and default value 0.0, got cols=%d val=%s", len(res.Columns), res.Rows[0][2])
+	}
+
+	// RENAME COLUMN
+	executeSQL(t, session, "ALTER TABLE t_alter RENAME COLUMN val TO description;")
+	res = executeSQL(t, session, "SELECT description FROM t_alter;")
+	if res.Columns[0] != "description" {
+		t.Fatalf("expected column name description, got %s", res.Columns[0])
+	}
+
+	// DROP COLUMN
+	executeSQL(t, session, "ALTER TABLE t_alter DROP COLUMN score;")
+	res = executeSQL(t, session, "SELECT * FROM t_alter;")
+	if len(res.Columns) != 2 {
+		t.Fatalf("expected 2 columns after drop, got %d", len(res.Columns))
+	}
+
+	// RENAME TABLE
+	executeSQL(t, session, "ALTER TABLE t_alter RENAME TO t_new;")
+	res = executeSQL(t, session, "SELECT * FROM t_new;")
+	if len(res.Rows) != 1 {
+		t.Fatalf("expected 1 row from renamed table, got %d", len(res.Rows))
+	}
+}
+
+func TestBuiltInFunctions(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// UPPER, LOWER, CONCAT
+	res := executeSQL(t, session, "SELECT UPPER(name), LOWER(name), CONCAT(name, ' (', level, ')') FROM heroes WHERE id = 1;")
+	if res.Rows[0][0] != "ARAGORN" || res.Rows[0][1] != "aragorn" || res.Rows[0][2] != "Aragorn (10)" {
+		t.Fatalf("unexpected string function results: %#v", res.Rows[0])
+	}
+
+	// ABS, ROUND
+	res = executeSQL(t, session, "SELECT ABS(-10.5), ROUND(8.654, 1);")
+	if res.Rows[0][0] != "10.5" || res.Rows[0][1] != "8.7" {
+		t.Fatalf("unexpected math function results: %#v", res.Rows[0])
+	}
+
+	// COALESCE
+	res = executeSQL(t, session, "SELECT COALESCE(NULL, 'fallback');")
+	if res.Rows[0][0] != "fallback" {
+		t.Fatalf("expected fallback, got %s", res.Rows[0][0])
+	}
+}
+
+func TestCaseAndCast(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// CAST
+	res := executeSQL(t, session, "SELECT CAST(id AS TEXT), CAST('123' AS INT) + 1 FROM heroes WHERE id = 1;")
+	if res.Rows[0][0] != "1" || res.Rows[0][1] != "124" {
+		t.Fatalf("unexpected CAST results: %#v", res.Rows[0])
+	}
+
+	// CASE searched
+	res = executeSQL(t, session, "SELECT name, CASE WHEN level >= 10 THEN 'legend' WHEN level >= 8 THEN 'veteran' ELSE 'rookie' END as rank FROM heroes ORDER BY level DESC;")
+	// Aragorn (10) -> legend
+	// Legolas (9) -> veteran
+	// Gimli (8) -> veteran
+	// Boromir (5) -> rookie
+	if res.Rows[0][1] != "legend" || res.Rows[1][1] != "veteran" || res.Rows[3][1] != "rookie" {
+		t.Fatalf("unexpected CASE results: %#v", res.Rows)
+	}
+
+	// CASE simple
+	res = executeSQL(t, session, "SELECT name, CASE id WHEN 1 THEN 'one' WHEN 2 THEN 'two' ELSE 'other' END FROM heroes ORDER BY id;")
+	if res.Rows[0][1] != "one" || res.Rows[1][1] != "two" || res.Rows[2][1] != "other" {
+		t.Fatalf("unexpected simple CASE results: %#v", res.Rows)
+	}
+}
+
+func TestSemanticSearch(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE TABLE docs (id INT, content TEXT, v VECTOR(8));")
+	
+	// Use AI_EMBED to generate vectors during INSERT
+	executeSQL(t, session, "INSERT INTO docs (id, content, v) VALUES (1, 'database systems', AI_EMBED('database systems'));")
+	executeSQL(t, session, "INSERT INTO docs (id, content, v) VALUES (2, 'artificial intelligence', AI_EMBED('artificial intelligence'));")
+
+	// Semantic search using content SEMANTIC_MATCH 'query'
+	res := executeSQL(t, session, "SELECT content FROM docs WHERE content SEMANTIC_MATCH 'sql storage';")
+	if len(res.Rows) != 1 || res.Rows[0][0] != "database systems" {
+		t.Fatalf("expected semantic match for 'database systems', got %#v", res.Rows)
+	}
+
+	res = executeSQL(t, session, "SELECT content FROM docs WHERE content SEMANTIC_MATCH 'neural networks';")
+	if len(res.Rows) != 1 || res.Rows[0][0] != "artificial intelligence" {
+		t.Fatalf("expected semantic match for 'artificial intelligence', got %#v", res.Rows)
+	}
+}
+
+func TestSchemaFreeMode(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE TABLE dynamic INFER SCHEMA;")
+	
+	// First insert infers schema: id=INT, data=FLEXIBLE
+	executeSQL(t, session, "INSERT INTO dynamic (id, data) VALUES (1, '{\"name\": \"VaultDB\", \"tags\": [\"sql\", \"ai\"]}');")
+	
+	res := executeSQL(t, session, "SELECT * FROM dynamic;")
+	if len(res.Columns) != 2 || res.Columns[1] != "data" {
+		t.Fatalf("expected inferred columns [id, data], got %v", res.Columns)
+	}
+
+	// Query using JSON path
+	res = executeSQL(t, session, "SELECT data->>'name' FROM dynamic WHERE id = 1;")
+	if res.Rows[0][0] != "VaultDB" {
+		t.Fatalf("expected JSON path result 'VaultDB', got %s", res.Rows[0][0])
+	}
+}
+
+func TestSelectOrderBy(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// Sort by level ASC
+	asc := executeSQL(t, session, "SELECT name FROM heroes ORDER BY level ASC;")
+	expectedAsc := []string{"Boromir", "Gimli", "Legolas", "Aragorn"}
+	for i, name := range expectedAsc {
+		if asc.Rows[i][0] != name {
+			t.Fatalf("expected %s at index %d, got %s", name, i, asc.Rows[i][0])
+		}
+	}
+
+	// Sort by level DESC
+	desc := executeSQL(t, session, "SELECT name FROM heroes ORDER BY level DESC;")
+	expectedDesc := []string{"Aragorn", "Legolas", "Gimli", "Boromir"}
+	for i, name := range expectedDesc {
+		if desc.Rows[i][0] != name {
+			t.Fatalf("expected %s at index %d, got %s", name, i, desc.Rows[i][0])
+		}
+	}
+
+	// Multi-column sort: score DESC, name ASC (not needed here but good to test)
+}
+
+func TestSelectOffset(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// ORDER BY level DESC LIMIT 2 OFFSET 1
+	// Full: Aragorn (10), Legolas (9), Gimli (8), Boromir (5)
+	// Offset 1: Legolas (9), Gimli (8), Boromir (5)
+	// Limit 2: Legolas (9), Gimli (8)
+	res := executeSQL(t, session, "SELECT name FROM heroes ORDER BY level DESC LIMIT 2 OFFSET 1;")
+	if len(res.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(res.Rows))
+	}
+	if res.Rows[0][0] != "Legolas" || res.Rows[1][0] != "Gimli" {
+		t.Fatalf("unexpected rows: %#v", res.Rows)
 	}
 }
 
@@ -169,7 +517,7 @@ func TestDeleteWithWhere(t *testing.T) {
 func TestSelectFromMissingTable(t *testing.T) {
 	store := storage.NewFileStorageEngine(t.TempDir(), nil)
 	txm := txmanager.NewManager()
-	session := NewSession(store, nil, txm)
+	session := NewSession(store, nil, txm, nil)
 	executeSQL(t, session, "CREATE DATABASE mydb;")
 	executeSQL(t, session, "USE mydb;")
 

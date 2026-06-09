@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (arg == "--version") {
-            std::cout << "vaultdb-tui 1.0.2\n";
+            std::cout << "vaultdb-tui 1.2.0\n";
             return 0;
         }
     }

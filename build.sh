@@ -81,16 +81,16 @@ build_docker() {
         return 0
     fi
 
-    log "[*] Building Docker image vaultdb/vaultdb:1.0.2..."
-    docker build -t vaultdb/vaultdb:1.0.2 -t vaultdb/vaultdb:latest .
+    log "[*] Building Docker image vaultdb/vaultdb:1.2.0..."
+    docker build -t vaultdb/vaultdb:1.2.0 -t vaultdb/vaultdb:latest .
 
-    IMAGE_SIZE="$(docker image inspect vaultdb/vaultdb:1.0.2 --format='{{.Size}}' 2>/dev/null || echo '?')"
+    IMAGE_SIZE="$(docker image inspect vaultdb/vaultdb:1.2.0 --format='{{.Size}}' 2>/dev/null || echo '?')"
     log "[OK] Docker image built."
-    log "     Tag:  vaultdb/vaultdb:1.0.2"
+    log "     Tag:  vaultdb/vaultdb:1.2.0"
     log "     Size: ${IMAGE_SIZE} bytes"
     log ""
     log "     Quick start:"
-    log "     docker run -p 5432:5432 -p 8080:8080 vaultdb/vaultdb:1.0.2"
+    log "     docker run -p 5432:5432 -p 8080:8080 vaultdb/vaultdb:1.2.0"
     log ""
     log "     With persistence:"
     log "     docker compose up -d"

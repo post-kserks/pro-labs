@@ -29,6 +29,9 @@ func TestParseValidStatements(t *testing.T) {
 		"INSERT INTO heroes (id, name) VALUES (1, 'test'), (2, 'test2');",
 		"UPDATE heroes SET level = 11 WHERE id = 1;",
 		"DELETE FROM heroes WHERE alive = FALSE;",
+		"ALTER TABLE heroes ADD COLUMN age INT;",
+		"ALTER TABLE heroes DROP COLUMN alive;",
+		"ALTER TABLE heroes RENAME COLUMN level TO exp;",
 	}
 
 	for _, query := range queries {
@@ -51,7 +54,12 @@ func TestParseSelectShape(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *SelectStatement, got %T", stmt)
 	}
-	if len(sel.Columns) != 2 || sel.Columns[0] != "id" || sel.Columns[1] != "name" {
+	if len(sel.Columns) != 2 {
+		t.Fatalf("unexpected number of columns: %d", len(sel.Columns))
+	}
+	col1, ok1 := sel.Columns[0].Expr.(*ColumnRef)
+	col2, ok2 := sel.Columns[1].Expr.(*ColumnRef)
+	if !ok1 || !ok2 || col1.Name != "id" || col2.Name != "name" {
 		t.Fatalf("unexpected columns: %#v", sel.Columns)
 	}
 	if sel.TableName != "heroes" {
