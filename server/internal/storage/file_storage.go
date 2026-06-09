@@ -210,9 +210,9 @@ func (s *FileStorageEngine) AlterTableDropColumn(dbName, tableName string, colNa
 	defer lock.Unlock()
 
 	payload := walAlterTablePayload{
-		DB:    dbName,
-		Table: tableName,
-		Op:    "DROP_COLUMN",
+		DB:     dbName,
+		Table:  tableName,
+		Op:     "DROP_COLUMN",
 		Column: ColumnSchema{Name: colName},
 	}
 

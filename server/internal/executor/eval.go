@@ -134,7 +134,7 @@ func cosineSimilarity(v1, v2 []float64) float64 {
 func mockEmbed(text string) []float64 {
 	text = strings.ToLower(text)
 	res := make([]float64, 8)
-	
+
 	// Influence vector by keywords
 	if strings.Contains(text, "database") || strings.Contains(text, "sql") || strings.Contains(text, "storage") {
 		res[0] = 1.0
@@ -403,7 +403,7 @@ func evalInExpr(e *parser.InExpr, row storage.Row, schema *storage.TableSchema, 
 			if err != nil {
 				return nil, err
 			}
-			
+
 			found := false
 			leftStr := valueToString(leftVal)
 			for _, row := range res.Rows {

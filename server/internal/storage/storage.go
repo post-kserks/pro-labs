@@ -17,7 +17,6 @@ type ColumnSchema struct {
 	IsComputed bool   `json:"is_computed,omitempty"`
 }
 
-
 // TableSchema describes a table.
 type TableSchema struct {
 	Name      string         `json:"name"`

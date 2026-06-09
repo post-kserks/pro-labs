@@ -413,7 +413,7 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if col.Alias != "" {
 			projectColumns[i] = col.Alias
 		} else if colRef, ok := col.Expr.(*parser.ColumnRef); ok {
-			// Strip table prefix if present for clean output if desired, 
+			// Strip table prefix if present for clean output if desired,
 			// but for now let's keep it if it's there.
 			projectColumns[i] = colRef.Name
 		} else {
@@ -489,7 +489,7 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 			for _, rrow := range rightRows {
 				// Combined row
 				combinedRow := append(append(storage.Row{}, lrow...), rrow...)
-				
+
 				// Evaluate join condition
 				if join.Type == "CROSS" {
 					newRows = append(newRows, combinedRow)
@@ -497,7 +497,7 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 					// We need to handle column resolution for multi-table schema
 					// evalExpr needs to know which columns come from which table.
 					// This is where resolveColumn needs to be smarter.
-					
+
 					// For now, let's use a temporary schema for evaluation
 					// that has all columns.
 					ok, err := evalExpr(join.Condition, combinedRow, combinedSchema, ctx)
@@ -507,7 +507,7 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 				}
 			}
 		}
-		
+
 		currentSchema = combinedSchema
 		currentRows = newRows
 	}
@@ -552,7 +552,7 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 	resultRows := make([][]string, 0)
 	for _, key := range groupOrder {
 		groupRows := groups[key]
-		
+
 		// Create aggregators for this group
 		aggregators := make([]Aggregator, len(c.stmt.Columns))
 		for i, col := range c.stmt.Columns {
@@ -585,7 +585,7 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 		resultRow := make([]string, len(c.stmt.Columns))
 		// We need a virtual row for HAVING evaluation if it uses aggregates
 		virtualRow := make(storage.Row, len(c.stmt.Columns))
-		
+
 		for i, col := range c.stmt.Columns {
 			if aggregators[i] != nil {
 				res := aggregators[i].Result()
@@ -613,7 +613,7 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 			for i, name := range projectColumns {
 				projectedSchema.Columns[i] = storage.ColumnSchema{Name: name}
 			}
-			
+
 			// Evaluate HAVING on the projected (aggregated) result row
 			ok, err := evalExpr(c.stmt.Having, virtualRow, projectedSchema, ctx)
 			if err != nil {
@@ -1014,7 +1014,7 @@ func (c *InsertCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 			}
 			inferredCols = append(inferredCols, storage.ColumnSchema{Name: name, Type: colType})
 		}
-		
+
 		// Update table schema on disk
 		for _, col := range inferredCols {
 			if err := ctx.Storage.AlterTableAddColumn(dbName, c.stmt.TableName, col, nil); err != nil {
@@ -1114,7 +1114,10 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 				if col.Name == "double_level" {
 					levelIdx := -1
 					for j, c := range schema.Columns {
-						if c.Name == "level" { levelIdx = j; break }
+						if c.Name == "level" {
+							levelIdx = j
+							break
+						}
 					}
 					if levelIdx != -1 && normalized[levelIdx] != nil {
 						if f, ok := toFloat(normalized[levelIdx]); ok {
@@ -2189,7 +2192,7 @@ func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	policyTable := "_policies"
 	if !ctx.Storage.TableExists(dbName, policyTable) {
 		schema := storage.TableSchema{

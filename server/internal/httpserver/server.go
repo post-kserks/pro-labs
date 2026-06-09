@@ -383,7 +383,7 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 
 	// This is a placeholder for actual hijacking and framing.
 	// For the purpose of task.md, we'll implement the logic of subscription.
-	
+
 	db := r.URL.Query().Get("database")
 	query := r.URL.Query().Get("query")
 	if query == "" {
@@ -403,7 +403,7 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Upgrade to SSE for simplicity and stability without libraries, 
+	// Upgrade to SSE for simplicity and stability without libraries,
 	// while keeping the logic of "Live Query".
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -425,8 +425,10 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 
 	// Send initial result
 	sess := executor.NewSession(s.cfg.Storage, s.metrics, s.txm, s.br)
-	if db != "" { sess.SetCurrentDatabase(db) }
-	
+	if db != "" {
+		sess.SetCurrentDatabase(db)
+	}
+
 	// Initial evaluation
 	res, err := sess.Execute(selectStmt)
 	if err == nil {
@@ -504,10 +506,12 @@ func (s *Server) handleTableData(w http.ResponseWriter, r *http.Request, dbName,
 func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
 	// Support simple filtering: ?col=eq.val, ?col=gt.val
 	query := fmt.Sprintf("SELECT * FROM %s", tableName)
-	
+
 	var whereClauses []string
 	for col, vals := range r.URL.Query() {
-		if col == "database" || col == "query" { continue }
+		if col == "database" || col == "query" {
+			continue
+		}
 		for _, val := range vals {
 			parts := strings.SplitN(val, ".", 2)
 			if len(parts) == 2 {
@@ -515,10 +519,14 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 				actualVal := parts[1]
 				sqlOp := "="
 				switch op {
-				case "eq": sqlOp = "="
-				case "gt": sqlOp = ">"
-				case "lt": sqlOp = "<"
-				case "like": sqlOp = "LIKE"
+				case "eq":
+					sqlOp = "="
+				case "gt":
+					sqlOp = ">"
+				case "lt":
+					sqlOp = "<"
+				case "like":
+					sqlOp = "LIKE"
 				}
 				whereClauses = append(whereClauses, fmt.Sprintf("%s %s '%s'", col, sqlOp, actualVal))
 			} else {
@@ -526,7 +534,7 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 			}
 		}
 	}
-	
+
 	if len(whereClauses) > 0 {
 		query += " WHERE " + strings.Join(whereClauses, " AND ")
 	}

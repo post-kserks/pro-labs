@@ -56,7 +56,7 @@ type sqlParser struct {
 func (p *sqlParser) parseStatement() (Statement, error) {
 	var stmt Statement
 	var err error
-	
+
 	switch p.current().Type {
 	case lexer.TOKEN_CREATE:
 		if p.peek().Type == lexer.TOKEN_MIGRATION {
@@ -734,7 +734,7 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 	p.advance() // SELECT
 
 	columns := make([]SelectColumn, 0, 8)
-	
+
 	if p.current().Type == lexer.TOKEN_STAR {
 		p.advance() // Consume '*'
 	} else {
@@ -743,7 +743,7 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 			if err != nil {
 				return nil, err
 			}
-			
+
 			alias := ""
 			if p.current().Type == lexer.TOKEN_AS {
 				p.advance()
@@ -755,9 +755,9 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 				alias = p.current().Literal
 				p.advance()
 			}
-			
+
 			columns = append(columns, SelectColumn{Expr: expr, Alias: alias})
-			
+
 			if p.current().Type == lexer.TOKEN_COMMA {
 				p.advance()
 				continue
@@ -834,7 +834,7 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 		if tokType != lexer.TOKEN_JOIN && tokType != lexer.TOKEN_INNER && tokType != lexer.TOKEN_LEFT && tokType != lexer.TOKEN_RIGHT && tokType != lexer.TOKEN_FULL && tokType != lexer.TOKEN_CROSS {
 			break
 		}
-		
+
 		joinType := "INNER"
 		if tokType != lexer.TOKEN_JOIN {
 			joinType = p.current().Literal
@@ -847,12 +847,12 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 		} else {
 			p.advance() // JOIN
 		}
-		
+
 		joinTable, err := p.consumeIdent("join table name")
 		if err != nil {
 			return nil, err
 		}
-		
+
 		joinAlias := ""
 		if p.current().Type == lexer.TOKEN_AS {
 			p.advance()
@@ -866,7 +866,7 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 				p.advance()
 			}
 		}
-		
+
 		var joinCond Expression
 		if strings.ToUpper(joinType) != "CROSS" {
 			if err := p.consume(lexer.TOKEN_ON, "ON"); err != nil {
@@ -877,7 +877,7 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 				return nil, err
 			}
 		}
-		
+
 		joins = append(joins, JoinClause{
 			Type:      strings.ToUpper(joinType),
 			TableName: joinTable,
@@ -1194,7 +1194,7 @@ func (p *sqlParser) parseComparison() (Expression, error) {
 		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
 			return nil, err
 		}
-		
+
 		var list []Expression
 		if p.current().Type == lexer.TOKEN_SELECT {
 			stmt, err := p.parseSelect()
@@ -1338,7 +1338,7 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 				args = append(args, &ColumnRef{Name: "*"})
 				p.advance()
 			}
-			
+
 			if len(args) == 0 && p.current().Type != lexer.TOKEN_RPAREN {
 				list, err := p.parseValueListUntilRParen()
 				if err != nil {
@@ -1349,7 +1349,7 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 				return nil, err
 			}
-			
+
 			var funcExpr Expression
 			nameUp := strings.ToUpper(ident)
 			if nameUp == "COUNT" || nameUp == "SUM" || nameUp == "AVG" || nameUp == "MIN" || nameUp == "MAX" {
@@ -1357,7 +1357,7 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 			} else {
 				funcExpr = &FunctionCall{Name: nameUp, Args: args}
 			}
-			
+
 			if p.current().Type == lexer.TOKEN_OVER {
 				p.advance()
 				if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
@@ -1575,7 +1575,7 @@ func (p *sqlParser) parseCast() (Expression, error) {
 
 func (p *sqlParser) parseCase() (Expression, error) {
 	p.advance() // CASE
-	
+
 	var base Expression
 	if p.current().Type != lexer.TOKEN_WHEN {
 		var err error
@@ -1817,7 +1817,7 @@ func (p *sqlParser) parseSetOperation(left Statement) (Statement, error) {
 
 		op := tok.Literal
 		p.advance()
-		
+
 		if strings.EqualFold(op, "UNION") && strings.EqualFold(p.current().Literal, "ALL") {
 			op = "UNION ALL"
 			p.advance()
@@ -1826,7 +1826,7 @@ func (p *sqlParser) parseSetOperation(left Statement) (Statement, error) {
 		if p.current().Type != lexer.TOKEN_SELECT {
 			return nil, p.expectedError("SELECT after set operator", p.current())
 		}
-		
+
 		right, err := p.parseSelect()
 		if err != nil {
 			return nil, err

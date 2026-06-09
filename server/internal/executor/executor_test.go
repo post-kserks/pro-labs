@@ -341,7 +341,7 @@ func TestCaseAndCast(t *testing.T) {
 func TestSemanticSearch(t *testing.T) {
 	session := setupSession(t)
 	executeSQL(t, session, "CREATE TABLE docs (id INT, content TEXT, v VECTOR(8));")
-	
+
 	// Use AI_EMBED to generate vectors during INSERT
 	executeSQL(t, session, "INSERT INTO docs (id, content, v) VALUES (1, 'database systems', AI_EMBED('database systems'));")
 	executeSQL(t, session, "INSERT INTO docs (id, content, v) VALUES (2, 'artificial intelligence', AI_EMBED('artificial intelligence'));")
@@ -361,10 +361,10 @@ func TestSemanticSearch(t *testing.T) {
 func TestSchemaFreeMode(t *testing.T) {
 	session := setupSession(t)
 	executeSQL(t, session, "CREATE TABLE dynamic INFER SCHEMA;")
-	
+
 	// First insert infers schema: id=INT, data=FLEXIBLE
 	executeSQL(t, session, "INSERT INTO dynamic (id, data) VALUES (1, '{\"name\": \"VaultDB\", \"tags\": [\"sql\", \"ai\"]}');")
-	
+
 	res := executeSQL(t, session, "SELECT * FROM dynamic;")
 	if len(res.Columns) != 2 || res.Columns[1] != "data" {
 		t.Fatalf("expected inferred columns [id, data], got %v", res.Columns)
