@@ -1,4 +1,4 @@
-package server
+package vaultdb
 
 import (
 	"vaultdb/internal/executor"
