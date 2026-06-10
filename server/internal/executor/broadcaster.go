@@ -1,25 +1,157 @@
 package executor
 
 import (
+	"log/slog"
 	"sync"
+	"sync/atomic"
+	"time"
+
 	"vaultdb/internal/parser"
 )
+
+// DropPolicy определяет поведение при переполнении канала подписки.
+type DropPolicy int
+
+const (
+	// PolicyDrop — отбросить обновление с логированием (поведение по умолчанию).
+	PolicyDrop DropPolicy = iota
+	// PolicyBlock — блокировать до освобождения места; по таймауту клиент отписывается.
+	PolicyBlock
+	// PolicyEvict — вытеснить старейшее обновление и положить новое.
+	PolicyEvict
+)
+
+// ParseDropPolicy разбирает значение drop_policy из конфигурации.
+func ParseDropPolicy(s string) DropPolicy {
+	switch s {
+	case "block":
+		return PolicyBlock
+	case "evict":
+		return PolicyEvict
+	default:
+		return PolicyDrop
+	}
+}
 
 type Subscription struct {
 	ID    string
 	Query *parser.SelectStatement
 	DB    string
 	Send  chan *Result
+
+	DropPolicy   DropPolicy
+	BlockTimeout time.Duration
+
+	closed atomic.Bool
+}
+
+// Close закрывает канал подписки ровно один раз.
+func (s *Subscription) Close() {
+	if s.closed.CompareAndSwap(false, true) {
+		close(s.Send)
+	}
+}
+
+// notify доставляет обновление согласно политике подписки.
+// Возвращает false, если клиент должен быть отписан (block-таймаут).
+func (s *Subscription) notify(res *Result, logger *slog.Logger) bool {
+	if s.closed.Load() {
+		return false
+	}
+
+	switch s.DropPolicy {
+	case PolicyBlock:
+		timeout := s.BlockTimeout
+		if timeout <= 0 {
+			timeout = 5 * time.Second
+		}
+		select {
+		case s.Send <- res:
+			return true
+		case <-time.After(timeout):
+			// Клиент слишком медленный — отписываем
+			logger.Warn("live query subscription timed out, unsubscribing",
+				"subscription", s.ID)
+			return false
+		}
+
+	case PolicyEvict:
+		// Вытесняем старейшее обновление — подходит для real-time дашбордов.
+		// Количество попыток ограничено: при конкурентной записи нельзя
+		// крутиться бесконечно.
+		for attempt := 0; attempt < cap(s.Send)+4; attempt++ {
+			select {
+			case s.Send <- res:
+				return true
+			default:
+				select {
+				case <-s.Send: // discard oldest
+				default:
+				}
+			}
+		}
+		logger.Warn("live query notification dropped after evict attempts",
+			"subscription", s.ID)
+		return true
+
+	default: // PolicyDrop
+		select {
+		case s.Send <- res:
+		default:
+			logger.Warn("live query notification dropped, client too slow",
+				"subscription", s.ID)
+		}
+		return true
+	}
 }
 
 type Broadcaster struct {
 	mu            sync.RWMutex
 	subscriptions map[string]*Subscription
+
+	logger        *slog.Logger
+	defaultPolicy DropPolicy
+	blockTimeout  time.Duration
+	bufferSize    int
 }
 
 func NewBroadcaster() *Broadcaster {
 	return &Broadcaster{
 		subscriptions: make(map[string]*Subscription),
+		logger:        slog.Default(),
+		defaultPolicy: PolicyDrop,
+		blockTimeout:  5 * time.Second,
+		bufferSize:    256,
+	}
+}
+
+// Configure задаёт политику доставки Live Queries (вызывается при старте).
+func (b *Broadcaster) Configure(policy DropPolicy, blockTimeout time.Duration, bufferSize int, logger *slog.Logger) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.defaultPolicy = policy
+	if blockTimeout > 0 {
+		b.blockTimeout = blockTimeout
+	}
+	if bufferSize > 0 {
+		b.bufferSize = bufferSize
+	}
+	if logger != nil {
+		b.logger = logger
+	}
+}
+
+// NewSubscription создаёт подписку с настроенными политикой и буфером.
+func (b *Broadcaster) NewSubscription(id string, query *parser.SelectStatement, db string) *Subscription {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return &Subscription{
+		ID:           id,
+		Query:        query,
+		DB:           db,
+		Send:         make(chan *Result, b.bufferSize),
+		DropPolicy:   b.defaultPolicy,
+		BlockTimeout: b.blockTimeout,
 	}
 }
 
@@ -39,6 +171,7 @@ func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *Executio
 	// Snapshot matching subscriptions first so subscriber queries do not run
 	// while holding the broadcaster lock.
 	b.mu.RLock()
+	logger := b.logger
 	matched := make([]*Subscription, 0, len(b.subscriptions))
 	for _, s := range b.subscriptions {
 		if s.DB == dbName && s.Query.TableName == tableName {
@@ -51,12 +184,14 @@ func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *Executio
 		// Re-run the query
 		cmd := &SelectCommand{stmt: s.Query}
 		res, err := cmd.Execute(ctx)
-		if err == nil {
-			select {
-			case s.Send <- res:
-			default:
-				// Drop notification if channel is full
-			}
+		if err != nil {
+			continue
+		}
+		if !s.notify(res, logger) {
+			// Клиент отвалился или слишком медленный — отписываем и
+			// закрываем канал, чтобы читатель узнал об отписке.
+			b.Unsubscribe(s.ID)
+			s.Close()
 		}
 	}
 }

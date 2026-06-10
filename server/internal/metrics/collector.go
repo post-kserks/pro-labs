@@ -10,13 +10,63 @@ import (
 	"time"
 )
 
+// queryClass — категория запроса для счётчиков. Набор известен заранее,
+// поэтому на горячем пути используются прямые atomic-счётчики без sync.Map.
+type queryClass int
+
+const (
+	classSelect queryClass = iota
+	classInsert
+	classUpdate
+	classDelete
+	classDDL
+	classExplain
+	classTransaction
+	classOther
+	numQueryClasses
+)
+
+var queryClassNames = [numQueryClasses]string{
+	"select", "insert", "update", "delete", "ddl", "explain", "transaction", "other",
+}
+
+// QueryCounters — счётчики ok/error по каждой категории запросов.
+type QueryCounters struct {
+	ok  [numQueryClasses]atomic.Int64
+	err [numQueryClasses]atomic.Int64
+}
+
+// classify сводит StatementType (в нижнем регистре) к категории счётчика.
+func classify(queryType string) queryClass {
+	switch queryType {
+	case "select", "set_operation":
+		return classSelect
+	case "insert":
+		return classInsert
+	case "update":
+		return classUpdate
+	case "delete":
+		return classDelete
+	case "explain":
+		return classExplain
+	case "begin", "commit", "rollback":
+		return classTransaction
+	case "create_database", "drop_database", "create_table", "drop_table",
+		"alter_table", "create_index", "drop_index", "create_policy",
+		"enable_rls", "migration", "ddl":
+		return classDDL
+	default:
+		return classOther
+	}
+}
+
 // Collector хранит все метрики сервера и умеет сериализовать их
 // в Prometheus text format.
 type Collector struct {
 	startTime time.Time
 
-	// Счётчики запросов: ключ = "type:status", например "select:ok"
-	queryCounts sync.Map // map[string]*atomic.Int64
+	// Счётчики запросов по категориям (прямые atomic, без sync.Map)
+	queries QueryCounters
 
 	// Гистограмма времени выполнения (в секундах)
 	// Границы бакетов: 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, +Inf
@@ -61,10 +111,13 @@ func New() *Collector {
 // status: "ok" или "error"
 // duration: время выполнения
 func (c *Collector) RecordQuery(queryType, status string, duration time.Duration) {
-	// Счётчик запросов
-	key := queryType + ":" + status
-	v, _ := c.queryCounts.LoadOrStore(key, new(atomic.Int64))
-	v.(*atomic.Int64).Add(1)
+	// Счётчик запросов: прямое обращение к atomic — никакого sync.Map
+	class := classify(strings.ToLower(queryType))
+	if status == "error" {
+		c.queries.err[class].Add(1)
+	} else {
+		c.queries.ok[class].Add(1)
+	}
 
 	// Гистограмма (только успешные запросы)
 	if status == "ok" {
@@ -111,22 +164,14 @@ func (c *Collector) Render() string {
 	b.WriteString("# HELP vaultdb_queries_total Total SQL queries executed\n")
 	b.WriteString("# TYPE vaultdb_queries_total counter\n")
 
-	// Собираем и сортируем ключи для детерминированного вывода
-	var queryKeys []string
-	c.queryCounts.Range(func(k, _ interface{}) bool {
-		queryKeys = append(queryKeys, k.(string))
-		return true
-	})
-	sort.Strings(queryKeys)
-
-	for _, key := range queryKeys {
-		v, _ := c.queryCounts.Load(key)
-		parts := strings.SplitN(key, ":", 2)
-		if len(parts) == 2 {
-			fmt.Fprintf(&b,
-				`vaultdb_queries_total{type="%s",status="%s"} %d`+"\n",
-				parts[0], parts[1], v.(*atomic.Int64).Load())
-		}
+	// Прямые атомарные чтения; фиксированный порядок категорий
+	for class := queryClass(0); class < numQueryClasses; class++ {
+		fmt.Fprintf(&b,
+			`vaultdb_queries_total{type="%s",status="ok"} %d`+"\n",
+			queryClassNames[class], c.queries.ok[class].Load())
+		fmt.Fprintf(&b,
+			`vaultdb_queries_total{type="%s",status="error"} %d`+"\n",
+			queryClassNames[class], c.queries.err[class].Load())
 	}
 
 	// ── Гистограмма времени выполнения ────────────────────────────────

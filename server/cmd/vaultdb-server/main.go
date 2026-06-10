@@ -20,7 +20,9 @@ import (
 	"syscall"
 	"time"
 
+	"vaultdb/internal/ai"
 	"vaultdb/internal/auth"
+	"vaultdb/internal/config"
 	"vaultdb/internal/executor"
 	"vaultdb/internal/httpserver"
 	"vaultdb/internal/metrics"
@@ -29,8 +31,10 @@ import (
 	"vaultdb/internal/txmanager"
 )
 
+// version и buildDate перезаписываются через ldflags при сборке
+// (единый источник истины — файл VERSION в корне репозитория).
 var (
-	version   = "1.2.0"
+	version   = "dev"
 	buildDate = "unknown"
 )
 
@@ -67,6 +71,39 @@ func main() {
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
+
+	cfgPath := *configPath
+	if cfgPath != "" {
+		if _, err := os.Stat(cfgPath); err != nil {
+			logger.Warn("config file not found, using defaults", "path", cfgPath, "error", err)
+			cfgPath = ""
+		}
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		logger.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
+
+	// CLI-флаги имеют приоритет над vaultdb.yaml: значения из конфига
+	// применяются только для флагов, которые не были заданы явно.
+	setFlags := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	if !setFlags["host"] {
+		*host = cfg.Server.Host
+	}
+	if !setFlags["port"] {
+		*port = cfg.Server.Port
+	}
+	if !setFlags["http-port"] {
+		*httpPort = cfg.Server.HTTPPort
+	}
+	if !setFlags["monitor-port"] {
+		*monitorPort = cfg.Server.MonitorPort
+	}
+	if !setFlags["data"] {
+		*dataDir = cfg.Storage.DataDir
+	}
 	logger.Info("starting vaultdb server",
 		"version", version,
 		"build_date", buildDate,
@@ -82,7 +119,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	store := storage.NewFileStorageEngine(*dataDir, metricsCollector)
+	// Выбор движка хранения (storage.engine в vaultdb.yaml)
+	var store storage.StorageEngine
+	switch cfg.Storage.Engine {
+	case "page":
+		pageStore, err := storage.NewPageStorageEngine(*dataDir)
+		if err != nil {
+			logger.Error("failed to open page storage engine", "error", err)
+			os.Exit(1)
+		}
+		store = pageStore
+		logger.Info("using page-based storage engine (experimental)")
+	default:
+		store = storage.NewFileStorageEngine(*dataDir, metricsCollector)
+		logger.Info("using JSON storage engine")
+	}
 	defer func() {
 		if err := store.Close(); err != nil {
 			logger.Warn("storage close failed", "error", err)
@@ -91,6 +142,11 @@ func main() {
 
 	txm := txmanager.NewManager()
 	br := executor.NewBroadcaster()
+	br.Configure(
+		executor.ParseDropPolicy(cfg.Server.LiveQueries.DropPolicy),
+		time.Duration(cfg.Server.LiveQueries.BlockTimeoutS)*time.Second,
+		cfg.Server.LiveQueries.BufferSize,
+		logger)
 
 	var activeConnections atomic.Int64
 
@@ -112,7 +168,7 @@ func main() {
 	av := storage.NewAutoVacuum(store, 0.2, 1*time.Minute, logger)
 	go av.Run(ctx)
 
-	authEnabled := envBool("VAULTDB_AUTH_ENABLED", true)
+	authEnabled := envBool("VAULTDB_AUTH_ENABLED", cfg.Auth.Enabled)
 	tokens := tokensFromEnv()
 	if authEnabled && len(tokens) == 0 {
 		token, err := generateToken()
@@ -126,6 +182,23 @@ func main() {
 			"hint", "set VAULTDB_API_TOKENS to configure stable tokens, or VAULTDB_AUTH_ENABLED=0 to disable auth")
 	}
 	authManager := auth.New(authEnabled, tokens)
+
+	// Embedding-провайдер для SEMANTIC_MATCH/AI_EMBED. Без настроенного AI
+	// эти операции возвращают понятную ошибку (NoopEmbedder в executor).
+	var embedder ai.Embedder
+	if cfg.AI.Endpoint != "" {
+		apiKey := cfg.AI.APIKey
+		if envKey := strings.TrimSpace(os.Getenv("VAULTDB_AI_API_KEY")); envKey != "" {
+			apiKey = envKey
+		}
+		embedder = ai.NewHTTPEmbedder(cfg.AI.Endpoint, cfg.AI.Model, apiKey)
+		logger.Info("AI embedder configured",
+			"provider", cfg.AI.Provider,
+			"endpoint", cfg.AI.Endpoint,
+			"model", cfg.AI.Model)
+	} else {
+		logger.Info("AI embedder not configured; SEMANTIC_MATCH and AI_EMBED will return a configuration error")
+	}
 
 	httpSrv := httpserver.New(httpserver.Config{
 		Host:        *host,
@@ -141,6 +214,7 @@ func main() {
 			return activeConnections.Load()
 		},
 		Broadcaster: br,
+		Embedder:    embedder,
 	})
 
 	httpErrCh := make(chan error, 1)
@@ -149,6 +223,11 @@ func main() {
 			httpErrCh <- err
 		}
 	}()
+
+	maxRequestSize := cfg.Server.MaxRequestSizeBytes
+	if maxRequestSize <= 0 {
+		maxRequestSize = config.DefaultMaxRequestSize
+	}
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	listener, err := net.Listen("tcp", addr)
@@ -186,7 +265,7 @@ func main() {
 				defer wg.Done()
 				defer activeConnections.Add(-1)
 				defer metricsCollector.DecConnections()
-				handleConnection(c, store, metricsCollector, txm, br, authManager, logger)
+				handleConnection(c, store, metricsCollector, txm, br, authManager, embedder, logger, maxRequestSize)
 			}(conn)
 		}
 	}()
@@ -226,10 +305,13 @@ func runHealthCheck(monitorPort int) int {
 	return 0
 }
 
-func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, logger *slog.Logger) {
+func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, embedder ai.Embedder, logger *slog.Logger, maxRequestSize int) {
 	defer conn.Close()
 
 	session := executor.NewSession(store, m, txm, br)
+	if embedder != nil {
+		session.SetEmbedder(embedder)
+	}
 	defer func() {
 		if session.IsInTx() {
 			logger.Warn("connection closed with active transaction, rolling back",
@@ -239,31 +321,39 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 	}()
 
 	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxRequestSize)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 
 		var req Request
 		if err := json.Unmarshal(line, &req); err != nil {
-			sendError(conn, "", "invalid JSON request")
+			if !sendError(conn, "", "invalid JSON request", logger) {
+				return
+			}
 			continue
 		}
 
 		if !authManager.ValidateToken(req.Token) {
-			sendError(conn, req.ID, "unauthorized: invalid or missing token")
+			if !sendError(conn, req.ID, "unauthorized: invalid or missing token", logger) {
+				return
+			}
 			continue
 		}
 
 		stmt, err := parser.Parse(req.Query)
 		if err != nil {
-			sendError(conn, req.ID, err.Error())
+			if !sendError(conn, req.ID, err.Error(), logger) {
+				return
+			}
 			continue
 		}
 
 		result, err := session.Execute(stmt)
 		if err != nil {
-			sendError(conn, req.ID, err.Error())
+			if !sendError(conn, req.ID, err.Error(), logger) {
+				return
+			}
 			continue
 		}
 
@@ -278,7 +368,10 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 	}
 }
 
-func sendError(conn net.Conn, id, message string) {
+// sendError отправляет ошибку клиенту. Возвращает false, если запись в сокет
+// не удалась (клиент отвалился) — в этом случае обрабатывать соединение дальше
+// бессмысленно.
+func sendError(conn net.Conn, id, message string, logger *slog.Logger) bool {
 	resp := Response{
 		ID:      id,
 		Status:  "error",
@@ -287,7 +380,13 @@ func sendError(conn net.Conn, id, message string) {
 		Rows:    [][]string{},
 		Message: message,
 	}
-	_ = writeResponse(conn, resp)
+	if err := writeResponse(conn, resp); err != nil {
+		logger.Debug("failed to send error response, client disconnected",
+			"conn", conn.RemoteAddr(),
+			"error", err)
+		return false
+	}
+	return true
 }
 
 func sendResult(conn net.Conn, id string, result *executor.Result) error {

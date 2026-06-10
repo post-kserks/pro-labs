@@ -7,3 +7,17 @@ data/**/*
 *.so
 *.a
 CLAUDE.md
+# Данные и временные файлы
+data_test/
+tmp_data/
+**/tmp_data/
+**/tmp_*.txt
+**/tmp_*.json
+task.md
+*.md.bak
+
+# Web UI
+node_modules/
+
+# macOS
+.DS_Store

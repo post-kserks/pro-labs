@@ -1,9 +1,0 @@
-{
-  "indexes": [
-    {
-      "name": "idx_id",
-      "column": "id",
-      "col_index": 0
-    }
-  ]
-}

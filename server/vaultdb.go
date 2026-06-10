@@ -1,6 +1,7 @@
 package vaultdb
 
 import (
+	"vaultdb/internal/ai"
 	"vaultdb/internal/executor"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
@@ -14,6 +15,8 @@ type VaultDB struct {
 	Metrics     *metrics.Collector
 	TxManager   *txmanager.Manager
 	Broadcaster *executor.Broadcaster
+	// Embedder, if set, enables SEMANTIC_MATCH and AI_EMBED.
+	Embedder ai.Embedder
 }
 
 // Open creates a new embedded database instance.
@@ -41,6 +44,9 @@ func (db *VaultDB) Query(dbName, sql string) (*executor.Result, error) {
 	}
 
 	session := executor.NewSession(db.Storage, db.Metrics, db.TxManager, db.Broadcaster)
+	if db.Embedder != nil {
+		session.SetEmbedder(db.Embedder)
+	}
 	if dbName != "" {
 		session.SetCurrentDatabase(dbName)
 	}

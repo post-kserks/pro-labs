@@ -1,14 +1,15 @@
 package executor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"vaultdb/internal/ai"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -52,48 +53,12 @@ func evalBinary(expr *parser.BinaryExpr, row storage.Row, schema *storage.TableS
 	case "IS NOT":
 		return left != nil, nil
 	case "SEMANTIC_MATCH":
-		return evalSemanticMatch(left, right)
+		return evalSemanticMatch(left, right, ctx)
 	case "FTS_MATCH":
 		return evalFtsMatch(left, right)
 	default:
 		return nil, fmt.Errorf("unsupported operator '%s'", expr.Operator)
 	}
-}
-
-// evalLike implements SQL LIKE: % matches any run of characters, _ matches a
-// single character. NULL operands never match.
-func evalLike(left, right interface{}) (bool, error) {
-	if left == nil || right == nil {
-		return false, nil
-	}
-	pattern, ok := right.(string)
-	if !ok {
-		return false, fmt.Errorf("LIKE pattern must be a string, got %T", right)
-	}
-	text, ok := left.(string)
-	if !ok {
-		text = valueToString(left)
-	}
-
-	var b strings.Builder
-	b.WriteString("(?s)^")
-	for _, r := range pattern {
-		switch r {
-		case '%':
-			b.WriteString(".*")
-		case '_':
-			b.WriteString(".")
-		default:
-			b.WriteString(regexp.QuoteMeta(string(r)))
-		}
-	}
-	b.WriteString("$")
-
-	re, err := regexp.Compile(b.String())
-	if err != nil {
-		return false, fmt.Errorf("invalid LIKE pattern %q: %w", pattern, err)
-	}
-	return re.MatchString(text), nil
 }
 
 func evalFtsMatch(left, right interface{}) (bool, error) {
@@ -123,18 +88,42 @@ func evalFtsMatch(left, right interface{}) (bool, error) {
 	return score > 0.1, nil // Threshold for "match"
 }
 
-func evalSemanticMatch(left, right interface{}) (bool, error) {
-	v1, err := toVector(left)
+// evalSemanticMatch сравнивает операнды по косинусной близости. Операнды,
+// которые уже являются векторами, используются как есть; текст прогоняется
+// через настроенный embedding-провайдер. Если AI не настроен, возвращается
+// понятная ошибка (NoopEmbedder), а не тихий mock-результат.
+func evalSemanticMatch(left, right interface{}, ctx *ExecutionContext) (bool, error) {
+	v1, err := operandVector(left, ctx)
 	if err != nil {
-		v1 = mockEmbed(valueToString(left))
+		return false, fmt.Errorf("SEMANTIC_MATCH: %w", err)
 	}
-	v2, err := toVector(right)
+	v2, err := operandVector(right, ctx)
 	if err != nil {
-		v2 = mockEmbed(valueToString(right))
+		return false, fmt.Errorf("SEMANTIC_MATCH: %w", err)
 	}
 
 	sim := cosineSimilarity(v1, v2)
 	return sim > 0.7, nil
+}
+
+// operandVector превращает операнд в вектор: готовые векторы проходят как
+// есть, текст эмбеддится через настроенный провайдер.
+func operandVector(val interface{}, ctx *ExecutionContext) ([]float64, error) {
+	if v, err := toVector(val); err == nil {
+		return v, nil
+	}
+	return embedText(ctx, valueToString(val))
+}
+
+// embedText вызывает настроенный embedding-провайдер с таймаутом.
+func embedText(ctx *ExecutionContext, text string) ([]float64, error) {
+	var embedder ai.Embedder = ai.NoopEmbedder{}
+	if ctx != nil && ctx.Embedder != nil {
+		embedder = ctx.Embedder
+	}
+	embedCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return embedder.Embed(embedCtx, text)
 }
 
 func toVector(val interface{}) ([]float64, error) {
@@ -172,29 +161,6 @@ func cosineSimilarity(v1, v2 []float64) float64 {
 		return 0
 	}
 	return dot / (math.Sqrt(n1) * math.Sqrt(n2))
-}
-
-func mockEmbed(text string) []float64 {
-	text = strings.ToLower(text)
-	res := make([]float64, 8)
-
-	// Influence vector by keywords
-	if strings.Contains(text, "database") || strings.Contains(text, "sql") || strings.Contains(text, "storage") {
-		res[0] = 1.0
-	}
-	if strings.Contains(text, "ai") || strings.Contains(text, "artificial") || strings.Contains(text, "intelligence") || strings.Contains(text, "neural") || strings.Contains(text, "network") {
-		res[4] = 1.0
-	}
-
-	// Add some hash-based noise but keep it small
-	var h uint32
-	for _, b := range []byte(text) {
-		h = h*31 + uint32(b)
-	}
-	for i := range res {
-		res[i] += math.Sin(float64(h)+float64(i)) * 0.1
-	}
-	return res
 }
 
 func evalArithmetic(left, right interface{}, op string) (interface{}, error) {
@@ -393,7 +359,11 @@ func evalFunctionCall(fn *parser.FunctionCall, row storage.Row, schema *storage.
 			return nil, fmt.Errorf("AI_EMBED requires 1 argument")
 		}
 		text := valueToString(args[0])
-		return mockEmbed(text), nil
+		vec, err := embedText(ctx, text)
+		if err != nil {
+			return nil, fmt.Errorf("AI_EMBED: %w", err)
+		}
+		return vec, nil
 	default:
 		return nil, fmt.Errorf("unknown function: %s", name)
 	}

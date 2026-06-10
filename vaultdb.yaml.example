@@ -3,9 +3,31 @@ server:
   port: 5432
   http_port: 8080
   monitor_port: 5433
+  # Максимальный размер одного запроса по TCP-протоколу
+  max_request_size_bytes: 67108864  # 64 МБ
+  live_queries:
+    # Размер буфера канала каждой подписки
+    buffer_size: 256
+    # Что делать, когда клиент не успевает читать обновления:
+    #   drop  — отбросить обновление (с логированием)
+    #   block — ждать до block_timeout_s, затем отписать клиента
+    #   evict — вытеснить старейшее обновление и положить новое
+    drop_policy: "evict"
+    block_timeout_s: 5
 
 storage:
+  # json — хранилище на JSON-файлах (по умолчанию)
+  # page — бинарное страничное хранилище (экспериментальное)
+  engine: "json"
   data_dir: /data
 
 auth:
   enabled: true
+
+# Внешний embedding-провайдер для SEMANTIC_MATCH и AI_EMBED.
+# Если секция не заполнена, SEMANTIC_MATCH возвращает понятную ошибку.
+ai:
+  provider: ""        # "openai" или "ollama"
+  endpoint: ""        # например https://api.openai.com/v1/embeddings или http://localhost:11434/api/embeddings
+  model: ""           # например text-embedding-3-small или nomic-embed-text
+  api_key: ""         # или переменная окружения VAULTDB_AI_API_KEY

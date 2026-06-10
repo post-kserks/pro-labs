@@ -1,8 +1,12 @@
-.PHONY: docker-build docker-run docker-stop docker-clean docker-logs docker-health
+.PHONY: build docker-build docker-run docker-stop docker-clean docker-logs docker-health
 
 IMAGE   := vaultdb/vaultdb
-VERSION := 1.2.0
+VERSION := $(shell cat VERSION)
 TAG     := $(IMAGE):$(VERSION)
+LDFLAGS := -X main.version=$(VERSION) -X main.buildDate=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+build:
+	cd server && go build -ldflags="$(LDFLAGS)" -o ../build/vaultdb-server ./cmd/vaultdb-server
 
 docker-build:
 	docker build \

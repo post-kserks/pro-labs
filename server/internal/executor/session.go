@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"vaultdb/internal/ai"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -30,6 +31,11 @@ func NewSession(store storage.StorageEngine, m *metrics.Collector, txm *txmanage
 		Broadcaster:        b,
 		PreparedStatements: make(map[string]*PreparedStatement),
 	}
+}
+
+// SetEmbedder подключает embedding-провайдер для SEMANTIC_MATCH/AI_EMBED.
+func (s *Session) SetEmbedder(emb ai.Embedder) {
+	s.executor.SetEmbedder(emb)
 }
 
 func (s *Session) IsInTx() bool {

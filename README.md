@@ -53,21 +53,35 @@ cd ../..
 | Особенность | VaultDB | PostgreSQL | MongoDB | Vector DBs |
 | :--- | :--- | :--- | :--- | :--- |
 | **Схема** | Flexible (INFER SCHEMA) | Rigid (Strict) | Schema-less | Rigid/None |
-| **AI/Vector** | Native (Built-in) | via Extensions | No | Native |
+| **AI/Vector** | SQL-синтаксис + внешний embedder | via Extensions | No | Native |
 | **Real-time** | Live Queries (Native) | via Triggers/CDC | Change Streams | No |
 | **API** | Auto REST + OpenAPI | Third-party (PostgREST)| Native | Limited |
 | **Embeddable** | Yes (Go Library) | No | No | Some |
 
 ### Преимущества VaultDB
 
-#### 1. AI-Native SQL
-Вам не нужны отдельные библиотеки для работы с эмбеддингами.
+#### 1. AI-Ready SQL
+Семантический поиск встроен в SQL, но сами эмбеддинги VaultDB не генерирует —
+для `SEMANTIC_MATCH` и `AI_EMBED` нужен внешний embedding-провайдер
+(OpenAI, Ollama или любой OpenAI-совместимый API), настроенный в `vaultdb.yaml`:
+
+```yaml
+ai:
+  provider: "ollama"
+  endpoint: "http://localhost:11434/api/embeddings"
+  model: "nomic-embed-text"
+  # api_key: "..."  # или переменная окружения VAULTDB_AI_API_KEY
+```
+
 ```sql
 -- Поиск по смыслу, а не по словам
 SELECT content FROM docs 
 WHERE content SEMANTIC_MATCH 'как настроить бэкап' 
 LIMIT 5;
 ```
+
+Без настроенного провайдера эти операции возвращают понятную ошибку
+конфигурации — никаких «фейковых» AI-результатов.
 
 #### 2. Schema-Free Power
 Создавайте таблицы без предварительного проектирования. VaultDB сама поймет типы данных при первой вставке.
@@ -91,6 +105,24 @@ APPLY MIGRATION add_user_bio;
 #### 5. Автоматический REST API
 Как только вы создали таблицу, у неё появляется готовый REST-эндпоинт с поддержкой фильтрации:
 `GET /api/databases/mydb/tables/users/data?age=gt.18`
+
+#### 6. Web UI
+На `http://localhost:8080` доступен встроенный веб-интерфейс: SQL-редактор
+с историей запросов, таблица результатов, дерево баз/таблиц и просмотр схемы.
+Исходники — `server/internal/httpserver/web` (React + Vite), собранный bundle
+встраивается в бинарник сервера.
+
+#### 7. Движки хранения
+По умолчанию данные хранятся в JSON-файлах с версионированием строк
+(time travel, `AS OF`). Дополнительно доступен экспериментальный бинарный
+страничный движок (slotted pages, 8 КБ, контрольные суммы):
+
+```yaml
+storage:
+  engine: "page"   # json (по умолчанию) | page (экспериментальный)
+```
+
+Ограничения page-движка: вторичные индексы пока не поддерживаются.
 
 ---
 

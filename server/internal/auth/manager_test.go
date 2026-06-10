@@ -49,3 +49,24 @@ func TestMiddlewareAcceptsQueryParamToken(t *testing.T) {
 		t.Fatalf("missing token allowed: status %d", rec.Code)
 	}
 }
+
+func TestTokensStoredHashed(t *testing.T) {
+	m := New(true, map[string]string{"plain-secret": "ci"})
+	if _, ok := m.tokens["plain-secret"]; ok {
+		t.Fatal("plaintext token stored in manager")
+	}
+	if !m.ValidateToken("plain-secret") {
+		t.Fatal("original token must validate after hashing")
+	}
+	if m.GetLabel("plain-secret") != "ci" {
+		t.Fatal("label lookup by original token failed")
+	}
+
+	m.AddToken("another-token", "ops")
+	if _, ok := m.tokens["another-token"]; ok {
+		t.Fatal("AddToken stored plaintext")
+	}
+	if !m.ValidateToken("another-token") {
+		t.Fatal("added token must validate")
+	}
+}

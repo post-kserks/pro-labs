@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"vaultdb/internal/ai"
 	"vaultdb/internal/auth"
 	"vaultdb/internal/executor"
 	"vaultdb/internal/metrics"
@@ -35,6 +36,7 @@ type Config struct {
 	TxManager         *txmanager.Manager
 	ActiveConnections func() int64
 	Broadcaster       *executor.Broadcaster
+	Embedder          ai.Embedder
 }
 
 type Server struct {
@@ -150,6 +152,15 @@ func (s *Server) monitorMux() *http.ServeMux {
 	return mux
 }
 
+// newSession создаёт сессию executor с подключённым embedder (если настроен).
+func (s *Server) newSession() *executor.Session {
+	sess := executor.NewSession(s.cfg.Storage, s.metrics, s.txm, s.br)
+	if s.cfg.Embedder != nil {
+		sess.SetEmbedder(s.cfg.Embedder)
+	}
+	return sess
+}
+
 func (s *Server) withMethod(method string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != method {
@@ -191,7 +202,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session := executor.NewSession(s.cfg.Storage, s.metrics, s.txm, s.br)
+	session := s.newSession()
 	if req.Database != "" {
 		session.SetCurrentDatabase(req.Database)
 	}
@@ -414,13 +425,8 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	send := make(chan *executor.Result, 10)
-	sub := &executor.Subscription{
-		ID:    fmt.Sprintf("sub-%d", time.Now().UnixNano()),
-		Query: selectStmt,
-		DB:    db,
-		Send:  send,
-	}
+	sub := s.br.NewSubscription(fmt.Sprintf("sub-%d", time.Now().UnixNano()), selectStmt, db)
+	send := sub.Send
 
 	s.br.Subscribe(sub)
 	defer s.br.Unsubscribe(sub.ID)
@@ -429,7 +435,7 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Send initial result
-	sess := executor.NewSession(s.cfg.Storage, s.metrics, s.txm, s.br)
+	sess := s.newSession()
 	if db != "" {
 		sess.SetCurrentDatabase(db)
 	}
@@ -446,7 +452,11 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
-		case res := <-send:
+		case res, ok := <-send:
+			if !ok {
+				// Broadcaster отписал клиента (block-таймаут)
+				return
+			}
 			data, _ := json.Marshal(res)
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
@@ -560,7 +570,7 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 	}
 
 	stmt := &parser.SelectStatement{TableName: tableName, Where: where}
-	sess := executor.NewSession(s.cfg.Storage, s.metrics, s.txm, s.br)
+	sess := s.newSession()
 	sess.SetCurrentDatabase(dbName)
 	res, err := sess.Execute(stmt)
 	if err != nil {

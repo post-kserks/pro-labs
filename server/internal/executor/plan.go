@@ -77,6 +77,10 @@ func formatPlan(plan QueryPlan) *Result {
 		b.WriteString(fmt.Sprintf("Total Time:     %.2f ms\n", plan.PlanningMs+stats.ExecutionMs))
 	}
 
+	// Честный дисклеймер: планировщик эвристический, без статистики
+	b.WriteString("\nNote: VaultDB uses a rule-based planner (not cost-based).\n")
+	b.WriteString("      Plans are chosen by heuristics, not statistics.\n")
+
 	return &Result{
 		Type:    "message",
 		Message: b.String(),

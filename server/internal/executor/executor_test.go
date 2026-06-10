@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"vaultdb/internal/ai"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
@@ -340,6 +341,9 @@ func TestCaseAndCast(t *testing.T) {
 
 func TestSemanticSearch(t *testing.T) {
 	session := setupSession(t)
+	// В тестах используется детерминированный mock-embedder; в продакшене
+	// без настроенного AI SEMANTIC_MATCH возвращает ошибку (см. NoopEmbedder).
+	session.SetEmbedder(ai.MockEmbedder{})
 	executeSQL(t, session, "CREATE TABLE docs (id INT, content TEXT, v VECTOR(8));")
 
 	// Use AI_EMBED to generate vectors during INSERT
@@ -594,5 +598,33 @@ func TestHistoryCommand(t *testing.T) {
 	}
 	if len(history.Rows) < 2 {
 		t.Fatalf("expected at least 2 history rows, got %d", len(history.Rows))
+	}
+}
+
+func TestSemanticMatchWithoutAIConfigured(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE TABLE docs2 (id INT, content TEXT);")
+	executeSQL(t, session, "INSERT INTO docs2 VALUES (1, 'database systems');")
+
+	stmt, err := parser.Parse("SELECT content FROM docs2 WHERE content SEMANTIC_MATCH 'sql';")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = session.Execute(stmt)
+	if err == nil {
+		t.Fatal("SEMANTIC_MATCH without configured AI must return an error, not a mock result")
+	}
+	if !strings.Contains(err.Error(), "AI embedding is not configured") {
+		t.Fatalf("error must explain how to configure AI, got: %v", err)
+	}
+}
+
+func TestExplainContainsPlannerNote(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	result := executeSQL(t, session, "EXPLAIN SELECT * FROM heroes;")
+	if !strings.Contains(result.Message, "rule-based planner") {
+		t.Fatalf("EXPLAIN output must disclose the rule-based planner, got:\n%s", result.Message)
 	}
 }

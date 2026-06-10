@@ -346,7 +346,7 @@ func (s *FileStorageEngine) applyAlterTableRenameColumnLocked(dbName, tableName,
 		changed := false
 		for _, idx := range mgr.All() {
 			if strings.EqualFold(idx.Column(), oldName) {
-				idx.SetColumn(newName)
+				mgr.RenameColumn(idx.Name(), newName)
 				changed = true
 			}
 		}

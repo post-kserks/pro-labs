@@ -2,34 +2,56 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 type contextKey string
 
 const tokenLabelContextKey contextKey = "token_label"
 
+// Manager хранит только SHA-256 хеши токенов: даже при утечке памяти/дампа
+// сами токены восстановить нельзя.
 type Manager struct {
 	enabled bool
-	tokens  map[string]string
+	mu      sync.RWMutex
+	tokens  map[string]string // SHA-256(token) hex → label
 }
 
+// hashToken вычисляет SHA-256 токена.
+func hashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
+
+// New создаёт менеджер. Входные токены приходят в открытом виде (из env или
+// конфига) и немедленно хешируются; plaintext дальше нигде не хранится.
 func New(enabled bool, tokens map[string]string) *Manager {
-	copied := make(map[string]string, len(tokens))
+	hashed := make(map[string]string, len(tokens))
 	for token, label := range tokens {
-		copied[token] = label
+		hashed[hashToken(token)] = label
 	}
 
 	return &Manager{
 		enabled: enabled,
-		tokens:  copied,
+		tokens:  hashed,
 	}
 }
 
 func (m *Manager) Enabled() bool {
 	return m.enabled
+}
+
+// AddToken регистрирует новый токен (хранится только хеш).
+func (m *Manager) AddToken(token, label string) {
+	hash := hashToken(token)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tokens[hash] = label
 }
 
 func (m *Manager) ValidateToken(token string) bool {
@@ -39,12 +61,17 @@ func (m *Manager) ValidateToken(token string) bool {
 	if token == "" {
 		return false
 	}
-	_, ok := m.tokens[token]
+	hash := hashToken(token)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.tokens[hash]
 	return ok
 }
 
 func (m *Manager) GetLabel(token string) string {
-	if label, ok := m.tokens[token]; ok {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if label, ok := m.tokens[hashToken(token)]; ok {
 		return label
 	}
 	return "unknown"

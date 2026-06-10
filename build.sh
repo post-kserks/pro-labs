@@ -5,6 +5,11 @@ log() {
     echo "$1"
 }
 
+# Единый источник истины для версии — файл VERSION
+VERSION="$(cat VERSION)"
+BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+LDFLAGS="-X main.version=${VERSION} -X main.buildDate=${BUILD_DATE}"
+
 echo "╔════════════════════════════════╗"
 echo "║  VaultDB Build System v2.0     ║"
 echo "╚════════════════════════════════╝"
@@ -81,16 +86,16 @@ build_docker() {
         return 0
     fi
 
-    log "[*] Building Docker image vaultdb/vaultdb:1.2.0..."
-    docker build -t vaultdb/vaultdb:1.2.0 -t vaultdb/vaultdb:latest .
+    log "[*] Building Docker image vaultdb/vaultdb:${VERSION}..."
+    docker build --build-arg VERSION="${VERSION}" -t "vaultdb/vaultdb:${VERSION}" -t vaultdb/vaultdb:latest .
 
-    IMAGE_SIZE="$(docker image inspect vaultdb/vaultdb:1.2.0 --format='{{.Size}}' 2>/dev/null || echo '?')"
+    IMAGE_SIZE="$(docker image inspect "vaultdb/vaultdb:${VERSION}" --format='{{.Size}}' 2>/dev/null || echo '?')"
     log "[OK] Docker image built."
-    log "     Tag:  vaultdb/vaultdb:1.2.0"
+    log "     Tag:  vaultdb/vaultdb:${VERSION}"
     log "     Size: ${IMAGE_SIZE} bytes"
     log ""
     log "     Quick start:"
-    log "     docker run -p 5432:5432 -p 8080:8080 vaultdb/vaultdb:1.2.0"
+    log "     docker run -p 5432:5432 -p 8080:8080 vaultdb/vaultdb:${VERSION}"
     log ""
     log "     With persistence:"
     log "     docker compose up -d"
@@ -114,7 +119,7 @@ build_webui
 
 log "[*] Building VaultDB server (Go)..."
 cd server
-GOCACHE="${GOCACHE:-/tmp/go-cache}" GOMODCACHE="${GOMODCACHE:-/tmp/go-mod-cache}" go build -o ../build/vaultdb-server ./cmd/vaultdb-server
+GOCACHE="${GOCACHE:-/tmp/go-cache}" GOMODCACHE="${GOMODCACHE:-/tmp/go-mod-cache}" go build -ldflags="$LDFLAGS" -o ../build/vaultdb-server ./cmd/vaultdb-server
 cd ..
 log "[OK] Server built: build/vaultdb-server"
 

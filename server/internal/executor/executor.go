@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"vaultdb/internal/ai"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -34,6 +35,7 @@ type ExecutionContext struct {
 	Metrics     *metrics.Collector
 	TxManager   *txmanager.Manager
 	Broadcaster *Broadcaster
+	Embedder    ai.Embedder
 
 	// WindowCols maps each window function expression to the synthetic result
 	// column it was materialized into, so several window functions in one
@@ -46,10 +48,20 @@ type Executor struct {
 	metrics     *metrics.Collector
 	txm         *txmanager.Manager
 	broadcaster *Broadcaster
+	embedder    ai.Embedder
 }
 
 func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Executor {
-	return &Executor{storage: store, metrics: m, txm: txm, broadcaster: b}
+	// По умолчанию AI не настроен: SEMANTIC_MATCH/AI_EMBED возвращают
+	// понятную ошибку, а не тихий mock-результат.
+	return &Executor{storage: store, metrics: m, txm: txm, broadcaster: b, embedder: ai.NoopEmbedder{}}
+}
+
+// SetEmbedder подключает реальный embedding-провайдер.
+func (e *Executor) SetEmbedder(emb ai.Embedder) {
+	if emb != nil {
+		e.embedder = emb
+	}
 }
 
 func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
@@ -66,6 +78,7 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 		Metrics:     e.metrics,
 		TxManager:   e.txm,
 		Broadcaster: e.broadcaster,
+		Embedder:    e.embedder,
 	}
 	result, err := cmd.Execute(ctx)
 
