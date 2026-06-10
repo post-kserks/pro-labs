@@ -36,20 +36,26 @@ func (b *Broadcaster) Unsubscribe(id string) {
 }
 
 func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *ExecutionContext) {
+	// Snapshot matching subscriptions first so subscriber queries do not run
+	// while holding the broadcaster lock.
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-
+	matched := make([]*Subscription, 0, len(b.subscriptions))
 	for _, s := range b.subscriptions {
 		if s.DB == dbName && s.Query.TableName == tableName {
-			// Re-run the query
-			cmd := &SelectCommand{stmt: s.Query}
-			res, err := cmd.Execute(ctx)
-			if err == nil {
-				select {
-				case s.Send <- res:
-				default:
-					// Drop notification if channel is full
-				}
+			matched = append(matched, s)
+		}
+	}
+	b.mu.RUnlock()
+
+	for _, s := range matched {
+		// Re-run the query
+		cmd := &SelectCommand{stmt: s.Query}
+		res, err := cmd.Execute(ctx)
+		if err == nil {
+			select {
+			case s.Send <- res:
+			default:
+				// Drop notification if channel is full
 			}
 		}
 	}

@@ -38,8 +38,9 @@ func (a *countAgg) Result() interface{} {
 
 // sumAgg handles SUM(col).
 type sumAgg struct {
-	sum    float64
-	hasVal bool
+	sum     float64
+	hasVal  bool
+	allInts bool
 }
 
 func (a *sumAgg) Add(v interface{}) {
@@ -47,6 +48,14 @@ func (a *sumAgg) Add(v interface{}) {
 		return
 	}
 	if f, ok := toFloat(v); ok {
+		if !a.hasVal {
+			a.allInts = true
+		}
+		switch v.(type) {
+		case int, int64:
+		default:
+			a.allInts = false
+		}
 		a.sum += f
 		a.hasVal = true
 	}
@@ -55,6 +64,9 @@ func (a *sumAgg) Add(v interface{}) {
 func (a *sumAgg) Result() interface{} {
 	if !a.hasVal {
 		return nil
+	}
+	if a.allInts {
+		return int64(a.sum)
 	}
 	return a.sum
 }

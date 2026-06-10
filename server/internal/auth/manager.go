@@ -22,10 +22,6 @@ func New(enabled bool, tokens map[string]string) *Manager {
 		copied[token] = label
 	}
 
-	if len(copied) == 0 {
-		copied["vdb_sk_local_dev"] = "local-dev"
-	}
-
 	return &Manager{
 		enabled: enabled,
 		tokens:  copied,
@@ -83,5 +79,9 @@ func tokenFromRequest(r *http.Request) string {
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		return strings.TrimPrefix(authHeader, "Bearer ")
 	}
-	return r.Header.Get("X-VaultDB-Token")
+	if token := r.Header.Get("X-VaultDB-Token"); token != "" {
+		return token
+	}
+	// EventSource clients cannot set headers; allow ?token= for SSE endpoints.
+	return r.URL.Query().Get("token")
 }

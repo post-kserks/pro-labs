@@ -34,6 +34,11 @@ type ExecutionContext struct {
 	Metrics     *metrics.Collector
 	TxManager   *txmanager.Manager
 	Broadcaster *Broadcaster
+
+	// WindowCols maps each window function expression to the synthetic result
+	// column it was materialized into, so several window functions in one
+	// query project their own values.
+	WindowCols map[*parser.WindowFunctionExpr]string
 }
 
 type Executor struct {

@@ -1,6 +1,9 @@
 package index
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // IndexManager хранит все индексы одной таблицы.
 type IndexManager struct {
@@ -38,7 +41,7 @@ func (m *IndexManager) FindForColumn(column string) (*HashIndex, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, idx := range m.indexes {
-		if idx.column == column {
+		if strings.EqualFold(idx.column, column) {
 			return idx, true
 		}
 	}

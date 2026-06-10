@@ -41,6 +41,14 @@ func (idx *HashIndex) Name() string   { return idx.name }
 func (idx *HashIndex) Column() string { return idx.column }
 func (idx *HashIndex) ColIndex() int  { return idx.colIndex }
 
+// SetColumn renames the indexed column (used by ALTER TABLE RENAME COLUMN).
+// The data mapping is unchanged, only the column label moves.
+func (idx *HashIndex) SetColumn(column string) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.column = column
+}
+
 // Lookup возвращает индексы строк для заданного значения.
 func (idx *HashIndex) Lookup(value string) ([]int, bool) {
 	idx.mu.RLock()

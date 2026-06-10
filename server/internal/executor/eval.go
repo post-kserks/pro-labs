@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,12 @@ func evalBinary(expr *parser.BinaryExpr, row storage.Row, schema *storage.TableS
 		return compareValues(left, right, expr.Operator)
 	case "+", "-", "*", "/":
 		return evalArithmetic(left, right, expr.Operator)
+	case "LIKE":
+		return evalLike(left, right)
+	case "IS":
+		return left == nil, nil
+	case "IS NOT":
+		return left != nil, nil
 	case "SEMANTIC_MATCH":
 		return evalSemanticMatch(left, right)
 	case "FTS_MATCH":
@@ -51,6 +58,42 @@ func evalBinary(expr *parser.BinaryExpr, row storage.Row, schema *storage.TableS
 	default:
 		return nil, fmt.Errorf("unsupported operator '%s'", expr.Operator)
 	}
+}
+
+// evalLike implements SQL LIKE: % matches any run of characters, _ matches a
+// single character. NULL operands never match.
+func evalLike(left, right interface{}) (bool, error) {
+	if left == nil || right == nil {
+		return false, nil
+	}
+	pattern, ok := right.(string)
+	if !ok {
+		return false, fmt.Errorf("LIKE pattern must be a string, got %T", right)
+	}
+	text, ok := left.(string)
+	if !ok {
+		text = valueToString(left)
+	}
+
+	var b strings.Builder
+	b.WriteString("(?s)^")
+	for _, r := range pattern {
+		switch r {
+		case '%':
+			b.WriteString(".*")
+		case '_':
+			b.WriteString(".")
+		default:
+			b.WriteString(regexp.QuoteMeta(string(r)))
+		}
+	}
+	b.WriteString("$")
+
+	re, err := regexp.Compile(b.String())
+	if err != nil {
+		return false, fmt.Errorf("invalid LIKE pattern %q: %w", pattern, err)
+	}
+	return re.MatchString(text), nil
 }
 
 func evalFtsMatch(left, right interface{}) (bool, error) {
@@ -241,6 +284,11 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 	case *parser.InExpr:
 		return evalInExpr(e, row, schema, ctx)
 	case *parser.WindowFunctionExpr:
+		if ctx != nil && ctx.WindowCols != nil {
+			if name, ok := ctx.WindowCols[e]; ok {
+				return resolveColumn(row, schema, name)
+			}
+		}
 		return resolveColumn(row, schema, "window_func")
 	case *parser.FunctionCall:
 		return evalFunctionCall(e, row, schema, ctx)

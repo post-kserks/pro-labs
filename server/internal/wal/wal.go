@@ -177,6 +177,7 @@ func (w *WAL) readEntriesLocked(resetOnCheckpoint bool) ([]Entry, uint64, error)
 
 	entries := make([]Entry, 0, 16)
 	var maxTxID uint64
+	var validEnd int64
 
 	for {
 		magic := make([]byte, 4)
@@ -236,6 +237,8 @@ func (w *WAL) readEntriesLocked(resetOnCheckpoint bool) ([]Entry, uint64, error)
 			break
 		}
 
+		validEnd += int64(4 + 8 + 1 + 4 + len(payload) + 4)
+
 		if opType == OpCheckpoint && resetOnCheckpoint {
 			entries = entries[:0]
 			continue
@@ -246,6 +249,14 @@ func (w *WAL) readEntriesLocked(resetOnCheckpoint bool) ([]Entry, uint64, error)
 			OpType:  opType,
 			Payload: payload,
 		})
+	}
+
+	// Drop any corrupt or partially written tail. Otherwise future appends
+	// land after the garbage and become unreachable on the next recovery scan.
+	if info, err := w.file.Stat(); err == nil && info.Size() > validEnd {
+		if err := w.file.Truncate(validEnd); err != nil {
+			return nil, 0, fmt.Errorf("wal: truncate corrupt tail: %w", err)
+		}
 	}
 
 	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {

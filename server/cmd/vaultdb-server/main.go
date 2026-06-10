@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -111,7 +113,19 @@ func main() {
 	go av.Run(ctx)
 
 	authEnabled := envBool("VAULTDB_AUTH_ENABLED", true)
-	authManager := auth.New(authEnabled, tokensFromEnv())
+	tokens := tokensFromEnv()
+	if authEnabled && len(tokens) == 0 {
+		token, err := generateToken()
+		if err != nil {
+			logger.Error("failed to generate auth token", "error", err)
+			os.Exit(1)
+		}
+		tokens = map[string]string{token: "generated"}
+		logger.Warn("no API tokens configured; generated a one-time token for this run",
+			"token", token,
+			"hint", "set VAULTDB_API_TOKENS to configure stable tokens, or VAULTDB_AUTH_ENABLED=0 to disable auth")
+	}
+	authManager := auth.New(authEnabled, tokens)
 
 	httpSrv := httpserver.New(httpserver.Config{
 		Host:        *host,
@@ -172,7 +186,7 @@ func main() {
 				defer wg.Done()
 				defer activeConnections.Add(-1)
 				defer metricsCollector.DecConnections()
-				handleConnection(c, store, metricsCollector, txm, br, logger)
+				handleConnection(c, store, metricsCollector, txm, br, authManager, logger)
 			}(conn)
 		}
 	}()
@@ -212,7 +226,7 @@ func runHealthCheck(monitorPort int) int {
 	return 0
 }
 
-func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, logger *slog.Logger) {
+func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, logger *slog.Logger) {
 	defer conn.Close()
 
 	session := executor.NewSession(store, m, txm, br)
@@ -233,6 +247,11 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 		var req Request
 		if err := json.Unmarshal(line, &req); err != nil {
 			sendError(conn, "", "invalid JSON request")
+			continue
+		}
+
+		if !authManager.ValidateToken(req.Token) {
+			sendError(conn, req.ID, "unauthorized: invalid or missing token")
 			continue
 		}
 
@@ -318,6 +337,14 @@ func envBool(name string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func generateToken() (string, error) {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return "vdb_sk_" + hex.EncodeToString(buf), nil
 }
 
 func tokensFromEnv() map[string]string {

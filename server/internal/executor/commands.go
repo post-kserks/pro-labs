@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -631,12 +632,102 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 		resultRows = append(resultRows, resultRow)
 	}
 
+	resultRows = c.orderAndPageGrouped(resultRows, projectColumns)
+
 	return &Result{
 		Type:     "rows",
 		Columns:  projectColumns,
 		Rows:     resultRows,
 		AsOfNote: asOfNote,
 	}, nil
+}
+
+// orderAndPageGrouped applies ORDER BY / OFFSET / LIMIT to grouped output.
+// Sort keys are resolved against the projected columns: by alias or column
+// name, or by 1-based position (ORDER BY 2).
+func (c *SelectCommand) orderAndPageGrouped(rows [][]string, projectColumns []string) [][]string {
+	if len(c.stmt.OrderBy) > 0 {
+		colIndexByName := make(map[string]int, len(projectColumns))
+		for i, name := range projectColumns {
+			colIndexByName[strings.ToLower(name)] = i
+		}
+
+		type sortKey struct {
+			idx  int
+			desc bool
+		}
+		keys := make([]sortKey, 0, len(c.stmt.OrderBy))
+		for _, item := range c.stmt.OrderBy {
+			idx := -1
+			switch expr := item.Expr.(type) {
+			case *parser.ColumnRef:
+				if i, ok := colIndexByName[strings.ToLower(expr.Name)]; ok {
+					idx = i
+				}
+			case parser.Value:
+				if expr.Type == "int" && expr.IntVal >= 1 && int(expr.IntVal) <= len(projectColumns) {
+					idx = int(expr.IntVal) - 1
+				}
+			case *parser.Value:
+				if expr.Type == "int" && expr.IntVal >= 1 && int(expr.IntVal) <= len(projectColumns) {
+					idx = int(expr.IntVal) - 1
+				}
+			}
+			if idx >= 0 {
+				keys = append(keys, sortKey{idx: idx, desc: item.Direction == "DESC"})
+			}
+		}
+
+		if len(keys) > 0 {
+			sort.SliceStable(rows, func(i, j int) bool {
+				for _, k := range keys {
+					cmp := compareResultCells(rows[i][k.idx], rows[j][k.idx])
+					if cmp == 0 {
+						continue
+					}
+					if k.desc {
+						return cmp > 0
+					}
+					return cmp < 0
+				}
+				return false
+			})
+		}
+	}
+
+	start := 0
+	if c.stmt.HasOffset {
+		start = c.stmt.Offset
+		if start > len(rows) {
+			start = len(rows)
+		}
+	}
+	end := len(rows)
+	if c.stmt.HasLimit {
+		end = start + c.stmt.Limit
+		if end > len(rows) {
+			end = len(rows)
+		}
+	}
+	return rows[start:end]
+}
+
+// compareResultCells compares rendered cells numerically when both parse as
+// numbers, lexically otherwise.
+func compareResultCells(a, b string) int {
+	af, aerr := strconv.ParseFloat(a, 64)
+	bf, berr := strconv.ParseFloat(b, 64)
+	if aerr == nil && berr == nil {
+		switch {
+		case af < bf:
+			return -1
+		case af > bf:
+			return 1
+		default:
+			return 0
+		}
+	}
+	return strings.Compare(a, b)
 }
 
 func (c *SelectCommand) applyOrderBy(rows []storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) {
@@ -1374,20 +1465,34 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	tx := ctx.Session.ActiveTx
+	opsCount := len(tx.Ops)
 
-	// Проверяем конфликты
-	if err := checkConflicts(ctx, tx); err != nil {
-		return nil, err
+	// Проверка конфликтов и применение выполняются под общим commit-локом,
+	// чтобы другой COMMIT не вклинился между валидацией и применением.
+	var conflictErr error
+	var applied int
+	var applyErr error
+	_ = ctx.Session.TxManager.WithCommitLock(func() error {
+		if err := checkConflicts(ctx, tx); err != nil {
+			conflictErr = err
+			return err
+		}
+		applied, applyErr = applyOps(ctx, tx.Ops)
+		return applyErr
+	})
+
+	if conflictErr != nil {
+		return nil, conflictErr
 	}
-
-	// Применяем все буферизованные операции атомарно
-	if err := applyOps(ctx, tx.Ops); err != nil {
+	if applyErr != nil {
 		tx.Rollback()
 		ctx.Session.ActiveTx = nil
-		return nil, fmt.Errorf("commit failed, transaction rolled back: %w", err)
+		if applied > 0 {
+			return nil, fmt.Errorf("commit failed after applying %d of %d operations; data may be partially updated: %w", applied, opsCount, applyErr)
+		}
+		return nil, fmt.Errorf("commit failed, no operations applied: %w", applyErr)
 	}
 
-	opsCount := len(tx.Ops)
 	tx.Rollback()
 	ctx.Session.ActiveTx = nil
 
@@ -1436,30 +1541,32 @@ func checkConflicts(ctx *ExecutionContext, tx *txmanager.Transaction) error {
 	return nil
 }
 
-func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) error {
-	for _, op := range ops {
+// applyOps applies buffered operations in order and reports how many were
+// applied before the first failure.
+func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) (int, error) {
+	for i, op := range ops {
 		switch op.Type {
 		case "insert":
 			stmt := op.Payload.(*parser.InsertStatement)
 			cmd := &InsertCommand{stmt: stmt}
 			if _, err := cmd.executeImmediate(ctx); err != nil {
-				return err
+				return i, err
 			}
 		case "update":
 			stmt := op.Payload.(*parser.UpdateStatement)
 			cmd := &UpdateCommand{stmt: stmt}
 			if _, err := cmd.executeImmediate(ctx); err != nil {
-				return err
+				return i, err
 			}
 		case "delete":
 			stmt := op.Payload.(*parser.DeleteStatement)
 			cmd := &DeleteCommand{stmt: stmt}
 			if _, err := cmd.executeImmediate(ctx); err != nil {
-				return err
+				return i, err
 			}
 		}
 	}
-	return nil
+	return len(ops), nil
 }
 
 type PrepareCommand struct {
@@ -1600,46 +1707,42 @@ func (c *SetOperationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 func bindParams(stmt parser.Statement, params []parser.Value) (parser.Statement, error) {
 	switch s := stmt.(type) {
 	case *parser.SelectStatement:
-		return &parser.SelectStatement{
-			Columns:   s.Columns,
-			TableName: s.TableName,
-			Where:     bindExpr(s.Where, params),
-			Limit:     s.Limit,
-			HasLimit:  s.HasLimit,
-			CountAll:  s.CountAll,
-			AsOf:      s.AsOf,
-		}, nil
+		bound := *s
+		bound.Where = bindExpr(s.Where, params)
+		bound.Having = bindExpr(s.Having, params)
+		if len(s.Joins) > 0 {
+			bound.Joins = make([]parser.JoinClause, len(s.Joins))
+			for i, join := range s.Joins {
+				bound.Joins[i] = join
+				bound.Joins[i].Condition = bindExpr(join.Condition, params)
+			}
+		}
+		return &bound, nil
 	case *parser.UpdateStatement:
-		newAssignments := make([]parser.Assignment, len(s.Assignments))
+		bound := *s
+		bound.Assignments = make([]parser.Assignment, len(s.Assignments))
 		for i, a := range s.Assignments {
-			newAssignments[i] = parser.Assignment{
+			bound.Assignments[i] = parser.Assignment{
 				Column: a.Column,
 				Value:  bindExpr(a.Value, params),
 			}
 		}
-		return &parser.UpdateStatement{
-			TableName:   s.TableName,
-			Assignments: newAssignments,
-			Where:       bindExpr(s.Where, params),
-		}, nil
+		bound.Where = bindExpr(s.Where, params)
+		return &bound, nil
 	case *parser.InsertStatement:
-		newRows := make([][]parser.Expression, len(s.Rows))
+		bound := *s
+		bound.Rows = make([][]parser.Expression, len(s.Rows))
 		for i, row := range s.Rows {
-			newRows[i] = make([]parser.Expression, len(row))
+			bound.Rows[i] = make([]parser.Expression, len(row))
 			for j, expr := range row {
-				newRows[i][j] = bindExpr(expr, params)
+				bound.Rows[i][j] = bindExpr(expr, params)
 			}
 		}
-		return &parser.InsertStatement{
-			TableName: s.TableName,
-			Columns:   s.Columns,
-			Rows:      newRows,
-		}, nil
+		return &bound, nil
 	case *parser.DeleteStatement:
-		return &parser.DeleteStatement{
-			TableName: s.TableName,
-			Where:     bindExpr(s.Where, params),
-		}, nil
+		bound := *s
+		bound.Where = bindExpr(s.Where, params)
+		return &bound, nil
 	}
 	return nil, fmt.Errorf("EXECUTE not supported for %T", stmt)
 }
@@ -1907,9 +2010,15 @@ func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage
 		copy(newRows[i], row)
 	}
 
-	for _, wf := range funcs {
-		// Add column to schema
-		newSchema.Columns = append(newSchema.Columns, storage.ColumnSchema{Name: "window_func"})
+	for wfIdx, wf := range funcs {
+		// Add a uniquely named column per window function so each expression
+		// resolves to its own values.
+		colName := fmt.Sprintf("__window_%d", wfIdx)
+		if ctx.WindowCols == nil {
+			ctx.WindowCols = make(map[*parser.WindowFunctionExpr]string)
+		}
+		ctx.WindowCols[wf] = colName
+		newSchema.Columns = append(newSchema.Columns, storage.ColumnSchema{Name: colName})
 
 		// Partition rows
 		partitions := make(map[string][]int)
@@ -1974,7 +2083,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 		}
 		return int64(rank)
 	case "COUNT", "SUM", "AVG", "MIN", "MAX":
-		frameIndices := c.getFrameIndices(partitionIndices, currentPosInPartition, wf.Over.Frame)
+		frameIndices := c.getFrameIndices(partitionIndices, currentPosInPartition, wf.Over.Frame, len(wf.Over.OrderBy) > 0)
 		agg := NewAggregator(name, false)
 		for _, idx := range frameIndices {
 			var val interface{}
@@ -2005,8 +2114,13 @@ func (c *SelectCommand) rowsEqualByOrderBy(r1, r2 storage.Row, orderBy []parser.
 	return true
 }
 
-func (c *SelectCommand) getFrameIndices(partitionIndices []int, currentPos int, frame *parser.FrameSpec) []int {
+func (c *SelectCommand) getFrameIndices(partitionIndices []int, currentPos int, frame *parser.FrameSpec, hasOrderBy bool) []int {
 	if frame == nil {
+		// SQL default: with ORDER BY the frame runs up to the current row
+		// (running total); without it the frame is the whole partition.
+		if !hasOrderBy {
+			return partitionIndices
+		}
 		return partitionIndices[:currentPos+1]
 	}
 
@@ -2145,18 +2259,18 @@ func (c *MigrationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			return nil, err
 		}
 		var sqlToApply string
-		found := false
-		for _, row := range rows {
+		rowIdx := -1
+		for i, row := range rows {
 			if row[0] == c.stmt.Name {
 				if row[2] != nil && row[2] != "NULL" {
 					return nil, fmt.Errorf("migration '%s' already applied", c.stmt.Name)
 				}
 				sqlToApply = valueToString(row[1])
-				found = true
+				rowIdx = i
 				break
 			}
 		}
-		if !found {
+		if rowIdx == -1 {
 			return nil, fmt.Errorf("migration '%s' not found", c.stmt.Name)
 		}
 
@@ -2169,8 +2283,13 @@ func (c *MigrationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			return nil, fmt.Errorf("failed to apply migration: %w", err)
 		}
 
-		// Mark as applied
-		// ... logic to update _migrations row ...
+		// Mark as applied so the already-applied guard above holds.
+		appliedAt := time.Now().UTC().Format(time.RFC3339)
+		if _, err := ctx.Storage.UpdateRows(dbName, migrationTable, []int{rowIdx}, map[string]storage.Value{
+			"applied_at": appliedAt,
+		}); err != nil {
+			return nil, fmt.Errorf("migration '%s' applied but recording it failed: %w", c.stmt.Name, err)
+		}
 		return &Result{Type: "message", Message: fmt.Sprintf("Migration '%s' applied.", c.stmt.Name)}, nil
 
 	case "PREVIEW":

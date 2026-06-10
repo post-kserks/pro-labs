@@ -53,6 +53,15 @@ func (m *Manager) Begin(snapshotTxID uint64) *Transaction {
 	}
 }
 
+// WithCommitLock serializes commit critical sections (conflict check + apply)
+// across sessions, so another commit cannot slip in between validation and
+// application.
+func (m *Manager) WithCommitLock(fn func() error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return fn()
+}
+
 // AddOp добавляет операцию в буфер транзакции.
 func (tx *Transaction) AddOp(op PendingOp) {
 	tx.Ops = append(tx.Ops, op)

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -121,7 +122,7 @@ func (s *Server) apiMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/query", s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleQuery)))
-	mux.HandleFunc("/api/live", s.handleLiveQuery)
+	mux.HandleFunc("/api/live", s.cfg.Auth.Middleware(s.handleLiveQuery))
 	mux.HandleFunc("/api/docs/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/databases", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleListDatabases)))
 	mux.HandleFunc("/api/databases/", s.cfg.Auth.Middleware(s.handleDatabasesSubroutes))
@@ -178,6 +179,15 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	stmt, err := parser.Parse(query)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, 3002, err.Error())
+		return
+	}
+
+	// Each request gets a fresh session, so transaction state cannot survive
+	// between requests — reject instead of silently buffering into the void.
+	switch stmt.(type) {
+	case *parser.BeginStatement, *parser.CommitStatement, *parser.RollbackStatement:
+		writeError(w, http.StatusBadRequest, 3005,
+			"transactions are not supported over the stateless HTTP API; use the TCP client on port 5432")
 		return
 	}
 
@@ -375,15 +385,6 @@ func emptyRowsIfNil(rows [][]string) [][]string {
 }
 
 func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
-	// Standard library "WebSocket" (simplified)
-	if r.Header.Get("Upgrade") != "websocket" {
-		http.Error(w, "expected websocket upgrade", http.StatusBadRequest)
-		return
-	}
-
-	// This is a placeholder for actual hijacking and framing.
-	// For the purpose of task.md, we'll implement the logic of subscription.
-
 	db := r.URL.Query().Get("database")
 	query := r.URL.Query().Get("query")
 	if query == "" {
@@ -403,8 +404,12 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Upgrade to SSE for simplicity and stability without libraries,
-	// while keeping the logic of "Live Query".
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -434,7 +439,7 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		data, _ := json.Marshal(res)
 		fmt.Fprintf(w, "data: %s\n\n", data)
-		w.(http.Flusher).Flush()
+		flusher.Flush()
 	}
 
 	for {
@@ -444,7 +449,7 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 		case res := <-send:
 			data, _ := json.Marshal(res)
 			fmt.Fprintf(w, "data: %s\n\n", data)
-			w.(http.Flusher).Flush()
+			flusher.Flush()
 		}
 	}
 }
@@ -504,43 +509,57 @@ func (s *Server) handleTableData(w http.ResponseWriter, r *http.Request, dbName,
 }
 
 func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
-	// Support simple filtering: ?col=eq.val, ?col=gt.val
-	query := fmt.Sprintf("SELECT * FROM %s", tableName)
+	// Support simple filtering: ?col=eq.val, ?col=gt.val. The statement is
+	// built as an AST (never as SQL text) so request values cannot inject SQL.
+	schema, err := s.cfg.Storage.GetTableSchema(dbName, tableName)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, 3004, err.Error())
+		return
+	}
+	columnsByName := make(map[string]string, len(schema.Columns))
+	for _, col := range schema.Columns {
+		columnsByName[strings.ToLower(col.Name)] = col.Name
+	}
 
-	var whereClauses []string
+	var where parser.Expression
 	for col, vals := range r.URL.Query() {
-		if col == "database" || col == "query" {
+		if col == "database" || col == "query" || col == "token" {
 			continue
 		}
+		canonical, ok := columnsByName[strings.ToLower(col)]
+		if !ok {
+			writeError(w, http.StatusBadRequest, 3003, fmt.Sprintf("unknown column '%s'", col))
+			return
+		}
 		for _, val := range vals {
-			parts := strings.SplitN(val, ".", 2)
-			if len(parts) == 2 {
-				op := parts[0]
-				actualVal := parts[1]
-				sqlOp := "="
-				switch op {
+			op := "="
+			actualVal := val
+			if parts := strings.SplitN(val, ".", 2); len(parts) == 2 {
+				switch parts[0] {
 				case "eq":
-					sqlOp = "="
+					op, actualVal = "=", parts[1]
 				case "gt":
-					sqlOp = ">"
+					op, actualVal = ">", parts[1]
 				case "lt":
-					sqlOp = "<"
+					op, actualVal = "<", parts[1]
 				case "like":
-					sqlOp = "LIKE"
+					op, actualVal = "LIKE", parts[1]
 				}
-				whereClauses = append(whereClauses, fmt.Sprintf("%s %s '%s'", col, sqlOp, actualVal))
+			}
+			cond := &parser.BinaryExpr{
+				Left:     &parser.ColumnRef{Name: canonical},
+				Operator: op,
+				Right:    filterLiteral(actualVal),
+			}
+			if where == nil {
+				where = cond
 			} else {
-				whereClauses = append(whereClauses, fmt.Sprintf("%s = '%s'", col, val))
+				where = &parser.AndExpr{Left: where, Right: cond}
 			}
 		}
 	}
 
-	if len(whereClauses) > 0 {
-		query += " WHERE " + strings.Join(whereClauses, " AND ")
-	}
-	query += ";"
-
-	stmt, _ := parser.Parse(query)
+	stmt := &parser.SelectStatement{TableName: tableName, Where: where}
 	sess := executor.NewSession(s.cfg.Storage, s.metrics, s.txm, s.br)
 	sess.SetCurrentDatabase(dbName)
 	res, err := sess.Execute(stmt)
@@ -549,6 +568,24 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// filterLiteral converts a raw query-string value into a typed literal so
+// comparisons against INT/FLOAT/BOOL columns work.
+func filterLiteral(raw string) parser.Expression {
+	if i, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return parser.Value{Type: "int", IntVal: i}
+	}
+	if f, err := strconv.ParseFloat(raw, 64); err == nil {
+		return parser.Value{Type: "float", FltVal: f}
+	}
+	switch strings.ToLower(raw) {
+	case "true":
+		return parser.Value{Type: "bool", BoolVal: true}
+	case "false":
+		return parser.Value{Type: "bool", BoolVal: false}
+	}
+	return parser.Value{Type: "string", StrVal: raw}
 }
 
 func (s *Server) handlePostTableData(w http.ResponseWriter, r *http.Request, dbName, tableName string) {

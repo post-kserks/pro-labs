@@ -166,11 +166,13 @@ func (s *FileStorageEngine) AlterTableAddColumn(dbName, tableName string, col Co
 		DefaultVal: defaultVal,
 	}
 
-	if _, err := s.appendWAL(wal.OpAlterTable, payload); err != nil {
-		return err
-	}
-
-	return s.applyAlterTableAddColumnLocked(dbName, tableName, col, defaultVal)
+	_, err := s.withWALGate(func() (int, error) {
+		if _, err := s.appendWAL(wal.OpAlterTable, payload); err != nil {
+			return 0, err
+		}
+		return 0, s.applyAlterTableAddColumnLocked(dbName, tableName, col, defaultVal)
+	})
+	return err
 }
 
 func (s *FileStorageEngine) applyAlterTableAddColumnLocked(dbName, tableName string, col ColumnSchema, defaultVal interface{}) error {
@@ -216,11 +218,13 @@ func (s *FileStorageEngine) AlterTableDropColumn(dbName, tableName string, colNa
 		Column: ColumnSchema{Name: colName},
 	}
 
-	if _, err := s.appendWAL(wal.OpAlterTable, payload); err != nil {
-		return err
-	}
-
-	return s.applyAlterTableDropColumnLocked(dbName, tableName, colName)
+	_, err := s.withWALGate(func() (int, error) {
+		if _, err := s.appendWAL(wal.OpAlterTable, payload); err != nil {
+			return 0, err
+		}
+		return 0, s.applyAlterTableDropColumnLocked(dbName, tableName, colName)
+	})
+	return err
 }
 
 func (s *FileStorageEngine) applyAlterTableDropColumnLocked(dbName, tableName string, colName string) error {
@@ -260,7 +264,36 @@ func (s *FileStorageEngine) applyAlterTableDropColumnLocked(dbName, tableName st
 		data.Rows[i].Data = append(row[:colIdx], row[colIdx+1:]...)
 	}
 
-	return s.writeVersionedData(dbName, tableName, data)
+	if err := s.writeVersionedData(dbName, tableName, data); err != nil {
+		return err
+	}
+
+	// Dropping a column invalidates the index on it and shifts every index on
+	// a later column left by one position.
+	if mgr := s.getOrCreateIndexManager(dbName, tableName); mgr != nil {
+		changed := false
+		rows := s.diskToIndexableRows(data)
+		for _, idx := range mgr.All() {
+			switch {
+			case idx.ColIndex() == colIdx:
+				mgr.Remove(idx.Name())
+				changed = true
+			case idx.ColIndex() > colIdx:
+				mgr.Remove(idx.Name())
+				shifted := index.New(idx.Name(), idx.Column(), idx.ColIndex()-1)
+				shifted.Rebuild(rows)
+				mgr.Add(shifted)
+				changed = true
+			}
+		}
+		if changed {
+			if err := s.saveIndexesMetadata(dbName, tableName, mgr); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *FileStorageEngine) AlterTableRenameColumn(dbName, tableName, oldName, newName string) error {
@@ -276,11 +309,13 @@ func (s *FileStorageEngine) AlterTableRenameColumn(dbName, tableName, oldName, n
 		NewName: newName,
 	}
 
-	if _, err := s.appendWAL(wal.OpAlterTable, payload); err != nil {
-		return err
-	}
-
-	return s.applyAlterTableRenameColumnLocked(dbName, tableName, oldName, newName)
+	_, err := s.withWALGate(func() (int, error) {
+		if _, err := s.appendWAL(wal.OpAlterTable, payload); err != nil {
+			return 0, err
+		}
+		return 0, s.applyAlterTableRenameColumnLocked(dbName, tableName, oldName, newName)
+	})
+	return err
 }
 
 func (s *FileStorageEngine) applyAlterTableRenameColumnLocked(dbName, tableName, oldName, newName string) error {
@@ -302,7 +337,27 @@ func (s *FileStorageEngine) applyAlterTableRenameColumnLocked(dbName, tableName,
 		return fmt.Errorf("column '%s' not found in table '%s'", oldName, tableName)
 	}
 
-	return writeJSONAtomic(s.schemaPath(dbName, tableName), schema)
+	if err := writeJSONAtomic(s.schemaPath(dbName, tableName), schema); err != nil {
+		return err
+	}
+
+	// Keep index metadata pointing at the renamed column.
+	if mgr := s.getOrCreateIndexManager(dbName, tableName); mgr != nil {
+		changed := false
+		for _, idx := range mgr.All() {
+			if strings.EqualFold(idx.Column(), oldName) {
+				idx.SetColumn(newName)
+				changed = true
+			}
+		}
+		if changed {
+			if err := s.saveIndexesMetadata(dbName, tableName, mgr); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *FileStorageEngine) AlterTableRenameTable(dbName, oldName, newName string) error {
@@ -316,11 +371,13 @@ func (s *FileStorageEngine) AlterTableRenameTable(dbName, oldName, newName strin
 		NewName: newName,
 	}
 
-	if _, err := s.appendWAL(wal.OpAlterTable, payload); err != nil {
-		return err
-	}
-
-	return s.applyAlterTableRenameTableLocked(dbName, oldName, newName)
+	_, err := s.withWALGate(func() (int, error) {
+		if _, err := s.appendWAL(wal.OpAlterTable, payload); err != nil {
+			return 0, err
+		}
+		return 0, s.applyAlterTableRenameTableLocked(dbName, oldName, newName)
+	})
+	return err
 }
 
 func (s *FileStorageEngine) applyAlterTableRenameTableLocked(dbName, oldName, newName string) error {
@@ -1541,9 +1598,6 @@ func (s *FileStorageEngine) applyInsertLocked(db, table string, data *tableDataD
 				if idx.ColIndex() < len(row) {
 					key := index.ValueToIndexKey(row[idx.ColIndex()])
 					idx.Insert(key, startPos+i)
-					if s.metrics != nil {
-						s.metrics.IncIndexHit()
-					}
 				}
 			}
 		}
@@ -1588,9 +1642,6 @@ func (s *FileStorageEngine) applyUpdateLocked(
 		if mgr != nil {
 			for _, idx := range mgr.All() {
 				idx.Delete(physicalIdx)
-				if s.metrics != nil {
-					s.metrics.IncIndexHit()
-				}
 			}
 		}
 
@@ -1615,9 +1666,6 @@ func (s *FileStorageEngine) applyUpdateLocked(
 				if idx.ColIndex() < len(newData) {
 					key := index.ValueToIndexKey(newData[idx.ColIndex()])
 					idx.Insert(key, newPhysicalIdx)
-					if s.metrics != nil {
-						s.metrics.IncIndexHit()
-					}
 				}
 			}
 		}
@@ -1648,9 +1696,6 @@ func (s *FileStorageEngine) applyDeleteLocked(db, table string, data *tableDataD
 		if mgr != nil {
 			for _, idx := range mgr.All() {
 				idx.Delete(physicalIdx)
-				if s.metrics != nil {
-					s.metrics.IncIndexHit()
-				}
 			}
 		}
 	}
