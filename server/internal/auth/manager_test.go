@@ -7,7 +7,7 @@ import (
 )
 
 func TestNoDefaultTokenInjected(t *testing.T) {
-	m := New(true, nil)
+	m := New(true, nil, nil)
 	if m.ValidateToken("vdb_sk_local_dev") {
 		t.Fatal("legacy hardcoded token still accepted")
 	}
@@ -17,7 +17,7 @@ func TestNoDefaultTokenInjected(t *testing.T) {
 }
 
 func TestValidateToken(t *testing.T) {
-	m := New(true, map[string]string{"sekret": "ci"})
+	m := New(true, map[string]string{"sekret": "ci"}, nil)
 	if !m.ValidateToken("sekret") {
 		t.Fatal("configured token rejected")
 	}
@@ -25,14 +25,14 @@ func TestValidateToken(t *testing.T) {
 		t.Fatal("unknown token accepted")
 	}
 
-	disabled := New(false, nil)
+	disabled := New(false, nil, nil)
 	if !disabled.ValidateToken("anything") {
 		t.Fatal("disabled auth should accept any token")
 	}
 }
 
 func TestMiddlewareAcceptsQueryParamToken(t *testing.T) {
-	m := New(true, map[string]string{"sekret": "ci"})
+	m := New(true, map[string]string{"sekret": "ci"}, nil)
 	handler := m.Middleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -51,7 +51,7 @@ func TestMiddlewareAcceptsQueryParamToken(t *testing.T) {
 }
 
 func TestTokensStoredHashed(t *testing.T) {
-	m := New(true, map[string]string{"plain-secret": "ci"})
+	m := New(true, map[string]string{"plain-secret": "ci"}, nil)
 	if _, ok := m.tokens["plain-secret"]; ok {
 		t.Fatal("plaintext token stored in manager")
 	}

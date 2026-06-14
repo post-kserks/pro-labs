@@ -8,6 +8,19 @@ MONITOR_PORT="${4:-5433}"
 DATA_DIR="./data"
 CONFIG_PATH="./vaultdb.yaml"
 
+validate_port() {
+    local port="$1"
+    local name="$2"
+    if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        echo "[ERROR] Invalid $name: $port (must be 1-65535)"
+        exit 1
+    fi
+}
+
+validate_port "$PORT" "port"
+validate_port "$HTTP_PORT" "http-port"
+validate_port "$MONITOR_PORT" "monitor-port"
+
 echo "╔════════════════════════════════════════╗"
 echo "║          VaultDB  is starting          ║"
 echo "╚════════════════════════════════════════╝"

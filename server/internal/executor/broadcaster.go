@@ -76,22 +76,26 @@ func (s *Subscription) notify(res *Result, logger *slog.Logger) bool {
 		}
 
 	case PolicyEvict:
-		// Вытесняем старейшее обновление — подходит для real-time дашбордов.
-		// Количество попыток ограничено: при конкурентной записи нельзя
-		// крутиться бесконечно.
-		for attempt := 0; attempt < cap(s.Send)+4; attempt++ {
+		// Один select: попытка отправить, при провале — дренировать и повторить.
+		// Это O(1), не цикл.
+		select {
+		case s.Send <- res:
+			// успех с первой попытки
+		default:
+			// Канал полон: дренируем одно старое сообщение и вставляем новое.
+			select {
+			case <-s.Send: // discard oldest
+			default: // канал уже пуст (race condition — ok)
+			}
+			// Теперь место точно есть (мы единственный writer для этой подписки)
 			select {
 			case s.Send <- res:
-				return true
 			default:
-				select {
-				case <-s.Send: // discard oldest
-				default:
-				}
+				// Если всё равно не влезло — кто-то ещё пишет параллельно.
+				logger.Warn("evict policy: could not insert after drain, dropping",
+					"session", s.ID)
 			}
 		}
-		logger.Warn("live query notification dropped after evict attempts",
-			"subscription", s.ID)
 		return true
 
 	default: // PolicyDrop

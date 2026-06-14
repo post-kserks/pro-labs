@@ -1,9 +1,11 @@
 package storage
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +16,8 @@ import (
 
 	"vaultdb/internal/storage/heap"
 	"vaultdb/internal/storage/page"
+	"vaultdb/internal/txmanager"
+	"vaultdb/internal/wal"
 )
 
 // PageStorageEngine — реализация StorageEngine поверх бинарного страничного
@@ -34,6 +38,10 @@ type PageStorageEngine struct {
 
 	tables  map[string]*pageTable // "db/table" → открытая таблица
 	catalog pageCatalog
+
+	wal     *wal.WAL
+	txMgr   *txmanager.Manager
+	bufPool *BufferPool
 }
 
 type pageTable struct {
@@ -57,7 +65,7 @@ const pageTupleHeaderSize = 16
 
 // NewPageStorageEngine открывает (или создаёт) страничное хранилище в
 // <dataDir>/pagedb.
-func NewPageStorageEngine(dataDir string) (*PageStorageEngine, error) {
+func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) (*PageStorageEngine, error) {
 	root := filepath.Join(dataDir, "pagedb")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
@@ -70,6 +78,9 @@ func NewPageStorageEngine(dataDir string) (*PageStorageEngine, error) {
 			LastModified: make(map[string]uint64),
 			RowCounts:    make(map[string]int),
 		},
+		wal:     w,
+		txMgr:   txMgr,
+		bufPool: NewBufferPool(1024), // 1024 страницы = 8 МБ
 	}
 
 	catalogPath := e.catalogPath()
@@ -87,6 +98,330 @@ func NewPageStorageEngine(dataDir string) (*PageStorageEngine, error) {
 	return e, nil
 }
 
+// RecoverFromWAL воспроизводит WAL при старте page engine.
+// Три фазы: Analysis → Redo → Undo (как в PostgreSQL ARIES).
+func (e *PageStorageEngine) RecoverFromWAL() error {
+	if e.wal == nil {
+		return nil
+	}
+
+	// Фаза 1: Analysis — определяем какие транзакции закоммичены
+	committed, inProgress, err := e.wal.AnalyzeTransactions()
+	if err != nil {
+		return fmt.Errorf("wal analysis: %w", err)
+	}
+
+	slog.Info("WAL recovery: analysis complete",
+		"committed", len(committed),
+		"in_progress", len(inProgress))
+
+	// Фаза 2: Redo — воспроизводим ВСЕ записи (и committed, и in-progress)
+	if err := e.redoPhase(); err != nil {
+		return fmt.Errorf("wal redo: %w", err)
+	}
+
+	// Фаза 3: Undo — откатываем незакоммиченные транзакции
+	if err := e.undoPhase(inProgress); err != nil {
+		return fmt.Errorf("wal undo: %w", err)
+	}
+
+	// Очищаем WAL после успешного recovery
+	if err := e.wal.Checkpoint(); err != nil {
+		return fmt.Errorf("wal checkpoint after recovery: %w", err)
+	}
+
+	slog.Info("WAL recovery: complete",
+		"replayed", len(committed),
+		"rolled_back", len(inProgress))
+
+	return nil
+}
+
+func (e *PageStorageEngine) redoPhase() error {
+	return e.wal.Replay(func(entry wal.Entry) error {
+		switch entry.OpType {
+		case wal.OpPageInsert:
+			var p wal.WALPageInsertPayload
+			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+				return err
+			}
+			return e.redoInsert(p)
+		case wal.OpPageDelete, wal.OpPageUpdateXMax:
+			var p wal.WALPageDeletePayload
+			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+				return err
+			}
+			return e.redoDelete(p)
+		case wal.OpSchemaWrite:
+			var p wal.WALSchemaWritePayload
+			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+				return err
+			}
+			return e.redoSchemaWrite(p)
+		case wal.OpRewriteBegin:
+			slog.Warn("WAL recovery: incomplete table rewrite detected (OpRewriteBegin without OpRewriteCommit)",
+				"db", extractFieldFromPayload(entry.Payload, "db"),
+				"table", extractFieldFromPayload(entry.Payload, "table"),
+				"txid", entry.TxID)
+		case wal.OpRewriteCommit, wal.OpRewriteData:
+			// Rewrite already completed — nothing to redo (data was written to heap)
+		}
+		return nil // другие типы — пропускаем
+	})
+}
+
+func (e *PageStorageEngine) undoPhase(inProgress map[uint64]bool) error {
+	for xid := range inProgress {
+		if err := e.wal.ReplayTransaction(xid, func(entry wal.Entry) error {
+			switch entry.OpType {
+			case wal.OpPageInsert:
+				var p wal.WALPageInsertPayload
+				if err := json.Unmarshal(entry.Payload, &p); err != nil {
+					return err
+				}
+				return e.undoInsert(p, xid)
+			case wal.OpPageDelete:
+				var p wal.WALPageDeletePayload
+				if err := json.Unmarshal(entry.Payload, &p); err != nil {
+					return err
+				}
+				return e.undoDelete(p)
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("undo transaction %d: %w", xid, err)
+		}
+
+		// Записать в WAL что транзакция откатилась
+		e.wal.Append(wal.OpAbort, nil)
+	}
+	return nil
+}
+
+func (e *PageStorageEngine) redoInsert(p wal.WALPageInsertPayload) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	key := p.DB + "/" + p.Table
+	t, ok := e.tables[key]
+	if !ok {
+		// Таблица не найдена — пропускаем (возможно, была удалена)
+		return nil
+	}
+
+	// Восстанавливаем tuple на страницу
+	pid := page.PageID{SegmentNo: p.SegmentNo, PageNo: p.PageNo}
+	var pg page.Page
+	if err := t.heap.ReadPage(pid, &pg); err != nil {
+		// Страница не существует — создаём новую
+		newPid, newPg, err := t.heap.AllocatePage(page.PageTypeHeap)
+		if err != nil {
+			return err
+		}
+		pg = *newPg
+		pid = newPid
+	}
+
+	if _, err := pg.InsertTuple(p.TupleData); err != nil {
+		return err
+	}
+
+	if err := t.heap.WritePage(pid, &pg); err != nil {
+		return err
+	}
+
+	// Обновляем каталог
+	e.catalog.RowCounts[key]++
+	return nil
+}
+
+func (e *PageStorageEngine) redoDelete(p wal.WALPageDeletePayload) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	key := p.DB + "/" + p.Table
+	t, ok := e.tables[key]
+	if !ok {
+		return nil
+	}
+
+	// Помечаем tuple как удалённый (устанавливаем XMax)
+	pid := page.PageID{SegmentNo: p.SegmentNo, PageNo: p.PageNo}
+	var pg page.Page
+	if err := t.heap.ReadPage(pid, &pg); err != nil {
+		return err
+	}
+
+	tuple := pg.GetTuple(p.SlotNo)
+	if tuple == nil {
+		return nil
+	}
+
+	// Устанавливаем XMax (deleted_tx)
+	binary.LittleEndian.PutUint64(tuple[8:16], p.XMax)
+
+	if err := t.heap.WritePage(pid, &pg); err != nil {
+		return err
+	}
+
+	// Обновляем каталог
+	e.catalog.RowCounts[key]--
+	if e.catalog.RowCounts[key] < 0 {
+		e.catalog.RowCounts[key] = 0
+	}
+	return nil
+}
+
+func (e *PageStorageEngine) redoSchemaWrite(p wal.WALSchemaWritePayload) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return os.WriteFile(e.schemaPathFor(p.DB, p.Table), []byte(p.Schema), 0o644)
+}
+
+func extractFieldFromPayload(payload []byte, field string) string {
+	var m map[string]interface{}
+	if err := json.Unmarshal(payload, &m); err != nil {
+		return ""
+	}
+	if v, ok := m[field]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func (e *PageStorageEngine) undoInsert(p wal.WALPageInsertPayload, xid uint64) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	key := p.DB + "/" + p.Table
+	t, ok := e.tables[key]
+	if !ok {
+		return nil
+	}
+
+	// Undo INSERT = пометить tuple как dead (XMax = xid)
+	pid := page.PageID{SegmentNo: p.SegmentNo, PageNo: p.PageNo}
+	var pg page.Page
+	if err := t.heap.ReadPage(pid, &pg); err != nil {
+		return err
+	}
+
+	tuple := pg.GetTuple(p.SlotNo)
+	if tuple == nil {
+		return nil
+	}
+
+	// Устанавливаем XMax = xid (помечаем как удалённый)
+	binary.LittleEndian.PutUint64(tuple[8:16], xid)
+
+	if err := t.heap.WritePage(pid, &pg); err != nil {
+		return err
+	}
+
+	// Обновляем каталог
+	e.catalog.RowCounts[key]--
+	if e.catalog.RowCounts[key] < 0 {
+		e.catalog.RowCounts[key] = 0
+	}
+	return nil
+}
+
+func (e *PageStorageEngine) undoDelete(p wal.WALPageDeletePayload) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	key := p.DB + "/" + p.Table
+	t, ok := e.tables[key]
+	if !ok {
+		return nil
+	}
+
+	// Undo DELETE = снять XMax (восстановить tuple)
+	pid := page.PageID{SegmentNo: p.SegmentNo, PageNo: p.PageNo}
+	var pg page.Page
+	if err := t.heap.ReadPage(pid, &pg); err != nil {
+		return err
+	}
+
+	tuple := pg.GetTuple(p.SlotNo)
+	if tuple == nil {
+		return nil
+	}
+
+	// Обнуляем XMax (восстанавливаем tuple)
+	binary.LittleEndian.PutUint64(tuple[8:16], 0)
+
+	if err := t.heap.WritePage(pid, &pg); err != nil {
+		return err
+	}
+
+	// Обновляем каталог
+	e.catalog.RowCounts[key]++
+	return nil
+}
+
+// CheckpointLoop запускается в фоновой горутине и периодически:
+// 1. Сбрасывает WAL на диск (fsync)
+// 2. После успешного WAL fsync — сбрасывает dirty pages из buffer pool
+// 3. Записывает checkpoint запись в WAL
+func (e *PageStorageEngine) CheckpointLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Финальный checkpoint при shutdown
+			e.doCheckpoint()
+			return
+		case <-ticker.C:
+			if err := e.doCheckpoint(); err != nil {
+				slog.Error("checkpoint failed", "error", err)
+			}
+		}
+	}
+}
+
+func (e *PageStorageEngine) doCheckpoint() error {
+	if e.wal == nil {
+		return nil
+	}
+
+	// Шаг 1: fsync WAL
+	lsn, err := e.wal.Flush()
+	if err != nil {
+		return fmt.Errorf("checkpoint: wal flush: %w", err)
+	}
+
+	// Шаг 2: сбрасываем dirty pages из buffer pool
+	e.mu.Lock()
+	if e.bufPool != nil {
+		for _, t := range e.tables {
+			if err := e.bufPool.FlushDirtyPagesUpToLSN(lsn, t.heap); err != nil {
+				e.mu.Unlock()
+				return fmt.Errorf("checkpoint: flush dirty pages: %w", err)
+			}
+		}
+	}
+
+	// Шаг 3: сохраняем каталог (содержит актуальные RowCounts)
+	if err := e.saveCatalogLocked(); err != nil {
+		e.mu.Unlock()
+		return fmt.Errorf("checkpoint: save catalog: %w", err)
+	}
+	e.mu.Unlock()
+
+	// Шаг 4: записать checkpoint в WAL
+	if _, err := e.wal.Append(wal.OpCheckpoint, wal.CheckpointPayload{LSN: lsn}); err != nil {
+		return fmt.Errorf("checkpoint: write record: %w", err)
+	}
+
+	return nil
+}
+
 func (e *PageStorageEngine) catalogPath() string {
 	return filepath.Join(e.rootDir, "_catalog.json")
 }
@@ -101,6 +436,20 @@ func (e *PageStorageEngine) tablePath(db, table string) string {
 
 func (e *PageStorageEngine) schemaPathFor(db, table string) string {
 	return filepath.Join(e.tablePath(db, table), "_schema.json")
+}
+
+// getPage загружает страницу из buffer pool или с диска.
+func (e *PageStorageEngine) getPage(pid page.PageID, hf *heap.HeapFile) (*page.Page, error) {
+	pg, _, err := e.bufPool.FetchPage(pid, hf)
+	if err != nil {
+		return nil, err
+	}
+	return pg, nil
+}
+
+// unpinPage освобождает страницу в buffer pool.
+func (e *PageStorageEngine) unpinPage(pid page.PageID, dirty bool) {
+	e.bufPool.UnpinPage(pid, dirty)
 }
 
 // saveCatalogLocked сохраняет каталог; вызывается под write-локом.
@@ -263,10 +612,22 @@ func (e *PageStorageEngine) CreateTable(dbName string, schema TableSchema) error
 	return e.saveCatalogLocked()
 }
 
+// writeSchemaLocked записывает JSON-схему на диск. Перед записью эмитится
+// WAL-запись OpSchemaWrite, чтобы при recovery можно было перезаписать схему.
 func (e *PageStorageEngine) writeSchemaLocked(db, table string, schema *TableSchema) error {
 	data, err := json.MarshalIndent(schema, "", "  ")
 	if err != nil {
 		return err
+	}
+	if e.wal != nil {
+		payload := wal.WALSchemaWritePayload{
+			DB:     db,
+			Table:  table,
+			Schema: string(data),
+		}
+		if _, err := e.wal.Append(wal.OpSchemaWrite, payload); err != nil {
+			return err
+		}
 	}
 	return os.WriteFile(e.schemaPathFor(db, table), data, 0o644)
 }
@@ -365,9 +726,9 @@ func (e *PageStorageEngine) ListTables(dbName string) ([]TableInfo, error) {
 }
 
 func (e *PageStorageEngine) GetTableSchema(dbName, tableName string) (*TableSchema, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	t, err := e.getTableLocked(dbName, tableName, true)
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	t, err := e.getTableLocked(dbName, tableName, false)
 	if err != nil {
 		return nil, err
 	}
@@ -396,8 +757,8 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 	}
 	for g := uint32(0); g < total; g++ {
 		pid := pageIDAt(g)
-		var pg page.Page
-		if err := t.heap.ReadPage(pid, &pg); err != nil {
+		pg, err := e.getPage(pid, t.heap)
+		if err != nil {
 			return err
 		}
 		h := pg.Header()
@@ -408,21 +769,36 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 			}
 			createdTx, deletedTx, row, err := decodePageTuple(tuple, t.schema)
 			if err != nil {
+				e.unpinPage(pid, false)
 				return err
 			}
-			stop, err := visit(pid, &pg, slot, createdTx, deletedTx, row)
+			stop, err := visit(pid, pg, slot, createdTx, deletedTx, row)
 			if err != nil {
+				e.unpinPage(pid, false)
 				return err
 			}
 			if stop {
+				e.unpinPage(pid, false)
 				return nil
 			}
 		}
+		e.unpinPage(pid, false)
 	}
 	return nil
 }
 
 // ── Запись ────────────────────────────────────────────────────────────────
+
+// flushDirty сбрасывает грязную страницу на диск через heap файл.
+func (e *PageStorageEngine) flushDirty(dirty bool, dirtyPid page.PageID, dirtyPg *page.Page, t *pageTable) error {
+	if dirty {
+		if err := t.heap.WritePage(dirtyPid, dirtyPg); err != nil {
+			return err
+		}
+		dirty = false
+	}
+	return nil
+}
 
 // appendTuplesLocked добавляет кортежи в конец таблицы; вызывается под write-локом.
 func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) error {
@@ -432,11 +808,12 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 	}
 
 	var pid page.PageID
-	var pg page.Page
+	var pg *page.Page
 	havePage := false
 	if total > 0 {
 		pid = pageIDAt(total - 1)
-		if err := t.heap.ReadPage(pid, &pg); err != nil {
+		pg, err = e.getPage(pid, t.heap)
+		if err != nil {
 			return err
 		}
 		havePage = true
@@ -445,9 +822,10 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 	dirty := false
 	flush := func() error {
 		if havePage && dirty {
-			if err := t.heap.WritePage(pid, &pg); err != nil {
+			if err := t.heap.WritePage(pid, pg); err != nil {
 				return err
 			}
+			e.bufPool.InvalidatePage(pid)
 			dirty = false
 		}
 		return nil
@@ -460,7 +838,7 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 				if err != nil {
 					return err
 				}
-				pid, pg, havePage = newPid, *newPg, true
+				pid, pg, havePage = newPid, newPg, true
 			}
 			if _, err := pg.InsertTuple(tuple); err == nil {
 				dirty = true
@@ -507,9 +885,80 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		tuples = append(tuples, tuple)
 	}
 
-	if err := e.appendTuplesLocked(t, tuples); err != nil {
-		return 0, err
+	// Сначала вставляем tuples, затем пишем WAL с реальными позициями
+	// Это важно для recovery — WAL должен содержать точные позиции
+	insertedTuples := make([]struct {
+		pid page.PageID
+		slot uint16
+	}, 0, len(tuples))
+
+	for _, tuple := range tuples {
+		// Находим или выделяем страницу
+		total, err := t.heap.PageCount()
+		if err != nil {
+			return 0, err
+		}
+
+		var pid page.PageID
+		var pg page.Page
+		havePage := false
+
+		if total > 0 {
+			pid = pageIDAt(total - 1)
+			if err := t.heap.ReadPage(pid, &pg); err != nil {
+				return 0, err
+			}
+			havePage = true
+		}
+
+		for {
+			if !havePage {
+				newPid, newPg, err := t.heap.AllocatePage(page.PageTypeHeap)
+				if err != nil {
+					return 0, err
+				}
+				pid, pg, havePage = newPid, *newPg, true
+			}
+
+			slot, err := pg.InsertTuple(tuple)
+			if err == nil {
+				// Успешно вставили — записываем в WAL
+				if e.wal != nil {
+					payload := wal.WALPageInsertPayload{
+						DB:         dbName,
+						Table:      tableName,
+						SegmentNo:  pid.SegmentNo,
+						PageNo:     pid.PageNo,
+						SlotNo:     slot,
+						XID:        txID,
+						TupleData:  tuple,
+					}
+					if _, err := e.wal.AppendWithTx(txID, wal.OpPageInsert, payload); err != nil {
+						return 0, fmt.Errorf("wal insert: %w", err)
+					}
+				}
+
+				// Запоминаем позицию для catalog
+				insertedTuples = append(insertedTuples, struct {
+					pid page.PageID
+					slot uint16
+				}{pid, slot})
+
+				// Сбрасываем страницу
+				if err := t.heap.WritePage(pid, &pg); err != nil {
+					return 0, err
+				}
+				break
+			}
+
+			// Страница полна — выделяем новую
+			if err := t.heap.Sync(); err != nil {
+				return 0, err
+			}
+			havePage = false
+		}
 	}
+
 	if err := t.heap.Sync(); err != nil {
 		return 0, err
 	}
@@ -556,9 +1005,50 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 			if err := t.heap.WritePage(dirtyPid, dirtyPg); err != nil {
 				return err
 			}
+			e.bufPool.InvalidatePage(dirtyPid)
 			dirty = false
 		}
 		return nil
+	}
+
+	// WAL: записываем каждую операцию ПЕРЕД изменением heap
+	// Важно: SlotNo должен быть физическим слотом, а не логической позицией
+	if e.wal != nil {
+		// Сначала сканируем чтобы найти физические слоты
+		var physicalSlots []struct {
+			pid  page.PageID
+			slot uint16
+		}
+		e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+			if deletedTx != 0 {
+				return false, nil
+			}
+			matched := wanted[pos]
+			pos++
+			if matched {
+				physicalSlots = append(physicalSlots, struct {
+					pid  page.PageID
+					slot uint16
+				}{pid, slot})
+			}
+			return false, nil
+		})
+
+		// Записываем WAL с реальными физическими слотами
+		for _, ps := range physicalSlots {
+			payload := wal.WALPageDeletePayload{
+				DB:         dbName,
+				Table:      tableName,
+				SegmentNo:  ps.pid.SegmentNo,
+				PageNo:     ps.pid.PageNo,
+				SlotNo:     ps.slot,
+				XMax:       txID,
+			}
+			if _, err := e.wal.AppendWithTx(txID, wal.OpPageDelete, payload); err != nil {
+				return 0, fmt.Errorf("wal delete: %w", err)
+			}
+		}
+		pos = 0 // Сбрасываем позицию для следующего сканирования
 	}
 
 	err = e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
@@ -625,6 +1115,9 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	e.catalog.LastModified[key] = txID
 	if isDelete {
 		e.catalog.RowCounts[key] -= affected
+		if e.catalog.RowCounts[key] < 0 {
+			e.catalog.RowCounts[key] = 0
+		}
 	}
 	if err := e.saveCatalogLocked(); err != nil {
 		return 0, err
@@ -644,10 +1137,10 @@ func (e *PageStorageEngine) DeleteRows(dbName, tableName string, indices []int) 
 
 // readRows возвращает строки, видимые на момент asOf (0 = текущие версии).
 func (e *PageStorageEngine) readRows(dbName, tableName string, asOf uint64) ([]Row, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 
-	t, err := e.getTableLocked(dbName, tableName, true)
+	t, err := e.getTableLocked(dbName, tableName, false)
 	if err != nil {
 		return nil, err
 	}
@@ -684,25 +1177,57 @@ func (e *PageStorageEngine) ReadRowsAsOf(dbName, tableName string, txID uint64) 
 }
 
 func (e *PageStorageEngine) ReadRowsByPositions(dbName, tableName string, positions []int) ([]Row, error) {
-	all, err := e.readRows(dbName, tableName, 0)
+	if len(positions) == 0 {
+		return nil, nil
+	}
+
+	e.mu.RLock()
+	t, err := e.getTableLocked(dbName, tableName, false)
+	if err != nil {
+		e.mu.RUnlock()
+		return nil, err
+	}
+
+	posSet := make(map[int]bool, len(positions))
+	for _, p := range positions {
+		posSet[p] = true
+	}
+
+	result := make([]Row, 0, len(positions))
+	rowIdx := 0
+
+	err = e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+		if deletedTx != 0 {
+			return false, nil
+		}
+		if posSet[rowIdx] {
+			result = append(result, row)
+			delete(posSet, rowIdx)
+		}
+		rowIdx++
+		if len(posSet) == 0 {
+			return true, nil
+		}
+		return false, nil
+	})
+	e.mu.RUnlock()
+
 	if err != nil {
 		return nil, err
 	}
-	rows := make([]Row, 0, len(positions))
-	for _, p := range positions {
-		if p >= 0 && p < len(all) {
-			rows = append(rows, all[p])
-		}
-	}
-	return rows, nil
+	return result, nil
 }
 
 func (e *PageStorageEngine) CountRows(dbName, tableName string) (int, error) {
-	rows, err := e.readRows(dbName, tableName, 0)
-	if err != nil {
-		return 0, err
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	key := dbName + "/" + tableName
+	count, ok := e.catalog.RowCounts[key]
+	if !ok {
+		return 0, fmt.Errorf("table '%s' not found in database '%s'", tableName, dbName)
 	}
-	return len(rows), nil
+	return count, nil
 }
 
 func (e *PageStorageEngine) TxIDAtTimestamp(dbName, ts string) (uint64, error) {
@@ -763,8 +1288,28 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 
 	sizeBefore := e.tableSizeLocked(dbName, tableName)
 
+	// Записываем начало vacuum в WAL
+	if e.wal != nil {
+		vacuumPayload := wal.WALVacuumPayload{
+			DB:    dbName,
+			Table: tableName,
+		}
+		if _, err := e.wal.Append(wal.OpVacuumBegin, vacuumPayload); err != nil {
+			return nil, fmt.Errorf("vacuum: wal begin: %w", err)
+		}
+	}
+
+	// Создаём shadow file для новой версии таблицы
+	shadowPath := e.tablePath(dbName, tableName) + ".vacuum"
+	shadowHF, err := heap.CreateHeapFile(shadowPath)
+	if err != nil {
+		return nil, fmt.Errorf("vacuum: create shadow file: %w", err)
+	}
+	defer shadowHF.Close()
+
 	total, err := t.heap.PageCount()
 	if err != nil {
+		os.Remove(shadowPath)
 		return nil, err
 	}
 
@@ -773,6 +1318,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		pid := pageIDAt(g)
 		var pg page.Page
 		if err := t.heap.ReadPage(pid, &pg); err != nil {
+			os.Remove(shadowPath)
 			return nil, err
 		}
 		h := pg.Header()
@@ -792,14 +1338,60 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		pg.Init(page.PageTypeHeap)
 		for _, tuple := range live {
 			if _, err := pg.InsertTuple(tuple); err != nil {
+				os.Remove(shadowPath)
 				return nil, err
 			}
 		}
-		if err := t.heap.WritePage(pid, &pg); err != nil {
+		// Пишем в shadow file
+		if err := shadowHF.WritePage(pid, &pg); err != nil {
+			os.Remove(shadowPath)
 			return nil, err
 		}
 	}
-	if err := t.heap.Sync(); err != nil {
+	if err := shadowHF.Sync(); err != nil {
+		os.Remove(shadowPath)
+		return nil, err
+	}
+	shadowHF.Close()
+
+	// Записываем завершение vacuum в WAL (перед заменой файлов)
+	if e.wal != nil {
+		vacuumPayload := wal.WALVacuumPayload{
+			DB:    dbName,
+			Table: tableName,
+		}
+		if _, err := e.wal.Append(wal.OpVacuumCommit, vacuumPayload); err != nil {
+			os.Remove(shadowPath)
+			return nil, fmt.Errorf("vacuum: wal commit: %w", err)
+		}
+	}
+
+	// Атомарная замена: удаляем старый heap и переименовываем shadow
+	originalPath := e.tablePath(dbName, tableName)
+	if err := t.heap.Close(); err != nil {
+		os.Remove(shadowPath)
+		return nil, err
+	}
+	if err := os.RemoveAll(originalPath); err != nil {
+		os.Remove(shadowPath)
+		return nil, err
+	}
+	if err := os.Rename(shadowPath, originalPath); err != nil {
+		os.Remove(shadowPath)
+		return nil, err
+	}
+
+	// Открываем новый heap file
+	newHF, err := heap.OpenHeapFile(originalPath)
+	if err != nil {
+		return nil, err
+	}
+	t.heap = newHF
+
+	// Обновляем каталог
+	key := dbName + "/" + tableName
+	e.catalog.RowCounts[key] = rowsAfter
+	if err := e.saveCatalogLocked(); err != nil {
 		return nil, err
 	}
 
@@ -867,10 +1459,19 @@ func (e *PageStorageEngine) CurrentTxID() uint64 {
 
 // rewriteTable перезаписывает все живые строки таблицы функцией transform
 // (используется ADD/DROP COLUMN, когда меняется арность строк).
+// Перед началом и после завершения эмитятся WAL-записи OpRewriteBegin/OpRewriteCommit.
 func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchema, transform func(Row) Row) error {
 	t, err := e.getTableLocked(db, table, true)
 	if err != nil {
 		return err
+	}
+
+	// Emit WAL rewrite begin
+	if e.wal != nil {
+		rewritePayload := wal.WALRewritePayload{DB: db, Table: table}
+		if _, err := e.wal.Append(wal.OpRewriteBegin, rewritePayload); err != nil {
+			return err
+		}
 	}
 
 	rows := []Row{}
@@ -926,6 +1527,15 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 	if err := e.writeSchemaLocked(db, table, newSchema); err != nil {
 		return err
 	}
+
+	// Emit WAL rewrite commit
+	if e.wal != nil {
+		rewritePayload := wal.WALRewritePayload{DB: db, Table: table}
+		if _, err := e.wal.Append(wal.OpRewriteCommit, rewritePayload); err != nil {
+			return err
+		}
+	}
+
 	e.catalog.LastModified[db+"/"+table] = txID
 	return e.saveCatalogLocked()
 }

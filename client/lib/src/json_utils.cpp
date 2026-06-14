@@ -24,8 +24,11 @@ public:
     }
 
 private:
+    static constexpr std::size_t kMaxDepth = 128;
+
     const std::string& input_;
     std::size_t pos_ = 0;
+    std::size_t depth_ = 0;
 
     Value parseValue() {
         if (eof()) {
@@ -57,6 +60,10 @@ private:
     }
 
     Value parseObject() {
+        if (depth_ >= kMaxDepth) {
+            throw std::runtime_error("JSON nesting depth exceeds limit");
+        }
+        ++depth_;
         consume('{');
 
         Value object;
@@ -70,20 +77,9 @@ private:
 
         while (true) {
             skipWhitespace();
-            if (peek() != '"') {
-                throw std::runtime_error("expected string key in JSON object");
-            }
-            std::string key = parseString();
-
-            skipWhitespace();
-            consume(':');
-            skipWhitespace();
-
-            object.objectValue.emplace(std::move(key), parseValue());
-
-            skipWhitespace();
             if (peek() == '}') {
                 consume('}');
+                --depth_;
                 break;
             }
             consume(',');
@@ -94,6 +90,10 @@ private:
     }
 
     Value parseArray() {
+        if (depth_ >= kMaxDepth) {
+            throw std::runtime_error("JSON nesting depth exceeds limit");
+        }
+        ++depth_;
         consume('[');
 
         Value array;
@@ -112,6 +112,7 @@ private:
             skipWhitespace();
             if (peek() == ']') {
                 consume(']');
+                --depth_;
                 break;
             }
             consume(',');
@@ -201,7 +202,16 @@ private:
         const std::string token = input_.substr(start, pos_ - start);
         Value number;
         number.type = Type::Number;
-        number.numberValue = std::stod(token);
+        if (isInteger) {
+            try {
+                number.intValue = std::stoll(token);
+                number.useInt = true;
+            } catch (...) {
+                number.numberValue = std::stod(token);
+            }
+        } else {
+            number.numberValue = std::stod(token);
+        }
         number.numberIsInteger = isInteger;
         return number;
     }
@@ -327,6 +337,9 @@ std::string valueToString(const Value& value) {
     case Type::Bool:
         return value.boolValue ? "true" : "false";
     case Type::Number: {
+        if (value.useInt) {
+            return std::to_string(value.intValue);
+        }
         if (value.numberIsInteger && std::floor(value.numberValue) == value.numberValue) {
             long long number = static_cast<long long>(value.numberValue);
             return std::to_string(number);

@@ -1,5 +1,6 @@
 #include "logic/history.hpp"
 
+#include "vaultdb/json_utils.hpp"
 #include "utils/string_utils.hpp"
 
 #include <filesystem>
@@ -13,34 +14,6 @@ namespace {
 
 std::filesystem::path historyPath() {
     return std::filesystem::path(utils::vaultdbDirectory()) / "history.json";
-}
-
-std::string escapeJson(const std::string& value) {
-    std::string out;
-    out.reserve(value.size());
-    for (char c : value) {
-        switch (c) {
-        case '\\':
-            out += "\\\\";
-            break;
-        case '"':
-            out += "\\\"";
-            break;
-        case '\n':
-            out += "\\n";
-            break;
-        case '\r':
-            out += "\\r";
-            break;
-        case '\t':
-            out += "\\t";
-            break;
-        default:
-            out.push_back(c);
-            break;
-        }
-    }
-    return out;
 }
 
 std::string unescapeJson(const std::string& value) {
@@ -133,8 +106,8 @@ void History::save() const {
     for (std::size_t i = 0; i < entries_.size(); ++i) {
         const auto& entry = entries_[i];
         out << "  {\n"
-            << "    \"timestamp\": \"" << escapeJson(entry.timestamp) << "\",\n"
-            << "    \"query\": \"" << escapeJson(entry.query) << "\",\n"
+            << "    \"timestamp\": \"" << json::escape(entry.timestamp) << "\",\n"
+            << "    \"query\": \"" << json::escape(entry.query) << "\",\n"
             << "    \"success\": " << (entry.success ? "true" : "false") << ",\n"
             << "    \"duration_ms\": " << entry.durationMs << "\n"
             << "  }";

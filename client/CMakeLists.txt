@@ -7,6 +7,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_SKIP_INSTALL_RPATH TRUE)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
+find_package(OpenSSL REQUIRED)
+
 add_library(vaultdb SHARED
     lib/src/connection.cpp
     lib/src/result.cpp
@@ -18,6 +20,12 @@ target_include_directories(vaultdb
         lib/include
     PRIVATE
         lib/src
+)
+
+target_link_libraries(vaultdb
+    PUBLIC
+        OpenSSL::SSL
+        OpenSSL::Crypto
 )
 
 add_executable(vaultdb-shell

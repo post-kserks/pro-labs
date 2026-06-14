@@ -11,7 +11,7 @@ import { useQuery } from "./hooks/useQuery";
 const TOKEN_KEY = "vaultdb_token";
 
 export function App() {
-  const [token, setToken] = useState(localStorage.getItem(TOKEN_KEY) || "");
+  const [token, setToken] = useState(sessionStorage.getItem(TOKEN_KEY) || "");
   const [currentDB, setCurrentDB] = useState("");
   const [pendingQuery, setPendingQuery] = useState<string | null>(null);
   const [schemaTarget, setSchemaTarget] = useState<{ db: string; table: string } | null>(null);
@@ -21,14 +21,14 @@ export function App() {
 
   const handleLogin = useCallback(
     (newToken: string) => {
-      localStorage.setItem(TOKEN_KEY, newToken);
+      sessionStorage.setItem(TOKEN_KEY, newToken);
       setToken(newToken);
     },
     [setToken],
   );
 
   const handleLogout = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
     setToken("");
   }, [setToken]);
 

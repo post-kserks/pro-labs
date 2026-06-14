@@ -555,10 +555,10 @@ func TestExplainAnalyze(t *testing.T) {
 	if result.Type != "message" {
 		t.Fatalf("expected message result, got %s", result.Type)
 	}
-	if !strings.Contains(result.Message, "QUERY PLAN") {
+	if !strings.Contains(result.Message, "OPTIMIZED QUERY PLAN") {
 		t.Fatalf("expected query plan output, got: %s", result.Message)
 	}
-	if !strings.Contains(result.Message, "Rows matched") {
+	if !strings.Contains(result.Message, "Actual Rows") {
 		t.Fatalf("expected stats in explain analyze output, got: %s", result.Message)
 	}
 }
@@ -624,7 +624,10 @@ func TestExplainContainsPlannerNote(t *testing.T) {
 	seedHeroes(t, session)
 
 	result := executeSQL(t, session, "EXPLAIN SELECT * FROM heroes;")
-	if !strings.Contains(result.Message, "rule-based planner") {
-		t.Fatalf("EXPLAIN output must disclose the rule-based planner, got:\n%s", result.Message)
+	if !strings.Contains(result.Message, "OPTIMIZED QUERY PLAN") {
+		t.Fatalf("EXPLAIN output must contain optimized plan, got:\n%s", result.Message)
+	}
+	if !strings.Contains(result.Message, "Estimated Cost") {
+		t.Fatalf("EXPLAIN output must contain cost estimate, got:\n%s", result.Message)
 	}
 }

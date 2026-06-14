@@ -9,7 +9,7 @@ var _ StorageEngine = (*PageStorageEngine)(nil)
 
 func newPageEngine(t *testing.T) *PageStorageEngine {
 	t.Helper()
-	e, err := NewPageStorageEngine(t.TempDir())
+	e, err := NewPageStorageEngine(t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestPageEngineTimeTravel(t *testing.T) {
 
 func TestPageEnginePersistenceAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
-	e, err := NewPageStorageEngine(dir)
+	e, err := NewPageStorageEngine(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestPageEnginePersistenceAcrossReopen(t *testing.T) {
 	// Имитация краша: НЕ вызываем Close (данные синхронизированы при записи)
 	tx := e.CurrentTxID()
 
-	e2, err := NewPageStorageEngine(dir)
+	e2, err := NewPageStorageEngine(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

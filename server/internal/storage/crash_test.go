@@ -1,0 +1,709 @@
+package storage
+
+import (
+	"fmt"
+	"testing"
+
+	"vaultdb/internal/index"
+	"vaultdb/internal/txmanager"
+	"vaultdb/internal/wal"
+)
+
+func TestWALRecoveryAfterCrash(t *testing.T) {
+	// Create a temporary directory for the test
+	dir := t.TempDir()
+
+	// Create WAL
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// Create page engine
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert some rows
+	rows := []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+		{int64(3), "Charlie"},
+	}
+	_, err = engine.InsertRows("testdb", "users", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate crash by closing without final checkpoint
+	w.Close()
+
+	// Reopen and check recovery
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify data is still there
+	count, err := engine2.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 rows after recovery, got %d", count)
+	}
+}
+
+func TestWALRecoveryWithPartialWrite(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create WAL and page engine
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert first batch
+	rows1 := []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+	}
+	_, err = engine.InsertRows("testdb", "users", rows1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate partial write (close WAL abruptly)
+	w.Close()
+
+	// Reopen and verify data integrity
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify data is consistent
+	count, err := engine2.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 rows after recovery, got %d", count)
+	}
+}
+
+func TestWALRecoveryWithMultipleTables(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create WAL and page engine
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create multiple tables
+	schema1 := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	schema2 := TableSchema{
+		Name: "orders",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "user_id", Type: "INT"},
+			{Name: "amount", Type: "FLOAT"},
+		},
+	}
+
+	if err := engine.CreateTable("testdb", schema1); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.CreateTable("testdb", schema2); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert data into both tables
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = engine.InsertRows("testdb", "orders", []Row{
+		{int64(1), int64(1), 100.0},
+		{int64(2), int64(2), 200.0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate crash
+	w.Close()
+
+	// Reopen and verify
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify both tables
+	usersCount, err := engine2.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usersCount != 2 {
+		t.Fatalf("expected 2 users after recovery, got %d", usersCount)
+	}
+
+	ordersCount, err := engine2.CountRows("testdb", "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordersCount != 2 {
+		t.Fatalf("expected 2 orders after recovery, got %d", ordersCount)
+	}
+}
+
+func TestWALRecoveryAfterDelete(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create WAL and page engine
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+		{int64(3), "Charlie"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete one row
+	_, err = engine.DeleteRows("testdb", "users", []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate crash
+	w.Close()
+
+	// Reopen and verify
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify delete was persisted
+	count, err := engine2.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 rows after delete and recovery, got %d", count)
+	}
+}
+
+func TestCheckpointAfterOperations(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create WAL and page engine
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Checkpoint
+	if err := engine.doCheckpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert more rows
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(3), "Charlie"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify all rows are present
+	count, err := engine.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 rows after checkpoint and insert, got %d", count)
+	}
+}
+
+func TestBufferPoolFlush(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create page engine with buffer pool
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows (should be cached in buffer pool)
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify rows are present
+	count, err := engine.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 rows, got %d", count)
+	}
+}
+
+func TestIndexPersistence(t *testing.T) {
+	t.Skip("page storage engine does not support secondary indexes yet")
+	dir := t.TempDir()
+
+	// Create page engine
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create index
+	if err := engine.CreateIndex("testdb", "users", "idx_name", "name"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify index exists
+	indexes, err := engine.ListIndexes("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indexes) != 1 {
+		t.Fatalf("expected 1 index, got %d", len(indexes))
+	}
+}
+
+func TestConcurrentInserts(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create page engine
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Concurrent inserts
+	done := make(chan bool, 10)
+	for i := 0; i < 10; i++ {
+		go func(id int) {
+			defer func() { done <- true }()
+			rows := []Row{
+				{int64(id), fmt.Sprintf("user_%d", id)},
+			}
+			_, err := engine.InsertRows("testdb", "users", rows)
+			if err != nil {
+				t.Errorf("insert failed: %v", err)
+			}
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+
+	// Verify all rows are present
+	count, err := engine.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 10 {
+		t.Fatalf("expected 10 rows, got %d", count)
+	}
+}
+
+func TestConcurrentReadsAndWrites(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create page engine
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert initial rows
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Concurrent reads and writes
+	done := make(chan bool, 20)
+
+	// Readers
+	for i := 0; i < 10; i++ {
+		go func() {
+			defer func() { done <- true }()
+			_, err := engine.ReadCurrentRows("testdb", "users")
+			if err != nil {
+				t.Errorf("read failed: %v", err)
+			}
+		}()
+	}
+
+	// Writers
+	for i := 0; i < 10; i++ {
+		go func(id int) {
+			defer func() { done <- true }()
+			rows := []Row{
+				{int64(100 + id), fmt.Sprintf("user_%d", id)},
+			}
+			_, err := engine.InsertRows("testdb", "users", rows)
+			if err != nil {
+				t.Errorf("insert failed: %v", err)
+			}
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 20; i++ {
+		<-done
+	}
+
+	// Verify rows are present (at least the initial ones)
+	count, err := engine.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count < 2 {
+		t.Fatalf("expected at least 2 rows, got %d", count)
+	}
+}
+
+func TestTransactionRecovery(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create WAL and page engine
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate crash
+	w.Close()
+
+	// Reopen and verify
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify data is consistent
+	count, err := engine2.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 rows after recovery, got %d", count)
+	}
+}
+
+func TestBTreeIndexSaveLoad(t *testing.T) {
+	dir := t.TempDir()
+	indexPath := dir + "/test_index.json"
+
+	// Create and populate index
+	idx := index.NewBTreeIndex("test_idx", "name", 0)
+	idx.Insert("Alice", 0)
+	idx.Insert("Bob", 1)
+	idx.Insert("Charlie", 2)
+
+	// Save index
+	if err := idx.Save(indexPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load index
+	loadedIdx, err := index.LoadBTreeIndex(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify loaded index works
+	if val, ok := loadedIdx.Lookup("Alice"); !ok || len(val) != 1 || val[0] != 0 {
+		t.Errorf("Lookup(Alice) = %v, want [0]", val)
+	}
+	if val, ok := loadedIdx.Lookup("Bob"); !ok || len(val) != 1 || val[0] != 1 {
+		t.Errorf("Lookup(Bob) = %v, want [1]", val)
+	}
+
+	// Verify range query works
+	result := loadedIdx.Range("Alice", "Charlie")
+	if len(result) != 3 {
+		t.Errorf("Range(Alice, Charlie) returned %d positions, want 3", len(result))
+	}
+}

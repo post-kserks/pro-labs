@@ -1,4 +1,5 @@
 build/
+server/vaultdb-server
 client/build/
 data/**/*
 !data/**/

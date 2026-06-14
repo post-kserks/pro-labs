@@ -62,9 +62,6 @@ std::vector<std::string> splitLines(const std::string& value) {
     while (std::getline(stream, line)) {
         lines.push_back(line);
     }
-    if (value.empty() || (!value.empty() && value.back() == '\n')) {
-        lines.emplace_back();
-    }
     return lines;
 }
 

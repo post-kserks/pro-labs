@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,8 +28,11 @@ import (
 	"vaultdb/internal/httpserver"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
+	"vaultdb/internal/pool"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/tls"
 	"vaultdb/internal/txmanager"
+	"vaultdb/internal/wal"
 )
 
 // version и buildDate перезаписываются через ldflags при сборке
@@ -55,24 +59,17 @@ type Response struct {
 	AsOfNote string     `json:"as_of_note,omitempty"`
 }
 
-func main() {
-	host := flag.String("host", "127.0.0.1", "Host to listen on")
-	port := flag.Int("port", 5432, "TCP port for SQL clients")
-	httpPort := flag.Int("http-port", 8080, "HTTP port for REST API and Web UI")
-	monitorPort := flag.Int("monitor-port", 5433, "HTTP port for health and metrics")
-	dataDir := flag.String("data", "./data", "Path to data directory")
-	configPath := flag.String("config", "", "Optional config file path")
-	healthCheck := flag.Bool("health-check", false, "Run one health check against monitor port and exit")
-	flag.Parse()
-
-	if *healthCheck {
-		os.Exit(runHealthCheck(*monitorPort))
+func setupLogger(logLevel string) *slog.Logger {
+	level := slog.LevelInfo
+	if logLevel == "debug" {
+		level = slog.LevelDebug
 	}
-
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
+	return logger
+}
 
-	cfgPath := *configPath
+func loadConfig(cfgPath string, logger *slog.Logger) *config.Config {
 	if cfgPath != "" {
 		if _, err := os.Stat(cfgPath); err != nil {
 			logger.Warn("config file not found, using defaults", "path", cfgPath, "error", err)
@@ -84,233 +81,83 @@ func main() {
 		logger.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+	config.ApplyEnvOverrides(cfg)
+	return cfg
+}
 
-	// CLI-флаги имеют приоритет над vaultdb.yaml: значения из конфига
-	// применяются только для флагов, которые не были заданы явно.
-	setFlags := make(map[string]bool)
-	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
-	if !setFlags["host"] {
-		*host = cfg.Server.Host
-	}
-	if !setFlags["port"] {
-		*port = cfg.Server.Port
-	}
-	if !setFlags["http-port"] {
-		*httpPort = cfg.Server.HTTPPort
-	}
-	if !setFlags["monitor-port"] {
-		*monitorPort = cfg.Server.MonitorPort
-	}
-	if !setFlags["data"] {
-		*dataDir = cfg.Storage.DataDir
-	}
-	logger.Info("starting vaultdb server",
-		"version", version,
-		"build_date", buildDate,
-		"host", *host,
-		"port", *port,
-		"http_port", *httpPort,
-		"monitor_port", *monitorPort,
-		"data_dir", *dataDir,
-		"config", *configPath)
-
-	metricsCollector := metrics.New()
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	// Выбор движка хранения (storage.engine в vaultdb.yaml)
+func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *txmanager.Manager, metricsCollector *metrics.Collector, logger *slog.Logger) (storage.StorageEngine, *wal.WAL) {
 	var store storage.StorageEngine
+	var serverWAL *wal.WAL
 	switch cfg.Storage.Engine {
 	case "page":
-		pageStore, err := storage.NewPageStorageEngine(*dataDir)
+		walPath := filepath.Join(dataDir, "wal", "vaultdb.wal")
+		w, err := wal.Open(walPath)
+		if err != nil {
+			logger.Error("failed to open WAL", "error", err)
+			os.Exit(1)
+		}
+		serverWAL = w
+
+		pageStore, err := storage.NewPageStorageEngine(dataDir, w, txm)
 		if err != nil {
 			logger.Error("failed to open page storage engine", "error", err)
 			os.Exit(1)
 		}
+
+		if err := pageStore.RecoverFromWAL(); err != nil {
+			logger.Error("WAL recovery failed", "error", err)
+			os.Exit(1)
+		}
+
+		go pageStore.CheckpointLoop(ctx, 30*time.Second)
+
 		store = pageStore
 		logger.Info("using page-based storage engine (experimental)")
 	default:
-		store = storage.NewFileStorageEngine(*dataDir, metricsCollector)
+		store = storage.NewFileStorageEngine(dataDir, metricsCollector)
 		logger.Info("using JSON storage engine")
 	}
-	defer func() {
-		if err := store.Close(); err != nil {
-			logger.Warn("storage close failed", "error", err)
-		}
-	}()
+	return store, serverWAL
+}
 
-	txm := txmanager.NewManager()
-	br := executor.NewBroadcaster()
-	br.Configure(
-		executor.ParseDropPolicy(cfg.Server.LiveQueries.DropPolicy),
-		time.Duration(cfg.Server.LiveQueries.BlockTimeoutS)*time.Second,
-		cfg.Server.LiveQueries.BufferSize,
-		logger)
-
-	var activeConnections atomic.Int64
-
-	// Start storage metrics background updater
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				updateStorageMetrics(store, metricsCollector)
-			}
-		}
-	}()
-
-	// Start autovacuum
-	av := storage.NewAutoVacuum(store, 0.2, 1*time.Minute, logger)
-	go av.Run(ctx)
-
-	authEnabled := envBool("VAULTDB_AUTH_ENABLED", cfg.Auth.Enabled)
-	tokens := tokensFromEnv()
-	if authEnabled && len(tokens) == 0 {
-		token, err := generateToken()
-		if err != nil {
-			logger.Error("failed to generate auth token", "error", err)
-			os.Exit(1)
-		}
-		tokens = map[string]string{token: "generated"}
-		logger.Warn("no API tokens configured; generated a one-time token for this run",
-			"token", token,
-			"hint", "set VAULTDB_API_TOKENS to configure stable tokens, or VAULTDB_AUTH_ENABLED=0 to disable auth")
-	}
-	authManager := auth.New(authEnabled, tokens)
-
-	// Embedding-провайдер для SEMANTIC_MATCH/AI_EMBED. Без настроенного AI
-	// эти операции возвращают понятную ошибку (NoopEmbedder в executor).
-	var embedder ai.Embedder
-	if cfg.AI.Endpoint != "" {
-		apiKey := cfg.AI.APIKey
-		if envKey := strings.TrimSpace(os.Getenv("VAULTDB_AI_API_KEY")); envKey != "" {
-			apiKey = envKey
-		}
-		embedder = ai.NewHTTPEmbedder(cfg.AI.Endpoint, cfg.AI.Model, apiKey)
-		logger.Info("AI embedder configured",
-			"provider", cfg.AI.Provider,
-			"endpoint", cfg.AI.Endpoint,
-			"model", cfg.AI.Model)
-	} else {
-		logger.Info("AI embedder not configured; SEMANTIC_MATCH and AI_EMBED will return a configuration error")
-	}
-
+func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPort, monitorPort int, store storage.StorageEngine, authManager *auth.Manager, metricsCollector *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, embedder ai.Embedder, activeConnections func() int64, logger *slog.Logger) <-chan error {
 	httpSrv := httpserver.New(httpserver.Config{
-		Host:        *host,
-		Port:        *httpPort,
-		MonitorPort: *monitorPort,
-		Version:     version,
-		Storage:     store,
-		Auth:        authManager,
-		Logger:      logger,
-		Metrics:     metricsCollector,
-		TxManager:   txm,
-		ActiveConnections: func() int64 {
-			return activeConnections.Load()
-		},
-		Broadcaster: br,
-		Embedder:    embedder,
+		Host:              host,
+		Port:              httpPort,
+		MonitorPort:       monitorPort,
+		Version:           version,
+		MaxRequestSizeBytes: cfg.Server.MaxRequestSizeBytes,
+		AllowedOrigins:    cfg.Server.AllowedOrigins,
+		Storage:           store,
+		Auth:              authManager,
+		Logger:            logger,
+		Metrics:           metricsCollector,
+		TxManager:         txm,
+		ActiveConnections: activeConnections,
+		Broadcaster:       br,
+		Embedder:          embedder,
 	})
-
 	httpErrCh := make(chan error, 1)
 	go func() {
 		if err := httpSrv.Start(ctx); err != nil {
 			httpErrCh <- err
 		}
 	}()
-
-	maxRequestSize := cfg.Server.MaxRequestSizeBytes
-	if maxRequestSize <= 0 {
-		maxRequestSize = config.DefaultMaxRequestSize
-	}
-
-	addr := fmt.Sprintf("%s:%d", *host, *port)
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		logger.Error("tcp listen failed", "error", err)
-		os.Exit(1)
-	}
-	logger.Info("tcp server started", "addr", addr)
-
-	go func() {
-		<-ctx.Done()
-		_ = listener.Close()
-	}()
-
-	var wg sync.WaitGroup
-	acceptDone := make(chan struct{})
-	go func() {
-		defer close(acceptDone)
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					logger.Warn("accept failed", "error", err)
-					continue
-				}
-			}
-
-			activeConnections.Add(1)
-			metricsCollector.IncConnections()
-			wg.Add(1)
-			go func(c net.Conn) {
-				defer wg.Done()
-				defer activeConnections.Add(-1)
-				defer metricsCollector.DecConnections()
-				handleConnection(c, store, metricsCollector, txm, br, authManager, embedder, logger, maxRequestSize)
-			}(conn)
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-	case err := <-httpErrCh:
-		logger.Error("http server failed", "error", err)
-		stop()
-	}
-
-	<-acceptDone
-	wg.Wait()
-
-	logger.Info("shutdown signal received, writing WAL checkpoint")
-	if err := store.FinalCheckpoint(); err != nil {
-		logger.Error("final checkpoint failed", "error", err)
-	}
-	logger.Info("shutdown complete")
+	return httpErrCh
 }
 
-func runHealthCheck(monitorPort int) int {
-	url := fmt.Sprintf("http://127.0.0.1:%d/health", monitorPort)
-	client := &http.Client{Timeout: 3 * time.Second}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "health check failed: %v\n", err)
-		return 1
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "health check failed: status=%d body=%s\n", resp.StatusCode, string(body))
-		return 1
-	}
-	return 0
-}
-
-func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, embedder ai.Embedder, logger *slog.Logger, maxRequestSize int) {
+func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, embedder ai.Embedder, serverWAL *wal.WAL, logger *slog.Logger, maxRequestSize int, queryTimeoutSec int) {
 	defer conn.Close()
 
 	session := executor.NewSession(store, m, txm, br)
 	if embedder != nil {
 		session.SetEmbedder(embedder)
+	}
+	if serverWAL != nil {
+		session.SetWAL(serverWAL)
+	}
+	if queryTimeoutSec > 0 {
+		session.SetQueryTimeout(time.Duration(queryTimeoutSec) * time.Second)
 	}
 	defer func() {
 		if session.IsInTx() {
@@ -421,6 +268,286 @@ func writeResponse(conn net.Conn, response Response) error {
 	bytes = append(bytes, '\n')
 	_, err = conn.Write(bytes)
 	return err
+}
+
+func main() {
+	host := flag.String("host", "127.0.0.1", "Host to listen on")
+	port := flag.Int("port", 5432, "TCP port for SQL clients")
+	httpPort := flag.Int("http-port", 8080, "HTTP port for REST API and Web UI")
+	monitorPort := flag.Int("monitor-port", 5433, "HTTP port for health and metrics")
+	dataDir := flag.String("data", "./data", "Path to data directory")
+	configPath := flag.String("config", "", "Optional config file path")
+	healthCheck := flag.Bool("health-check", false, "Run one health check against monitor port and exit")
+	tlsCert := flag.String("tls-cert", "", "Path to TLS certificate file")
+	tlsKey := flag.String("tls-key", "", "Path to TLS private key file")
+	flag.Parse()
+
+	if *healthCheck {
+		os.Exit(runHealthCheck(*monitorPort))
+	}
+
+	logger := setupLogger(os.Getenv("VAULTDB_LOG_LEVEL"))
+	cfg := loadConfig(*configPath, logger)
+
+	// CLI-флаги имеют приоритет над vaultdb.yaml: значения из конфига
+	// применяются только для флагов, которые не были заданы явно.
+	setFlags := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+
+	if !setFlags["host"] {
+		*host = cfg.Server.Host
+	}
+	if !setFlags["port"] {
+		*port = cfg.Server.Port
+	}
+	if !setFlags["http-port"] {
+		*httpPort = cfg.Server.HTTPPort
+	}
+	if !setFlags["monitor-port"] {
+		*monitorPort = cfg.Server.MonitorPort
+	}
+	if !setFlags["data"] {
+		*dataDir = cfg.Storage.DataDir
+	}
+	logger.Info("starting vaultdb server",
+		"version", version,
+		"build_date", buildDate,
+		"host", *host,
+		"port", *port,
+		"http_port", *httpPort,
+		"monitor_port", *monitorPort,
+		"data_dir", *dataDir,
+		"config", *configPath)
+
+	metricsCollector := metrics.New()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	txm := txmanager.NewManager()
+
+	store, serverWAL := setupStorage(cfg, *dataDir, ctx, txm, metricsCollector, logger)
+	if serverWAL != nil {
+		defer serverWAL.Close()
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			logger.Warn("storage close failed", "error", err)
+		}
+	}()
+
+	br := executor.NewBroadcaster()
+	br.Configure(
+		executor.ParseDropPolicy(cfg.Server.LiveQueries.DropPolicy),
+		time.Duration(cfg.Server.LiveQueries.BlockTimeoutS)*time.Second,
+		cfg.Server.LiveQueries.BufferSize,
+		logger)
+
+	var activeConnections atomic.Int64
+
+	// Start storage metrics background updater
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				updateStorageMetrics(store, metricsCollector)
+			}
+		}
+	}()
+
+	// Start autovacuum
+	av := storage.NewAutoVacuum(store, 0.2, 1*time.Minute, logger)
+	go av.Run(ctx)
+
+	authEnabled := envBool("VAULTDB_AUTH_ENABLED", cfg.Auth.Enabled)
+	tokens := tokensFromEnv()
+	if authEnabled && len(tokens) == 0 {
+		token, err := generateToken()
+		if err != nil {
+			logger.Error("failed to generate auth token", "error", err)
+			os.Exit(1)
+		}
+		tokens = map[string]string{token: "generated"}
+		tokenPath := filepath.Join(cfg.Storage.DataDir, ".generated-token")
+		f, ferr := os.OpenFile(tokenPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if ferr != nil {
+			logger.Warn("could not save token to file, printing to stderr",
+				"path", tokenPath, "error", ferr)
+			fmt.Fprintf(os.Stderr, "\n  Generated token: %s\n", token)
+		} else {
+			if _, werr := f.WriteString(token + "\n"); werr != nil {
+				logger.Warn("could not write token to file", "path", tokenPath, "error", werr)
+			} else if serr := f.Sync(); serr != nil {
+				logger.Warn("could not fsync token file", "path", tokenPath, "error", serr)
+			}
+			f.Close()
+			logger.Warn("no API tokens configured; generated a one-time token",
+				"token_file", tokenPath,
+				"action", "token saved to file, set VAULTDB_API_TOKENS env var for next restart")
+			fmt.Fprintf(os.Stderr, "\n  Token saved to: %s\n", tokenPath)
+		}
+	}
+	authManager := auth.New(authEnabled, tokens, logger)
+
+	// Embedding-провайдер для SEMANTIC_MATCH/AI_EMBED. Без настроенного AI
+	// эти операции возвращают понятную ошибку (NoopEmbedder в executor).
+	var embedder ai.Embedder
+	if cfg.AI.Endpoint != "" {
+		apiKey := cfg.AI.APIKey
+		if envKey := strings.TrimSpace(os.Getenv("VAULTDB_AI_API_KEY")); envKey != "" {
+			apiKey = envKey
+		}
+		embedder = ai.NewHTTPEmbedder(cfg.AI.Endpoint, cfg.AI.Model, apiKey)
+		logger.Info("AI embedder configured",
+			"provider", cfg.AI.Provider,
+			"endpoint", cfg.AI.Endpoint,
+			"model", cfg.AI.Model)
+	} else {
+		logger.Info("AI embedder not configured; SEMANTIC_MATCH and AI_EMBED will return a configuration error")
+	}
+
+	httpErrCh := runHTTPServer(ctx, cfg, *host, *httpPort, *monitorPort, store, authManager, metricsCollector, txm, br, embedder, func() int64 {
+		return activeConnections.Load()
+	}, logger)
+
+	maxRequestSize := cfg.Server.MaxRequestSizeBytes
+	if maxRequestSize <= 0 {
+		maxRequestSize = config.DefaultMaxRequestSize
+	}
+
+	addr := fmt.Sprintf("%s:%d", *host, *port)
+	var listener net.Listener
+	if *tlsCert != "" && *tlsKey != "" {
+		// TLS mode
+		tlsCfg, err := tls.LoadTLSConfig(*tlsCert, *tlsKey)
+		if err != nil {
+			logger.Error("failed to load TLS config", "error", err)
+			os.Exit(1)
+		}
+		plainListener, err := net.Listen("tcp", addr)
+		if err != nil {
+			logger.Error("tcp listen failed", "error", err)
+			os.Exit(1)
+		}
+		listener = tls.WrapListener(plainListener, tlsCfg)
+		logger.Info("tcp server started with TLS", "addr", addr)
+	} else {
+		// Plain TCP mode
+		var err error
+		listener, err = net.Listen("tcp", addr)
+		if err != nil {
+			logger.Error("tcp listen failed", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("tcp server started", "addr", addr)
+	}
+
+	// Connection pool
+	maxConns := cfg.Server.MaxConnections
+	connPool := pool.NewPool(10, maxConns, 5*time.Minute)
+
+	go func() {
+		<-ctx.Done()
+		if err := listener.Close(); err != nil {
+			logger.Warn("listener close failed", "error", err)
+		}
+		connPool.Close()
+	}()
+
+	var wg sync.WaitGroup
+	acceptDone := make(chan struct{})
+	go func() {
+		defer close(acceptDone)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					logger.Warn("accept failed", "error", err)
+					continue
+				}
+			}
+
+			// Acquire connection from pool (non-blocking)
+			connObj := connPool.Acquire()
+			if connObj == nil {
+				// Pool is full — reject connection
+				logger.Warn("connection pool full, rejecting connection",
+					"remote", conn.RemoteAddr(),
+					"max_connections", maxConns)
+				conn.Close()
+				continue
+			}
+
+			activeConnections.Add(1)
+			metricsCollector.IncConnections()
+			wg.Add(1)
+			go func(c net.Conn, connInfo *pool.Connection) {
+				defer wg.Done()
+				defer activeConnections.Add(-1)
+				defer metricsCollector.DecConnections()
+				defer connPool.Release(connInfo) // Release back to pool
+				handleConnection(c, store, metricsCollector, txm, br, authManager, embedder, serverWAL, logger, maxRequestSize, cfg.Server.QueryTimeoutSec)
+			}(conn, connObj)
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		logger.Info("shutdown signal received")
+	case err := <-httpErrCh:
+		logger.Error("http server failed", "error", err)
+		stop()
+	}
+
+	// Stop accepting new connections
+	<-acceptDone
+
+	// Wait for active connections with timeout
+	logger.Info("waiting for active connections to finish", "active", activeConnections.Load())
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		logger.Info("all connections closed gracefully")
+	case <-time.After(time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second):
+		logger.Warn("shutdown timeout reached, forcing close of remaining connections")
+	}
+
+	// Final checkpoint
+	logger.Info("writing final WAL checkpoint")
+	if err := store.FinalCheckpoint(); err != nil {
+		logger.Error("final checkpoint failed", "error", err)
+	}
+	logger.Info("shutdown complete")
+}
+
+func runHealthCheck(monitorPort int) int {
+	url := fmt.Sprintf("http://127.0.0.1:%d/health", monitorPort)
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health check failed: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(os.Stderr, "health check failed: status=%d body=%s\n", resp.StatusCode, string(body))
+		return 1
+	}
+	return 0
 }
 
 func envBool(name string, fallback bool) bool {

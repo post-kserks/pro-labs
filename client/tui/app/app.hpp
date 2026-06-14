@@ -21,6 +21,7 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
 
+#include <atomic>
 #include <string>
 
 namespace vaultdb::tui {
@@ -41,7 +42,7 @@ private:
     vaultdb::Connection connection_;
     History history_;
 
-    Mode mode_ = Mode::Splash;
+    std::atomic<Mode> mode_{Mode::Splash};
     std::string activeDb_;
     std::string statusMessage_;
     std::string connectionError_;

@@ -1,11 +1,14 @@
 #include "panels/editor.hpp"
 
+#include "utils/event_utils.hpp"
 #include "utils/string_utils.hpp"
 
 #include <algorithm>
 #include <cctype>
 
 namespace vaultdb::tui {
+
+using utils::isCtrl;
 
 namespace {
 
@@ -52,14 +55,6 @@ std::size_t previousLineStart(const std::string& text, std::size_t cursor) {
 std::size_t lineEnd(const std::string& text, std::size_t cursor) {
     const std::size_t next = text.find('\n', cursor);
     return next == std::string::npos ? text.size() : next;
-}
-
-bool isCtrl(ftxui::Event event, char key) {
-    const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(key)));
-    if (upper < 'A' || upper > 'Z') {
-        return false;
-    }
-    return event == ftxui::Event::Special(std::string(1, static_cast<char>(upper - 'A' + 1)));
 }
 
 } // namespace

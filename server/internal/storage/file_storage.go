@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -661,6 +662,31 @@ func (s *FileStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		normalizedRows = append(normalizedRows, normalized)
 	}
 
+	refReader := func(dbName, tableName string) ([]Row, error) {
+		refSchema, err := s.readSchema(dbName, tableName)
+		if err != nil {
+			return nil, err
+		}
+		refData, err := s.readVersionedData(dbName, tableName, refSchema)
+		if err != nil {
+			return nil, err
+		}
+		rows := make([]Row, 0, len(refData.Rows))
+		for _, vr := range refData.Rows {
+			if vr.DeletedTx == 0 {
+				row := make(Row, len(vr.Data))
+				for i, v := range vr.Data {
+					row[i] = v
+				}
+				rows = append(rows, row)
+			}
+		}
+		return rows, nil
+	}
+	if err := validateConstraintsRaw(schema, normalizedRows, existingRowsFromData(data), refReader); err != nil {
+		return 0, err
+	}
+
 	ts := time.Now().UTC()
 	payload := walInsertPayload{
 		DB:    dbName,
@@ -1125,11 +1151,20 @@ func (s *FileStorageEngine) CreateIndex(dbName, tableName, indexName, column str
 
 	mgr := s.getOrCreateIndexManager(dbName, tableName)
 	if _, ok := mgr.FindForColumn(column); ok {
-		// MVP: only one index per column
 		return fmt.Errorf("index already exists for column '%s' in table '%s'", column, tableName)
 	}
 
-	idx := index.New(indexName, column, colIdx)
+	var idx index.Index
+	if strings.HasPrefix(indexName, "gin_") {
+		idx = index.NewGINIndex(indexName, column, colIdx)
+	} else if strings.HasPrefix(indexName, "gin_jsonb_") {
+		idx = index.NewGINJSONBIndex(indexName, column, colIdx)
+	} else if strings.HasPrefix(indexName, "gist_") {
+		idx = index.NewGiSTIndex(indexName, column, colIdx)
+	} else {
+		idx = index.New(indexName, column, colIdx)
+	}
+
 	data, err := s.readVersionedData(dbName, tableName, schema)
 	if err != nil {
 		return err
@@ -1237,6 +1272,7 @@ type indexMeta struct {
 	Name     string `json:"name"`
 	Column   string `json:"column"`
 	ColIndex int    `json:"col_index"`
+	Type     string `json:"type"`
 }
 
 type indexesMetadata struct {
@@ -1260,7 +1296,7 @@ func (s *FileStorageEngine) loadIndexesMetadata(db, table string, mgr *index.Ind
 	rows := s.diskToIndexableRows(data)
 
 	for _, m := range meta.Indexes {
-		idx := index.New(m.Name, m.Column, m.ColIndex)
+		idx := index.NewByType(m.Name, m.Column, m.ColIndex, m.Type)
 		idx.Rebuild(rows)
 		mgr.Add(idx)
 	}
@@ -1274,6 +1310,7 @@ func (s *FileStorageEngine) saveIndexesMetadata(db, table string, mgr *index.Ind
 			Name:     idx.Name(),
 			Column:   idx.Column(),
 			ColIndex: idx.ColIndex(),
+			Type:     idx.Type(),
 		})
 	}
 
@@ -1318,16 +1355,14 @@ func (s *FileStorageEngine) Close() error {
 	if s.wal == nil {
 		return nil
 	}
-	// Persist any deferred writes before closing. The WAL is left intact (not
-	// truncated), so anything not yet flushed is still recoverable on restart.
 	s.walGate.Lock()
+	defer s.walGate.Unlock()
 	if err := s.flushDataDirty(); err != nil {
 		slog.Warn("flush data on close failed", "error", err)
 	}
 	if err := s.flushTxLogDirty(); err != nil {
 		slog.Warn("flush tx log on close failed", "error", err)
 	}
-	s.walGate.Unlock()
 	return s.wal.Close()
 }
 
@@ -1802,6 +1837,15 @@ func (s *FileStorageEngine) dropDatabaseInternal(name string) error {
 	}
 	s.tableLocksMu.Unlock()
 
+	s.indexesMu.Lock()
+	prefix := name + "/"
+	for key := range s.indexes {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.indexes, key)
+		}
+	}
+	s.indexesMu.Unlock()
+
 	return nil
 }
 
@@ -1911,24 +1955,18 @@ func (s *FileStorageEngine) maybeCheckpoint() {
 // that iterate Entries must hold txLogMu (see TxIDAtTimestamp / TableModifiedSince).
 func (s *FileStorageEngine) readTxLog(dbName string) (*txLogDisk, error) {
 	s.txLogMu.Lock()
+	defer s.txLogMu.Unlock()
+
 	if cached := s.txLogCache[dbName]; cached != nil {
-		s.txLogMu.Unlock()
 		return cached, nil
 	}
-	s.txLogMu.Unlock()
 
 	path := s.txLogPath(dbName)
 	bytes, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			log := &txLogDisk{Entries: []txLogEntryDisk{}}
-			s.txLogMu.Lock()
-			if cached := s.txLogCache[dbName]; cached != nil {
-				log = cached
-			} else {
-				s.txLogCache[dbName] = log
-			}
-			s.txLogMu.Unlock()
+			s.txLogCache[dbName] = log
 			return log, nil
 		}
 		return nil, fmt.Errorf("read tx log: %w", err)
@@ -1942,14 +1980,12 @@ func (s *FileStorageEngine) readTxLog(dbName string) (*txLogDisk, error) {
 		log.Entries = []txLogEntryDisk{}
 	}
 
-	s.txLogMu.Lock()
 	result := &log
 	if cached := s.txLogCache[dbName]; cached != nil {
 		result = cached
 	} else {
 		s.txLogCache[dbName] = result
 	}
-	s.txLogMu.Unlock()
 	return result, nil
 }
 
@@ -2337,6 +2373,8 @@ func normalizeValue(value interface{}, col ColumnSchema) (Value, error) {
 		}
 	case "DATE", "TIME", "TIMESTAMP", "DECIMAL":
 		return fmt.Sprintf("%v", value), nil
+	case "JSONB", "JSON":
+		return fmt.Sprintf("%v", value), nil
 	default:
 		return nil, fmt.Errorf("unsupported column type '%s'", col.Type)
 	}
@@ -2507,4 +2545,289 @@ func splitLockKey(key string) (dbName, tableName string) {
 		return key, ""
 	}
 	return parts[0], parts[1]
+}
+
+func validateConstraints(schema *TableSchema, newRows [][]interface{}, data *tableDataDisk) error {
+	existingRows := make([]Row, 0, len(data.Rows))
+	for _, vr := range data.Rows {
+		if vr.DeletedTx == 0 {
+			row := make(Row, len(vr.Data))
+			for i, v := range vr.Data {
+				row[i] = v
+			}
+			existingRows = append(existingRows, row)
+		}
+	}
+	return validateConstraintsRaw(schema, newRows, existingRows, nil)
+}
+
+func existingRowsFromData(data *tableDataDisk) []Row {
+	rows := make([]Row, 0, len(data.Rows))
+	for _, vr := range data.Rows {
+		if vr.DeletedTx == 0 {
+			row := make(Row, len(vr.Data))
+			for i, v := range vr.Data {
+				row[i] = v
+			}
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+type refTableReader func(dbName, tableName string) ([]Row, error)
+
+func validateConstraintsRaw(schema *TableSchema, newRows [][]interface{}, existingRows []Row, readRef refTableReader) error {
+	for _, constraint := range schema.Constraints {
+		switch constraint.Type {
+		case "UNIQUE":
+			for i, newRow := range newRows {
+				for _, existingRow := range existingRows {
+					allMatch := true
+					for _, colName := range constraint.Columns {
+						colIdx := -1
+						for ci, col := range schema.Columns {
+							if col.Name == colName {
+								colIdx = ci
+								break
+							}
+						}
+						if colIdx >= 0 && colIdx < len(newRow) && colIdx < len(existingRow) {
+							if fmt.Sprintf("%v", newRow[colIdx]) != fmt.Sprintf("%v", existingRow[colIdx]) {
+								allMatch = false
+								break
+							}
+						}
+					}
+					if allMatch {
+						return fmt.Errorf("UNIQUE constraint '%s' violated", constraint.Name)
+					}
+				}
+				for j, otherNewRow := range newRows {
+					if j <= i {
+						continue
+					}
+					allMatch := true
+					for _, colName := range constraint.Columns {
+						colIdx := -1
+						for ci, col := range schema.Columns {
+							if col.Name == colName {
+								colIdx = ci
+								break
+							}
+						}
+						if colIdx >= 0 && colIdx < len(newRow) && colIdx < len(otherNewRow) {
+							if fmt.Sprintf("%v", newRow[colIdx]) != fmt.Sprintf("%v", otherNewRow[colIdx]) {
+								allMatch = false
+								break
+							}
+						}
+					}
+					if allMatch {
+						return fmt.Errorf("UNIQUE constraint '%s' violated", constraint.Name)
+					}
+				}
+			}
+		case "CHECK":
+			if constraint.Expr == "" {
+				continue
+			}
+			for _, newRow := range newRows {
+				val, err := evaluateCheckExpr(constraint.Expr, newRow, schema)
+				if err != nil {
+					return fmt.Errorf("CHECK constraint '%s': %w", constraint.Name, err)
+				}
+				if !val {
+					return fmt.Errorf("CHECK constraint '%s' violated", constraint.Name)
+				}
+			}
+		case "FOREIGN_KEY":
+			if len(constraint.Columns) == 0 || constraint.RefTable == "" {
+				continue
+			}
+			if readRef == nil {
+				continue
+			}
+			refRows, err := readRef(schema.Database, constraint.RefTable)
+			if err != nil {
+				continue
+			}
+			for _, newRow := range newRows {
+				for _, colName := range constraint.Columns {
+					colIdx := -1
+					for i, col := range schema.Columns {
+						if col.Name == colName {
+							colIdx = i
+							break
+						}
+					}
+					if colIdx < 0 || colIdx >= len(newRow) || newRow[colIdx] == nil {
+						continue
+					}
+					val := fmt.Sprintf("%v", newRow[colIdx])
+					if val == "" || val == "0" {
+						continue
+					}
+					found := false
+					for _, refRow := range refRows {
+						if colIdx < len(refRow) && fmt.Sprintf("%v", refRow[colIdx]) == val {
+							found = true
+							break
+						}
+					}
+					if !found {
+						return fmt.Errorf("FOREIGN KEY constraint '%s' violated: value '%s' not found in '%s.%s'",
+							constraint.Name, val, schema.Database, constraint.RefTable)
+					}
+				}
+			}
+		}
+	}
+
+	for i, col := range schema.Columns {
+		for _, newRow := range newRows {
+			if col.NotNull && i < len(newRow) && newRow[i] == nil {
+				return fmt.Errorf("NOT NULL constraint on column '%s' violated", col.Name)
+			}
+			if col.PrimaryKey && i < len(newRow) && newRow[i] == nil {
+				return fmt.Errorf("PRIMARY KEY constraint on column '%s' violated: NULL value", col.Name)
+			}
+		}
+	}
+
+	for i, col := range schema.Columns {
+		if col.Type == "ENUM" && len(col.EnumValues) > 0 {
+			for _, row := range newRows {
+				if i < len(row) && row[i] != nil {
+					val := fmt.Sprintf("%v", row[i])
+					valid := false
+					for _, ev := range col.EnumValues {
+						if val == ev {
+							valid = true
+							break
+						}
+					}
+					if !valid {
+						return fmt.Errorf("invalid ENUM value '%s' for column '%s'", val, col.Name)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func evaluateCheckExpr(expr string, row []interface{}, schema *TableSchema) (bool, error) {
+	expr = strings.TrimSpace(expr)
+
+	// Парсим операторы слева направо, longest-match first
+	operators := []string{">=", "<=", "!=", "<>", ">", "<", "="}
+	for _, op := range operators {
+		idx := findOperator(expr, op)
+		if idx >= 0 {
+			leftVal := resolveCheckColumn(strings.TrimSpace(expr[:idx]), row, schema)
+			rightVal := resolveCheckValue(strings.TrimSpace(expr[idx+len(op):]), row, schema)
+			if leftVal != nil && rightVal != nil {
+				lf, lok := toFloat(leftVal)
+				rf, rok := toFloat(rightVal)
+				if lok && rok {
+					switch op {
+					case ">=":
+						return lf >= rf, nil
+					case "<=":
+						return lf <= rf, nil
+					case ">":
+						return lf > rf, nil
+					case "<":
+						return lf < rf, nil
+					case "=", "!=", "<>":
+						eq := fmt.Sprintf("%v", leftVal) == fmt.Sprintf("%v", rightVal)
+						if op == "!=" || op == "<>" {
+							return !eq, nil
+						}
+						return eq, nil
+					}
+				}
+				switch op {
+				case ">=":
+					return fmt.Sprintf("%v", leftVal) >= fmt.Sprintf("%v", rightVal), nil
+				case "<=":
+					return fmt.Sprintf("%v", leftVal) <= fmt.Sprintf("%v", rightVal), nil
+				case ">":
+					return fmt.Sprintf("%v", leftVal) > fmt.Sprintf("%v", rightVal), nil
+				case "<":
+					return fmt.Sprintf("%v", leftVal) < fmt.Sprintf("%v", rightVal), nil
+				case "=", "!=", "<>":
+					eq := fmt.Sprintf("%v", leftVal) == fmt.Sprintf("%v", rightVal)
+					if op == "!=" || op == "<>" {
+						return !eq, nil
+					}
+					return eq, nil
+				}
+			}
+			return true, nil
+		}
+	}
+	return true, nil
+}
+
+// findOperator ищет оператор в выражении, избегая совпадений внутри имён колонок.
+// Возвращает позицию оператора или -1 если не найден.
+func findOperator(expr, op string) int {
+	start := 0
+	for {
+		idx := strings.Index(expr[start:], op)
+		if idx < 0 {
+			return -1
+		}
+		pos := start + idx
+		// Проверяем что оператор не внутри строки или идентификатора
+		if pos > 0 {
+			prev := expr[pos-1]
+			if prev == ' ' || prev == '(' || prev == ',' {
+				return pos
+			}
+		} else {
+			return pos
+		}
+		start = pos + len(op)
+	}
+}
+
+func resolveCheckColumn(name string, row []interface{}, schema *TableSchema) interface{} {
+	for i, col := range schema.Columns {
+		if col.Name == name && i < len(row) {
+			return row[i]
+		}
+	}
+	return nil
+}
+
+func resolveCheckValue(val string, row []interface{}, schema *TableSchema) interface{} {
+	val = strings.TrimSpace(val)
+	if i, err := strconv.ParseInt(val, 10, 64); err == nil {
+		return i
+	}
+	if f, err := strconv.ParseFloat(val, 64); err == nil {
+		return f
+	}
+	val = strings.Trim(val, "'\"")
+	return val
+}
+
+func toFloat(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case float64:
+		return n, true
+	case string:
+		f, err := strconv.ParseFloat(n, 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
 }

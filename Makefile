@@ -6,6 +6,7 @@ TAG     := $(IMAGE):$(VERSION)
 LDFLAGS := -X main.version=$(VERSION) -X main.buildDate=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 build:
+	mkdir -p build
 	cd server && go build -ldflags="$(LDFLAGS)" -o ../build/vaultdb-server ./cmd/vaultdb-server
 
 docker-build:

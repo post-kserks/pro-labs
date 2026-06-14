@@ -72,7 +72,7 @@ EOF
     NODE_VERSION="$(node --version)"
     log "[*] Building Web UI (Node.js ${NODE_VERSION})..."
     (
-        cd "$WEB_DIR"
+        cd "$WEB_DIR" || { log "[ERROR] Cannot cd to $WEB_DIR"; exit 1; }
         npm install --silent
         npm run build
     )
@@ -118,9 +118,9 @@ mkdir -p build
 build_webui
 
 log "[*] Building VaultDB server (Go)..."
-cd server
+cd server || { log "[ERROR] Cannot cd to server directory"; exit 1; }
 GOCACHE="${GOCACHE:-/tmp/go-cache}" GOMODCACHE="${GOMODCACHE:-/tmp/go-mod-cache}" go build -ldflags="$LDFLAGS" -o ../build/vaultdb-server ./cmd/vaultdb-server
-cd ..
+cd .. || { log "[ERROR] Cannot return to root directory"; exit 1; }
 log "[OK] Server built: build/vaultdb-server"
 
 log "[*] Building VaultDB benchmark tool..."

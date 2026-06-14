@@ -38,10 +38,14 @@ type DescribeTableStatement struct {
 
 type ColumnDef struct {
 	Name       string
-	DataType   string // INT, FLOAT, BOOL, TEXT, VARCHAR
+	DataType   string // INT, FLOAT, BOOL, TEXT, VARCHAR, ENUM:val1,val2,...
 	VarcharLen int
+	EnumValues []string // for ENUM type
 	Default    Expression
 	Computed   Expression
+	NotNull    bool
+	PrimaryKey bool
+	Unique     bool
 }
 
 type CreateTableStatement struct {
@@ -73,21 +77,93 @@ type SelectColumn struct {
 }
 
 type SelectStatement struct {
-	Columns   []SelectColumn // empty means '*'
-	TableName string
-	Alias     string
-	Joins     []JoinClause
-	Where     Expression
-	GroupBy   []Expression
-	Having    Expression
-	OrderBy   []OrderItem
-	Limit     int
-	HasLimit  bool
-	Offset    int
-	HasOffset bool
-	CountAll  bool // Deprecated: replace with COUNT(*) aggregate function
-	AsOf      *AsOfClause
+	Columns      []SelectColumn // empty means '*'
+	TableName    string
+	Alias        string
+	FromSubquery *SelectStatement // derived table: SELECT ... FROM (SELECT ...) AS alias
+	FromAlias    string           // alias for derived table
+	IsLateral    bool             // LATERAL derived table
+	Joins        []JoinClause
+	Where        Expression
+	GroupBy      []Expression
+	Having       Expression
+	OrderBy      []OrderItem
+	Limit        int
+	HasLimit     bool
+	Offset       int
+	HasOffset    bool
+	CountAll     bool // Deprecated: replace with COUNT(*) aggregate function
+	AsOf         *AsOfClause
+	CTEs         []CTEDefinition // WITH clause definitions
+	Distinct     bool            // SELECT DISTINCT
 }
+
+// CTEDefinition — определение CTE в WITH clause.
+type CTEDefinition struct {
+	Name    string
+	Columns []string           // optional column aliases
+	Query   *SelectStatement   // CTE query
+}
+
+// CTEStatement — WITH clause statement.
+type CTEStatement struct {
+	CTEs      []CTEDefinition
+	Body      Statement // SELECT or another statement
+	Recursive bool      // WITH RECURSIVE
+}
+
+// MergeStatement — MERGE INTO ... USING ... ON ... WHEN MATCHED/NOT MATCHED
+type MergeStatement struct {
+	TargetTable string
+	SourceTable string
+	Alias       string
+	OnCondition Expression
+	WhenMatched *MergeWhenClause
+	WhenNotMatched *MergeWhenClause
+}
+
+// MergeWhenClause — WHEN MATCHED THEN ... или WHEN NOT MATCHED THEN ...
+type MergeWhenClause struct {
+	Action      string       // "UPDATE" или "INSERT"
+	Assignments []Assignment // для UPDATE
+	Columns     []string     // для INSERT
+	Values      [][]Expression // для INSERT
+}
+
+func (*MergeStatement) statementNode()        {}
+func (*MergeStatement) StatementType() string { return "MERGE" }
+
+// TruncateStatement — TRUNCATE TABLE
+type TruncateStatement struct {
+	TableName string
+}
+
+func (*TruncateStatement) statementNode()        {}
+func (*TruncateStatement) StatementType() string { return "TRUNCATE" }
+
+// SavepointStatement — SAVEPOINT name
+type SavepointStatement struct {
+	Name string
+}
+
+func (*SavepointStatement) statementNode()        {}
+func (*SavepointStatement) StatementType() string { return "SAVEPOINT" }
+
+// RollbackToSavepointStatement — ROLLBACK TO SAVEPOINT name
+type RollbackToSavepointStatement struct {
+	Name string
+}
+
+func (*RollbackToSavepointStatement) statementNode()        {}
+func (*RollbackToSavepointStatement) StatementType() string { return "ROLLBACK_TO_SAVEPOINT" }
+
+// ReleaseSavepointStatement — RELEASE SAVEPOINT name
+type ReleaseSavepointStatement struct {
+	Name string
+}
+
+func (*ReleaseSavepointStatement) statementNode()        {}
+func (*ReleaseSavepointStatement) StatementType() string { return "RELEASE_SAVEPOINT" }
 
 // Alter Table actions
 type AlterTableAction interface {
@@ -111,15 +187,25 @@ type AlterRenameTable struct {
 	NewName string
 }
 
+type AlterAddConstraint struct {
+	Name       string
+	Type       string   // "UNIQUE", "CHECK", "FOREIGN_KEY"
+	Columns    []string // for UNIQUE, FOREIGN_KEY
+	CheckExpr  string   // for CHECK
+	RefTable   string   // for FOREIGN_KEY
+	RefCols    []string // for FOREIGN_KEY
+}
+
 type AlterTableStatement struct {
 	TableName string
 	Action    AlterTableAction
 }
 
-func (*AlterAddColumn) alterTableAction()    {}
-func (*AlterDropColumn) alterTableAction()   {}
-func (*AlterRenameColumn) alterTableAction() {}
-func (*AlterRenameTable) alterTableAction()  {}
+func (*AlterAddColumn) alterTableAction()      {}
+func (*AlterDropColumn) alterTableAction()     {}
+func (*AlterRenameColumn) alterTableAction()   {}
+func (*AlterRenameTable) alterTableAction()    {}
+func (*AlterAddConstraint) alterTableAction()  {}
 
 type ExplainStatement struct {
 	Inner   *SelectStatement
@@ -132,9 +218,19 @@ type HistoryStatement struct {
 }
 
 type InsertStatement struct {
-	TableName string
-	Columns   []string // empty means all columns in schema order
-	Rows      [][]Expression
+	TableName  string
+	Columns    []string // empty means all columns in schema order
+	Rows       [][]Expression
+	SelectQuery *SelectStatement // INSERT ... SELECT
+	OnConflict *OnConflictClause // INSERT ... ON CONFLICT DO ...
+	Returning  []SelectColumn   // RETURNING clause
+}
+
+// OnConflictClause — ON CONFLICT clause для UPSERT.
+type OnConflictClause struct {
+	Columns []string // conflict target columns (UNIQUE index)
+	Action  string   // "NOTHING" или "UPDATE"
+	Assignments []Assignment // для ON CONFLICT DO UPDATE SET
 }
 
 type Assignment struct {
@@ -146,11 +242,15 @@ type UpdateStatement struct {
 	TableName   string
 	Assignments []Assignment
 	Where       Expression
+	Returning   []SelectColumn // RETURNING clause
+	FromTable   string         // UPDATE ... FROM table
+	FromAlias   string
 }
 
 type DeleteStatement struct {
 	TableName string
 	Where     Expression
+	Returning []SelectColumn // RETURNING clause
 }
 
 type VacuumStatement struct {
@@ -171,6 +271,60 @@ type DropIndexStatement struct {
 
 type ShowIndexesStatement struct {
 	TableName string
+}
+
+// View statements
+type CreateViewStatement struct {
+	Name      string
+	Query     *SelectStatement
+	OrReplace bool
+}
+
+type DropViewStatement struct {
+	Name string
+}
+
+// Trigger statements
+type CreateTriggerStatement struct {
+	Name      string
+	TableName string
+	Timing    string // "BEFORE" or "AFTER"
+	Event     string // "INSERT", "UPDATE", "DELETE"
+	Body      string // SQL body as string for simplicity
+}
+
+type DropTriggerStatement struct {
+	Name string
+}
+
+// Function statements
+type CreateFunctionStatement struct {
+	Name       string
+	Params     []string
+	ReturnType string
+	Body       string // SQL expression body
+	Language   string // "SQL" by default
+}
+
+type DropFunctionStatement struct {
+	Name string
+}
+
+// Procedure statements
+type CreateProcedureStatement struct {
+	Name     string
+	Params   []string
+	Body     string // SQL body
+	Language string // "SQL" by default
+}
+
+type DropProcedureStatement struct {
+	Name string
+}
+
+type CallProcedureStatement struct {
+	Name   string
+	Params []Expression
 }
 
 // Transaction statements
@@ -245,6 +399,16 @@ func (*SetOperationStatement) statementNode()   {}
 func (*MigrationStatement) statementNode()      {}
 func (*CreatePolicyStatement) statementNode()   {}
 func (*EnableRlsStatement) statementNode()      {}
+func (*CTEStatement) statementNode()            {}
+func (*CreateViewStatement) statementNode()     {}
+func (*DropViewStatement) statementNode()       {}
+func (*CreateTriggerStatement) statementNode()  {}
+func (*DropTriggerStatement) statementNode()    {}
+func (*CreateFunctionStatement) statementNode() {}
+func (*DropFunctionStatement) statementNode()   {}
+func (*CreateProcedureStatement) statementNode() {}
+func (*DropProcedureStatement) statementNode()   {}
+func (*CallProcedureStatement) statementNode()   {}
 
 func (*CreateDatabaseStatement) StatementType() string { return "CREATE_DATABASE" }
 
@@ -276,6 +440,16 @@ func (*SetOperationStatement) StatementType() string  { return "SET_OPERATION" }
 func (*MigrationStatement) StatementType() string     { return "MIGRATION" }
 func (*CreatePolicyStatement) StatementType() string  { return "CREATE_POLICY" }
 func (*EnableRlsStatement) StatementType() string     { return "ENABLE_RLS" }
+func (*CTEStatement) StatementType() string           { return "CTE" }
+func (*CreateViewStatement) StatementType() string     { return "CREATE_VIEW" }
+func (*DropViewStatement) StatementType() string       { return "DROP_VIEW" }
+func (*CreateTriggerStatement) StatementType() string  { return "CREATE_TRIGGER" }
+func (*DropTriggerStatement) StatementType() string    { return "DROP_TRIGGER" }
+func (*CreateFunctionStatement) StatementType() string { return "CREATE_FUNCTION" }
+func (*DropFunctionStatement) StatementType() string   { return "DROP_FUNCTION" }
+func (*CreateProcedureStatement) StatementType() string { return "CREATE_PROCEDURE" }
+func (*DropProcedureStatement) StatementType() string   { return "DROP_PROCEDURE" }
+func (*CallProcedureStatement) StatementType() string   { return "CALL_PROCEDURE" }
 
 // Expression is the root interface for all WHERE expressions.
 type Expression interface {
@@ -368,6 +542,18 @@ type CastExpr struct {
 	TargetType string
 }
 
+type ExistsExpr struct {
+	Select *SelectStatement
+	Not    bool // NOT EXISTS
+}
+
+type BetweenExpr struct {
+	Expr  Expression
+	Lower Expression
+	Upper Expression
+	Not   bool // NOT BETWEEN
+}
+
 type CaseWhen struct {
 	Condition Expression
 	Result    Expression
@@ -385,10 +571,21 @@ type JsonPathExpr struct {
 	Path string
 }
 
+// ComparisonSubqueryExpr handles: x > ALL (SELECT ...), x = ANY (SELECT ...), etc.
+type ComparisonSubqueryExpr struct {
+	Left       Expression
+	Operator   string // =, !=, <, >, <=, >=
+	Quantifier string // ALL, ANY, SOME
+	Subquery   *SelectStatement
+}
+
 func (*WindowFunctionExpr) expressionNode() {}
 func (*CastExpr) expressionNode()           {}
 func (*CaseExpr) expressionNode()           {}
 func (*JsonPathExpr) expressionNode()       {}
+func (*ExistsExpr) expressionNode()         {}
+func (*BetweenExpr) expressionNode()        {}
+func (*ComparisonSubqueryExpr) expressionNode() {}
 
 func (Value) expressionNode()          {}
 func (*ColumnRef) expressionNode()     {}

@@ -4,7 +4,9 @@ package executor
 // set-операции, EXPLAIN, HISTORY.
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,8 +58,20 @@ func (c *SelectCommand) containsAggregate(expr parser.Expression) bool {
 }
 
 func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	if c.stmt.TableName == "" {
+	if ctx.Ctx != nil {
+		select {
+		case <-ctx.Ctx.Done():
+			return nil, fmt.Errorf("query timeout: %w", ctx.Ctx.Err())
+		default:
+		}
+	}
+
+	if c.stmt.TableName == "" && c.stmt.FromSubquery == nil {
 		return c.executeDual(ctx)
+	}
+
+	if c.stmt.FromSubquery != nil {
+		return c.executeDerivedTable(ctx)
 	}
 
 	dbName, err := requireCurrentDB(ctx)
@@ -65,7 +79,56 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 
+	if len(c.stmt.CTEs) > 0 {
+		return c.executeWithCTE(ctx, dbName)
+	}
+
+	return c.executeSimpleSelect(ctx, dbName)
+}
+
+func (c *SelectCommand) executeWithCTE(ctx *ExecutionContext, dbName string) (*Result, error) {
+	return ExecuteSelectWithCTE(c.stmt, ctx)
+}
+
+func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string) (*Result, error) {
 	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+		viewQuery, err := loadViewQuery(dbName, c.stmt.TableName)
+		if err == nil && viewQuery != "" {
+			subStmt, err := parser.Parse(viewQuery)
+			if err != nil {
+				return nil, fmt.Errorf("view '%s': parse error: %w", c.stmt.TableName, err)
+			}
+			subSel, ok := subStmt.(*parser.SelectStatement)
+			if !ok {
+				return nil, fmt.Errorf("view '%s': body is not a SELECT", c.stmt.TableName)
+			}
+			if c.stmt.Where != nil {
+				if subSel.Where != nil {
+					subSel.Where = &parser.AndExpr{Left: subSel.Where, Right: c.stmt.Where}
+				} else {
+					subSel.Where = c.stmt.Where
+				}
+			}
+			if len(c.stmt.OrderBy) > 0 {
+				subSel.OrderBy = c.stmt.OrderBy
+			}
+			if c.stmt.HasLimit {
+				subSel.HasLimit = true
+				subSel.Limit = c.stmt.Limit
+			}
+			if c.stmt.HasOffset {
+				subSel.HasOffset = true
+				subSel.Offset = c.stmt.Offset
+			}
+			if c.stmt.Distinct {
+				subSel.Distinct = true
+			}
+			if len(c.stmt.Columns) > 0 {
+				subSel.Columns = c.stmt.Columns
+			}
+			cmd := &SelectCommand{stmt: subSel}
+			return cmd.Execute(ctx)
+		}
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
 
@@ -98,6 +161,54 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 				if foundVal {
 					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, valueToString(parserValueToRaw(val))); ok {
+						rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
+						if err == nil {
+							usedIndex = true
+						}
+					}
+				}
+			}
+		} else if cmp, ok := c.stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "@@" {
+			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
+				queryVal := valueToString(evalOperandRaw(cmp.Right))
+				if queryVal != "" {
+					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, queryVal); ok && len(positions) > 0 {
+						rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
+						if err == nil {
+							usedIndex = true
+						}
+					}
+				}
+			}
+		} else if cmp, ok := c.stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "@>" {
+			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
+				queryVal := valueToString(evalOperandRaw(cmp.Right))
+				if queryVal != "" {
+					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, queryVal); ok && len(positions) > 0 {
+						rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
+						if err == nil {
+							usedIndex = true
+						}
+					}
+				}
+			}
+		} else if cmp, ok := c.stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "<@" {
+			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
+				queryVal := valueToString(evalOperandRaw(cmp.Right))
+				if queryVal != "" {
+					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, queryVal); ok && len(positions) > 0 {
+						rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
+						if err == nil {
+							usedIndex = true
+						}
+					}
+				}
+			}
+		} else if cmp, ok := c.stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "?" {
+			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
+				queryVal := valueToString(evalOperandRaw(cmp.Right))
+				if queryVal != "" {
+					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, queryVal); ok && len(positions) > 0 {
 						rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
 						if err == nil {
 							usedIndex = true
@@ -144,15 +255,15 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Convert result back to storage.Row for further pipeline steps if needed
-		// Window functions, ORDER BY, LIMIT etc.
-		// For simplicity, let's keep it as is for now and focus on non-grouped window functions first.
 		return res, nil
 	}
 
 	// Apply Window Functions
 	windowFuncs := c.extractWindowFunctions()
 	if len(windowFuncs) > 0 {
+		if ctx.WindowCols == nil {
+			ctx.WindowCols = make(map[*parser.WindowFunctionExpr]string)
+		}
 		filtered, combinedSchema, err = c.applyWindowFunctions(filtered, combinedSchema, windowFuncs, ctx)
 		if err != nil {
 			return nil, err
@@ -163,25 +274,6 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if len(c.stmt.OrderBy) > 0 {
 		c.applyOrderBy(filtered, combinedSchema, ctx)
 	}
-
-	// Pagination (OFFSET and LIMIT)
-	start := 0
-	if c.stmt.HasOffset {
-		start = c.stmt.Offset
-		if start > len(filtered) {
-			start = len(filtered)
-		}
-	}
-
-	end := len(filtered)
-	if c.stmt.HasLimit {
-		end = start + c.stmt.Limit
-		if end > len(filtered) {
-			end = len(filtered)
-		}
-	}
-
-	paged := filtered[start:end]
 
 	// Project columns
 	effectiveColumns := c.stmt.Columns
@@ -200,9 +292,204 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if col.Alias != "" {
 			projectColumns[i] = col.Alias
 		} else if colRef, ok := col.Expr.(*parser.ColumnRef); ok {
-			// Strip table prefix if present for clean output if desired,
-			// but for now let's keep it if it's there.
 			projectColumns[i] = colRef.Name
+		} else {
+			projectColumns[i] = fmt.Sprintf("col%d", i)
+		}
+	}
+
+	resultRows := make([][]string, 0, len(filtered))
+	for _, row := range filtered {
+		projected := make([]string, len(effectiveColumns))
+		for i, col := range effectiveColumns {
+			val, err := evalOperand(col.Expr, row, combinedSchema, ctx)
+			if err != nil {
+				projected[i] = "ERR"
+			} else {
+				projected[i] = valueToString(val)
+			}
+		}
+		resultRows = append(resultRows, projected)
+	}
+
+	// Apply DISTINCT after projection
+	if c.stmt.Distinct {
+		resultRows = distinctRows(resultRows)
+	}
+
+	// Pagination (OFFSET and LIMIT) after DISTINCT
+	start := 0
+	if c.stmt.HasOffset {
+		start = c.stmt.Offset
+		if start > len(resultRows) {
+			start = len(resultRows)
+		}
+	}
+
+	end := len(resultRows)
+	if c.stmt.HasLimit {
+		end = start + c.stmt.Limit
+		if end > len(resultRows) {
+			end = len(resultRows)
+		}
+	}
+
+	finalRows := resultRows[start:end]
+
+	resultSchema := &storage.TableSchema{
+		Name:    c.stmt.TableName,
+		Columns: make([]storage.ColumnSchema, len(effectiveColumns)),
+	}
+	for i, col := range effectiveColumns {
+		colType := inferTypeFromExpr(col.Expr, combinedSchema)
+		resultSchema.Columns[i] = storage.ColumnSchema{
+			Name: projectColumns[i],
+			Type: colType,
+		}
+	}
+
+	return &Result{
+		Type:     "rows",
+		Columns:  projectColumns,
+		Rows:     finalRows,
+		Schema:   resultSchema,
+		AsOfNote: asOfNote,
+	}, nil
+}
+
+func (c *SelectCommand) executeDerivedTable(ctx *ExecutionContext) (*Result, error) {
+	subCmd, err := CommandFactory(c.stmt.FromSubquery)
+	if err != nil {
+		return nil, fmt.Errorf("derived table: %w", err)
+	}
+	subResult, err := subCmd.Execute(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("derived table: %w", err)
+	}
+
+	subSchema := &storage.TableSchema{
+		Name:    c.stmt.FromAlias,
+		Columns: make([]storage.ColumnSchema, len(subResult.Columns)),
+	}
+	for i, col := range subResult.Columns {
+		colName := col
+		if c.stmt.FromAlias != "" {
+			colName = c.stmt.FromAlias + "." + col
+		}
+		colType := "TEXT"
+		for _, row := range subResult.Rows {
+			if i < len(row) && row[i] != "" {
+				if _, err := strconv.ParseInt(row[i], 10, 64); err == nil {
+					colType = "INT"
+				} else if _, err := strconv.ParseFloat(row[i], 64); err == nil {
+					colType = "FLOAT"
+				} else if row[i] == "true" || row[i] == "false" {
+					colType = "BOOL"
+				}
+				break
+			}
+		}
+		subSchema.Columns[i] = storage.ColumnSchema{Name: colName, Type: colType}
+	}
+
+	subRows := make([]storage.Row, len(subResult.Rows))
+	for i, row := range subResult.Rows {
+		storageRow := make(storage.Row, len(row))
+		for j, val := range row {
+			if j < len(subSchema.Columns) {
+				converted, err := convertStringToValue(val, subSchema.Columns[j])
+				if err == nil {
+					storageRow[j] = converted
+				} else {
+					storageRow[j] = val
+				}
+			} else {
+				storageRow[j] = val
+			}
+		}
+		subRows[i] = storageRow
+	}
+
+	combinedSchema := subSchema
+	combinedRows := subRows
+
+	if len(c.stmt.Joins) > 0 {
+		combinedSchema, combinedRows, err = c.executeJoins(ctx, "", combinedSchema, combinedRows)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var filtered []storage.Row
+	if c.stmt.Where != nil {
+		for _, row := range combinedRows {
+			match, err := evalExpr(c.stmt.Where, row, combinedSchema, ctx)
+			if err != nil {
+				return nil, err
+			}
+			if match {
+				filtered = append(filtered, row)
+			}
+		}
+	} else {
+		filtered = combinedRows
+	}
+
+	if len(c.stmt.GroupBy) > 0 || c.hasAggregates() {
+		return c.executeWithGrouping(filtered, combinedSchema, "", ctx)
+	}
+
+	windowFuncs := c.extractWindowFunctions()
+	if len(windowFuncs) > 0 {
+		if ctx.WindowCols == nil {
+			ctx.WindowCols = make(map[*parser.WindowFunctionExpr]string)
+		}
+		filtered, combinedSchema, err = c.applyWindowFunctions(filtered, combinedSchema, windowFuncs, ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if len(c.stmt.OrderBy) > 0 {
+		c.applyOrderBy(filtered, combinedSchema, ctx)
+	}
+
+	start := 0
+	if c.stmt.HasOffset {
+		start = c.stmt.Offset
+		if start > len(filtered) {
+			start = len(filtered)
+		}
+	}
+	end := len(filtered)
+	if c.stmt.HasLimit {
+		end = start + c.stmt.Limit
+		if end > len(filtered) {
+			end = len(filtered)
+		}
+	}
+	paged := filtered[start:end]
+
+	effectiveColumns := c.stmt.Columns
+	if len(effectiveColumns) == 0 {
+		effectiveColumns = make([]parser.SelectColumn, len(combinedSchema.Columns))
+		for i, col := range combinedSchema.Columns {
+			effectiveColumns[i] = parser.SelectColumn{
+				Expr: &parser.ColumnRef{Name: col.Name},
+			}
+		}
+	}
+
+	projectColumns := make([]string, len(effectiveColumns))
+	for i, col := range effectiveColumns {
+		if col.Alias != "" {
+			projectColumns[i] = col.Alias
+		} else if colRef, ok := col.Expr.(*parser.ColumnRef); ok {
+			name := colRef.Name
+			if parts := strings.SplitN(name, ".", 2); len(parts) == 2 {
+				name = parts[1]
+			}
+			projectColumns[i] = name
 		} else {
 			projectColumns[i] = fmt.Sprintf("col%d", i)
 		}
@@ -222,11 +509,14 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		resultRows = append(resultRows, projected)
 	}
 
+	if c.stmt.Distinct {
+		resultRows = distinctRows(resultRows)
+	}
+
 	return &Result{
-		Type:     "rows",
-		Columns:  projectColumns,
-		Rows:     resultRows,
-		AsOfNote: asOfNote,
+		Type:    "rows",
+		Columns: projectColumns,
+		Rows:    resultRows,
 	}, nil
 }
 
@@ -271,26 +561,110 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 
 		newRows := make([]storage.Row, 0)
 
-		// Nested Loop Join
-		for _, lrow := range currentRows {
-			for _, rrow := range rightRows {
-				// Combined row
-				combinedRow := append(append(storage.Row{}, lrow...), rrow...)
-
-				// Evaluate join condition
-				if join.Type == "CROSS" {
+		switch join.Type {
+		case "CROSS":
+			// Cross join: all combinations
+			for _, lrow := range currentRows {
+				for _, rrow := range rightRows {
+					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
 					newRows = append(newRows, combinedRow)
-				} else {
-					// We need to handle column resolution for multi-table schema
-					// evalExpr needs to know which columns come from which table.
-					// This is where resolveColumn needs to be smarter.
+				}
+			}
 
-					// For now, let's use a temporary schema for evaluation
-					// that has all columns.
+		case "INNER", "":
+			// Inner join: only matching rows
+			for _, lrow := range currentRows {
+				matched := false
+				for _, rrow := range rightRows {
+					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
 					ok, err := evalExpr(join.Condition, combinedRow, combinedSchema, ctx)
 					if err == nil && ok {
 						newRows = append(newRows, combinedRow)
+						matched = true
 					}
+				}
+				_ = matched
+			}
+
+		case "LEFT":
+			// Left join: all left rows, NULL-fill unmatched right
+			rightNulls := make(storage.Row, len(rightSchema.Columns))
+			for i := range rightNulls {
+				rightNulls[i] = nil
+			}
+			for _, lrow := range currentRows {
+				matched := false
+				for _, rrow := range rightRows {
+					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
+					ok, err := evalExpr(join.Condition, combinedRow, combinedSchema, ctx)
+					if err == nil && ok {
+						newRows = append(newRows, combinedRow)
+						matched = true
+					}
+				}
+				if !matched {
+					// No match — add left row with NULLs for right columns
+					newRows = append(newRows, append(append(storage.Row{}, lrow...), rightNulls...))
+				}
+			}
+
+		case "RIGHT":
+			// Right join: all right rows, NULL-fill unmatched left
+			leftNulls := make(storage.Row, len(currentSchema.Columns))
+			for i := range leftNulls {
+				leftNulls[i] = nil
+			}
+			for _, rrow := range rightRows {
+				matched := false
+				for _, lrow := range currentRows {
+					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
+					ok, err := evalExpr(join.Condition, combinedRow, combinedSchema, ctx)
+					if err == nil && ok {
+						newRows = append(newRows, combinedRow)
+						matched = true
+					}
+				}
+				if !matched {
+					// No match — add right row with NULLs for left columns
+					newRows = append(newRows, append(append(storage.Row{}, leftNulls...), rrow...))
+				}
+			}
+
+		case "FULL":
+			// Full join: all rows from both sides, NULL-fill unmatched
+			leftNulls := make(storage.Row, len(currentSchema.Columns))
+			for i := range leftNulls {
+				leftNulls[i] = nil
+			}
+			rightNulls := make(storage.Row, len(rightSchema.Columns))
+			for i := range rightNulls {
+				rightNulls[i] = nil
+			}
+
+			// Track which right rows matched
+			rightMatched := make(map[int]bool)
+
+			for _, lrow := range currentRows {
+				lmatched := false
+				for ri, rrow := range rightRows {
+					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
+					ok, err := evalExpr(join.Condition, combinedRow, combinedSchema, ctx)
+					if err == nil && ok {
+						newRows = append(newRows, combinedRow)
+						lmatched = true
+						rightMatched[ri] = true
+					}
+				}
+				if !lmatched {
+					// Left row has no match — add with NULLs for right
+					newRows = append(newRows, append(append(storage.Row{}, lrow...), rightNulls...))
+				}
+			}
+
+			// Add unmatched right rows with NULLs for left
+			for ri, rrow := range rightRows {
+				if !rightMatched[ri] {
+					newRows = append(newRows, append(append(storage.Row{}, leftNulls...), rrow...))
 				}
 			}
 		}
@@ -300,6 +674,82 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 	}
 
 	return currentSchema, currentRows, nil
+}
+
+// hashJoin выполняет Hash Join для equi-join.
+func (c *SelectCommand) hashJoin(leftRows, rightRows []storage.Row, leftSchema, rightSchema, combinedSchema *storage.TableSchema, join parser.JoinClause, ctx *ExecutionContext) []storage.Row {
+	// Определяем столбец для хэширования
+	if join.Condition == nil {
+		return nil
+	}
+
+	cmp, ok := join.Condition.(*parser.BinaryExpr)
+	if !ok || cmp.Operator != "=" {
+		return nil
+	}
+
+	// Определяем левый и правый столбцы
+	leftCol, leftIsCol := cmp.Left.(*parser.ColumnRef)
+	rightCol, rightIsCol := cmp.Right.(*parser.ColumnRef)
+
+	var hashColLeft, hashColRight *parser.ColumnRef
+	if leftIsCol && !rightIsCol {
+		hashColLeft = leftCol
+		hashColRight = rightCol
+	} else if !leftIsCol && rightIsCol {
+		hashColLeft = rightCol
+		hashColRight = leftCol
+	} else {
+		return nil // Не equi-join
+	}
+
+	// Выбираем меньшую таблицу для построения хэш-таблицы
+	hashRows := leftRows
+	probeRows := rightRows
+	hashSchema := leftSchema
+	probeSchema := rightSchema
+	hashCol := hashColLeft
+	probeCol := hashColRight
+
+	if len(rightRows) < len(leftRows) {
+		hashRows = rightRows
+		probeRows = leftRows
+		hashSchema = rightSchema
+		probeSchema = leftSchema
+		hashCol = hashColRight
+		probeCol = hashColLeft
+	}
+
+	// Построение хэш-таблицы
+	hashTable := make(map[string][]storage.Row)
+	for _, row := range hashRows {
+		val, err := evalOperand(hashCol, row, hashSchema, ctx)
+		if err != nil {
+			continue
+		}
+		key := valueToString(val)
+		hashTable[key] = append(hashTable[key], row)
+	}
+
+	// Probe phase
+	var result []storage.Row
+	for _, probeRow := range probeRows {
+		val, err := evalOperand(probeCol, probeRow, probeSchema, ctx)
+		if err != nil {
+			continue
+		}
+		key := valueToString(val)
+
+		if matchingRows, ok := hashTable[key]; ok {
+			for _, hashRow := range matchingRows {
+				// Объединяем строки
+				combinedRow := append(append(storage.Row{}, hashRow...), probeRow...)
+				result = append(result, combinedRow)
+			}
+		}
+	}
+
+	return result
 }
 
 func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.TableSchema, asOfNote string, ctx *ExecutionContext) (*Result, error) {
@@ -704,17 +1154,21 @@ func (c *ExplainCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 
-	planStart := time.Now()
-	plan, err := buildPlan(ctx, dbName, c.stmt.Inner)
+	// Use optimized plan if available
+	optimizer := NewOptimizer(ctx.Storage)
+	optPlan, err := optimizer.OptimizePlan(dbName, c.stmt.Inner)
 	if err != nil {
 		return nil, err
 	}
-	plan.PlanningMs = float64(time.Since(planStart).Microseconds()) / 1000.0
 
 	if !c.stmt.Analyze {
-		return formatPlan(plan), nil
+		return &Result{
+			Type:    "message",
+			Message: optPlan.FormatOptimizedPlan(),
+		}, nil
 	}
 
+	// EXPLAIN ANALYZE: execute and collect actual stats
 	execStart := time.Now()
 	selectCmd := &SelectCommand{stmt: c.stmt.Inner}
 	stats, _, err := selectCmd.executeWithStats(ctx)
@@ -722,9 +1176,17 @@ func (c *ExplainCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 	stats.ExecutionMs = float64(time.Since(execStart).Microseconds()) / 1000.0
-	plan.Root.Stats = stats
 
-	return formatPlan(plan), nil
+	// Merge planned and actual stats
+	var b strings.Builder
+	b.WriteString(optPlan.FormatOptimizedPlan())
+	b.WriteString(fmt.Sprintf("\nActual Execution Time: %.2f ms\n", stats.ExecutionMs))
+	b.WriteString(fmt.Sprintf("Actual Rows: %d\n", stats.RowsMatched))
+
+	return &Result{
+		Type:    "message",
+		Message: b.String(),
+	}, nil
 }
 
 type HistoryCommand struct {
@@ -968,6 +1430,130 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 			}
 		}
 		return int64(rank)
+	case "DENSE_RANK":
+		rank := 1
+		currentRow := allRows[partitionIndices[currentPosInPartition]]
+		for i := 0; i < currentPosInPartition; i++ {
+			prevRow := allRows[partitionIndices[i]]
+			if !c.rowsEqualByOrderBy(currentRow, prevRow, wf.Over.OrderBy, schema, ctx) {
+				rank++
+			}
+		}
+		return int64(rank)
+	case "NTILE":
+		n := 1
+		if len(wf.Args) > 0 {
+			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
+				if i, ok := toInt64(v); ok {
+					n = int(i)
+				}
+			}
+		}
+		if n <= 0 {
+			return int64(0)
+		}
+		total := len(partitionIndices)
+		bucketSize := total / n
+		bucket := currentPosInPartition/bucketSize + 1
+		if currentPosInPartition >= bucketSize*n {
+			bucket = n
+		}
+		return int64(bucket)
+	case "LAG":
+		offset := 1
+		if len(wf.Args) >= 2 {
+			if v, err := evalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
+				if i, ok := toInt64(v); ok {
+					offset = int(i)
+				}
+			}
+		}
+		prevPos := currentPosInPartition - offset
+		if prevPos < 0 {
+			// Default value
+			if len(wf.Args) >= 2 {
+				return nil
+			}
+			if len(wf.Args) >= 1 {
+				if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
+					return v
+				}
+			}
+			return nil
+		}
+		if len(wf.Args) >= 1 {
+			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[prevPos]], schema, ctx); err == nil {
+				return v
+			}
+		}
+		return nil
+	case "LEAD":
+		offset := 1
+		if len(wf.Args) >= 2 {
+			if v, err := evalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
+				if i, ok := toInt64(v); ok {
+					offset = int(i)
+				}
+			}
+		}
+		nextPos := currentPosInPartition + offset
+		if nextPos >= len(partitionIndices) {
+			// Default value
+			if len(wf.Args) >= 2 {
+				return nil
+			}
+			if len(wf.Args) >= 1 {
+				if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
+					return v
+				}
+			}
+			return nil
+		}
+		if len(wf.Args) >= 1 {
+			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[nextPos]], schema, ctx); err == nil {
+				return v
+			}
+		}
+		return nil
+	case "FIRST_VALUE":
+		if len(partitionIndices) == 0 {
+			return nil
+		}
+		if len(wf.Args) >= 1 {
+			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
+				return v
+			}
+		}
+		return nil
+	case "LAST_VALUE":
+		if len(partitionIndices) == 0 {
+			return nil
+		}
+		if len(wf.Args) >= 1 {
+			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[len(partitionIndices)-1]], schema, ctx); err == nil {
+				return v
+			}
+		}
+		return nil
+	case "NTH_VALUE":
+		n := 1
+		if len(wf.Args) >= 2 {
+			if v, err := evalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
+				if i, ok := toInt64(v); ok {
+					n = int(i)
+				}
+			}
+		}
+		idx := n - 1
+		if idx < 0 || idx >= len(partitionIndices) {
+			return nil
+		}
+		if len(wf.Args) >= 1 {
+			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[idx]], schema, ctx); err == nil {
+				return v
+			}
+		}
+		return nil
 	case "COUNT", "SUM", "AVG", "MIN", "MAX":
 		frameIndices := c.getFrameIndices(partitionIndices, currentPosInPartition, wf.Over.Frame, len(wf.Over.OrderBy) > 0)
 		agg := NewAggregator(name, false)
@@ -1074,4 +1660,55 @@ func (c *SelectCommand) executeDual(ctx *ExecutionContext) (*Result, error) {
 		Columns: projectColumns,
 		Rows:    [][]string{row},
 	}, nil
+}
+
+// distinctRows удаляет дубликаты строк из результата.
+func distinctRows(rows [][]string) [][]string {
+	seen := make(map[string]bool)
+	result := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		key := strings.Join(row, "\x00")
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+func distinctRowsFromSchema(rows []storage.Row, schema *storage.TableSchema) []storage.Row {
+	seen := make(map[string]bool)
+	result := make([]storage.Row, 0, len(rows))
+	for _, row := range rows {
+		key := rowKey(row)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+func rowKey(row storage.Row) string {
+	parts := make([]string, len(row))
+	for i, v := range row {
+		parts[i] = fmt.Sprintf("%v", v)
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func loadViewQuery(dbName, viewName string) (string, error) {
+	path := fmt.Sprintf("%s/_views/%s.json", dbName, viewName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var vd map[string]interface{}
+	if err := json.Unmarshal(data, &vd); err != nil {
+		return "", err
+	}
+	if query, ok := vd["query"].(string); ok {
+		return query, nil
+	}
+	return "", fmt.Errorf("view query not found")
 }

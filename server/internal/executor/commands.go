@@ -182,6 +182,8 @@ func coerceToColumn(value storage.Value, column storage.ColumnSchema) (storage.V
 	case "DATE", "TIME", "TIMESTAMP", "DECIMAL":
 		// For simplicity, store these as strings for now.
 		return valueToString(value), nil
+	case "JSONB", "JSON":
+		return valueToString(value), nil
 	default:
 		return nil, fmt.Errorf("unsupported column type '%s'", column.Type)
 	}

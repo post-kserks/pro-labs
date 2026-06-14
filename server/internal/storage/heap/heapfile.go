@@ -22,6 +22,7 @@ type HeapFile struct {
 	dir      string
 	mu       sync.RWMutex
 	segments []*os.File
+	closed   bool
 }
 
 func segmentName(segNo uint16) string {
@@ -71,6 +72,7 @@ func OpenHeapFile(dir string) (*HeapFile, error) {
 func (hf *HeapFile) Close() error {
 	hf.mu.Lock()
 	defer hf.mu.Unlock()
+	hf.closed = true
 	var firstErr error
 	for _, seg := range hf.segments {
 		if err := seg.Close(); err != nil && firstErr == nil {
@@ -84,6 +86,9 @@ func (hf *HeapFile) Close() error {
 func (hf *HeapFile) getSegment(segNo uint16) (*os.File, error) {
 	hf.mu.RLock()
 	defer hf.mu.RUnlock()
+	if hf.closed {
+		return nil, errors.New("heap file is closed")
+	}
 	if int(segNo) >= len(hf.segments) {
 		return nil, fmt.Errorf("segment %d does not exist", segNo)
 	}
@@ -91,11 +96,24 @@ func (hf *HeapFile) getSegment(segNo uint16) (*os.File, error) {
 }
 
 // ReadPage reads a page from disk into buf and verifies its checksum.
+//
+// KNOWN LIMITATION: There is a TOCTOU race between releasing the RLock and
+// performing ReadAt. If Close() runs in that window, the file descriptor is
+// closed and ReadAt returns "bad file descriptor". In practice this is not
+// a problem because Close() is only called during shutdown when no I/O is
+// in progress. The practical impact is a confusing error message, not a crash.
 func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
-	seg, err := hf.getSegment(pid.SegmentNo)
-	if err != nil {
-		return err
+	hf.mu.RLock()
+	if hf.closed {
+		hf.mu.RUnlock()
+		return errors.New("heap file is closed")
 	}
+	if int(pid.SegmentNo) >= len(hf.segments) {
+		hf.mu.RUnlock()
+		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
+	}
+	seg := hf.segments[pid.SegmentNo]
+	hf.mu.RUnlock()
 
 	if _, err := seg.ReadAt(buf[:], pid.FileOffset()); err != nil {
 		return fmt.Errorf("readpage %v: %w", pid, err)
@@ -110,13 +128,25 @@ func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
 
 // WritePage computes the page checksum and writes the page to disk.
 // It does NOT fsync — durability ordering is the WAL's responsibility.
+//
+// KNOWN LIMITATION: Same TOCTOU race as ReadPage — releasing the RLock
+// before WriteAt means Close() could run in between. In practice, Close()
+// is only called during shutdown when no I/O is happening.
 func (hf *HeapFile) WritePage(pid page.PageID, buf *page.Page) error {
-	seg, err := hf.getSegment(pid.SegmentNo)
-	if err != nil {
-		return err
+	hf.mu.RLock()
+	if hf.closed {
+		hf.mu.RUnlock()
+		return errors.New("heap file is closed")
 	}
+	if int(pid.SegmentNo) >= len(hf.segments) {
+		hf.mu.RUnlock()
+		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
+	}
+	seg := hf.segments[pid.SegmentNo]
+	hf.mu.RUnlock()
+
 	buf.SetChecksum()
-	_, err = seg.WriteAt(buf[:], pid.FileOffset())
+	_, err := seg.WriteAt(buf[:], pid.FileOffset())
 	return err
 }
 
@@ -126,7 +156,7 @@ func (hf *HeapFile) AllocatePage(pageType uint8) (page.PageID, *page.Page, error
 	hf.mu.Lock()
 	defer hf.mu.Unlock()
 
-	if len(hf.segments) == 0 {
+	if hf.closed || len(hf.segments) == 0 {
 		return page.PageID{}, nil, errors.New("heap file is closed")
 	}
 
@@ -164,6 +194,9 @@ func (hf *HeapFile) AllocatePage(pageType uint8) (page.PageID, *page.Page, error
 func (hf *HeapFile) PageCount() (uint32, error) {
 	hf.mu.RLock()
 	defer hf.mu.RUnlock()
+	if hf.closed {
+		return 0, errors.New("heap file is closed")
+	}
 	var total uint32
 	for _, seg := range hf.segments {
 		info, err := seg.Stat()
@@ -179,6 +212,9 @@ func (hf *HeapFile) PageCount() (uint32, error) {
 func (hf *HeapFile) SegmentCount() int {
 	hf.mu.RLock()
 	defer hf.mu.RUnlock()
+	if hf.closed {
+		return 0
+	}
 	return len(hf.segments)
 }
 

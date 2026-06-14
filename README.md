@@ -1,140 +1,173 @@
-# ⚡ VaultDB: The Next-Gen Hybrid SQL Engine
+# VaultDB
 
-VaultDB — это современная гибридная СУБД, сочетающая мощь реляционной алгебры, гибкость документных хранилищ и возможности векторных баз данных для AI.
+SQL-compatible database server with Go backend and C++ clients.
 
----
+## Features
 
-## 🚀 Быстрый старт (Deployment)
+- **SQL Support**: SELECT, INSERT, UPDATE, DELETE, JOIN, CTE, MERGE, TRUNCATE, UPSERT
+- **Dual Storage**: JSON (file-based) and Page (binary heap pages)
+- **WAL**: Write-Ahead Logging for crash recovery (ARIES protocol)
+- **MVCC**: Multi-Version Concurrency Control with time travel
+- **Query Optimizer**: Cost-based optimizer with statistics
+- **Indexes**: Hash and B-tree indexes
+- **Buffer Pool**: LRU page cache
+- **Concurrent Writes**: Page-level locking
+- **Transactions**: BEGIN/COMMIT/ROLLBACK with conflict detection
+- **Authentication**: HMAC-SHA256 tokens
+- **TLS Support**: Self-signed certificate generation
+- **Rate Limiting**: Token bucket algorithm
+- **Monitoring**: Prometheus metrics, health checks, dashboard
 
-### 1. Требования
-- **Go 1.21+** (для сервера)
-- **CMake & C++ Compiler** (для TUI-клиента)
-- **Docker** (опционально, для быстрого запуска)
+## Quick Start
 
-### 2. Запуск через Docker (Рекомендуется)
-```bash
-docker-compose up --build
-```
-После запуска:
-- **TCP SQL Port:** 5432
-- **REST API & Web UI:** http://localhost:8080
-- **Metrics/Health:** http://localhost:5433/metrics
+### Build from source
 
-### 3. Ручная сборка и запуск
-**Сервер (Go):**
 ```bash
 cd server
-go build -o vaultdb-server cmd/vaultdb-server/main.go
-./vaultdb-server --data ./data
+go build -o vaultdb-server ./cmd/vaultdb-server
 ```
 
-**TUI-Клиент (C++):**
+### Run server
+
 ```bash
-cd client
-mkdir -p build && cd build
-cmake ..
-make -j
-# Запуск из корня проекта:
-cd ../..
-./client/build/tui/vaultdb-tui --host 127.0.0.1 --port 5432
+./vaultdb-server --host 0.0.0.0 --port 5432 --data ./data
 ```
 
----
+### Run with TLS
 
-## 🛠 Информация для разработчиков
+```bash
+./vaultdb-server --tls-cert=cert.pem --tls-key=key.pem
+```
 
-### Зачем существует VaultDB?
-Современные приложения перегружены "зоопарком" баз данных: PostgreSQL для метаданных, Redis для кеша, Pinecone для векторов и MongoDB для гибких конфигов. VaultDB создана, чтобы **устранить эту фрагментацию**. 
+### Connect
 
-Это **единый движок**, который одинаково хорошо справляется с транзакциями, семантическим поиском и неструктурированными данными.
+```bash
+# TCP connection
+psql -h localhost -p 5432
 
-### Ключевые отличия от конкурентов
+# HTTP API
+curl -X POST http://localhost:8080/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "SELECT 1 + 1;"}'
+```
 
-| Особенность | VaultDB | PostgreSQL | MongoDB | Vector DBs |
-| :--- | :--- | :--- | :--- | :--- |
-| **Схема** | Flexible (INFER SCHEMA) | Rigid (Strict) | Schema-less | Rigid/None |
-| **AI/Vector** | SQL-синтаксис + внешний embedder | via Extensions | No | Native |
-| **Real-time** | Live Queries (Native) | via Triggers/CDC | Change Streams | No |
-| **API** | Auto REST + OpenAPI | Third-party (PostgREST)| Native | Limited |
-| **Embeddable** | Yes (Go Library) | No | No | Some |
+## Configuration
 
-### Преимущества VaultDB
-
-#### 1. AI-Ready SQL
-Семантический поиск встроен в SQL, но сами эмбеддинги VaultDB не генерирует —
-для `SEMANTIC_MATCH` и `AI_EMBED` нужен внешний embedding-провайдер
-(OpenAI, Ollama или любой OpenAI-совместимый API), настроенный в `vaultdb.yaml`:
+### vaultdb.yaml
 
 ```yaml
-ai:
-  provider: "ollama"
-  endpoint: "http://localhost:11434/api/embeddings"
-  model: "nomic-embed-text"
-  # api_key: "..."  # или переменная окружения VAULTDB_AI_API_KEY
-```
+server:
+  host: "0.0.0.0"
+  port: 5432
+  http_port: 8080
+  monitor_port: 5433
+  max_request_size_bytes: 67108864
 
-```sql
--- Поиск по смыслу, а не по словам
-SELECT content FROM docs 
-WHERE content SEMANTIC_MATCH 'как настроить бэкап' 
-LIMIT 5;
-```
-
-Без настроенного провайдера эти операции возвращают понятную ошибку
-конфигурации — никаких «фейковых» AI-результатов.
-
-#### 2. Schema-Free Power
-Создавайте таблицы без предварительного проектирования. VaultDB сама поймет типы данных при первой вставке.
-```sql
-CREATE TABLE settings INFER SCHEMA;
-INSERT INTO settings (id, val) VALUES (1, '{"theme": "dark", "zoom": 1.2}');
--- Запрос к JSON прямо в SQL
-SELECT val->>'theme' FROM settings WHERE id = 1;
-```
-
-#### 3. Live Queries
-Подписывайтесь на результаты запросов. Клиент получит обновление мгновенно при изменении данных в таблице. Идеально для дашбордов и совместной работы.
-
-#### 4. Встроенные миграции (DevOps First)
-Забудьте о внешних утилитах. Миграции — это часть ядра СУБД.
-```sql
-CREATE MIGRATION add_user_bio ('ALTER TABLE users ADD COLUMN bio TEXT;');
-APPLY MIGRATION add_user_bio;
-```
-
-#### 5. Автоматический REST API
-Как только вы создали таблицу, у неё появляется готовый REST-эндпоинт с поддержкой фильтрации:
-`GET /api/databases/mydb/tables/users/data?age=gt.18`
-
-#### 6. Web UI
-На `http://localhost:8080` доступен встроенный веб-интерфейс: SQL-редактор
-с историей запросов, таблица результатов, дерево баз/таблиц и просмотр схемы.
-Исходники — `server/internal/httpserver/web` (React + Vite), собранный bundle
-встраивается в бинарник сервера.
-
-#### 7. Движки хранения
-По умолчанию данные хранятся в JSON-файлах с версионированием строк
-(time travel, `AS OF`). Дополнительно доступен экспериментальный бинарный
-страничный движок (slotted pages, 8 КБ, контрольные суммы):
-
-```yaml
 storage:
-  engine: "page"   # json (по умолчанию) | page (экспериментальный)
+  engine: "json"  # или "page"
+  data_dir: "/data"
+
+auth:
+  enabled: true
+
+ai:
+  enabled: false
+  provider: "noop"
 ```
 
-Ограничения page-движка: вторичные индексы пока не поддерживаются.
+### Environment Variables
 
----
+| Variable | Description |
+|----------|-------------|
+| VAULTDB_HOST | Server host |
+| VAULTDB_PORT | TCP port |
+| VAULTDB_HTTP_PORT | HTTP port |
+| VAULTDB_DATA_DIR | Data directory |
+| VAULTDB_AUTH_ENABLED | Enable auth (true/false) |
+| VAULTDB_API_TOKENS | API tokens (token:label) |
+| VAULTDB_AUTH_SECRET | HMAC secret for tokens |
+| VAULTDB_AI_API_KEY | AI embedding API key |
 
-## 🏗 Архитектура
-Подробное описание внутреннего устройства (парсер, executor, storage, WAL, Time Travel) находится в файле [ARCHITECTURE.md](./ARCHITECTURE.md).
+## SQL Reference
 
-## 🧪 Тестирование
-Для запуска полного цикла тестов (включая реляционную логику, JOIN, Window functions и AI):
+### DDL
+- `CREATE DATABASE name`
+- `DROP DATABASE name`
+- `USE name`
+- `CREATE TABLE name (col TYPE, ...)`
+- `DROP TABLE name`
+- `ALTER TABLE name ADD/DROP/RENAME COLUMN`
+- `CREATE INDEX name ON table (column)`
+- `DROP INDEX name`
+
+### DML
+- `INSERT INTO table VALUES (...)`
+- `INSERT INTO table SELECT ... FROM ...`
+- `INSERT INTO table ON CONFLICT DO NOTHING/UPDATE`
+- `UPDATE table SET col = val WHERE ...`
+- `UPDATE t1 SET col = val FROM t2 WHERE ...`
+- `DELETE FROM table WHERE ...`
+- `TRUNCATE TABLE table`
+
+### DQL
+- `SELECT [DISTINCT] columns FROM table [WHERE ...] [GROUP BY ...] [HAVING ...] [ORDER BY ...] [LIMIT n] [OFFSET n]`
+- `SELECT * FROM t1 LEFT/RIGHT/FULL/INNER/CROSS JOIN t2 ON condition`
+- `SELECT * FROM t1 UNION/INTERSECT/EXCEPT SELECT * FROM t2`
+- `SELECT * FROM t WHERE EXISTS (SELECT ...)`
+- `SELECT * FROM t WHERE col BETWEEN a AND b`
+- `WITH cte AS (...) SELECT * FROM cte`
+
+### Transactions
+- `BEGIN` / `START TRANSACTION`
+- `COMMIT`
+- `ROLLBACK`
+- `SAVEPOINT name`
+- `ROLLBACK TO SAVEPOINT name`
+- `RELEASE SAVEPOINT name`
+
+### Functions
+- String: `UPPER`, `LOWER`, `LENGTH`, `SUBSTRING`, `TRIM`, `REPLACE`, `LPAD`, `RPAD`, `REVERSE`, `INITCAP`, `LEFT`, `RIGHT`, `POSITION`, `STRING_AGG`
+- Numeric: `ABS`, `CEIL`, `FLOOR`, `ROUND`, `MOD`, `POWER`, `SQRT`, `SIGN`, `GREATEST`, `LEAST`
+- Date: `NOW`, `CURRENT_DATE`, `CURRENT_TIME`, `CURRENT_TIMESTAMP`, `DATE_TRUNC`, `EXTRACT`, `AGE`, `TO_DATE`, `TO_TIMESTAMP`, `TO_CHAR`
+- Aggregate: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `BOOL_AND`, `BOOL_OR`, `STDDEV`, `VARIANCE`
+- Window: `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTILE`
+- Other: `COALESCE`, `NULLIF`, `CASE WHEN ... THEN ... END`, `CAST(x AS type)`
+
+### Data Types
+- `INT` — 64-bit integer
+- `FLOAT` — 64-bit float
+- `BOOL` — boolean
+- `TEXT` — text string
+- `VARCHAR(n)` — variable-length string
+
+## Architecture
+
+```
+Client (C++) → TCP/HTTP → Lexer → Parser → Executor → Storage Engine
+                                          ↓
+                                    Transaction Manager
+                                          ↓
+                                    WAL (crash recovery)
+                                          ↓
+                                    Buffer Pool (LRU cache)
+                                          ↓
+                                    Heap Files (disk)
+```
+
+## Development
+
 ```bash
+# Run tests
 cd server
-go test -v ./internal/executor
+go test ./... -v
+
+# Run with race detector
+go test ./... -race
+
+# Build
+go build ./cmd/vaultdb-server
 ```
 
----
-*VaultDB — Database for the AI Era.*
+## License
+
+MIT

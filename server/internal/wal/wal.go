@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -24,6 +25,22 @@ const (
 	OpVacuum         byte = 0x14
 	OpAlterTable     byte = 0x15
 	OpCheckpoint     byte = 0xF0
+
+	// Page engine operations
+	OpPageInsert     byte = 0x20 // вставка tuple на страницу
+	OpPageDelete     byte = 0x21 // пометка tuple как dead (XMax)
+	OpPageUpdateXMax byte = 0x22 // обновление XMax (при DELETE/UPDATE)
+	OpPageNewPage    byte = 0x23 // выделение новой страницы
+	OpVacuumBegin    byte = 0x30
+	OpVacuumCommit   byte = 0x31
+	OpAbort          byte = 0x40
+	OpCommit         byte = 0x50
+
+	// Schema rewrite operations
+	OpSchemaWrite   byte = 0x60 // schema file write
+	OpRewriteBegin  byte = 0x61 // start table rewrite (ALTER TABLE ADD/DROP COLUMN)
+	OpRewriteData   byte = 0x62 // rewrite data chunk
+	OpRewriteCommit byte = 0x63 // rewrite complete
 )
 
 const (
@@ -35,6 +52,52 @@ type Entry struct {
 	TxID    uint64
 	OpType  byte
 	Payload []byte
+}
+
+// WALPageInsertPayload — payload для OpPageInsert
+type WALPageInsertPayload struct {
+	DB          string
+	Table       string
+	SegmentNo  uint16
+	PageNo     uint32
+	SlotNo     uint16
+	XID        uint64   // транзакция, создавшая tuple
+	TupleData  []byte   // полные данные tuple (header + attrs)
+}
+
+// WALPageDeletePayload — payload для OpPageDelete/OpPageUpdateXMax
+type WALPageDeletePayload struct {
+	DB          string
+	Table       string
+	SegmentNo  uint16
+	PageNo     uint32
+	SlotNo     uint16
+	XMax       uint64   // XID транзакции удаляющей tuple
+}
+
+// WALVacuumPayload — payload для OpVacuumBegin/OpVacuumCommit
+type WALVacuumPayload struct {
+	DB          string
+	Table       string
+	ShadowPath  string
+}
+
+// WALSchemaWritePayload — payload для OpSchemaWrite
+type WALSchemaWritePayload struct {
+	DB     string
+	Table  string
+	Schema string // JSON schema
+}
+
+// WALRewritePayload — payload для OpRewriteBegin/OpRewriteCommit
+type WALRewritePayload struct {
+	DB    string
+	Table string
+}
+
+// CheckpointPayload — payload для OpCheckpoint
+type CheckpointPayload struct {
+	LSN uint64
 }
 
 type WAL struct {
@@ -83,14 +146,25 @@ func (w *WAL) Checkpoint() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	payload, err := json.Marshal(CheckpointPayload{LSN: w.nextTxID.Load()})
+	if err != nil {
+		return fmt.Errorf("wal: marshal checkpoint payload: %w", err)
+	}
+	record, err := buildRecord(w.nextTxID.Add(1), OpCheckpoint, payload)
+	if err != nil {
+		return err
+	}
+	if _, err := w.file.Write(record); err != nil {
+		return fmt.Errorf("wal: write checkpoint: %w", err)
+	}
+	if err := w.file.Sync(); err != nil {
+		return fmt.Errorf("wal: sync checkpoint: %w", err)
+	}
 	if err := w.file.Truncate(0); err != nil {
-		return fmt.Errorf("wal: truncate: %w", err)
+		return fmt.Errorf("wal: truncate after checkpoint: %w", err)
 	}
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("wal: seek after truncate: %w", err)
-	}
-	if err := w.file.Sync(); err != nil {
-		return fmt.Errorf("wal: sync after truncate: %w", err)
 	}
 	return nil
 }
@@ -128,6 +202,38 @@ func (w *WAL) CurrentTxID() uint64 {
 	return w.nextTxID.Load()
 }
 
+// AppendWithTx записывает запись в WAL с указанным txID (не инкрементирует автоматически).
+func (w *WAL) AppendWithTx(txID uint64, opType byte, payload interface{}) (uint64, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("wal: marshal payload: %w", err)
+	}
+	return w.appendBytesLockedWithTx(txID, opType, payloadBytes)
+}
+
+func (w *WAL) appendBytesLockedWithTx(txID uint64, opType byte, payload []byte) (uint64, error) {
+	record, err := buildRecord(txID, opType, payload)
+	if err != nil {
+		return 0, err
+	}
+
+	if _, err := w.file.Write(record); err != nil {
+		return 0, fmt.Errorf("wal: write: %w", err)
+	}
+	if err := w.file.Sync(); err != nil {
+		return 0, fmt.Errorf("wal: sync: %w", err)
+	}
+
+	if txID >= w.nextTxID.Load() {
+		w.nextTxID.Store(txID + 1)
+	}
+
+	return txID, nil
+}
+
 func (w *WAL) appendBytesLocked(opType byte, payload []byte) (uint64, error) {
 	txID := w.nextTxID.Add(1)
 
@@ -162,6 +268,11 @@ func buildRecord(txID uint64, opType byte, payload []byte) ([]byte, error) {
 	}
 	body.Write(payload)
 
+	// CRC32 используется для целостности данных (обнаружение битовых сбоев,
+	// неполных записей на диске), НЕ для криптографической безопасности.
+	// WAL хранится на локальном диске — если атакующий имеет доступ к файловой
+	// системе, он уже может модифицировать heap-файлы напрямую.
+	// Для security boundary используется HMAC-SHA256 в auth/manager.go.
 	crc := crc32.ChecksumIEEE(body.Bytes())
 	if err := binary.Write(&body, binary.LittleEndian, crc); err != nil {
 		return nil, fmt.Errorf("wal: encode checksum: %w", err)
@@ -255,7 +366,21 @@ func (w *WAL) readEntriesLocked(resetOnCheckpoint bool) ([]Entry, uint64, error)
 	// land after the garbage and become unreachable on the next recovery scan.
 	if info, err := w.file.Stat(); err == nil && info.Size() > validEnd {
 		if err := w.file.Truncate(validEnd); err != nil {
-			return nil, 0, fmt.Errorf("wal: truncate corrupt tail: %w", err)
+			// Cannot truncate — rename corrupt WAL and create new one
+			corruptPath := w.path + fmt.Sprintf(".corrupt.%d", time.Now().Unix())
+			w.file.Close()
+			if renameErr := os.Rename(w.path, corruptPath); renameErr != nil {
+				return nil, 0, fmt.Errorf(
+					"FATAL: WAL is corrupt and cannot be truncated or renamed. "+
+						"Manual intervention required. Corrupt WAL: %s. Error: %w", w.path, renameErr)
+			}
+			// Create new empty WAL
+			newFile, openErr := os.OpenFile(w.path, os.O_CREATE|os.O_RDWR, 0o644)
+			if openErr != nil {
+				return nil, 0, fmt.Errorf("failed to create new WAL after corrupt rename: %w", openErr)
+			}
+			w.file = newFile
+			return entries, maxTxID, nil
 		}
 	}
 
@@ -264,4 +389,121 @@ func (w *WAL) readEntriesLocked(resetOnCheckpoint bool) ([]Entry, uint64, error)
 	}
 
 	return entries, maxTxID, nil
+}
+
+// AnalyzeTransactions анализирует WAL и определяет какие транзакции закоммичены,
+// а какие остались незавершёнными.
+func (w *WAL) AnalyzeTransactions() (committed map[uint64]bool, inProgress map[uint64]bool, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	entries, _, err := w.readEntriesLocked(false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	committed = make(map[uint64]bool)
+	inProgress = make(map[uint64]bool)
+
+	for _, entry := range entries {
+		switch entry.OpType {
+		case OpCommit:
+			committed[entry.TxID] = true
+			delete(inProgress, entry.TxID)
+		case OpAbort:
+			delete(inProgress, entry.TxID)
+			delete(committed, entry.TxID)
+		default:
+			// Все остальные операции принадлежат транзакции
+			if entry.TxID != 0 {
+				if !committed[entry.TxID] {
+					inProgress[entry.TxID] = true
+				}
+			}
+		}
+	}
+
+	return committed, inProgress, nil
+}
+
+// Replay воспроизводит все записи WAL, вызывая callback для каждой операции.
+func (w *WAL) Replay(callback func(Entry) error) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	entries, _, err := w.readEntriesLocked(false)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if err := callback(entry); err != nil {
+			return fmt.Errorf("wal replay: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// ReplayTransaction воспроизводит записи конкретной транзакции.
+func (w *WAL) ReplayTransaction(txID uint64, callback func(Entry) error) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	entries, _, err := w.readEntriesLocked(false)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.TxID == txID {
+			if err := callback(entry); err != nil {
+				return fmt.Errorf("wal replay tx %d: %w", txID, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// Flush синхронизирует WAL файл на диск и возвращает текущий LSN.
+func (w *WAL) Flush() (uint64, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if err := w.file.Sync(); err != nil {
+		return 0, fmt.Errorf("wal flush: %w", err)
+	}
+
+	return w.nextTxID.Load(), nil
+}
+
+// FindLastVacuumCommit ищет последний OpVacuumCommit для указанной таблицы.
+func (w *WAL) FindLastVacuumCommit(db, table string) (bool, uint64, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	entries, _, err := w.readEntriesLocked(false)
+	if err != nil {
+		return false, 0, err
+	}
+
+	// Сканируем от конца к началу
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		if entry.OpType == OpVacuumCommit || entry.OpType == OpVacuumBegin {
+			var payload WALVacuumPayload
+			if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+				continue
+			}
+			if payload.DB == db && payload.Table == table {
+				if entry.OpType == OpVacuumCommit {
+					return true, entry.TxID, nil
+				}
+				return false, entry.TxID, nil
+			}
+		}
+	}
+
+	return false, 0, nil
 }

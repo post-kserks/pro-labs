@@ -86,7 +86,7 @@ func TestRecoverIgnoresCorruptedTail(t *testing.T) {
 	}
 }
 
-func TestCheckpointTruncatesLog(t *testing.T) {
+func TestCheckpointWritesMarker(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vaultdb.wal")
 
 	w, err := Open(path)
@@ -112,7 +112,87 @@ func TestCheckpointTruncatesLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recover failed: %v", err)
 	}
+	// After checkpoint marker, only the post-checkpoint entry should remain
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry after checkpoint, got %d", len(entries))
+	}
+	if entries[0].OpType != OpInsert {
+		t.Fatalf("expected OpInsert, got %d", entries[0].OpType)
+	}
+}
+
+func TestCheckpointSurvivesReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vaultdb.wal")
+
+	w, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	w.Append(OpInsert, map[string]interface{}{"v": 1})
+	w.Append(OpInsert, map[string]interface{}{"v": 2})
+	w.Checkpoint()
+	w.Append(OpInsert, map[string]interface{}{"v": 3})
+	w.Close()
+
+	// Reopen and recover
+	w2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-open failed: %v", err)
+	}
+	defer w2.Close()
+
+	entries, err := w2.Recover()
+	if err != nil {
+		t.Fatalf("Recover failed: %v", err)
+	}
+	// Only entry after checkpoint should be visible
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry after checkpoint reopen, got %d", len(entries))
+	}
+}
+
+func TestFlushSyncsToDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vaultdb.wal")
+
+	w, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer w.Close()
+
+	w.Append(OpInsert, map[string]interface{}{"v": 1})
+
+	lsn, err := w.Flush()
+	if err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+	if lsn == 0 {
+		t.Fatal("expected non-zero LSN")
+	}
+}
+
+func TestAppendNoPerWriteSync(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vaultdb.wal")
+
+	w, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer w.Close()
+
+	// Multiple appends should succeed without per-write sync
+	for i := 0; i < 100; i++ {
+		if _, err := w.Append(OpInsert, map[string]interface{}{"i": i}); err != nil {
+			t.Fatalf("append %d failed: %v", i, err)
+		}
+	}
+
+	entries, err := w.Recover()
+	if err != nil {
+		t.Fatalf("Recover failed: %v", err)
+	}
+	if len(entries) != 100 {
+		t.Fatalf("expected 100 entries, got %d", len(entries))
 	}
 }

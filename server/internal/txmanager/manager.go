@@ -23,10 +23,13 @@ var ErrTxConflict = errors.New("transaction conflict")
 
 // PendingOp — одна буферизованная операция внутри транзакции.
 type PendingOp struct {
-	Type    string // "insert", "update", "delete"
+	Type    string      // "insert", "update", "delete"
 	DB      string
 	Table   string
 	Payload interface{} // зависит от Type (обычно AST узел)
+	OldRow  interface{} // для update: старые значения (BeforeImage)
+	Row     interface{} // данные строки
+	Pos     int         // позиция строки (для update/delete)
 }
 
 // Transaction — активная транзакция одной сессии.
@@ -125,6 +128,7 @@ func (m *Manager) AddOp(tx *Transaction, op PendingOp) {
 // lockTables берёт commit-локи всех таблиц в отсортированном порядке
 // и возвращает функцию разблокировки.
 func (m *Manager) lockTables(keys []string) func() {
+	sort.Strings(keys)
 	locks := make([]*sync.Mutex, 0, len(keys))
 	for _, key := range keys {
 		m.commitLocksMu.Lock()

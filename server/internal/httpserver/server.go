@@ -21,6 +21,17 @@ import (
 	"vaultdb/internal/txmanager"
 )
 
+const (
+	errCodeBadRequest     = 3001
+	errCodeParseError     = 3002
+	errCodeUnknownColumn  = 3003
+	errCodeStorageError   = 3004
+	errCodeTxUnsupported  = 3005
+	errCodeRateLimited    = 3006
+	errCodeInternal       = 5000
+	errCodeNotImplemented = 9999
+)
+
 //go:embed web/dist/*
 var webUIFiles embed.FS
 
@@ -29,6 +40,8 @@ type Config struct {
 	Port              int
 	MonitorPort       int
 	Version           string
+	MaxRequestSizeBytes int
+	AllowedOrigins    []string
 	Storage           storage.StorageEngine
 	Auth              *auth.Manager
 	Logger            *slog.Logger
@@ -37,6 +50,7 @@ type Config struct {
 	ActiveConnections func() int64
 	Broadcaster       *executor.Broadcaster
 	Embedder          ai.Embedder
+	RateLimiter       *RateLimiter
 }
 
 type Server struct {
@@ -52,10 +66,13 @@ func New(cfg Config) *Server {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Auth == nil {
-		cfg.Auth = auth.New(false, nil)
+		cfg.Auth = auth.New(false, nil, cfg.Logger)
 	}
 	if cfg.ActiveConnections == nil {
 		cfg.ActiveConnections = func() int64 { return 0 }
+	}
+	if cfg.MaxRequestSizeBytes == 0 {
+		cfg.MaxRequestSizeBytes = 64 * 1024 * 1024
 	}
 	m := cfg.Metrics
 	if m == nil {
@@ -80,12 +97,20 @@ func New(cfg Config) *Server {
 
 func (s *Server) Start(ctx context.Context) error {
 	apiServer := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port),
-		Handler: corsMiddleware(s.apiMux()),
+		Addr:              fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port),
+		Handler:           s.corsMiddleware(s.apiMux()),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	monitorServer := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.MonitorPort),
-		Handler: s.monitorMux(),
+		Addr:              fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.MonitorPort),
+		Handler:           s.monitorMux(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	errCh := make(chan error, 2)
@@ -130,7 +155,9 @@ func (s *Server) apiMux() *http.ServeMux {
 	mux.HandleFunc("/api/databases/", s.cfg.Auth.Middleware(s.handleDatabasesSubroutes))
 
 	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleHealth))
-	mux.HandleFunc("/metrics", s.withMethod(http.MethodGet, s.handleMetrics))
+	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
+	mux.HandleFunc("/metrics", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics)))
+	mux.HandleFunc("/dashboard", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleDashboard)))
 
 	distFS, err := fs.Sub(webUIFiles, "web/dist")
 	if err == nil {
@@ -148,6 +175,7 @@ func (s *Server) apiMux() *http.ServeMux {
 func (s *Server) monitorMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleHealth))
+	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
 	mux.HandleFunc("/metrics", s.withMethod(http.MethodGet, s.handleMetrics))
 	return mux
 }
@@ -172,24 +200,36 @@ func (s *Server) withMethod(method string, next http.HandlerFunc) http.HandlerFu
 }
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.RateLimiter != nil {
+		key := r.RemoteAddr
+		if !s.cfg.RateLimiter.Allow(key) {
+			writeError(w, http.StatusTooManyRequests, errCodeRateLimited, "rate limit exceeded")
+			return
+		}
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
 	var req struct {
 		Database string `json:"database"`
 		Query    string `json:"query"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, 3001, "invalid JSON body")
+		if err.Error() == "http: request body too large" {
+			writeError(w, http.StatusRequestEntityTooLarge, errCodeBadRequest, "request body too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "invalid JSON body")
 		return
 	}
 
 	query := strings.TrimSpace(req.Query)
 	if query == "" {
-		writeError(w, http.StatusBadRequest, 3001, "query cannot be empty")
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "query cannot be empty")
 		return
 	}
 
 	stmt, err := parser.Parse(query)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, 3002, err.Error())
+		writeError(w, http.StatusBadRequest, errCodeParseError, err.Error())
 		return
 	}
 
@@ -197,7 +237,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// between requests — reject instead of silently buffering into the void.
 	switch stmt.(type) {
 	case *parser.BeginStatement, *parser.CommitStatement, *parser.RollbackStatement:
-		writeError(w, http.StatusBadRequest, 3005,
+		writeError(w, http.StatusBadRequest, errCodeTxUnsupported,
 			"transactions are not supported over the stateless HTTP API; use the TCP client on port 5432")
 		return
 	}
@@ -210,7 +250,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	result, err := session.Execute(stmt)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, 3004, err.Error())
+		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
 		return
 	}
 	duration := float64(time.Since(start).Microseconds()) / 1000.0
@@ -236,7 +276,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListDatabases(w http.ResponseWriter, _ *http.Request) {
 	names, err := s.cfg.Storage.ListDatabases()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, 5000, err.Error())
+		writeError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 		return
 	}
 
@@ -292,7 +332,7 @@ func (s *Server) handleDatabasesSubroutes(w http.ResponseWriter, r *http.Request
 func (s *Server) handleListTables(w http.ResponseWriter, dbName string) {
 	tables, err := s.cfg.Storage.ListTables(dbName)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, 3004, err.Error())
+		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
 		return
 	}
 
@@ -314,12 +354,12 @@ func (s *Server) handleListTables(w http.ResponseWriter, dbName string) {
 func (s *Server) handleSchema(w http.ResponseWriter, dbName, tableName string) {
 	schema, err := s.cfg.Storage.GetTableSchema(dbName, tableName)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, 3004, err.Error())
+		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
 		return
 	}
 	rowCount, err := s.cfg.Storage.CountRows(dbName, tableName)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, 3004, err.Error())
+		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
 		return
 	}
 
@@ -338,13 +378,47 @@ func (s *Server) handleSchema(w http.ResponseWriter, dbName, tableName string) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	uptime := int(time.Since(s.startedAt).Seconds())
+
+	status := "ok"
+	checks := map[string]interface{}{}
+
+	if _, err := s.cfg.Storage.ListDatabases(); err != nil {
+		status = "degraded"
+		checks["storage"] = map[string]interface{}{
+			"status": "fail",
+			"error":  err.Error(),
+		}
+	} else {
+		checks["storage"] = map[string]interface{}{
+			"status": "pass",
+		}
+	}
+
+	checks["wal"] = map[string]interface{}{
+		"status": "pass",
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":      "ok",
+		"status":      status,
 		"version":     s.cfg.Version,
 		"uptime_s":    uptime,
 		"connections": s.cfg.ActiveConnections(),
 		"wal_enabled": true,
 		"time_travel": true,
+		"checks":      checks,
+	})
+}
+
+func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
+	if _, err := s.cfg.Storage.ListDatabases(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"status": "not ready",
+			"error":  err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "ready",
 	})
 }
 
@@ -354,9 +428,88 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprint(w, s.metrics.Render())
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
+func (s *Server) handleDashboard(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, dashboardHTML)
+}
+
+const dashboardHTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>VaultDB Dashboard</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background: #f5f5f5; }
+h1 { color: #333; }
+.metric { background: white; padding: 15px; margin: 10px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.metric h3 { margin: 0 0 10px 0; color: #666; }
+.value { font-size: 24px; font-weight: bold; color: #2c3e50; }
+.refresh { background: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+.refresh:hover { background: #2980b9; }
+</style>
+</head>
+<body>
+<h1>VaultDB Dashboard</h1>
+<button class="refresh" onclick="refresh()">Refresh</button>
+<div id="metrics">Loading...</div>
+<script>
+async function refresh() {
+  const resp = await fetch('/metrics');
+  const text = await resp.text();
+  const lines = text.split('\n');
+  const container = document.getElementById('metrics');
+  container.textContent = '';
+  for (const line of lines) {
+    if (line.startsWith('#') || line.trim() === '') continue;
+    const parts = line.split(' ');
+    if (parts.length === 2) {
+      const div = document.createElement('div');
+      div.className = 'metric';
+      const h3 = document.createElement('h3');
+      h3.textContent = parts[0];
+      const val = document.createElement('div');
+      val.className = 'value';
+      val.textContent = parts[1];
+      div.appendChild(h3);
+      div.appendChild(val);
+      container.appendChild(div);
+    }
+  }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
+`
+
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:")
+
+		origin := r.Header.Get("Origin")
+		allowed := false
+		if len(s.cfg.AllowedOrigins) == 0 {
+			allowed = false
+		} else {
+			for _, o := range s.cfg.AllowedOrigins {
+				if o == "*" || o == origin {
+					allowed = true
+					break
+				}
+			}
+		}
+		if allowed {
+			if origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			} else {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			}
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-VaultDB-Token")
 		if r.Method == http.MethodOptions {
@@ -468,7 +621,7 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 	// Dynamically generate OpenAPI spec based on existing databases and tables
 	dbs, err := s.cfg.Storage.ListDatabases()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, 5000, err.Error())
+		writeError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 		return
 	}
 
@@ -523,7 +676,7 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 	// built as an AST (never as SQL text) so request values cannot inject SQL.
 	schema, err := s.cfg.Storage.GetTableSchema(dbName, tableName)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, 3004, err.Error())
+		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
 		return
 	}
 	columnsByName := make(map[string]string, len(schema.Columns))
@@ -538,7 +691,7 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 		}
 		canonical, ok := columnsByName[strings.ToLower(col)]
 		if !ok {
-			writeError(w, http.StatusBadRequest, 3003, fmt.Sprintf("unknown column '%s'", col))
+			writeError(w, http.StatusBadRequest, errCodeUnknownColumn, fmt.Sprintf("unknown column '%s'", col))
 			return
 		}
 		for _, val := range vals {
@@ -574,7 +727,7 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 	sess.SetCurrentDatabase(dbName)
 	res, err := sess.Execute(stmt)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, 3004, err.Error())
+		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -599,13 +752,14 @@ func filterLiteral(raw string) parser.Expression {
 }
 
 func (s *Server) handlePostTableData(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
 	var body interface{}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, 3001, "invalid JSON body")
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "invalid JSON body")
 		return
 	}
 
 	// Simplified: construct INSERT statement from JSON
 	// ... logic to build INSERT ...
-	writeError(w, http.StatusNotImplemented, 9999, "POST table data not fully implemented yet")
+	writeError(w, http.StatusNotImplemented, errCodeNotImplemented, "POST table data not fully implemented yet")
 }

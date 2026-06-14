@@ -4,12 +4,56 @@ package executor
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
 )
+
+func executeReturningGeneric(rows []storage.Row, returningCols []parser.SelectColumn, schema *storage.TableSchema, ctx *ExecutionContext) (*Result, error) {
+	resultRows := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		projected := make([]string, len(returningCols))
+		for i, col := range returningCols {
+			val, err := evalOperand(col.Expr, row, schema, ctx)
+			if err != nil {
+				projected[i] = "ERR"
+			} else {
+				projected[i] = valueToString(val)
+			}
+		}
+		resultRows = append(resultRows, projected)
+	}
+	projectColumns := make([]string, len(returningCols))
+	for i, col := range returningCols {
+		if col.Alias != "" {
+			projectColumns[i] = col.Alias
+		} else if colRef, ok := col.Expr.(*parser.ColumnRef); ok {
+			projectColumns[i] = colRef.Name
+		} else {
+			projectColumns[i] = fmt.Sprintf("col%d", i)
+		}
+	}
+	return &Result{
+		Type:    "rows",
+		Columns: projectColumns,
+		Rows:    resultRows,
+	}, nil
+}
+
+func notifyMutation(ctx *ExecutionContext, dbName, tableName string) {
+	if ctx.Stats != nil {
+		ctx.Stats.InvalidateStats(dbName, tableName)
+	}
+	if ctx.TxManager != nil {
+		ctx.TxManager.BumpTableVersion(dbName, tableName)
+	}
+	if ctx.Broadcaster != nil {
+		ctx.Broadcaster.NotifyTableChanged(dbName, tableName, ctx)
+	}
+}
 
 type InsertCommand struct {
 	stmt *parser.InsertStatement
@@ -32,6 +76,14 @@ func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 }
 
 func (c *InsertCommand) executeImmediate(ctx *ExecutionContext) (*Result, error) {
+	if ctx.Ctx != nil {
+		select {
+		case <-ctx.Ctx.Done():
+			return nil, fmt.Errorf("query timeout: %w", ctx.Ctx.Err())
+		default:
+		}
+	}
+
 	dbName, err := requireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
@@ -44,6 +96,11 @@ func (c *InsertCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 	schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
 	if err != nil {
 		return nil, err
+	}
+
+	// Handle INSERT ... SELECT
+	if c.stmt.SelectQuery != nil {
+		return c.executeInsertSelect(ctx, dbName, schema)
 	}
 
 	// Handle INFER SCHEMA
@@ -78,17 +135,44 @@ func (c *InsertCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 		return nil, err
 	}
 
+	for i, row := range rowsToInsert {
+		for j, col := range schema.Columns {
+			if col.Type == "ENUM" && len(col.EnumValues) > 0 && j < len(row) && row[j] != nil {
+				val := valueToString(row[j])
+				valid := false
+				for _, ev := range col.EnumValues {
+					if val == ev {
+						valid = true
+						break
+					}
+				}
+				if !valid {
+					return nil, fmt.Errorf("invalid ENUM value '%s' for column '%s' (valid: %v)", val, col.Name, col.EnumValues)
+				}
+			}
+		}
+		_ = i
+	}
+
+	// Handle ON CONFLICT (UPSERT)
+	if c.stmt.OnConflict != nil {
+		return c.executeUpsert(ctx, dbName, schema, rowsToInsert)
+	}
+
 	affected, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, rowsToInsert)
 	if err != nil {
 		return nil, err
 	}
 
-	if ctx.TxManager != nil {
-		ctx.TxManager.BumpTableVersion(dbName, c.stmt.TableName)
+	notifyMutation(ctx, dbName, c.stmt.TableName)
+	if ctx.Session.planCache != nil {
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
 	}
+	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
 
-	if ctx.Broadcaster != nil {
-		ctx.Broadcaster.NotifyTableChanged(dbName, c.stmt.TableName, ctx)
+	// Handle RETURNING
+	if len(c.stmt.Returning) > 0 {
+		return c.executeReturning(ctx, dbName, schema, rowsToInsert)
 	}
 
 	return &Result{Type: "affected", Affected: affected}, nil
@@ -139,7 +223,6 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 		}
 
 		normalized := make(storage.Row, len(schema.Columns))
-		// Fill with nil first (or handle defaults if stored in storage schema)
 		for i := range normalized {
 			normalized[i] = nil
 		}
@@ -156,10 +239,8 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 			}
 			normalized[colIdx] = converted
 		}
-		// Compute GENERATED columns (placeholder logic)
 		for i, col := range schema.Columns {
 			if col.IsComputed {
-				// For prototype: if name is 'double_level' and 'level' exists, double it
 				if col.Name == "double_level" {
 					levelIdx := -1
 					for j, c := range schema.Columns {
@@ -182,17 +263,203 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 	return result, nil
 }
 
+// executeUpsert выполняет INSERT ... ON CONFLICT DO NOTHING/UPDATE.
+func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, rowsToInsert []storage.Row) (*Result, error) {
+	affected := 0
+
+	conflictCols := c.stmt.OnConflict.Columns
+	if len(conflictCols) == 0 {
+		conflictCols = nil
+		for _, col := range schema.Columns {
+			conflictCols = append(conflictCols, col.Name)
+		}
+	}
+	colIdxMap := make(map[string]int, len(schema.Columns))
+	for i, col := range schema.Columns {
+		colIdxMap[strings.ToLower(col.Name)] = i
+	}
+
+	for _, row := range rowsToInsert {
+		existingRows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+		if err != nil {
+			return nil, err
+		}
+
+		conflict := false
+		conflictIdx := -1
+
+		for idx, existingRow := range existingRows {
+			if len(existingRow) != len(row) {
+				continue
+			}
+			allMatch := true
+			for _, colName := range conflictCols {
+				ci, ok := colIdxMap[strings.ToLower(colName)]
+				if !ok {
+					allMatch = false
+					break
+				}
+				if !valuesEqual(existingRow[ci], row[ci]) {
+					allMatch = false
+					break
+				}
+			}
+			if allMatch {
+				conflict = true
+				conflictIdx = idx
+				break
+			}
+		}
+
+		if conflict {
+			if c.stmt.OnConflict.Action == "NOTHING" {
+				continue
+			}
+			if c.stmt.OnConflict.Action == "UPDATE" {
+				updates := make(map[string]storage.Value)
+				for _, assign := range c.stmt.OnConflict.Assignments {
+					val, err := evalOperand(assign.Value, row, schema, ctx)
+					if err != nil {
+						return nil, err
+					}
+					updates[assign.Column] = val
+				}
+				_, err := ctx.Storage.UpdateRows(dbName, c.stmt.TableName, []int{conflictIdx}, updates)
+				if err != nil {
+					return nil, err
+				}
+				affected++
+			}
+		} else {
+			_, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, []storage.Row{row})
+			if err != nil {
+				return nil, err
+			}
+			affected++
+		}
+	}
+
+	notifyMutation(ctx, dbName, c.stmt.TableName)
+	if ctx.Session.planCache != nil {
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	}
+
+	return &Result{Type: "affected", Affected: affected}, nil
+}
+
+// executeInsertSelect выполняет INSERT ... SELECT.
+func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string, schema *storage.TableSchema) (*Result, error) {
+	// Выполняем SELECT запрос
+	cmd, err := CommandFactory(c.stmt.SelectQuery)
+	if err != nil {
+		return nil, fmt.Errorf("INSERT ... SELECT: %w", err)
+	}
+
+	res, err := cmd.Execute(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("INSERT ... SELECT: %w", err)
+	}
+
+	// Конвертируем результат в строки для вставки
+	rowsToInsert := make([]storage.Row, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		storageRow := make(storage.Row, len(schema.Columns))
+		for i := range schema.Columns {
+			if i < len(row) {
+				val, err := convertStringToValue(row[i], schema.Columns[i])
+				if err != nil {
+					return nil, fmt.Errorf("INSERT ... SELECT: column '%s': %w", schema.Columns[i].Name, err)
+				}
+				storageRow[i] = val
+			}
+		}
+		rowsToInsert = append(rowsToInsert, storageRow)
+	}
+
+	// Вставляем строки
+	affected, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, rowsToInsert)
+	if err != nil {
+		return nil, err
+	}
+
+	notifyMutation(ctx, dbName, c.stmt.TableName)
+	if ctx.Session.planCache != nil {
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	}
+
+	// Handle RETURNING
+	if len(c.stmt.Returning) > 0 {
+		return c.executeReturning(ctx, dbName, schema, rowsToInsert)
+	}
+
+	return &Result{Type: "affected", Affected: affected}, nil
+}
+
+// executeReturning выполняет RETURNING clause для INSERT.
+func (c *InsertCommand) executeReturning(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, insertedRows []storage.Row) (*Result, error) {
+	return executeReturningGeneric(insertedRows, c.stmt.Returning, schema, ctx)
+}
+
+// convertStringToValue конвертирует строку в значение нужного типа.
+func convertStringToValue(s string, col storage.ColumnSchema) (storage.Value, error) {
+	switch strings.ToUpper(col.Type) {
+	case "INT":
+		val, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("cannot convert '%s' to INT", s)
+		}
+		return val, nil
+	case "FLOAT":
+		val, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return nil, fmt.Errorf("cannot convert '%s' to FLOAT", s)
+		}
+		return val, nil
+	case "BOOL":
+		val, err := strconv.ParseBool(s)
+		if err != nil {
+			return nil, fmt.Errorf("cannot convert '%s' to BOOL", s)
+		}
+		return val, nil
+	case "TEXT", "VARCHAR":
+		return s, nil
+	default:
+		return s, nil
+	}
+}
+
 type UpdateCommand struct {
 	stmt *parser.UpdateStatement
 }
 
 func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.IsInTx() {
+		dbName, _ := requireCurrentDB(ctx)
+		var oldRows []storage.Row
+		var oldIndices []int
+		if dbName != "" && ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+			schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
+			if err == nil {
+				rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+				if err == nil {
+					for idx, row := range rows {
+						match, err := evalExpr(c.stmt.Where, row, schema, ctx)
+						if err == nil && match {
+							oldRows = append(oldRows, row)
+							oldIndices = append(oldIndices, idx)
+						}
+					}
+				}
+			}
+		}
+
 		ctx.Session.TxManager.AddOp(ctx.Session.ActiveTx, txmanager.PendingOp{
 			Type:    "update",
 			DB:      *ctx.CurrentDB,
 			Table:   c.stmt.TableName,
 			Payload: c.stmt,
+			OldRow:  oldRows,
+			Row:     oldIndices,
 		})
 		return &Result{
 			Type:    "message",
@@ -203,10 +470,19 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 }
 
 func (c *UpdateCommand) executeImmediate(ctx *ExecutionContext) (*Result, error) {
+	if ctx.Ctx != nil {
+		select {
+		case <-ctx.Ctx.Done():
+			return nil, fmt.Errorf("query timeout: %w", ctx.Ctx.Err())
+		default:
+		}
+	}
+
 	dbName, err := requireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
+
 	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
@@ -215,25 +491,96 @@ func (c *UpdateCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 	if err != nil {
 		return nil, err
 	}
+
+	// Handle UPDATE ... FROM
+	var fromRows []storage.Row
+	var fromSchema *storage.TableSchema
+	if c.stmt.FromTable != "" {
+		if !ctx.Storage.TableExists(dbName, c.stmt.FromTable) {
+			return nil, fmt.Errorf("FROM table '%s' does not exist", c.stmt.FromTable)
+		}
+		fromRows, err = ctx.Storage.ReadCurrentRows(dbName, c.stmt.FromTable)
+		if err != nil {
+			return nil, err
+		}
+		fromSchema, err = ctx.Storage.GetTableSchema(dbName, c.stmt.FromTable)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	updates := make(map[string]storage.Value)
+	for _, assign := range c.stmt.Assignments {
+		val, err := evalOperand(assign.Value, nil, schema, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("column '%s': %w", assign.Column, err)
+		}
+		updates[assign.Column] = val
+	}
+
 	rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 	if err != nil {
 		return nil, err
 	}
 
-	indices := make([]int, 0, len(rows))
-	for idx, row := range rows {
-		match, err := evalExpr(c.stmt.Where, row, schema, ctx)
-		if err != nil {
-			return nil, err
+	// If FROM clause, create combined rows for WHERE evaluation
+	var evalRows []storage.Row
+	var evalSchema *storage.TableSchema
+	if fromRows != nil {
+		// Combine target and source rows for WHERE evaluation
+		evalRows = make([]storage.Row, 0)
+		for _, targetRow := range rows {
+			for _, sourceRow := range fromRows {
+				combinedRow := append(append(storage.Row{}, targetRow...), sourceRow...)
+				evalRows = append(evalRows, combinedRow)
+			}
 		}
-		if match {
-			indices = append(indices, idx)
+		// Create combined schema
+		evalSchema = &storage.TableSchema{
+			Name:    "UPDATE_JOIN",
+			Columns: make([]storage.ColumnSchema, 0, len(schema.Columns)+len(fromSchema.Columns)),
 		}
+		for _, col := range schema.Columns {
+			evalSchema.Columns = append(evalSchema.Columns, col)
+		}
+		for _, col := range fromSchema.Columns {
+			newCol := col
+			if c.stmt.FromAlias != "" {
+				newCol.Name = c.stmt.FromAlias + "." + col.Name
+			}
+			evalSchema.Columns = append(evalSchema.Columns, newCol)
+		}
+	} else {
+		evalRows = rows
+		evalSchema = schema
 	}
 
-	updates, err := c.buildUpdates(schema)
-	if err != nil {
-		return nil, err
+	indices := make([]int, 0)
+	if fromRows != nil {
+		seenTarget := make(map[int]bool)
+		for idx, row := range evalRows {
+			match, err := evalExpr(c.stmt.Where, row, evalSchema, ctx)
+			if err != nil {
+				return nil, err
+			}
+			if match {
+				targetIdx := idx / len(fromRows)
+				if !seenTarget[targetIdx] {
+					seenTarget[targetIdx] = true
+					indices = append(indices, targetIdx)
+				}
+			}
+		}
+	} else {
+		for idx, row := range evalRows {
+			match, err := evalExpr(c.stmt.Where, row, evalSchema, ctx)
+			if err != nil {
+				return nil, err
+			}
+			if match {
+				indices = append(indices, idx)
+			}
+		}
 	}
 
 	affected, err := ctx.Storage.UpdateRows(dbName, c.stmt.TableName, indices, updates)
@@ -241,45 +588,30 @@ func (c *UpdateCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 		return nil, err
 	}
 
-	if ctx.TxManager != nil {
-		ctx.TxManager.BumpTableVersion(dbName, c.stmt.TableName)
+	notifyMutation(ctx, dbName, c.stmt.TableName)
+	if ctx.Session.planCache != nil {
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
 	}
 
-	if ctx.Broadcaster != nil {
-		ctx.Broadcaster.NotifyTableChanged(dbName, c.stmt.TableName, ctx)
+	fireTriggers(ctx, dbName, c.stmt.TableName, "UPDATE")
+
+	// Handle RETURNING
+	if len(c.stmt.Returning) > 0 {
+		return c.executeReturningUpdate(ctx, dbName, schema, indices, rows)
 	}
 
 	return &Result{Type: "affected", Affected: affected}, nil
 }
 
-func (c *UpdateCommand) buildUpdates(schema *storage.TableSchema) (map[string]storage.Value, error) {
-	columnMap := make(map[string]storage.ColumnSchema, len(schema.Columns))
-	for _, col := range schema.Columns {
-		columnMap[strings.ToLower(col.Name)] = col
+// executeReturningUpdate выполняет RETURNING clause для UPDATE.
+func (c *UpdateCommand) executeReturningUpdate(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, indices []int, preUpdateRows []storage.Row) (*Result, error) {
+	var updatedRows []storage.Row
+	for _, idx := range indices {
+		if idx < len(preUpdateRows) {
+			updatedRows = append(updatedRows, preUpdateRows[idx])
+		}
 	}
-
-	updates := make(map[string]storage.Value, len(c.stmt.Assignments))
-	for _, assignment := range c.stmt.Assignments {
-		col, ok := columnMap[strings.ToLower(assignment.Column)]
-		if !ok {
-			return nil, fmt.Errorf("unknown column '%s'", assignment.Column)
-		}
-		var val parser.Value
-		switch v := assignment.Value.(type) {
-		case parser.Value:
-			val = v
-		case *parser.Value:
-			val = *v
-		default:
-			return nil, fmt.Errorf("column '%s': expected literal value, got %T", assignment.Column, assignment.Value)
-		}
-		value, err := parserValueToColumnType(val, col)
-		if err != nil {
-			return nil, fmt.Errorf("column '%s': %w", assignment.Column, err)
-		}
-		updates[assignment.Column] = value
-	}
-	return updates, nil
+	return executeReturningGeneric(updatedRows, c.stmt.Returning, schema, ctx)
 }
 
 type DeleteCommand struct {
@@ -288,11 +620,29 @@ type DeleteCommand struct {
 
 func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.IsInTx() {
+		dbName, _ := requireCurrentDB(ctx)
+		var deletedRows []storage.Row
+		if dbName != "" && ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+			schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
+			if err == nil {
+				rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+				if err == nil {
+					for _, row := range rows {
+						match, err := evalExpr(c.stmt.Where, row, schema, ctx)
+						if err == nil && match {
+							deletedRows = append(deletedRows, row)
+						}
+					}
+				}
+			}
+		}
+
 		ctx.Session.TxManager.AddOp(ctx.Session.ActiveTx, txmanager.PendingOp{
 			Type:    "delete",
 			DB:      *ctx.CurrentDB,
 			Table:   c.stmt.TableName,
 			Payload: c.stmt,
+			Row:     deletedRows,
 		})
 		return &Result{
 			Type:    "message",
@@ -303,10 +653,19 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 }
 
 func (c *DeleteCommand) executeImmediate(ctx *ExecutionContext) (*Result, error) {
+	if ctx.Ctx != nil {
+		select {
+		case <-ctx.Ctx.Done():
+			return nil, fmt.Errorf("query timeout: %w", ctx.Ctx.Err())
+		default:
+		}
+	}
+
 	dbName, err := requireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
+
 	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
@@ -336,13 +695,28 @@ func (c *DeleteCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 		return nil, err
 	}
 
-	if ctx.TxManager != nil {
-		ctx.TxManager.BumpTableVersion(dbName, c.stmt.TableName)
+	notifyMutation(ctx, dbName, c.stmt.TableName)
+	if ctx.Session.planCache != nil {
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
 	}
 
-	if ctx.Broadcaster != nil {
-		ctx.Broadcaster.NotifyTableChanged(dbName, c.stmt.TableName, ctx)
+	fireTriggers(ctx, dbName, c.stmt.TableName, "DELETE")
+
+	// Handle RETURNING
+	if len(c.stmt.Returning) > 0 {
+		return c.executeReturningDelete(ctx, dbName, schema, indices, rows)
 	}
 
 	return &Result{Type: "affected", Affected: affected}, nil
+}
+
+// executeReturningDelete выполняет RETURNING clause для DELETE.
+func (c *DeleteCommand) executeReturningDelete(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, indices []int, preDeleteRows []storage.Row) (*Result, error) {
+	var deletedRows []storage.Row
+	for _, idx := range indices {
+		if idx < len(preDeleteRows) {
+			deletedRows = append(deletedRows, preDeleteRows[idx])
+		}
+	}
+	return executeReturningGeneric(deletedRows, c.stmt.Returning, schema, ctx)
 }

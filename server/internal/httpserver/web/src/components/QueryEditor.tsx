@@ -63,6 +63,7 @@ export function QueryEditor({
           }
         }}
         placeholder="SELECT * FROM users WHERE age > 18;"
+        aria-label="SQL query editor"
       />
       <div className="editor-toolbar">
         <button className="btn btn-primary" onClick={run} disabled={isRunning || !query.trim()}>

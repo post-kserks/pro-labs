@@ -99,3 +99,25 @@ func TestParseErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestParseDerivedTable(t *testing.T) {
+	queries := []string{
+		"SELECT * FROM (SELECT id, name FROM users) AS t;",
+		"SELECT t.id, t.name FROM (SELECT id, name FROM users WHERE age > 18) t;",
+		"SELECT * FROM (SELECT id, name, level FROM heroes WHERE level > 5) AS high_level;",
+		"SELECT * FROM (SELECT id FROM users) AS a;",
+	}
+	for _, q := range queries {
+		stmt, err := Parse(q)
+		if err != nil {
+			t.Fatalf("failed to parse derived table: %q: %v", q, err)
+		}
+		sel, ok := stmt.(*SelectStatement)
+		if !ok {
+			t.Fatalf("expected SelectStatement for %q", q)
+		}
+		if sel.FromSubquery == nil {
+			t.Fatalf("expected FromSubquery for %q", q)
+		}
+	}
+}

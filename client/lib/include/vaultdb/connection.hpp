@@ -3,6 +3,7 @@
 #include "result.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <stdexcept>
 
@@ -20,6 +21,11 @@
     typedef int socket_t;
 #endif
 
+struct ssl_st;
+typedef ssl_st SSL;
+struct ssl_ctx_st;
+typedef ssl_ctx_st SSL_CTX;
+
 namespace vaultdb {
 
 class NetworkError : public std::runtime_error {
@@ -32,6 +38,10 @@ struct ConnectionOptions {
     int port = 5432;
     std::string token;
     int timeout_ms = 5000;
+    bool useTls = false;
+    std::string tlsCertFile;
+    std::string tlsKeyFile;
+    std::string tlsCaFile;
 };
 
 class Connection {
@@ -52,6 +62,8 @@ public:
 private:
     ConnectionOptions opts_;
     socket_t sockfd_;
+    SSL* ssl_ = nullptr;
+    SSL_CTX* ctx_ = nullptr;
     std::uint64_t requestId_;
     std::string buffer_;
 

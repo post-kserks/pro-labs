@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
+	"vaultdb/internal/wal"
 )
 
 // Command is the Command pattern abstraction.
@@ -22,6 +24,7 @@ type Result struct {
 	Type     string
 	Columns  []string
 	Rows     [][]string
+	Schema   *storage.TableSchema
 	Affected int
 	Message  string
 	AsOfNote string
@@ -36,6 +39,9 @@ type ExecutionContext struct {
 	TxManager   *txmanager.Manager
 	Broadcaster *Broadcaster
 	Embedder    ai.Embedder
+	WAL         *wal.WAL
+	Stats       *StatisticsCollector
+	Ctx         context.Context
 
 	// WindowCols maps each window function expression to the synthetic result
 	// column it was materialized into, so several window functions in one
@@ -44,17 +50,24 @@ type ExecutionContext struct {
 }
 
 type Executor struct {
-	storage     storage.StorageEngine
-	metrics     *metrics.Collector
-	txm         *txmanager.Manager
-	broadcaster *Broadcaster
-	embedder    ai.Embedder
+	storage      storage.StorageEngine
+	metrics      *metrics.Collector
+	txm          *txmanager.Manager
+	broadcaster  *Broadcaster
+	embedder     ai.Embedder
+	wal          *wal.WAL
+	queryTimeout time.Duration
 }
 
 func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Executor {
 	// По умолчанию AI не настроен: SEMANTIC_MATCH/AI_EMBED возвращают
 	// понятную ошибку, а не тихий mock-результат.
 	return &Executor{storage: store, metrics: m, txm: txm, broadcaster: b, embedder: ai.NoopEmbedder{}}
+}
+
+// SetWAL подключает WAL для записи операций транзакций.
+func (e *Executor) SetWAL(w *wal.WAL) {
+	e.wal = w
 }
 
 // SetEmbedder подключает реальный embedding-провайдер.
@@ -64,11 +77,23 @@ func (e *Executor) SetEmbedder(emb ai.Embedder) {
 	}
 }
 
+// SetQueryTimeout задаёт таймаут на выполнение запроса.
+func (e *Executor) SetQueryTimeout(d time.Duration) {
+	e.queryTimeout = d
+}
+
 func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	start := time.Now()
 	cmd, err := CommandFactory(stmt)
 	if err != nil {
 		return nil, err
+	}
+
+	var queryCtx context.Context
+	if e.queryTimeout > 0 {
+		var cancel context.CancelFunc
+		queryCtx, cancel = context.WithTimeout(context.Background(), e.queryTimeout)
+		defer cancel()
 	}
 
 	ctx := &ExecutionContext{
@@ -79,6 +104,8 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 		TxManager:   e.txm,
 		Broadcaster: e.broadcaster,
 		Embedder:    e.embedder,
+		WAL:         e.wal,
+		Ctx:         queryCtx,
 	}
 	result, err := cmd.Execute(ctx)
 
@@ -155,6 +182,36 @@ func CommandFactory(stmt parser.Statement) (Command, error) {
 		return &CreatePolicyCommand{stmt: s}, nil
 	case *parser.EnableRlsStatement:
 		return &EnableRlsCommand{stmt: s}, nil
+	case *parser.CTEStatement:
+		return &CTECommand{stmt: s}, nil
+	case *parser.TruncateStatement:
+		return &TruncateCommand{stmt: s}, nil
+	case *parser.MergeStatement:
+		return &MergeCommand{stmt: s}, nil
+	case *parser.SavepointStatement:
+		return &SavepointCommand{stmt: s}, nil
+	case *parser.RollbackToSavepointStatement:
+		return &RollbackToSavepointCommand{stmt: s}, nil
+	case *parser.ReleaseSavepointStatement:
+		return &ReleaseSavepointCommand{stmt: s}, nil
+	case *parser.CreateViewStatement:
+		return &CreateViewCommand{stmt: s}, nil
+	case *parser.DropViewStatement:
+		return &DropViewCommand{stmt: s}, nil
+	case *parser.CreateTriggerStatement:
+		return &CreateTriggerCommand{stmt: s}, nil
+	case *parser.DropTriggerStatement:
+		return &DropTriggerCommand{stmt: s}, nil
+	case *parser.CreateFunctionStatement:
+		return &CreateFunctionCommand{stmt: s}, nil
+	case *parser.DropFunctionStatement:
+		return &DropFunctionCommand{stmt: s}, nil
+	case *parser.CreateProcedureStatement:
+		return &CreateProcedureCommand{stmt: s}, nil
+	case *parser.DropProcedureStatement:
+		return &DropProcedureCommand{stmt: s}, nil
+	case *parser.CallProcedureStatement:
+		return &CallProcedureCommand{stmt: s}, nil
 	default:
 		return nil, fmt.Errorf("unknown statement type: %T", stmt)
 	}

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ApiError, QueryResult, runQuery } from "../api/vaultdb";
 
 export interface QueryState {
@@ -7,19 +7,21 @@ export interface QueryState {
   execute: (sql: string, database: string) => Promise<void>;
 }
 
-// useQuery выполняет SQL через POST /api/query и хранит последний результат.
-// Ошибки API превращаются в result со status="error", чтобы ResultTable
-// показывал их единообразно.
 export function useQuery(token: string): QueryState {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   const execute = useCallback(
     async (sql: string, database: string) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
       setIsRunning(true);
       try {
-        setResult(await runQuery(token, database, sql));
+        setResult(await runQuery(token, database, sql, controller.signal));
       } catch (e) {
+        if ((e as Error).name === "AbortError") return;
         const err = e as ApiError;
         setResult({
           status: "error",

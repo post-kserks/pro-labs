@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -144,6 +143,12 @@ func (c *Collector) IncCheckpoints() { c.walCheckpoints.Add(1) }
 func (c *Collector) IncIndexHit()    { c.indexHits.Add(1) }
 func (c *Collector) IncIndexMiss()   { c.indexMisses.Add(1) }
 
+func sanitizeMetricLabel(s string) string {
+	s = strings.ReplaceAll(s, `\`, `_`)
+	s = strings.ReplaceAll(s, `"`, `'`)
+	return s
+}
+
 // UpdateStorageRows обновляет статистику хранилища.
 // Вызывается периодически (каждые 30 секунд) из фоновой горутины.
 func (c *Collector) UpdateStorageRows(db, table string, count int64) {
@@ -256,13 +261,12 @@ func (c *Collector) Render() string {
 			}
 			sort.Strings(tables)
 			for _, t := range tables {
-				fmt.Fprintf(&b,
-					`vaultdb_storage_rows{database="%s",table="%s"} %d`+"\n",
-					db, t, c.storageRows[db][t])
+			fmt.Fprintf(&b,
+				`vaultdb_storage_rows{database="%s",table="%s"} %d`+"\n",
+				sanitizeMetricLabel(db), sanitizeMetricLabel(t), c.storageRows[db][t])
 			}
 		}
 	}
 
-	_ = math.IsNaN // suppress unused import
 	return b.String()
 }

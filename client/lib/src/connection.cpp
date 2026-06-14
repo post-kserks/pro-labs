@@ -23,11 +23,26 @@
     #define INVALID_SOCKET -1
 #endif
 
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509v3.h>
+
 #include <cerrno>
 #include <cstring>
 #include <stdexcept>
 
 namespace vaultdb {
+
+namespace {
+
+struct SSLContextDeleter {
+    void operator()(SSL_CTX* ctx) const { SSL_CTX_free(ctx); }
+};
+struct SSLDeleter {
+    void operator()(SSL* ssl) const { SSL_free(ssl); }
+};
+
+} // namespace
 
 Connection::Connection(const ConnectionOptions& opts)
     : opts_(opts), sockfd_(INVALID_SOCKET), requestId_(0) {}
@@ -56,25 +71,48 @@ bool Connection::connect() {
 
     sockfd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd_ == INVALID_SOCKET) {
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return false;
     }
 
     // Таймаут на чтение и запись
 #ifdef _WIN32
     DWORD timeout = opts_.timeout_ms;
-    ::setsockopt(sockfd_, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
-    ::setsockopt(sockfd_, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
+    if (::setsockopt(sockfd_, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout)) != 0) {
+        CLOSE_SOCKET(sockfd_);
+        sockfd_ = INVALID_SOCKET;
+        return false;
+    }
+    if (::setsockopt(sockfd_, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout)) != 0) {
+        CLOSE_SOCKET(sockfd_);
+        sockfd_ = INVALID_SOCKET;
+        return false;
+    }
 #else
     struct timeval tv{};
     tv.tv_sec  = opts_.timeout_ms / 1000;
     tv.tv_usec = (opts_.timeout_ms % 1000) * 1000;
-    ::setsockopt(sockfd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    ::setsockopt(sockfd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    if (::setsockopt(sockfd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) {
+        CLOSE_SOCKET(sockfd_);
+        sockfd_ = INVALID_SOCKET;
+        return false;
+    }
+    if (::setsockopt(sockfd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) != 0) {
+        CLOSE_SOCKET(sockfd_);
+        sockfd_ = INVALID_SOCKET;
+        return false;
+    }
 #endif
 
     // TCP_NODELAY: отключить алгоритм Nagle для низкой латентности
     int flag = 1;
-    ::setsockopt(sockfd_, IPPROTO_TCP, TCP_NODELAY, (const char*)&flag, sizeof(flag));
+    if (::setsockopt(sockfd_, IPPROTO_TCP, TCP_NODELAY, (const char*)&flag, sizeof(flag)) != 0) {
+        CLOSE_SOCKET(sockfd_);
+        sockfd_ = INVALID_SOCKET;
+        return false;
+    }
 
     sockaddr_in addr {};
     addr.sin_family = AF_INET;
@@ -83,25 +121,71 @@ bool Connection::connect() {
     if (::inet_pton(AF_INET, opts_.host.c_str(), &addr.sin_addr) <= 0) {
         CLOSE_SOCKET(sockfd_);
         sockfd_ = INVALID_SOCKET;
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return false;
     }
 
     if (::connect(sockfd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
         CLOSE_SOCKET(sockfd_);
         sockfd_ = INVALID_SOCKET;
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return false;
+    }
+
+    // TLS handshake если включён
+    if (opts_.useTls) {
+        ctx_ = SSL_CTX_new(TLS_client_method());
+        if (!ctx_) {
+            CLOSE_SOCKET(sockfd_);
+            sockfd_ = INVALID_SOCKET;
+            return false;
+        }
+
+        if (!opts_.tlsCaFile.empty()) {
+            SSL_CTX_load_verify_locations(ctx_, opts_.tlsCaFile.c_str(), nullptr);
+        }
+
+        if (!opts_.tlsCertFile.empty() && !opts_.tlsKeyFile.empty()) {
+            SSL_CTX_use_certificate_file(ctx_, opts_.tlsCertFile.c_str(), SSL_FILETYPE_PEM);
+            SSL_CTX_use_PrivateKey_file(ctx_, opts_.tlsKeyFile.c_str(), SSL_FILETYPE_PEM);
+        }
+
+        ssl_ = SSL_new(ctx_);
+        SSL_set_fd(ssl_, static_cast<int>(sockfd_));
+        SSL_set_tlsext_host_name(ssl_, opts_.host.c_str());
+
+        if (SSL_connect(ssl_) <= 0) {
+            SSL_free(ssl_);
+            ssl_ = nullptr;
+            SSL_CTX_free(ctx_);
+            ctx_ = nullptr;
+            CLOSE_SOCKET(sockfd_);
+            sockfd_ = INVALID_SOCKET;
+            return false;
+        }
     }
 
     return true;
 }
 
 void Connection::disconnect() {
-    if (!isConnected()) {
-        return;
+    if (ssl_) {
+        SSL_shutdown(ssl_);
+        SSL_free(ssl_);
+        ssl_ = nullptr;
     }
-
-    CLOSE_SOCKET(sockfd_);
-    sockfd_ = INVALID_SOCKET;
+    if (ctx_) {
+        SSL_CTX_free(ctx_);
+        ctx_ = nullptr;
+    }
+    if (sockfd_ != INVALID_SOCKET) {
+        CLOSE_SOCKET(sockfd_);
+        sockfd_ = INVALID_SOCKET;
+    }
 #ifdef _WIN32
     WSACleanup();
 #endif
@@ -117,13 +201,20 @@ void Connection::sendPacket(const std::string& data) {
     size_t remaining  = data.size();
 
     while (remaining > 0) {
-        ssize_t n = ::send(sockfd_, ptr + total_sent, static_cast<int>(remaining),
+        ssize_t n;
+        if (ssl_) {
+            n = SSL_write(ssl_, ptr + total_sent,
+                          remaining > static_cast<size_t>(INT_MAX) ? INT_MAX : static_cast<int>(remaining));
+        } else {
+            n = ::send(sockfd_, ptr + total_sent,
+                       remaining > static_cast<size_t>(INT_MAX) ? INT_MAX : static_cast<int>(remaining),
 #if defined(MSG_NOSIGNAL)
-                           MSG_NOSIGNAL
+                       MSG_NOSIGNAL
 #else
-                           0
+                       0
 #endif
-        );
+            );
+        }
 
         if (n < 0) {
             if (SOCK_ERR == EINTR_ERR) continue;
@@ -138,7 +229,6 @@ void Connection::sendPacket(const std::string& data) {
 
 std::string Connection::recvPacket() {
     while (true) {
-        // Check if we already have a newline in our internal buffer
         size_t nl_pos = buffer_.find('\n');
         if (nl_pos != std::string::npos) {
             std::string packet = buffer_.substr(0, nl_pos);
@@ -147,7 +237,12 @@ std::string Connection::recvPacket() {
         }
 
         char buf[4096];
-        ssize_t n = ::recv(sockfd_, buf, sizeof(buf), 0);
+        ssize_t n;
+        if (ssl_) {
+            n = SSL_read(ssl_, buf, sizeof(buf));
+        } else {
+            n = ::recv(sockfd_, buf, sizeof(buf), 0);
+        }
 
         if (n < 0) {
             int err = SOCK_ERR;
@@ -217,7 +312,7 @@ Result Connection::parseResponse(const std::string& rawJson) {
 
     if (const json::Value* affected = findField("affected");
         affected != nullptr && affected->type == json::Type::Number) {
-        result.affected = static_cast<int>(affected->numberValue);
+        result.affected = static_cast<int>(affected->toInt());
     }
 
     if (const json::Value* message = findField("message"); message != nullptr && message->type == json::Type::String) {

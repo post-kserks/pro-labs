@@ -1,5 +1,6 @@
 #include "logic/autocomplete.hpp"
 
+#include "utils/sql_keywords.hpp"
 #include "utils/string_utils.hpp"
 
 #include <algorithm>
@@ -8,12 +9,6 @@
 namespace vaultdb::tui {
 
 namespace {
-
-const std::vector<std::string> kKeywords = {
-    "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "INSERT", "INTO", "VALUES",
-    "UPDATE", "SET", "DELETE", "CREATE", "DROP", "DATABASE", "TABLE", "USE",
-    "SHOW", "DATABASES", "TABLES", "DESCRIBE", "LIMIT", "NULL", "TRUE", "FALSE",
-};
 
 bool lastTokenIsOneOf(const std::string& before, const std::unordered_set<std::string>& tokens) {
     const std::string flattened = utils::toLower(before);
@@ -81,7 +76,7 @@ std::string Autocomplete::apply(const std::string& sql,
 }
 
 std::vector<std::string> Autocomplete::keywordSuggestions(const std::string& prefix) const {
-    return filterByPrefix(kKeywords, prefix);
+    return filterByPrefix(utils::kSQLKeywordsList, prefix);
 }
 
 } // namespace vaultdb::tui

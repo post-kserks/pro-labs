@@ -1,19 +1,45 @@
-# Build artifacts and runtime data
-build/
-client/
+# Build context exclusions for Docker
+# Reduces image build time and context size
+
+# Version control
+.git
+.gitignore
+.github
+
+# Documentation
+*.md
+LICENSE
+ARCHITECTURE.md
+task.md
+
+# Data directories
 data/
 
-# VCS
-.git/
-.gitignore
-.gitattributes
-
-# Docs and local scripts
-*.md
-*.sh
-
-# Local configs and temp files
+# IDE/editor files
+.mimocode/
 .vscode/
 .idea/
-*.tmp
-*.log
+*.swp
+*.swo
+*~
+
+# Go build artifacts
+server/vendor/
+server/benchmark
+server/check-index
+
+# Client code (not needed for server build)
+client/
+tools/
+
+# Docker files (don't copy into build context)
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Runtime files
+run.sh
+build.sh
+Makefile
+VERSION
+vaultdb.yaml

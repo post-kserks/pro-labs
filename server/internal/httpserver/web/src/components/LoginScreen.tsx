@@ -31,6 +31,7 @@ export function LoginScreen({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           autoFocus
+          aria-label="API token"
         />
         <button type="submit" className="btn btn-primary" disabled={!value.trim()}>
           Connect

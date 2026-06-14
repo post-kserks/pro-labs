@@ -1,0 +1,184 @@
+package executor
+
+import (
+	"strings"
+	"sync"
+
+	"vaultdb/internal/storage"
+)
+
+// TableStatistics хранит статистику по таблице для query optimizer.
+type TableStatistics struct {
+	TableName   string
+	RowCount    int
+	ColumnStats map[string]*ColumnStatistics
+}
+
+// ColumnStatistics хранит статистику по столбцу.
+type ColumnStatistics struct {
+	ColumnName   string
+	DistinctCount int
+	NullCount    int
+	MinValue     interface{}
+	MaxValue     interface{}
+}
+
+// StatisticsCollector собирает и кэширует статистику по таблицам.
+type StatisticsCollector struct {
+	mu      sync.RWMutex
+	cache   map[string]*TableStatistics // "db/table" → stats
+	storage storage.StorageEngine
+}
+
+// NewStatisticsCollector создаёт collector.
+func NewStatisticsCollector(store storage.StorageEngine) *StatisticsCollector {
+	return &StatisticsCollector{
+		cache:   make(map[string]*TableStatistics),
+		storage: store,
+	}
+}
+
+// GetTableStats возвращает статистику по таблице (кэшируется).
+func (sc *StatisticsCollector) GetTableStats(dbName, tableName string) *TableStatistics {
+	key := dbName + "/" + tableName
+
+	// Проверяем кэш
+	sc.mu.RLock()
+	if stats, ok := sc.cache[key]; ok {
+		sc.mu.RUnlock()
+		return stats
+	}
+	sc.mu.RUnlock()
+
+	// Собираем статистику
+	stats := sc.collectStats(dbName, tableName)
+
+	sc.mu.Lock()
+	sc.cache[key] = stats
+	sc.mu.Unlock()
+
+	return stats
+}
+
+// InvalidateStats сбрасывает кэш статистики для таблицы.
+func (sc *StatisticsCollector) InvalidateStats(dbName, tableName string) {
+	key := dbName + "/" + tableName
+	sc.mu.Lock()
+	delete(sc.cache, key)
+	sc.mu.Unlock()
+}
+
+// collectStats собирает статистику по таблице.
+func (sc *StatisticsCollector) collectStats(dbName, tableName string) *TableStatistics {
+	stats := &TableStatistics{
+		TableName:   tableName,
+		ColumnStats: make(map[string]*ColumnStatistics),
+	}
+
+	// Получаем схему
+	schema, err := sc.storage.GetTableSchema(dbName, tableName)
+	if err != nil {
+		return stats
+	}
+
+	// Получаем количество строк
+	rowCount, err := sc.storage.CountRows(dbName, tableName)
+	if err == nil {
+		stats.RowCount = rowCount
+	}
+
+	// Если таблица пуста — возвращаем базовую статистику
+	if rowCount == 0 {
+		for _, col := range schema.Columns {
+			stats.ColumnStats[strings.ToLower(col.Name)] = &ColumnStatistics{
+				ColumnName:    col.Name,
+				DistinctCount: 0,
+				NullCount:     0,
+			}
+		}
+		return stats
+	}
+
+	// Для сбора полной статистики нужно прочитать все строки
+	// Это дорого, поэтому делаем выборочно (первые 1000 строк)
+	rows, err := sc.storage.ReadCurrentRows(dbName, tableName)
+	if err != nil {
+		return stats
+	}
+
+	// Ограничиваем выборку для производительности
+	sampleSize := 1000
+	if len(rows) > sampleSize {
+		rows = rows[:sampleSize]
+	}
+
+	// Собираем статистику по каждому столбцу
+	for colIdx, col := range schema.Columns {
+		colStats := &ColumnStatistics{
+			ColumnName: col.Name,
+		}
+
+		distinctValues := make(map[interface{}]bool)
+		nullCount := 0
+
+		for _, row := range rows {
+			if colIdx >= len(row) {
+				continue
+			}
+			val := row[colIdx]
+			if val == nil {
+				nullCount++
+			} else {
+				distinctValues[val] = true
+			}
+		}
+
+		colStats.DistinctCount = len(distinctValues)
+		colStats.NullCount = nullCount
+		stats.ColumnStats[strings.ToLower(col.Name)] = colStats
+	}
+
+	return stats
+}
+
+// EstimateSelectivity оценивает селективность предиката (0.0 - 1.0).
+func (sc *StatisticsCollector) EstimateSelectivity(dbName, tableName string, predicate interface{}) float64 {
+	if predicate == nil {
+		return 1.0
+	}
+
+	stats := sc.GetTableStats(dbName, tableName)
+	if stats.RowCount == 0 {
+		return 0.0
+	}
+
+	// Базовая оценка селективности
+	switch p := predicate.(type) {
+	case interface{ GetLeft() interface{}; GetOperator() string; GetRight() interface{} }:
+		// BinaryExpr-like
+		return sc.estimateBinarySelectivity(stats, p.GetOperator())
+	}
+
+	// По умолчанию — 30% селективность
+	return 0.3
+}
+
+// estimateBinarySelectivity оценивает селективность для бинарных операций.
+func (sc *StatisticsCollector) estimateBinarySelectivity(stats *TableStatistics, operator string) float64 {
+	switch operator {
+	case "=":
+		// Равенство: 1/distinct_count (если есть индекс)
+		return 0.1
+	case "!=", "<>":
+		// Неравенство: 1 - selectivity(=)
+		return 0.9
+	case "<", ">", "<=", ">=":
+		// Range: ~30%
+		return 0.3
+	case "LIKE":
+		// Pattern matching: ~20%
+		return 0.2
+	default:
+		return 0.3
+	}
+}

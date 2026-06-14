@@ -1,19 +1,14 @@
 #include "panels/results.hpp"
 
 #include "utils/csv_exporter.hpp"
+#include "utils/event_utils.hpp"
 #include "utils/string_utils.hpp"
 
 #include <algorithm>
 
 namespace vaultdb::tui {
 
-namespace {
-bool isCtrl(ftxui::Event event, char key) {
-    const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(key)));
-    if (upper < 'A' || upper > 'Z') return false;
-    return event == ftxui::Event::Special(std::string(1, static_cast<char>(upper - 'A' + 1)));
-}
-} // namespace
+using utils::isCtrl;
 
 void ResultsPanel::display(const vaultdb::Result& result, int durationMs, std::string title) {
     result_ = result;

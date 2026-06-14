@@ -60,7 +60,7 @@ func getTableData(t *testing.T, srv *Server, query url.Values) *httptest.Respons
 }
 
 func TestTableDataFilter(t *testing.T) {
-	srv := newTestServer(t, auth.New(false, nil))
+	srv := newTestServer(t, auth.New(false, nil, nil))
 
 	rec := getTableData(t, srv, url.Values{"age": {"gt.20"}})
 	if rec.Code != http.StatusOK {
@@ -76,7 +76,7 @@ func TestTableDataFilter(t *testing.T) {
 }
 
 func TestTableDataInjectionAttempt(t *testing.T) {
-	srv := newTestServer(t, auth.New(false, nil))
+	srv := newTestServer(t, auth.New(false, nil, nil))
 
 	// Classic quote-breakout; must be treated as a literal string, matching nothing.
 	rec := getTableData(t, srv, url.Values{"name": {"eq.x' OR '1'='1"}})
@@ -93,7 +93,7 @@ func TestTableDataInjectionAttempt(t *testing.T) {
 }
 
 func TestTableDataUnknownColumn(t *testing.T) {
-	srv := newTestServer(t, auth.New(false, nil))
+	srv := newTestServer(t, auth.New(false, nil, nil))
 
 	rec := getTableData(t, srv, url.Values{"1=1; DROP TABLE users": {"eq.x"}})
 	if rec.Code != http.StatusBadRequest {
@@ -102,7 +102,7 @@ func TestTableDataUnknownColumn(t *testing.T) {
 }
 
 func TestQueryRejectsTransactions(t *testing.T) {
-	srv := newTestServer(t, auth.New(false, nil))
+	srv := newTestServer(t, auth.New(false, nil, nil))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query",
@@ -118,7 +118,7 @@ func TestQueryRejectsTransactions(t *testing.T) {
 }
 
 func TestLiveQueryRequiresAuth(t *testing.T) {
-	srv := newTestServer(t, auth.New(true, map[string]string{"sekret": "ci"}))
+	srv := newTestServer(t, auth.New(true, map[string]string{"sekret": "ci"}, nil))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/live?database=shop&query=SELECT+*+FROM+users%3B", nil)
@@ -129,7 +129,7 @@ func TestLiveQueryRequiresAuth(t *testing.T) {
 }
 
 func TestLiveQueryStreamsWithToken(t *testing.T) {
-	srv := newTestServer(t, auth.New(true, map[string]string{"sekret": "ci"}))
+	srv := newTestServer(t, auth.New(true, map[string]string{"sekret": "ci"}, nil))
 
 	// A cancelled context makes the SSE loop exit right after the initial result.
 	ctx, cancel := context.WithCancel(context.Background())

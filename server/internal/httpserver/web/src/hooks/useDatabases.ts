@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, listDatabases, listTables, TableInfo } from "../api/vaultdb";
 
 export interface DatabasesState {
@@ -10,21 +10,25 @@ export interface DatabasesState {
   loadTables: (db: string) => Promise<void>;
 }
 
-// useDatabases загружает список БД и (лениво) таблицы каждой БД.
 export function useDatabases(token: string): DatabasesState {
   const [databases, setDatabases] = useState<string[]>([]);
   const [tables, setTables] = useState<Record<string, TableInfo[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [unauthorized, setUnauthorized] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   const refresh = useCallback(() => {
-    listDatabases(token)
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    listDatabases(token, controller.signal)
       .then((dbs) => {
         setDatabases(dbs);
         setError(null);
         setUnauthorized(false);
       })
       .catch((e) => {
+        if ((e as Error).name === "AbortError") return;
         const err = e as ApiError;
         setError(err.message);
         setUnauthorized(err.httpStatus === 401);
@@ -33,6 +37,7 @@ export function useDatabases(token: string): DatabasesState {
 
   useEffect(() => {
     refresh();
+    return () => abortRef.current?.abort();
   }, [refresh]);
 
   const loadTables = useCallback(

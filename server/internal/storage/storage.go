@@ -11,18 +11,32 @@ type Row []Value
 
 // ColumnSchema describes one table column.
 type ColumnSchema struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	VarcharLen int    `json:"varchar_len,omitempty"`
-	IsComputed bool   `json:"is_computed,omitempty"`
+	Name       string   `json:"name"`
+	Type       string   `json:"type"`
+	VarcharLen int      `json:"varchar_len,omitempty"`
+	IsComputed bool     `json:"is_computed,omitempty"`
+	EnumValues []string `json:"enum_values,omitempty"`
+	NotNull    bool     `json:"not_null,omitempty"`
+	PrimaryKey bool     `json:"primary_key,omitempty"`
 }
 
 // TableSchema describes a table.
+// TableConstraint represents a constraint on a table.
+type TableConstraint struct {
+	Name     string   `json:"name"`
+	Type     string   `json:"type"`     // "UNIQUE", "CHECK", "FOREIGN_KEY"
+	Columns  []string `json:"columns"`
+	Expr     string   `json:"expr,omitempty"`     // for CHECK constraints
+	RefTable string   `json:"ref_table,omitempty"` // for FOREIGN_KEY
+	RefCols  []string `json:"ref_cols,omitempty"`  // for FOREIGN_KEY
+}
+
 type TableSchema struct {
-	Name      string         `json:"name"`
-	Database  string         `json:"database"`
-	Columns   []ColumnSchema `json:"columns"`
-	CreatedAt time.Time      `json:"created_at"`
+	Name        string            `json:"name"`
+	Database    string            `json:"database"`
+	Columns     []ColumnSchema    `json:"columns"`
+	Constraints []TableConstraint `json:"constraints,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
 }
 
 // TableInfo is lightweight metadata used by clients that browse a database.
@@ -60,45 +74,56 @@ type TableVersionStats struct {
 	DeadRows  int
 }
 
-// StorageEngine is the abstraction used by executor.
-type StorageEngine interface {
-	CreateDatabase(name string) error
-	DropDatabase(name string) error
+// ReadOnlyEngine defines read-only database operations.
+type ReadOnlyEngine interface {
 	DatabaseExists(name string) bool
 	ListDatabases() ([]string, error)
-
-	CreateTable(dbName string, schema TableSchema) error
-	DropTable(dbName, tableName string) error
 	TableExists(dbName, tableName string) bool
 	ListTables(dbName string) ([]TableInfo, error)
 	GetTableSchema(dbName, tableName string) (*TableSchema, error)
-
-	AlterTableAddColumn(dbName, tableName string, col ColumnSchema, defaultVal Value) error
-	AlterTableDropColumn(dbName, tableName string, colName string) error
-	AlterTableRenameColumn(dbName, tableName, oldName, newName string) error
-	AlterTableRenameTable(dbName, oldName, newName string) error
-
-	InsertRows(dbName, tableName string, rows []Row) (int, error)
 	SelectRows(dbName, tableName string) ([]Row, error)
 	ReadCurrentRows(dbName, tableName string) ([]Row, error)
 	ReadRowsAsOf(dbName, tableName string, txID uint64) ([]Row, error)
 	ReadRowsByPositions(dbName, tableName string, positions []int) ([]Row, error)
 	CountRows(dbName, tableName string) (int, error)
-	UpdateRows(dbName, tableName string, indices []int, updates map[string]Value) (int, error)
-	DeleteRows(dbName, tableName string, indices []int) (int, error)
 	TxIDAtTimestamp(dbName, ts string) (uint64, error)
 	RowHistory(dbName, tableName string, pkValue interface{}) ([]VersionedRow, error)
-	Vacuum(dbName, tableName string) (*VacuumStats, error)
 	TableVersionStats(dbName, tableName string) (*TableVersionStats, error)
 	TableModifiedSince(db, table string, txID uint64) (bool, error)
 	CurrentTxID() uint64
-
-	CreateIndex(dbName, tableName, indexName, column string) error
-	DropIndex(dbName, indexName string) error
 	ListIndexes(dbName, tableName string) ([]string, error)
 	FindIndexForColumn(dbName, tableName, column string) (string, bool)
 	IndexLookup(dbName, tableName, column, value string) ([]int, bool)
+}
 
+// WriteEngine defines mutating database operations.
+type WriteEngine interface {
+	CreateTable(dbName string, schema TableSchema) error
+	DropTable(dbName, tableName string) error
+	InsertRows(dbName, tableName string, rows []Row) (int, error)
+	UpdateRows(dbName, tableName string, indices []int, updates map[string]Value) (int, error)
+	DeleteRows(dbName, tableName string, indices []int) (int, error)
+	Vacuum(dbName, tableName string) (*VacuumStats, error)
+	AlterTableAddColumn(dbName, tableName string, col ColumnSchema, defaultVal Value) error
+	AlterTableDropColumn(dbName, tableName string, colName string) error
+	AlterTableRenameColumn(dbName, tableName, oldName, newName string) error
+	AlterTableRenameTable(dbName, oldName, newName string) error
+	CreateIndex(dbName, tableName, indexName, column string) error
+	DropIndex(dbName, indexName string) error
+}
+
+// AdminEngine defines lifecycle and administrative operations.
+type AdminEngine interface {
+	CreateDatabase(name string) error
+	DropDatabase(name string) error
 	FinalCheckpoint() error
 	Close() error
+}
+
+// StorageEngine is the full abstraction used by executor.
+// It composes ReadOnlyEngine, WriteEngine, and AdminEngine for backward compatibility.
+type StorageEngine interface {
+	ReadOnlyEngine
+	WriteEngine
+	AdminEngine
 }

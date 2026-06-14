@@ -108,6 +108,36 @@ const (
 	TOKEN_DEALLOCATE
 	TOKEN_APPLY
 	TOKEN_PREVIEW
+	TOKEN_STRING_AGG
+	TOKEN_WITH
+	TOKEN_CONFLICT
+	TOKEN_DO
+	TOKEN_VIEW
+	TOKEN_ALL
+	TOKEN_ANY
+	TOKEN_SOME
+	TOKEN_REFERENCES
+	TOKEN_LATERAL
+	TOKEN_TRIGGER
+	TOKEN_BEFORE
+	TOKEN_AFTER
+	TOKEN_EACH
+	TOKEN_FUNCTION
+	TOKEN_RETURNS
+	TOKEN_UUID
+	TOKEN_INTERVAL
+	TOKEN_PROCEDURE
+	TOKEN_CALL
+	TOKEN_JSONB
+	TOKEN_REPLACE
+	TOKEN_NOTHING
+	TOKEN_RETURNING
+	TOKEN_MERGE
+	TOKEN_MATCHED
+	TOKEN_TRUNCATE
+	TOKEN_SAVEPOINT
+	TOKEN_RELEASE
+	TOKEN_EXISTS
 
 	// Data types
 	TOKEN_INT
@@ -152,6 +182,11 @@ const (
 	TOKEN_PLUS
 	TOKEN_SLASH
 	TOKEN_PARAM
+	TOKEN_JSON_CONTAINS
+	TOKEN_JSON_CONTAINED_BY
+	TOKEN_JSON_HAS_KEY
+	TOKEN_JSON_MERGE
+	TOKEN_FULLTEXT_MATCH
 
 	TOKEN_EOF
 	TOKEN_ILLEGAL
@@ -169,12 +204,33 @@ type Lexer struct {
 	position     int
 	readPosition int
 	ch           rune
+	lineColCache []lineCol
+}
+
+type lineCol struct {
+	line, col int
 }
 
 func New(input string) *Lexer {
 	l := &Lexer{input: []rune(input)}
+	l.buildLineColCache()
 	l.readChar()
 	return l
+}
+
+func (l *Lexer) buildLineColCache() {
+	l.lineColCache = make([]lineCol, len(l.input)+1)
+	line, col := 1, 1
+	for i := 0; i < len(l.input); i++ {
+		l.lineColCache[i] = lineCol{line, col}
+		if l.input[i] == '\n' {
+			line++
+			col = 1
+		} else {
+			col++
+		}
+	}
+	l.lineColCache[len(l.input)] = lineCol{line, col}
 }
 
 func (l *Lexer) NextToken() Token {
@@ -198,16 +254,40 @@ func (l *Lexer) NextToken() Token {
 			tok = l.newToken(TOKEN_ILLEGAL, string(l.ch), start)
 			l.readChar()
 		}
-	case '<':
-		if l.peekChar() == '=' {
+	case '@':
+		if l.peekChar() == '@' {
 			ch := l.ch
 			l.readChar()
-			tok = l.newToken(TOKEN_LTE, string([]rune{ch, l.ch}), start)
+			tok = l.newToken(TOKEN_FULLTEXT_MATCH, string([]rune{ch, l.ch}), start)
+			l.readChar()
+		} else if l.peekChar() == '>' {
+			ch := l.ch
+			l.readChar()
+			tok = l.newToken(TOKEN_JSON_CONTAINS, string([]rune{ch, l.ch}), start)
 			l.readChar()
 		} else {
-			tok = l.newToken(TOKEN_LT, "<", start)
+			tok = l.newToken(TOKEN_ILLEGAL, string(l.ch), start)
 			l.readChar()
 		}
+	case '|':
+		if l.peekChar() == '|' {
+			ch := l.ch
+			l.readChar()
+			tok = l.newToken(TOKEN_JSON_MERGE, string([]rune{ch, l.ch}), start)
+			l.readChar()
+		} else {
+			tok = l.newToken(TOKEN_ILLEGAL, string(l.ch), start)
+			l.readChar()
+		}
+	case ',':
+		tok = l.newToken(TOKEN_COMMA, ",", start)
+		l.readChar()
+	case '.':
+		tok = l.newToken(TOKEN_DOT, ".", start)
+		l.readChar()
+	case '?':
+		tok = l.newToken(TOKEN_JSON_HAS_KEY, "?", start)
+		l.readChar()
 	case '>':
 		if l.peekChar() == '=' {
 			ch := l.ch
@@ -218,12 +298,21 @@ func (l *Lexer) NextToken() Token {
 			tok = l.newToken(TOKEN_GT, ">", start)
 			l.readChar()
 		}
-	case ',':
-		tok = l.newToken(TOKEN_COMMA, ",", start)
-		l.readChar()
-	case '.':
-		tok = l.newToken(TOKEN_DOT, ".", start)
-		l.readChar()
+	case '<':
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = l.newToken(TOKEN_LTE, string([]rune{ch, l.ch}), start)
+			l.readChar()
+		} else if l.peekChar() == '@' {
+			ch := l.ch
+			l.readChar()
+			tok = l.newToken(TOKEN_JSON_CONTAINED_BY, string([]rune{ch, l.ch}), start)
+			l.readChar()
+		} else {
+			tok = l.newToken(TOKEN_LT, "<", start)
+			l.readChar()
+		}
 	case ';':
 		tok = l.newToken(TOKEN_SEMICOLON, ";", start)
 		l.readChar()
@@ -307,12 +396,10 @@ func (l *Lexer) NextToken() Token {
 
 func (l *Lexer) readChar() {
 	if l.readPosition >= len(l.input) {
-		l.position = len(l.input)
 		l.ch = 0
-		l.readPosition++
-		return
+	} else {
+		l.ch = l.input[l.readPosition]
 	}
-	l.ch = l.input[l.readPosition]
 	l.position = l.readPosition
 	l.readPosition++
 }
@@ -394,29 +481,14 @@ func (l *Lexer) readString() (string, bool) {
 }
 
 func (l *Lexer) newToken(tokenType TokenType, lit string, position int) Token {
-	line, col := l.positionToLineCol(position)
-	return Token{Type: tokenType, Literal: lit, Line: line, Col: col}
-}
-
-func (l *Lexer) positionToLineCol(position int) (line, col int) {
 	if position < 0 {
 		position = 0
 	}
-	if position > len(l.input) {
-		position = len(l.input)
+	if position >= len(l.lineColCache) {
+		position = len(l.lineColCache) - 1
 	}
-
-	line = 1
-	col = 1
-	for i := 0; i < position; i++ {
-		if l.input[i] == '\n' {
-			line++
-			col = 1
-			continue
-		}
-		col++
-	}
-	return line, col
+	lc := l.lineColCache[position]
+	return Token{Type: tokenType, Literal: lit, Line: lc.line, Col: lc.col}
 }
 
 func isLetter(ch rune) bool {
@@ -541,6 +613,35 @@ var keywords = map[string]TokenType{
 	"DEALLOCATE": TOKEN_DEALLOCATE,
 	"APPLY":      TOKEN_APPLY,
 	"PREVIEW":    TOKEN_PREVIEW,
+	"STRING_AGG": TOKEN_STRING_AGG,
+	"WITH":       TOKEN_WITH,
+	"CONFLICT":   TOKEN_CONFLICT,
+	"DO":         TOKEN_DO,
+	"NOTHING":    TOKEN_NOTHING,
+	"VIEW":       TOKEN_VIEW,
+	"ALL":        TOKEN_ALL,
+	"ANY":        TOKEN_ANY,
+	"SOME":       TOKEN_SOME,
+	"REFERENCES": TOKEN_REFERENCES,
+	"LATERAL":    TOKEN_LATERAL,
+	"TRIGGER":    TOKEN_TRIGGER,
+	"BEFORE":     TOKEN_BEFORE,
+	"AFTER":      TOKEN_AFTER,
+	"EACH":       TOKEN_EACH,
+	"FUNCTION":   TOKEN_FUNCTION,
+	"RETURNS":    TOKEN_RETURNS,
+	"UUID":       TOKEN_UUID,
+	"INTERVAL":   TOKEN_INTERVAL,
+	"PROCEDURE":  TOKEN_PROCEDURE,
+	"CALL":       TOKEN_CALL,
+	"JSONB":      TOKEN_JSONB,
+	"RETURNING":  TOKEN_RETURNING,
+	"MERGE":      TOKEN_MERGE,
+	"MATCHED":    TOKEN_MATCHED,
+	"TRUNCATE":   TOKEN_TRUNCATE,
+	"SAVEPOINT":  TOKEN_SAVEPOINT,
+	"RELEASE":    TOKEN_RELEASE,
+	"EXISTS":     TOKEN_EXISTS,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -728,6 +829,30 @@ func (t TokenType) String() string {
 		return "EXECUTE"
 	case TOKEN_DEALLOCATE:
 		return "DEALLOCATE"
+	case TOKEN_STRING_AGG:
+		return "STRING_AGG"
+	case TOKEN_WITH:
+		return "WITH"
+	case TOKEN_CONFLICT:
+		return "CONFLICT"
+	case TOKEN_DO:
+		return "DO"
+	case TOKEN_NOTHING:
+		return "NOTHING"
+	case TOKEN_RETURNING:
+		return "RETURNING"
+	case TOKEN_MERGE:
+		return "MERGE"
+	case TOKEN_MATCHED:
+		return "MATCHED"
+	case TOKEN_TRUNCATE:
+		return "TRUNCATE"
+	case TOKEN_SAVEPOINT:
+		return "SAVEPOINT"
+	case TOKEN_RELEASE:
+		return "RELEASE"
+	case TOKEN_EXISTS:
+		return "EXISTS"
 	case TOKEN_IDENT:
 		return "IDENT"
 	case TOKEN_INT_LIT:

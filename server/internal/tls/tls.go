@@ -1,0 +1,100 @@
+package tls
+
+import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"net"
+	"os"
+	"time"
+)
+
+// Config — конфигурация TLS.
+type Config struct {
+	CertFile string // путь к файлу сертификата
+	KeyFile  string // путь к файлу ключа
+	Enabled  bool
+}
+
+// LoadTLSConfig загружает TLS конфигурацию из файлов.
+func LoadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS keypair: %w", err)
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		},
+	}, nil
+}
+
+// GenerateSelfSignedCert генерирует самоподписанный сертификат для тестов.
+func GenerateSelfSignedCert(host string) (*tls.Certificate, error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"VaultDB"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+
+	if host != "" {
+		if ip := net.ParseIP(host); ip != nil {
+			template.IPAddresses = []net.IP{ip}
+		} else {
+			template.DNSNames = []string{host}
+		}
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &priv.PublicKey, priv)
+	if err != nil {
+		return nil, err
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+
+	return &cert, nil
+}
+
+// SaveCertToFile сохраняет сертификат и ключ в файлы.
+func SaveCertToFile(certPEM, keyPEM []byte, certFile, keyFile string) error {
+	if err := os.WriteFile(certFile, certPEM, 0644); err != nil {
+		return fmt.Errorf("write cert file: %w", err)
+	}
+	if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
+		return fmt.Errorf("write key file: %w", err)
+	}
+	return nil
+}
+
+// WrapListener оборачивает net.Listener в TLS listener.
+func WrapListener(listener net.Listener, tlsConfig *tls.Config) net.Listener {
+	return tls.NewListener(listener, tlsConfig)
+}

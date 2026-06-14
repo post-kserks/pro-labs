@@ -5,12 +5,28 @@ package executor
 import (
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
+
+var validObjectName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+
+func sanitizeObjectName(name string) (string, error) {
+	if len(name) == 0 {
+		return "", fmt.Errorf("object name is empty")
+	}
+	if len(name) > 128 {
+		return "", fmt.Errorf("object name too long (max 128): %s", name)
+	}
+	if !validObjectName.MatchString(name) {
+		return "", fmt.Errorf("invalid object name (only letters, digits, underscores): %s", name)
+	}
+	return name, nil
+}
 
 type CreateDatabaseCommand struct {
 	stmt *parser.CreateDatabaseStatement
@@ -89,7 +105,10 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 		var defaultVal interface{}
 		if action.Column.Default != nil {
-			defaultVal, _ = evalOperand(action.Column.Default, nil, nil, ctx)
+			defaultVal, err = evalOperand(action.Column.Default, nil, nil, ctx)
+			if err != nil {
+				return nil, fmt.Errorf("evaluating default value: %w", err)
+			}
 		}
 		if err := ctx.Storage.AlterTableAddColumn(dbName, c.stmt.TableName, col, defaultVal); err != nil {
 			return nil, err
@@ -113,6 +132,26 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			return nil, err
 		}
 		return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' renamed to '%s'.", c.stmt.TableName, action.NewName)}, nil
+
+	case *parser.AlterAddConstraint:
+		schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
+		if err != nil {
+			return nil, err
+		}
+		constraint := storage.TableConstraint{
+			Name:    action.Name,
+			Type:    action.Type,
+			Columns: action.Columns,
+			Expr:    action.CheckExpr,
+		}
+		schema.Constraints = append(schema.Constraints, constraint)
+		if err := ctx.Storage.DropTable(dbName, c.stmt.TableName); err != nil {
+			return nil, err
+		}
+		if err := ctx.Storage.CreateTable(dbName, *schema); err != nil {
+			return nil, err
+		}
+		return &Result{Type: "message", Message: fmt.Sprintf("Constraint '%s' added to table '%s'.", action.Name, c.stmt.TableName)}, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported ALTER TABLE action: %T", action)
@@ -196,6 +235,7 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			Type:       column.DataType,
 			VarcharLen: column.VarcharLen,
 			IsComputed: column.Computed != nil,
+			EnumValues: column.EnumValues,
 		})
 	}
 
@@ -444,13 +484,17 @@ func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 				{Name: "using_sql", Type: "TEXT"},
 			},
 		}
-		ctx.Storage.CreateTable(dbName, schema)
+		if err := ctx.Storage.CreateTable(dbName, schema); err != nil {
+			return nil, fmt.Errorf("create policy table: %w", err)
+		}
 	}
 
 	// For simplicity, just use the SQL of the expression
 	// This is a major hack for prototype
 	row := storage.Row{c.stmt.Name, c.stmt.TableName, c.stmt.ToUser, "HACK_USING"}
-	ctx.Storage.InsertRows(dbName, policyTable, []storage.Row{row})
+	if _, err := ctx.Storage.InsertRows(dbName, policyTable, []storage.Row{row}); err != nil {
+		return nil, fmt.Errorf("insert policy: %w", err)
+	}
 
 	return &Result{Type: "message", Message: fmt.Sprintf("Policy '%s' created.", c.stmt.Name)}, nil
 }
@@ -461,4 +505,282 @@ type EnableRlsCommand struct {
 
 func (c *EnableRlsCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	return &Result{Type: "message", Message: fmt.Sprintf("RLS enabled for table '%s'.", c.stmt.TableName)}, nil
+}
+
+type CreateViewCommand struct {
+	stmt *parser.CreateViewStatement
+}
+
+func (c *CreateViewCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := sanitizeObjectName(c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("create view: %w", err)
+	}
+
+	querySQL := fmt.Sprintf("%v", c.stmt.Query)
+
+	vd := map[string]interface{}{
+		"name":  c.stmt.Name,
+		"query": querySQL,
+	}
+
+	if err := storeObject(ctx, dbName, objTypeView, c.stmt.Name, vd); err != nil {
+		return nil, fmt.Errorf("create view: %w", err)
+	}
+
+	return &Result{Type: "message", Message: fmt.Sprintf("View '%s' created.", c.stmt.Name)}, nil
+}
+
+type DropViewCommand struct {
+	stmt *parser.DropViewStatement
+}
+
+func (c *DropViewCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := sanitizeObjectName(c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("drop view: %w", err)
+	}
+
+	if err := deleteObject(ctx, dbName, objTypeView, c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("drop view: %w", err)
+	}
+
+	return &Result{Type: "message", Message: fmt.Sprintf("View '%s' dropped.", c.stmt.Name)}, nil
+}
+
+type CreateTriggerCommand struct {
+	stmt *parser.CreateTriggerStatement
+}
+
+func (c *CreateTriggerCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := sanitizeObjectName(c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("create trigger: %w", err)
+	}
+
+	td := map[string]interface{}{
+		"name":      c.stmt.Name,
+		"table":     c.stmt.TableName,
+		"timing":    c.stmt.Timing,
+		"event":     c.stmt.Event,
+		"body":      c.stmt.Body,
+	}
+
+	if err := storeObject(ctx, dbName, objTypeTrigger, c.stmt.Name, td); err != nil {
+		return nil, fmt.Errorf("create trigger: %w", err)
+	}
+
+	return &Result{Type: "message", Message: fmt.Sprintf("Trigger '%s' created on table '%s'.", c.stmt.Name, c.stmt.TableName)}, nil
+}
+
+type DropTriggerCommand struct {
+	stmt *parser.DropTriggerStatement
+}
+
+func (c *DropTriggerCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := sanitizeObjectName(c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("drop trigger: %w", err)
+	}
+
+	if err := deleteObject(ctx, dbName, objTypeTrigger, c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("drop trigger: %w", err)
+	}
+
+	return &Result{Type: "message", Message: fmt.Sprintf("Trigger '%s' dropped.", c.stmt.Name)}, nil
+}
+
+type CreateFunctionCommand struct {
+	stmt *parser.CreateFunctionStatement
+}
+
+func (c *CreateFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := sanitizeObjectName(c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("create function: %w", err)
+	}
+
+	fd := map[string]interface{}{
+		"name":        c.stmt.Name,
+		"params":      c.stmt.Params,
+		"return_type": c.stmt.ReturnType,
+		"body":        c.stmt.Body,
+		"language":    c.stmt.Language,
+	}
+
+	if err := storeObject(ctx, dbName, objTypeFunction, c.stmt.Name, fd); err != nil {
+		return nil, fmt.Errorf("create function: %w", err)
+	}
+
+	return &Result{Type: "message", Message: fmt.Sprintf("Function '%s' created.", c.stmt.Name)}, nil
+}
+
+type DropFunctionCommand struct {
+	stmt *parser.DropFunctionStatement
+}
+
+func (c *DropFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := sanitizeObjectName(c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("drop function: %w", err)
+	}
+
+	if err := deleteObject(ctx, dbName, objTypeFunction, c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("drop function: %w", err)
+	}
+
+	return &Result{Type: "message", Message: fmt.Sprintf("Function '%s' dropped.", c.stmt.Name)}, nil
+}
+
+func fireTriggers(ctx *ExecutionContext, dbName, tableName, event string) {
+	triggers, err := loadAllObjectsByType(ctx, dbName, objTypeTrigger)
+	if err != nil {
+		return
+	}
+	for _, td := range triggers {
+		triggerTable, _ := td["table"].(string)
+		triggerEvent, _ := td["event"].(string)
+		timing, _ := td["timing"].(string)
+		body, _ := td["body"].(string)
+		name, _ := td["name"].(string)
+
+		if triggerTable != tableName || strings.ToUpper(triggerEvent) != strings.ToUpper(event) {
+			continue
+		}
+		if timing != "AFTER" {
+			continue
+		}
+		if body == "" {
+			continue
+		}
+		if err := executeTriggerBody(ctx, body); err != nil {
+			slog.Error("trigger body execution failed", "trigger", name, "error", err)
+		}
+	}
+}
+
+func executeTriggerBody(ctx *ExecutionContext, body string) error {
+	stmt, err := parser.Parse(body)
+	if err != nil {
+		return fmt.Errorf("trigger body parse: %w", err)
+	}
+	cmd, err := CommandFactory(stmt)
+	if err != nil {
+		return fmt.Errorf("trigger body command: %w", err)
+	}
+	_, err = cmd.Execute(ctx)
+	return err
+}
+
+type CreateProcedureCommand struct {
+	stmt *parser.CreateProcedureStatement
+}
+
+func (c *CreateProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := sanitizeObjectName(c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("create procedure: %w", err)
+	}
+
+	pd := map[string]interface{}{
+		"name":     c.stmt.Name,
+		"params":   c.stmt.Params,
+		"body":     c.stmt.Body,
+		"language": c.stmt.Language,
+	}
+
+	if err := storeObject(ctx, dbName, objTypeProcedure, c.stmt.Name, pd); err != nil {
+		return nil, fmt.Errorf("create procedure: %w", err)
+	}
+
+	return &Result{Type: "message", Message: fmt.Sprintf("Procedure '%s' created.", c.stmt.Name)}, nil
+}
+
+type DropProcedureCommand struct {
+	stmt *parser.DropProcedureStatement
+}
+
+func (c *DropProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := sanitizeObjectName(c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("drop procedure: %w", err)
+	}
+
+	if err := deleteObject(ctx, dbName, objTypeProcedure, c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("drop procedure: %w", err)
+	}
+
+	return &Result{Type: "message", Message: fmt.Sprintf("Procedure '%s' dropped.", c.stmt.Name)}, nil
+}
+
+type CallProcedureCommand struct {
+	stmt *parser.CallProcedureStatement
+}
+
+func (c *CallProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := sanitizeObjectName(c.stmt.Name); err != nil {
+		return nil, fmt.Errorf("call procedure: %w", err)
+	}
+
+	pd, err := loadObject(ctx, dbName, objTypeProcedure, c.stmt.Name)
+	if err != nil {
+		return nil, fmt.Errorf("call procedure: %w", err)
+	}
+	if pd == nil {
+		return nil, fmt.Errorf("procedure '%s' not found", c.stmt.Name)
+	}
+
+	body, _ := pd["body"].(string)
+	if body == "" {
+		return nil, fmt.Errorf("procedure '%s' has no body", c.stmt.Name)
+	}
+
+	stmt, err := parser.Parse(body)
+	if err != nil {
+		return nil, fmt.Errorf("procedure '%s' body parse: %w", c.stmt.Name, err)
+	}
+
+	cmd, err := CommandFactory(stmt)
+	if err != nil {
+		return nil, fmt.Errorf("procedure '%s': %w", c.stmt.Name, err)
+	}
+
+	return cmd.Execute(ctx)
 }

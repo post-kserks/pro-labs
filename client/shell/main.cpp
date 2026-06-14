@@ -1,7 +1,6 @@
 #include "vaultdb/vaultdb.hpp"
+#include "vaultdb/string_utils.hpp"
 
-#include <algorithm>
-#include <cctype>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -9,32 +8,6 @@
 
 void renderTable(const std::vector<std::string>& columns,
                  const std::vector<std::vector<std::string>>& rows);
-
-namespace {
-
-std::string trim(const std::string& input) {
-    std::size_t begin = 0;
-    while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin])) != 0) {
-        ++begin;
-    }
-
-    std::size_t end = input.size();
-    while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
-        --end;
-    }
-
-    return input.substr(begin, end - begin);
-}
-
-std::string toLower(const std::string& input) {
-    std::string out = input;
-    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return out;
-}
-
-} // namespace
 
 int main(int argc, char** argv) {
     std::string host = "127.0.0.1";
@@ -76,19 +49,17 @@ int main(int argc, char** argv) {
             break;
         }
 
-        query = trim(query);
+        query = vaultdb::trim(query);
         if (query.empty()) {
             continue;
         }
 
-        const std::string lower = toLower(query);
+        const std::string lower = vaultdb::toLower(query);
         if (lower == "exit" || lower == "quit") {
             break;
         }
 
-        if (query.back() != ';') {
-            query.push_back(';');
-        }
+        query = vaultdb::ensureSemicolon(query);
 
         try {
             const vaultdb::Result result = connection.execute(query);

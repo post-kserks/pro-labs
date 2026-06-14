@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getTableSchema, TableSchemaInfo } from "../api/vaultdb";
 
 export function SchemaView({
@@ -14,13 +14,20 @@ export function SchemaView({
 }) {
   const [schema, setSchema] = useState<TableSchemaInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setSchema(null);
     setError(null);
-    getTableSchema(token, db, table)
+    getTableSchema(token, db, table, controller.signal)
       .then(setSchema)
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => {
+        if (e.name !== "AbortError") setError(e.message);
+      });
+    return () => controller.abort();
   }, [token, db, table]);
 
   return (
@@ -29,7 +36,7 @@ export function SchemaView({
         <span>
           {db}.{table}
         </span>
-        <button className="btn btn-ghost btn-small" onClick={onClose}>
+        <button className="btn btn-ghost btn-small" onClick={onClose} aria-label="Close schema view">
           ✕
         </button>
       </div>

@@ -37,6 +37,7 @@ func New(name, column string, colIndex int) *HashIndex {
 	}
 }
 
+func (idx *HashIndex) Type() string   { return "hash" }
 func (idx *HashIndex) Name() string   { return idx.name }
 func (idx *HashIndex) Column() string { return idx.column }
 func (idx *HashIndex) ColIndex() int  { return idx.colIndex }

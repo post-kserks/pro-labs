@@ -40,7 +40,7 @@ export class ApiError extends Error {
 }
 
 function authHeaders(token: string): Record<string, string> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   return headers;
 }
@@ -59,35 +59,64 @@ async function parseResponse<T>(resp: Response): Promise<T> {
   return data as T;
 }
 
-export async function runQuery(token: string, database: string, sql: string): Promise<QueryResult> {
-  const resp = await fetch("/api/query", {
-    method: "POST",
-    headers: authHeaders(token),
-    body: JSON.stringify({ database, query: sql }),
+async function apiFetch<T>(
+  token: string,
+  url: string,
+  options: RequestInit = {},
+  signal?: AbortSignal,
+): Promise<T> {
+  const resp = await fetch(url, {
+    ...options,
+    headers: { ...authHeaders(token), ...(options.headers as Record<string, string> || {}) },
+    signal,
   });
-  return parseResponse<QueryResult>(resp);
+  return parseResponse<T>(resp);
 }
 
-export async function listDatabases(token: string): Promise<string[]> {
-  const resp = await fetch("/api/databases", { headers: authHeaders(token) });
-  const data = await parseResponse<{ databases: { name: string }[] }>(resp);
+export async function runQuery(
+  token: string,
+  database: string,
+  sql: string,
+  signal?: AbortSignal,
+): Promise<QueryResult> {
+  return apiFetch<QueryResult>(
+    token,
+    "/api/query",
+    {
+      method: "POST",
+      body: JSON.stringify({ database, query: sql }),
+    },
+    signal,
+  );
+}
+
+export async function listDatabases(token: string, signal?: AbortSignal): Promise<string[]> {
+  const data = await apiFetch<{ databases: { name: string }[] }>(token, "/api/databases", {}, signal);
   return data.databases.map((d) => d.name);
 }
 
-export async function listTables(token: string, db: string): Promise<TableInfo[]> {
-  const resp = await fetch(`/api/databases/${encodeURIComponent(db)}/tables`, {
-    headers: authHeaders(token),
-  });
-  const data = await parseResponse<{ tables: TableInfo[] }>(resp);
+export async function listTables(token: string, db: string, signal?: AbortSignal): Promise<TableInfo[]> {
+  const data = await apiFetch<{ tables: TableInfo[] }>(
+    token,
+    `/api/databases/${encodeURIComponent(db)}/tables`,
+    {},
+    signal,
+  );
   return data.tables;
 }
 
-export async function getTableSchema(token: string, db: string, table: string): Promise<TableSchemaInfo> {
-  const resp = await fetch(
+export async function getTableSchema(
+  token: string,
+  db: string,
+  table: string,
+  signal?: AbortSignal,
+): Promise<TableSchemaInfo> {
+  return apiFetch<TableSchemaInfo>(
+    token,
     `/api/databases/${encodeURIComponent(db)}/tables/${encodeURIComponent(table)}/schema`,
-    { headers: authHeaders(token) },
+    {},
+    signal,
   );
-  return parseResponse<TableSchemaInfo>(resp);
 }
 
 export interface HealthInfo {
@@ -95,7 +124,7 @@ export interface HealthInfo {
   version?: string;
 }
 
-export async function getHealth(): Promise<HealthInfo> {
-  const resp = await fetch("/health");
+export async function getHealth(signal?: AbortSignal): Promise<HealthInfo> {
+  const resp = await fetch("/health", { signal });
   return parseResponse<HealthInfo>(resp);
 }

@@ -1,11 +1,11 @@
 services:
   vaultdb:
-    image: vaultdb/vaultdb:1.2.0
+    image: vaultdb/vaultdb:${VERSION:-latest}
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        VERSION: "1.2.0"
+        VERSION: "${VERSION:-dev}"
     container_name: vaultdb
     restart: unless-stopped
 
@@ -21,7 +21,7 @@ services:
     environment:
       VAULTDB_LOG_LEVEL: "${VAULTDB_LOG_LEVEL:-info}"
       VAULTDB_AUTH_ENABLED: "${VAULTDB_AUTH_ENABLED:-true}"
-      VAULTDB_API_TOKENS: "${VAULTDB_API_TOKENS:-vdb_sk_local_dev}"
+      VAULTDB_API_TOKENS: "${VAULTDB_API_TOKENS:?Set VAULTDB_API_TOKENS in .env or environment}"
 
     healthcheck:
       test: ["CMD", "/vaultdb-server", "--health-check", "--monitor-port", "5433"]

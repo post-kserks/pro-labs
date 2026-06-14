@@ -1,21 +1,14 @@
 #include "logic/highlighter.hpp"
 
+#include "utils/sql_keywords.hpp"
 #include "utils/string_utils.hpp"
 
 #include <cctype>
-#include <unordered_set>
 #include <vector>
 
 namespace vaultdb::tui {
 
 namespace {
-
-const std::unordered_set<std::string> kKeywords = {
-    "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "INSERT", "UPDATE", "DELETE",
-    "CREATE", "DROP", "TABLE", "DATABASE", "DATABASES", "SHOW", "TABLES", "DESCRIBE",
-    "VALUES", "SET", "INTO", "USE", "LIMIT", "COUNT", "NULL", "TRUE", "FALSE",
-    "INT", "FLOAT", "BOOL", "TEXT", "VARCHAR",
-};
 
 bool isWord(unsigned char c) {
     return std::isalnum(c) != 0 || c == '_';
@@ -127,7 +120,7 @@ ftxui::Element Highlighter::highlightLine(const std::string& line) const {
 }
 
 bool Highlighter::isKeyword(const std::string& word) const {
-    return kKeywords.find(utils::toUpper(word)) != kKeywords.end();
+    return utils::kSQLKeywords.find(utils::toUpper(word)) != utils::kSQLKeywords.end();
 }
 
 } // namespace vaultdb::tui

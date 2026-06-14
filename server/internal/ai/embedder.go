@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -39,6 +40,40 @@ func NewHTTPEmbedder(endpoint, model, apiKey string) *HTTPEmbedder {
 }
 
 func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float64, error) {
+	const maxAttempts = 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 500ms, 1s, 2s
+			backoff := time.Duration(500<<uint(attempt-1)) * time.Millisecond
+
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		vec, err := e.doEmbed(ctx, text)
+		if err == nil {
+			return vec, nil
+		}
+
+		// Retry только для временных ошибок
+		if isRetryable(err) {
+			lastErr = err
+			continue
+		}
+
+		// Не-ретраябельная ошибка (401, 400) — сразу возвращаем
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("embedding API failed after %d attempts: %w", maxAttempts, lastErr)
+}
+
+func (e *HTTPEmbedder) doEmbed(ctx context.Context, text string) ([]float64, error) {
 	body, err := json.Marshal(map[string]interface{}{
 		"model": e.Model,
 		"input": text,
@@ -66,7 +101,7 @@ func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float64, error
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("embedding API: unexpected status %s", resp.Status)
+		return nil, &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status}
 	}
 
 	// Поддерживаем два формата ответа:
@@ -89,6 +124,52 @@ func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float64, error
 		return result.Embedding, nil
 	}
 	return nil, fmt.Errorf("embedding API: empty embedding response")
+}
+
+// HTTPError represents an HTTP error response.
+type HTTPError struct {
+	StatusCode int
+	Status     string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("embedding API: unexpected status %s", e.Status)
+}
+
+// isRetryable определяет стоит ли делать retry.
+func isRetryable(err error) bool {
+	var httpErr *HTTPError
+	if ok := errorAs(err, &httpErr); ok {
+		// 429 (rate limit), 5xx (server errors) — retry
+		return httpErr.StatusCode == 429 ||
+			(httpErr.StatusCode >= 500 && httpErr.StatusCode < 600)
+	}
+	// Сетевые ошибки — retry
+	var netErr net.Error
+	if ok := errorAs(err, &netErr); ok {
+		return netErr.Timeout()
+	}
+	return false
+}
+
+// errorAs is a helper to check if an error matches a target type.
+func errorAs(err error, target interface{}) bool {
+	if err == nil {
+		return false
+	}
+	switch t := target.(type) {
+	case **HTTPError:
+		if e, ok := err.(*HTTPError); ok {
+			*t = e
+			return true
+		}
+	case *net.Error:
+		if e, ok := err.(net.Error); ok {
+			*t = e
+			return true
+		}
+	}
+	return false
 }
 
 // NoopEmbedder — заглушка, когда AI не настроен. Явно возвращает ошибку
