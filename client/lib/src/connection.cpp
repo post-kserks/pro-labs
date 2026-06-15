@@ -146,12 +146,30 @@ bool Connection::connect() {
         }
 
         if (!opts_.tlsCaFile.empty()) {
-            SSL_CTX_load_verify_locations(ctx_, opts_.tlsCaFile.c_str(), nullptr);
+            if (SSL_CTX_load_verify_locations(ctx_, opts_.tlsCaFile.c_str(), nullptr) != 1) {
+                SSL_CTX_free(ctx_);
+                ctx_ = nullptr;
+                CLOSE_SOCKET(sockfd_);
+                sockfd_ = INVALID_SOCKET;
+                return false;
+            }
         }
 
         if (!opts_.tlsCertFile.empty() && !opts_.tlsKeyFile.empty()) {
-            SSL_CTX_use_certificate_file(ctx_, opts_.tlsCertFile.c_str(), SSL_FILETYPE_PEM);
-            SSL_CTX_use_PrivateKey_file(ctx_, opts_.tlsKeyFile.c_str(), SSL_FILETYPE_PEM);
+            if (SSL_CTX_use_certificate_file(ctx_, opts_.tlsCertFile.c_str(), SSL_FILETYPE_PEM) != 1) {
+                SSL_CTX_free(ctx_);
+                ctx_ = nullptr;
+                CLOSE_SOCKET(sockfd_);
+                sockfd_ = INVALID_SOCKET;
+                return false;
+            }
+            if (SSL_CTX_use_PrivateKey_file(ctx_, opts_.tlsKeyFile.c_str(), SSL_FILETYPE_PEM) != 1) {
+                SSL_CTX_free(ctx_);
+                ctx_ = nullptr;
+                CLOSE_SOCKET(sockfd_);
+                sockfd_ = INVALID_SOCKET;
+                return false;
+            }
         }
 
         ssl_ = SSL_new(ctx_);
@@ -228,6 +246,8 @@ void Connection::sendPacket(const std::string& data) {
 }
 
 std::string Connection::recvPacket() {
+    constexpr size_t kRecvBufSize = 4096;
+
     while (true) {
         size_t nl_pos = buffer_.find('\n');
         if (nl_pos != std::string::npos) {
@@ -236,7 +256,7 @@ std::string Connection::recvPacket() {
             return packet;
         }
 
-        char buf[4096];
+        char buf[kRecvBufSize];
         ssize_t n;
         if (ssl_) {
             n = SSL_read(ssl_, buf, sizeof(buf));

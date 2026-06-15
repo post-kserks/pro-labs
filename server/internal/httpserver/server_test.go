@@ -47,6 +47,15 @@ func newTestServer(t *testing.T, authMgr *auth.Manager) *Server {
 	})
 }
 
+func mustAuth(t *testing.T, enabled bool, tokens map[string]string) *auth.Manager {
+	t.Helper()
+	m, err := auth.New(enabled, tokens, nil)
+	if err != nil {
+		t.Fatalf("auth.New: %v", err)
+	}
+	return m
+}
+
 type tableDataResponse struct {
 	Rows [][]string `json:"Rows"`
 }
@@ -60,7 +69,7 @@ func getTableData(t *testing.T, srv *Server, query url.Values) *httptest.Respons
 }
 
 func TestTableDataFilter(t *testing.T) {
-	srv := newTestServer(t, auth.New(false, nil, nil))
+	srv := newTestServer(t, mustAuth(t, false, nil))
 
 	rec := getTableData(t, srv, url.Values{"age": {"gt.20"}})
 	if rec.Code != http.StatusOK {
@@ -76,7 +85,7 @@ func TestTableDataFilter(t *testing.T) {
 }
 
 func TestTableDataInjectionAttempt(t *testing.T) {
-	srv := newTestServer(t, auth.New(false, nil, nil))
+	srv := newTestServer(t, mustAuth(t, false, nil))
 
 	// Classic quote-breakout; must be treated as a literal string, matching nothing.
 	rec := getTableData(t, srv, url.Values{"name": {"eq.x' OR '1'='1"}})
@@ -93,7 +102,7 @@ func TestTableDataInjectionAttempt(t *testing.T) {
 }
 
 func TestTableDataUnknownColumn(t *testing.T) {
-	srv := newTestServer(t, auth.New(false, nil, nil))
+	srv := newTestServer(t, mustAuth(t, false, nil))
 
 	rec := getTableData(t, srv, url.Values{"1=1; DROP TABLE users": {"eq.x"}})
 	if rec.Code != http.StatusBadRequest {
@@ -102,7 +111,7 @@ func TestTableDataUnknownColumn(t *testing.T) {
 }
 
 func TestQueryRejectsTransactions(t *testing.T) {
-	srv := newTestServer(t, auth.New(false, nil, nil))
+	srv := newTestServer(t, mustAuth(t, false, nil))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query",
@@ -118,7 +127,7 @@ func TestQueryRejectsTransactions(t *testing.T) {
 }
 
 func TestLiveQueryRequiresAuth(t *testing.T) {
-	srv := newTestServer(t, auth.New(true, map[string]string{"sekret": "ci"}, nil))
+	srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "ci"}))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/live?database=shop&query=SELECT+*+FROM+users%3B", nil)
@@ -129,7 +138,7 @@ func TestLiveQueryRequiresAuth(t *testing.T) {
 }
 
 func TestLiveQueryStreamsWithToken(t *testing.T) {
-	srv := newTestServer(t, auth.New(true, map[string]string{"sekret": "ci"}, nil))
+	srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "ci"}))
 
 	// A cancelled context makes the SSE loop exit right after the initial result.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -138,6 +147,7 @@ func TestLiveQueryStreamsWithToken(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
 		"/api/live?database=shop&query=SELECT+*+FROM+users%3B&token=sekret", nil).WithContext(ctx)
+	req.Header.Set("Accept", "text/event-stream")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

@@ -27,6 +27,13 @@ const (
 	MergeJoin
 )
 
+const (
+	costNestedLoopJoin  = 10.0
+	costHashJoin        = 2.0
+	costMergeJoin       = 1.5
+	defaultFallbackCost = 1000
+	defaultFallbackRows = 100
+)
 // CostEstimate оценка стоимости плана.
 type CostEstimate struct {
 	Cost         float64
@@ -151,8 +158,8 @@ func (o *Optimizer) estimateCost(dbName string, plan *OptimizedPlan) CostEstimat
 	// Стоимость IndexScan: log(N) + K (K — количество совпадений)
 	stats := plan.TableStats
 	if stats == nil {
-		cost.Cost = 1000
-		cost.EstimatedRows = 100
+		cost.Cost = defaultFallbackCost
+		cost.EstimatedRows = defaultFallbackRows
 		return cost
 	}
 
@@ -187,11 +194,11 @@ func (o *Optimizer) estimateCost(dbName string, plan *OptimizedPlan) CostEstimat
 		for _, joinMethod := range plan.JoinMethods {
 			switch joinMethod {
 			case NestedLoopJoin:
-				cost.Cost *= 10.0 // Nested Loop: O(N * M)
+				cost.Cost *= costNestedLoopJoin
 			case HashJoin:
-				cost.Cost *= 2.0 // Hash Join: O(N + M)
+				cost.Cost *= costHashJoin
 			case MergeJoin:
-				cost.Cost *= 1.5 // Merge Join: O(N log N + M log M)
+				cost.Cost *= costMergeJoin
 			}
 		}
 	}

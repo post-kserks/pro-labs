@@ -101,10 +101,12 @@ type CheckpointPayload struct {
 }
 
 type WAL struct {
-	file     *os.File
-	mu       sync.Mutex
-	nextTxID atomic.Uint64
-	path     string
+	file         *os.File
+	mu           sync.Mutex
+	nextTxID     atomic.Uint64
+	path         string
+	syncCounter  int
+	SyncBatchSize int // number of writes between fsyncs (0 = sync every write)
 }
 
 func Open(path string) (*WAL, error) {
@@ -118,8 +120,9 @@ func Open(path string) (*WAL, error) {
 	}
 
 	w := &WAL{
-		file: file,
-		path: path,
+		file:          file,
+		path:          path,
+		SyncBatchSize: 10,
 	}
 
 	_, maxTx, err := w.readEntriesLocked(true)
@@ -223,8 +226,20 @@ func (w *WAL) appendBytesLockedWithTx(txID uint64, opType byte, payload []byte) 
 	if _, err := w.file.Write(record); err != nil {
 		return 0, fmt.Errorf("wal: write: %w", err)
 	}
-	if err := w.file.Sync(); err != nil {
-		return 0, fmt.Errorf("wal: sync: %w", err)
+
+	// Batching fsyncs: same tradeoff as appendBytesLocked.
+	if w.SyncBatchSize > 0 {
+		w.syncCounter++
+		if w.syncCounter >= w.SyncBatchSize {
+			w.syncCounter = 0
+			if err := w.file.Sync(); err != nil {
+				return 0, fmt.Errorf("wal: sync: %w", err)
+			}
+		}
+	} else {
+		if err := w.file.Sync(); err != nil {
+			return 0, fmt.Errorf("wal: sync: %w", err)
+		}
 	}
 
 	if txID >= w.nextTxID.Load() {
@@ -245,8 +260,22 @@ func (w *WAL) appendBytesLocked(opType byte, payload []byte) (uint64, error) {
 	if _, err := w.file.Write(record); err != nil {
 		return 0, fmt.Errorf("wal: write: %w", err)
 	}
-	if err := w.file.Sync(); err != nil {
-		return 0, fmt.Errorf("wal: sync: %w", err)
+
+	// Batching fsyncs: trading a small window of potential data loss on crash
+	// (at most SyncBatchSize unwritten records) for a significant throughput
+	// improvement by amortizing the cost of expensive fsync syscalls.
+	if w.SyncBatchSize > 0 {
+		w.syncCounter++
+		if w.syncCounter >= w.SyncBatchSize {
+			w.syncCounter = 0
+			if err := w.file.Sync(); err != nil {
+				return 0, fmt.Errorf("wal: sync: %w", err)
+			}
+		}
+	} else {
+		if err := w.file.Sync(); err != nil {
+			return 0, fmt.Errorf("wal: sync: %w", err)
+		}
 	}
 
 	return txID, nil

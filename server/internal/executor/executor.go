@@ -122,6 +122,8 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	return result, err
 }
 
+// TODO: Replace type switch with a registry map for cleaner extensibility.
+// Pattern: var commandRegistry = map[reflect.Type]func(parser.Statement) Command{}
 func CommandFactory(stmt parser.Statement) (Command, error) {
 	switch s := stmt.(type) {
 	case *parser.CreateDatabaseStatement:

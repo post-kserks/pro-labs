@@ -185,7 +185,8 @@ func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *Executio
 	b.mu.RUnlock()
 
 	for _, s := range matched {
-		// Re-run the query
+		// Re-run the query in the subscription's DB context
+		ctx.Session.SetCurrentDatabase(s.DB)
 		cmd := &SelectCommand{stmt: s.Query}
 		res, err := cmd.Execute(ctx)
 		if err != nil {

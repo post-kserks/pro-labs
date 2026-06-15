@@ -4,8 +4,11 @@ import (
 	"strings"
 	"sync"
 
+	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
+
+const defaultSampleSize = 1000
 
 // TableStatistics хранит статистику по таблице для query optimizer.
 type TableStatistics struct {
@@ -42,20 +45,15 @@ func NewStatisticsCollector(store storage.StorageEngine) *StatisticsCollector {
 func (sc *StatisticsCollector) GetTableStats(dbName, tableName string) *TableStatistics {
 	key := dbName + "/" + tableName
 
-	// Проверяем кэш
-	sc.mu.RLock()
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
 	if stats, ok := sc.cache[key]; ok {
-		sc.mu.RUnlock()
 		return stats
 	}
-	sc.mu.RUnlock()
 
-	// Собираем статистику
 	stats := sc.collectStats(dbName, tableName)
-
-	sc.mu.Lock()
 	sc.cache[key] = stats
-	sc.mu.Unlock()
 
 	return stats
 }
@@ -107,7 +105,7 @@ func (sc *StatisticsCollector) collectStats(dbName, tableName string) *TableStat
 	}
 
 	// Ограничиваем выборку для производительности
-	sampleSize := 1000
+	sampleSize := defaultSampleSize
 	if len(rows) > sampleSize {
 		rows = rows[:sampleSize]
 	}
@@ -154,9 +152,8 @@ func (sc *StatisticsCollector) EstimateSelectivity(dbName, tableName string, pre
 
 	// Базовая оценка селективности
 	switch p := predicate.(type) {
-	case interface{ GetLeft() interface{}; GetOperator() string; GetRight() interface{} }:
-		// BinaryExpr-like
-		return sc.estimateBinarySelectivity(stats, p.GetOperator())
+	case *parser.BinaryExpr:
+		return sc.estimateBinarySelectivity(stats, p.Operator)
 	}
 
 	// По умолчанию — 30% селективность

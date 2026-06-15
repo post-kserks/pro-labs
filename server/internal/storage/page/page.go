@@ -11,7 +11,9 @@ package page
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
+	"math"
 )
 
 const (
@@ -170,6 +172,9 @@ func (p *Page) InsertTuple(data []byte) (uint16, error) {
 
 	// Tuples grow from the end of the page towards the header.
 	tupleOffset := h.Upper - uint16(len(data))
+	if tupleOffset > h.Upper {
+		return 0, fmt.Errorf("page corruption: tuple offset underflow")
+	}
 	copy(p[tupleOffset:], data)
 
 	ip := NewItemPointer(tupleOffset, uint16(len(data)), ItemFlagNormal)
@@ -177,8 +182,14 @@ func (p *Page) InsertTuple(data []byte) (uint16, error) {
 
 	h.Upper = tupleOffset
 	h.Lower += ItemPointerSize
+	if h.NItems == math.MaxUint16 {
+		return 0, fmt.Errorf("page full: too many items")
+	}
 	h.NItems++
 	h.FreeSpace = h.Upper - h.Lower
+	if h.Upper < h.Lower {
+		return 0, fmt.Errorf("page corruption: upper < lower")
+	}
 	p.writeHeader(h)
 
 	return h.NItems - 1, nil
@@ -262,4 +273,9 @@ func itemPointerOffset(slot uint16) uint16 {
 
 func (p *Page) itemPointer(slot uint16) ItemPointer {
 	return ItemPointer(binary.LittleEndian.Uint32(p[itemPointerOffset(slot):]))
+}
+
+func (p *Page) Clone() *Page {
+	cp := *p
+	return &cp
 }

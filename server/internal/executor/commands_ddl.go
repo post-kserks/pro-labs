@@ -33,6 +33,9 @@ type CreateDatabaseCommand struct {
 }
 
 func (c *CreateDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	if _, err := sanitizeObjectName(c.stmt.DatabaseName); err != nil {
+		return nil, fmt.Errorf("create database: %w", err)
+	}
 	if err := ctx.Storage.CreateDatabase(c.stmt.DatabaseName); err != nil {
 		return nil, err
 	}
@@ -44,6 +47,9 @@ type DropDatabaseCommand struct {
 }
 
 func (c *DropDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	if _, err := sanitizeObjectName(c.stmt.DatabaseName); err != nil {
+		return nil, fmt.Errorf("drop database: %w", err)
+	}
 	if err := ctx.Storage.DropDatabase(c.stmt.DatabaseName); err != nil {
 		return nil, err
 	}
@@ -58,6 +64,9 @@ type UseDatabaseCommand struct {
 }
 
 func (c *UseDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	if _, err := sanitizeObjectName(c.stmt.DatabaseName); err != nil {
+		return nil, fmt.Errorf("use database: %w", err)
+	}
 	if !ctx.Storage.DatabaseExists(c.stmt.DatabaseName) {
 		return nil, fmt.Errorf("database '%s' does not exist", c.stmt.DatabaseName)
 	}
@@ -228,6 +237,10 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 
+	if _, err := sanitizeObjectName(c.stmt.TableName); err != nil {
+		return nil, fmt.Errorf("create table: %w", err)
+	}
+
 	columns := make([]storage.ColumnSchema, 0, len(c.stmt.Columns))
 	for _, column := range c.stmt.Columns {
 		columns = append(columns, storage.ColumnSchema{
@@ -259,6 +272,9 @@ func (c *DropTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	dbName, err := requireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if _, err := sanitizeObjectName(c.stmt.TableName); err != nil {
+		return nil, fmt.Errorf("drop table: %w", err)
 	}
 	if err := ctx.Storage.DropTable(dbName, c.stmt.TableName); err != nil {
 		return nil, err
@@ -489,8 +505,8 @@ func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 	}
 
-	// For simplicity, just use the SQL of the expression
-	// This is a major hack for prototype
+	// NOTE: The USING expression is not yet parsed or stored.
+	// The policy is created but NOT enforced. This is prototype-only.
 	row := storage.Row{c.stmt.Name, c.stmt.TableName, c.stmt.ToUser, "HACK_USING"}
 	if _, err := ctx.Storage.InsertRows(dbName, policyTable, []storage.Row{row}); err != nil {
 		return nil, fmt.Errorf("insert policy: %w", err)
@@ -504,7 +520,14 @@ type EnableRlsCommand struct {
 }
 
 func (c *EnableRlsCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	return &Result{Type: "message", Message: fmt.Sprintf("RLS enabled for table '%s'.", c.stmt.TableName)}, nil
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
+	}
+	return nil, fmt.Errorf("RLS not yet implemented; policies are stored but not enforced")
 }
 
 type CreateViewCommand struct {

@@ -6,6 +6,8 @@ import (
 	"vaultdb/internal/parser"
 )
 
+const maxCTEIterations = 100
+
 // CTEScope — область видимости CTE для конкретного запроса.
 type CTEScope struct {
 	ctes   map[string]*CTEDefinition
@@ -139,7 +141,7 @@ func executeRecursiveCTE(cte *parser.CTEDefinition, scope *CTEScope, ctx *Execut
 		visited[rowKeyStr(row)] = true
 	}
 
-	maxIterations := 100
+	maxIterations := maxCTEIterations
 	for iter := 0; iter < maxIterations; iter++ {
 		prevCount := len(allRows)
 
@@ -160,11 +162,11 @@ func executeRecursiveCTE(cte *parser.CTEDefinition, scope *CTEScope, ctx *Execut
 		recursiveQuery := *cte.Query
 		cmd, err = CommandFactory(&recursiveQuery)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("recursive CTE: %w", err)
 		}
 		iterRes, err := cmd.Execute(ctx)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("recursive CTE: %w", err)
 		}
 
 		newRows := 0

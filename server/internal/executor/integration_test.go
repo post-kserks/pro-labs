@@ -132,7 +132,7 @@ func TestNULLIF(t *testing.T) {
 		t.Fatalf("expected 2 rows, got %d", len(result.Rows))
 	}
 	// First row: NULLIF(1, 1) = NULL
-	if result.Rows[0][0] != "NULL" {
+	if result.Rows[0][0] != "" {
 		t.Fatalf("expected NULL for first row, got %s", result.Rows[0][0])
 	}
 	// Second row: NULLIF(2, 3) = 2
@@ -161,7 +161,7 @@ func TestLEFTJOIN(t *testing.T) {
 	// Find row with NULL value
 	found := false
 	for _, row := range result.Rows {
-		if row[0] == "b" && row[1] == "NULL" {
+		if row[0] == "b" && row[1] == "" {
 			found = true
 		}
 	}
@@ -190,7 +190,7 @@ func TestRIGHTJOIN(t *testing.T) {
 	// Find row with NULL name
 	found := false
 	for _, row := range result.Rows {
-		if row[0] == "NULL" && row[1] == "200" {
+		if row[0] == "" && row[1] == "200" {
 			found = true
 		}
 	}

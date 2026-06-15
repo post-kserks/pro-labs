@@ -9,7 +9,7 @@ import (
 
 // Aggregator accumulates values and returns a result.
 type Aggregator interface {
-	Add(value interface{})
+	Add(key, value interface{})
 	Result() interface{}
 }
 
@@ -20,7 +20,7 @@ type countAgg struct {
 	seen     map[string]bool
 }
 
-func (a *countAgg) Add(v interface{}) {
+func (a *countAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
@@ -45,7 +45,7 @@ type sumAgg struct {
 	allInts bool
 }
 
-func (a *sumAgg) Add(v interface{}) {
+func (a *sumAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
@@ -79,7 +79,7 @@ type avgAgg struct {
 	count int64
 }
 
-func (a *avgAgg) Add(v interface{}) {
+func (a *avgAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
@@ -101,7 +101,7 @@ type minAgg struct {
 	min interface{}
 }
 
-func (a *minAgg) Add(v interface{}) {
+func (a *minAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
@@ -119,7 +119,7 @@ type maxAgg struct {
 	max interface{}
 }
 
-func (a *maxAgg) Add(v interface{}) {
+func (a *maxAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
@@ -135,14 +135,26 @@ func (a *maxAgg) Result() interface{} {
 // stringAgg handles STRING_AGG(col, delimiter).
 type stringAgg struct {
 	delimiter string
+	distinct  bool
+	seen      map[string]bool
 	values    []string
 }
 
-func (a *stringAgg) Add(v interface{}) {
+func (a *stringAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
-	a.values = append(a.values, valueToString(v))
+	s := valueToString(v)
+	if a.distinct {
+		if a.seen == nil {
+			a.seen = make(map[string]bool)
+		}
+		if a.seen[s] {
+			return
+		}
+		a.seen[s] = true
+	}
+	a.values = append(a.values, s)
 }
 
 func (a *stringAgg) Result() interface{} {
@@ -155,7 +167,7 @@ type boolAndAgg struct {
 	result bool
 }
 
-func (a *boolAndAgg) Add(v interface{}) {
+func (a *boolAndAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
@@ -184,7 +196,7 @@ type boolOrAgg struct {
 	result bool
 }
 
-func (a *boolOrAgg) Add(v interface{}) {
+func (a *boolOrAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
@@ -212,7 +224,7 @@ type stddevAgg struct {
 	values []float64
 }
 
-func (a *stddevAgg) Add(v interface{}) {
+func (a *stddevAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
@@ -252,7 +264,7 @@ type varianceAgg struct {
 	values []float64
 }
 
-func (a *varianceAgg) Add(v interface{}) {
+func (a *varianceAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
@@ -289,8 +301,9 @@ type jsonObjectAgg struct {
 	values []interface{}
 }
 
-func (a *jsonObjectAgg) Add(val interface{}) {
-	a.keys = append(a.keys, fmt.Sprintf("key_%d", len(a.keys)))
+func (a *jsonObjectAgg) Add(key, val interface{}) {
+	k := fmt.Sprintf("%v", key)
+	a.keys = append(a.keys, k)
 	a.values = append(a.values, val)
 }
 
@@ -322,7 +335,7 @@ func NewAggregator(name string, distinct bool) Aggregator {
 	case "MAX":
 		return &maxAgg{}
 	case "STRING_AGG":
-		return &stringAgg{delimiter: ","}
+		return &stringAgg{delimiter: ",", distinct: distinct}
 	case "BOOL_AND":
 		return &boolAndAgg{}
 	case "BOOL_OR":

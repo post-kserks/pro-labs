@@ -85,13 +85,45 @@ func GenerateSelfSignedCert(host string) (*tls.Certificate, error) {
 
 // SaveCertToFile сохраняет сертификат и ключ в файлы.
 func SaveCertToFile(certPEM, keyPEM []byte, certFile, keyFile string) error {
-	if err := os.WriteFile(certFile, certPEM, 0644); err != nil {
+	if err := os.WriteFile(certFile, certPEM, 0640); err != nil {
 		return fmt.Errorf("write cert file: %w", err)
 	}
 	if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
 		return fmt.Errorf("write key file: %w", err)
 	}
 	return nil
+}
+
+// LoadMTLSConfig загружает TLS конфигурацию с поддержкой mTLS (mutual TLS).
+// Помимо серверного сертификата загружает CA для верификации клиентских сертификатов.
+func LoadMTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS keypair: %w", err)
+	}
+
+	caCert, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("read CA file: %w", err)
+	}
+
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to parse CA certificate")
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    caCertPool,
+		MinVersion:   tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		},
+	}, nil
 }
 
 // WrapListener оборачивает net.Listener в TLS listener.

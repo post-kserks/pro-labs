@@ -16,6 +16,12 @@ import (
 	"vaultdb/internal/storage"
 )
 
+const (
+	ftsScoreThreshold      = 0.1
+	semanticMatchThreshold = 0.7
+	embeddingTimeout       = 10 * time.Second
+)
+
 func evalExpr(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (bool, error) {
 	if expr == nil {
 		return true, nil
@@ -97,7 +103,7 @@ func evalFtsMatch(left, right interface{}) (bool, error) {
 		}
 	}
 
-	return score > 0.1, nil // Threshold for "match"
+	return score > ftsScoreThreshold, nil
 }
 
 func evalJsonContains(left, right interface{}) (interface{}, error) {
@@ -210,7 +216,7 @@ func evalFullTextMatch(left, right interface{}, ctx *ExecutionContext) (interfac
 		}
 	}
 	
-	return score > 0.1, nil
+	return score > ftsScoreThreshold, nil
 }
 
 // evalSemanticMatch сравнивает операнды по косинусной близости. Операнды,
@@ -228,7 +234,7 @@ func evalSemanticMatch(left, right interface{}, ctx *ExecutionContext) (bool, er
 	}
 
 	sim := cosineSimilarity(v1, v2)
-	return sim > 0.7, nil
+	return sim > semanticMatchThreshold, nil
 }
 
 // operandVector превращает операнд в вектор: готовые векторы проходят как
@@ -246,7 +252,7 @@ func embedText(ctx *ExecutionContext, text string) ([]float64, error) {
 	if ctx != nil && ctx.Embedder != nil {
 		embedder = ctx.Embedder
 	}
-	embedCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	embedCtx, cancel := context.WithTimeout(context.Background(), embeddingTimeout)
 	defer cancel()
 	return embedder.Embed(embedCtx, text)
 }
@@ -1060,13 +1066,34 @@ func fnAge(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return fmt.Sprintf("%d days %d hours %d mins %d secs", days, hours, minutes, seconds), nil
 }
 
+func sqlToGoLayout(layout string) string {
+	sqlTokens := []struct{ sql, goLayout string }{
+		{"YYYY", "2006"},
+		{"YY", "06"},
+		{"HH24", "15"},
+		{"MM", "01"},
+		{"DD", "02"},
+		{"MI", "04"},
+		{"SS", "05"},
+		{"HH", "03"},
+		{"AM", "PM"},
+		{"PM", "PM"},
+	}
+	result := layout
+	for _, t := range sqlTokens {
+		result = strings.ReplaceAll(result, t.sql, t.goLayout)
+	}
+	return result
+}
+
 func fnToDate(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("TO_DATE requires 2 arguments")
 	}
 	s := valueToString(args[0])
 	layout := valueToString(args[1])
-	t, err := time.Parse(layout, s)
+	goLayout := sqlToGoLayout(layout)
+	t, err := time.Parse(goLayout, s)
 	if err != nil {
 		return nil, fmt.Errorf("TO_DATE: %w", err)
 	}
@@ -1304,6 +1331,18 @@ func fnJsonbSet(args []interface{}, ctx *ExecutionContext) (interface{}, error) 
 	if len(pathParts) == 1 {
 		if m, ok := data.(map[string]interface{}); ok {
 			m[pathParts[0]] = newVal
+		}
+	} else if len(pathParts) > 1 {
+		current := data
+		for _, part := range pathParts[:len(pathParts)-1] {
+			m, ok := current.(map[string]interface{})
+			if !ok {
+				break
+			}
+			current = m[part]
+		}
+		if m, ok := current.(map[string]interface{}); ok {
+			m[pathParts[len(pathParts)-1]] = newVal
 		}
 	}
 	result, _ := json.Marshal(data)

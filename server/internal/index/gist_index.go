@@ -87,7 +87,11 @@ func (g *GiSTIndex) Type() string             { return "gist" }
 func (g *GiSTIndex) Name() string             { return g.name }
 func (g *GiSTIndex) Column() string           { return g.column }
 func (g *GiSTIndex) ColIndex() int            { return g.colIndex }
-func (g *GiSTIndex) SetColumn(col string)     { g.column = col }
+func (g *GiSTIndex) SetColumn(col string) {
+	g.mu.Lock()
+	g.column = col
+	g.mu.Unlock()
+}
 
 func (g *GiSTIndex) Lookup(value string) ([]int, bool) {
 	g.mu.RLock()
@@ -515,9 +519,7 @@ func (g *GiSTIndex) Load(path string) error {
 	if data.Column != "" {
 		g.column = data.Column
 	}
-	if data.ColIndex != 0 {
-		g.colIndex = data.ColIndex
-	}
+	g.colIndex = data.ColIndex
 	if data.Root != nil {
 		g.root = deserializeTree(data.Root)
 	}

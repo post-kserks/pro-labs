@@ -815,7 +815,10 @@ func (p *sqlParser) parseColumnType() (string, int, error) {
 			if lenTok.Type != lexer.TOKEN_INT_LIT {
 				return "", 0, p.expectedError("VARCHAR length", lenTok)
 			}
-			l, _ := strconv.Atoi(lenTok.Literal)
+			l, err := strconv.Atoi(lenTok.Literal)
+			if err != nil {
+				return "", 0, fmt.Errorf("invalid VARCHAR length: %w", err)
+			}
 			p.advance()
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 				return "", 0, err
@@ -832,7 +835,10 @@ func (p *sqlParser) parseColumnType() (string, int, error) {
 			if lenTok.Type != lexer.TOKEN_INT_LIT {
 				return "", 0, p.expectedError("VECTOR dimension", lenTok)
 			}
-			d, _ := strconv.Atoi(lenTok.Literal)
+			d, err := strconv.Atoi(lenTok.Literal)
+			if err != nil {
+				return "", 0, fmt.Errorf("invalid VECTOR dimension: %w", err)
+			}
 			p.advance()
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 				return "", 0, err
@@ -2536,7 +2542,10 @@ func (p *sqlParser) parseFrameBound() (string, int, error) {
 		}
 		return "CURRENT ROW", 0, nil
 	case lexer.TOKEN_INT_LIT:
-		n, _ := strconv.Atoi(tok.Literal)
+		n, err := strconv.Atoi(tok.Literal)
+		if err != nil {
+			return "", 0, fmt.Errorf("invalid window frame offset: %w", err)
+		}
 		p.advance()
 		if p.current().Type == lexer.TOKEN_PRECEDING {
 			p.advance()

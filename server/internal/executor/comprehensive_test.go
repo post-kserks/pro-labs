@@ -127,7 +127,7 @@ func TestNULLIFComprehensive(t *testing.T) {
 		t.Fatalf("expected 2 rows, got %d", len(result.Rows))
 	}
 	// First row: NULLIF(1, 1) = NULL
-	if result.Rows[0][0] != "NULL" {
+	if result.Rows[0][0] != "" {
 		t.Fatalf("expected NULL for first row, got %s", result.Rows[0][0])
 	}
 	// Second row: NULLIF(2, 3) = 2
@@ -156,7 +156,7 @@ func TestLEFTJOINComprehensive(t *testing.T) {
 	// Find row with NULL value
 	found := false
 	for _, row := range result.Rows {
-		if row[0] == "b" && row[1] == "NULL" {
+		if row[0] == "b" && row[1] == "" {
 			found = true
 		}
 	}
@@ -478,17 +478,14 @@ func TestSAVEPOINTComprehensive(t *testing.T) {
 	// BEGIN
 	executeSQL(t, session, "BEGIN;")
 
-	// SAVEPOINT
-	executeSQL(t, session, "SAVEPOINT sp1;")
+	// SAVEPOINT — not yet implemented, should return error
+	executeSQLExpectError(t, session, "SAVEPOINT sp1;")
 
-	// INSERT
-	executeSQL(t, session, "INSERT INTO heroes VALUES (5, 'Frodo', 7, TRUE, 8.5, 'Hobbit');")
+	// ROLLBACK TO SAVEPOINT — not yet implemented, should return error
+	executeSQLExpectError(t, session, "ROLLBACK TO SAVEPOINT sp1;")
 
-	// ROLLBACK TO SAVEPOINT
-	executeSQL(t, session, "ROLLBACK TO SAVEPOINT sp1;")
-
-	// RELEASE SAVEPOINT
-	executeSQL(t, session, "RELEASE SAVEPOINT sp1;")
+	// RELEASE SAVEPOINT — not yet implemented, should return error
+	executeSQLExpectError(t, session, "RELEASE SAVEPOINT sp1;")
 
 	// COMMIT
 	executeSQL(t, session, "COMMIT;")

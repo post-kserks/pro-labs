@@ -28,7 +28,7 @@ func NewRotator(filename string, maxSizeMB int, maxBackups int) (*Rotator, error
 		maxBackups = 5 // по умолчанию 5 бэкапов
 	}
 
-	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (r *Rotator) rotate() error {
 	}
 
 	// Создаём новый файл
-	file, err := os.OpenFile(r.filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(r.filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
 	if err != nil {
 		return err
 	}

@@ -191,7 +191,7 @@ func coerceToColumn(value storage.Value, column storage.ColumnSchema) (storage.V
 
 func valueToString(value interface{}) string {
 	if value == nil {
-		return "NULL"
+		return ""
 	}
 	switch v := value.(type) {
 	case string:

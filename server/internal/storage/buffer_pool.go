@@ -8,6 +8,8 @@ import (
 	"vaultdb/internal/storage/page"
 )
 
+const defaultBufferPoolCapacity = 1024
+
 // BufferPool — LRU кэш для страниц.
 // Сидит между page engine и HeapFile, кэширует прочитанные страницы в памяти.
 type BufferPool struct {
@@ -29,7 +31,7 @@ type bufferEntry struct {
 // NewBufferPool создаёт новый buffer pool с указанным capacity.
 func NewBufferPool(capacity int) *BufferPool {
 	if capacity <= 0 {
-		capacity = 1024 // по умолчанию 1024 страницы = 8 МБ
+		capacity = defaultBufferPoolCapacity
 	}
 	return &BufferPool{
 		capacity: capacity,
@@ -56,7 +58,6 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile) (*page.Page,
 	if elem, ok := bp.cache[pid]; ok {
 		entry := elem.Value.(*bufferEntry)
 		entry.pinCnt++
-		// Перемещаем в начало LRU (recently used)
 		bp.lru.MoveToFront(elem)
 		return entry.page, 0, nil
 	}
@@ -69,7 +70,7 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile) (*page.Page,
 
 	// Если кэш полон — вытесняем LRU
 	for bp.count >= bp.capacity {
-		if !bp.evict() {
+		if !bp.evict(hf) {
 			// Не удалось вытестить (все страницы запинованы)
 			break
 		}
@@ -124,11 +125,15 @@ func (bp *BufferPool) InvalidatePage(pid page.PageID) {
 // evict вытесняет самую старую незапинованную страницу из кэша.
 // Грязные страницы сбрасываются на диск перед удалением.
 // Возвращает true если удалось, false если все страницы запинованы.
-func (bp *BufferPool) evict() bool {
+func (bp *BufferPool) evict(hf *heap.HeapFile) bool {
 	for elem := bp.lru.Back(); elem != nil; elem = elem.Prev() {
 		entry := elem.Value.(*bufferEntry)
 		if entry.pinCnt > 0 {
 			continue
+		}
+		if entry.dirty && hf != nil {
+			_ = hf.WritePage(entry.pid, entry.page)
+			entry.dirty = false
 		}
 		bp.lru.Remove(elem)
 		delete(bp.cache, entry.pid)

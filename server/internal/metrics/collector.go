@@ -146,6 +146,8 @@ func (c *Collector) IncIndexMiss()   { c.indexMisses.Add(1) }
 func sanitizeMetricLabel(s string) string {
 	s = strings.ReplaceAll(s, `\`, `_`)
 	s = strings.ReplaceAll(s, `"`, `'`)
+	s = strings.ReplaceAll(s, "\n", "_")
+	s = strings.ReplaceAll(s, "\r", "_")
 	return s
 }
 

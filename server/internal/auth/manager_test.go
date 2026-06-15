@@ -7,7 +7,10 @@ import (
 )
 
 func TestNoDefaultTokenInjected(t *testing.T) {
-	m := New(true, nil, nil)
+	m, err := New(true, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	if m.ValidateToken("vdb_sk_local_dev") {
 		t.Fatal("legacy hardcoded token still accepted")
 	}
@@ -17,7 +20,10 @@ func TestNoDefaultTokenInjected(t *testing.T) {
 }
 
 func TestValidateToken(t *testing.T) {
-	m := New(true, map[string]string{"sekret": "ci"}, nil)
+	m, err := New(true, map[string]string{"sekret": "ci"}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	if !m.ValidateToken("sekret") {
 		t.Fatal("configured token rejected")
 	}
@@ -25,24 +31,41 @@ func TestValidateToken(t *testing.T) {
 		t.Fatal("unknown token accepted")
 	}
 
-	disabled := New(false, nil, nil)
+	disabled, err := New(false, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	if !disabled.ValidateToken("anything") {
 		t.Fatal("disabled auth should accept any token")
 	}
 }
 
 func TestMiddlewareAcceptsQueryParamToken(t *testing.T) {
-	m := New(true, map[string]string{"sekret": "ci"}, nil)
+	m, err := New(true, map[string]string{"sekret": "ci"}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	handler := m.Middleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	// Query param token allowed for SSE endpoints
 	rec := httptest.NewRecorder()
-	handler(rec, httptest.NewRequest(http.MethodGet, "/api/live?token=sekret", nil))
+	req := httptest.NewRequest(http.MethodGet, "/api/live?token=sekret", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	handler(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("query param token rejected: status %d", rec.Code)
+		t.Fatalf("query param token rejected for SSE: status %d", rec.Code)
 	}
 
+	// Query param token rejected for non-SSE endpoints
+	rec = httptest.NewRecorder()
+	handler(rec, httptest.NewRequest(http.MethodGet, "/api/live?token=sekret", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("query param token accepted for non-SSE: status %d", rec.Code)
+	}
+
+	// Missing token still rejected
 	rec = httptest.NewRecorder()
 	handler(rec, httptest.NewRequest(http.MethodGet, "/api/live", nil))
 	if rec.Code != http.StatusUnauthorized {
@@ -51,7 +74,10 @@ func TestMiddlewareAcceptsQueryParamToken(t *testing.T) {
 }
 
 func TestTokensStoredHashed(t *testing.T) {
-	m := New(true, map[string]string{"plain-secret": "ci"}, nil)
+	m, err := New(true, map[string]string{"plain-secret": "ci"}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	if _, ok := m.tokens["plain-secret"]; ok {
 		t.Fatal("plaintext token stored in manager")
 	}

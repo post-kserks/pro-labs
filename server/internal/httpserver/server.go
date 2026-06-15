@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"vaultdb/internal/ai"
 	"vaultdb/internal/auth"
+	"vaultdb/internal/config"
 	"vaultdb/internal/executor"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
@@ -30,6 +32,8 @@ const (
 	errCodeRateLimited    = 3006
 	errCodeInternal       = 5000
 	errCodeNotImplemented = 9999
+
+	DefaultMaxLiveQuerySubscriptions = 1000
 )
 
 //go:embed web/dist/*
@@ -51,14 +55,18 @@ type Config struct {
 	Broadcaster       *executor.Broadcaster
 	Embedder          ai.Embedder
 	RateLimiter       *RateLimiter
+	TLSCertFile       string
+	TLSKeyFile        string
+	MaxLiveQuerySubscriptions int
 }
 
 type Server struct {
-	cfg       Config
-	startedAt time.Time
-	metrics   *metrics.Collector
-	txm       *txmanager.Manager
-	br        *executor.Broadcaster
+	cfg                  Config
+	startedAt            time.Time
+	metrics              *metrics.Collector
+	txm                  *txmanager.Manager
+	br                   *executor.Broadcaster
+	activeSubscriptions  atomic.Int64
 }
 
 func New(cfg Config) *Server {
@@ -66,13 +74,22 @@ func New(cfg Config) *Server {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Auth == nil {
-		cfg.Auth = auth.New(false, nil, cfg.Logger)
+		mgr, err := auth.New(false, nil, cfg.Logger)
+		if err != nil {
+			cfg.Logger.Error("failed to create auth manager", "error", err)
+			cfg.Logger.Warn("continuing with auth disabled")
+			mgr, _ = auth.NewDisabled()
+		}
+		cfg.Auth = mgr
 	}
 	if cfg.ActiveConnections == nil {
 		cfg.ActiveConnections = func() int64 { return 0 }
 	}
 	if cfg.MaxRequestSizeBytes == 0 {
-		cfg.MaxRequestSizeBytes = 64 * 1024 * 1024
+		cfg.MaxRequestSizeBytes = config.DefaultMaxRequestSize
+	}
+	if cfg.MaxLiveQuerySubscriptions == 0 {
+		cfg.MaxLiveQuerySubscriptions = DefaultMaxLiveQuerySubscriptions
 	}
 	m := cfg.Metrics
 	if m == nil {
@@ -116,14 +133,24 @@ func (s *Server) Start(ctx context.Context) error {
 	errCh := make(chan error, 2)
 
 	go func() {
-		err := apiServer.ListenAndServe()
+		var err error
+		if s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != "" {
+			err = apiServer.ListenAndServeTLS(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+		} else {
+			err = apiServer.ListenAndServe()
+		}
 		if err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 	}()
 
 	go func() {
-		err := monitorServer.ListenAndServe()
+		var err error
+		if s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != "" {
+			err = monitorServer.ListenAndServeTLS(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+		} else {
+			err = monitorServer.ListenAndServe()
+		}
 		if err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
@@ -150,7 +177,7 @@ func (s *Server) apiMux() *http.ServeMux {
 
 	mux.HandleFunc("/api/query", s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleQuery)))
 	mux.HandleFunc("/api/live", s.cfg.Auth.Middleware(s.handleLiveQuery))
-	mux.HandleFunc("/api/docs/openapi.json", s.handleOpenAPI)
+	mux.HandleFunc("/api/docs/openapi.json", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleOpenAPI)))
 	mux.HandleFunc("/api/databases", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleListDatabases)))
 	mux.HandleFunc("/api/databases/", s.cfg.Auth.Middleware(s.handleDatabasesSubroutes))
 
@@ -176,7 +203,11 @@ func (s *Server) monitorMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleHealth))
 	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
-	mux.HandleFunc("/metrics", s.withMethod(http.MethodGet, s.handleMetrics))
+	if s.cfg.Auth.Enabled() {
+		mux.HandleFunc("/metrics", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics)))
+	} else {
+		mux.HandleFunc("/metrics", s.withMethod(http.MethodGet, s.handleMetrics))
+	}
 	return mux
 }
 
@@ -201,7 +232,7 @@ func (s *Server) withMethod(method string, next http.HandlerFunc) http.HandlerFu
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.RateLimiter != nil {
-		key := r.RemoteAddr
+		key := extractClientIP(r)
 		if !s.cfg.RateLimiter.Allow(key) {
 			writeError(w, http.StatusTooManyRequests, errCodeRateLimited, "rate limit exceeded")
 			return
@@ -453,33 +484,7 @@ h1 { color: #333; }
 <h1>VaultDB Dashboard</h1>
 <button class="refresh" onclick="refresh()">Refresh</button>
 <div id="metrics">Loading...</div>
-<script>
-async function refresh() {
-  const resp = await fetch('/metrics');
-  const text = await resp.text();
-  const lines = text.split('\n');
-  const container = document.getElementById('metrics');
-  container.textContent = '';
-  for (const line of lines) {
-    if (line.startsWith('#') || line.trim() === '') continue;
-    const parts = line.split(' ');
-    if (parts.length === 2) {
-      const div = document.createElement('div');
-      div.className = 'metric';
-      const h3 = document.createElement('h3');
-      h3.textContent = parts[0];
-      const val = document.createElement('div');
-      val.className = 'value';
-      val.textContent = parts[1];
-      div.appendChild(h3);
-      div.appendChild(val);
-      container.appendChild(div);
-    }
-  }
-}
-refresh();
-setInterval(refresh, 5000);
-</script>
+<script src="/dashboard.js"></script>
 </body>
 </html>
 `
@@ -488,7 +493,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:")
 
 		origin := r.Header.Get("Origin")
 		allowed := false
@@ -549,6 +554,11 @@ func emptyRowsIfNil(rows [][]string) [][]string {
 }
 
 func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.MaxLiveQuerySubscriptions > 0 && s.activeSubscriptions.Load() >= int64(s.cfg.MaxLiveQuerySubscriptions) {
+		writeError(w, http.StatusTooManyRequests, errCodeRateLimited, "too many active live query subscriptions")
+		return
+	}
+
 	db := r.URL.Query().Get("database")
 	query := r.URL.Query().Get("query")
 	if query == "" {
@@ -582,6 +592,8 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	send := sub.Send
 
 	s.br.Subscribe(sub)
+	s.activeSubscriptions.Add(1)
+	defer s.activeSubscriptions.Add(-1)
 	defer s.br.Unsubscribe(sub.ID)
 
 	ctx, cancel := context.WithCancel(r.Context())

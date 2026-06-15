@@ -52,7 +52,11 @@ func (g *GINIndex) Type() string     { return "gin" }
 func (g *GINIndex) Name() string     { return g.name }
 func (g *GINIndex) Column() string   { return g.column }
 func (g *GINIndex) ColIndex() int    { return g.colIndex }
-func (g *GINIndex) SetColumn(col string) { g.column = col }
+func (g *GINIndex) SetColumn(col string) {
+	g.mu.Lock()
+	g.column = col
+	g.mu.Unlock()
+}
 
 func (g *GINIndex) Lookup(value string) ([]int, bool) {
 	g.mu.RLock()

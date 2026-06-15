@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -29,8 +30,9 @@ import (
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/pool"
+	"vaultdb/internal/protocol"
 	"vaultdb/internal/storage"
-	"vaultdb/internal/tls"
+	vaulttls "vaultdb/internal/tls"
 	"vaultdb/internal/txmanager"
 	"vaultdb/internal/wal"
 )
@@ -42,22 +44,12 @@ var (
 	buildDate = "unknown"
 )
 
-type Request struct {
-	ID    string `json:"id"`
-	Token string `json:"token,omitempty"`
-	Query string `json:"query"`
-}
-
-type Response struct {
-	ID       string     `json:"id"`
-	Status   string     `json:"status"`
-	Type     string     `json:"type"`
-	Columns  []string   `json:"columns"`
-	Rows     [][]string `json:"rows"`
-	Affected int        `json:"affected"`
-	Message  string     `json:"message,omitempty"`
-	AsOfNote string     `json:"as_of_note,omitempty"`
-}
+const (
+	checkpointInterval    = 30 * time.Second
+	metricsUpdateInterval = 30 * time.Second
+	poolInitialCapacity   = 10
+	poolIdleTimeout       = 5 * time.Minute
+)
 
 func setupLogger(logLevel string) *slog.Logger {
 	level := slog.LevelInfo
@@ -109,7 +101,7 @@ func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *
 			os.Exit(1)
 		}
 
-		go pageStore.CheckpointLoop(ctx, 30*time.Second)
+		go pageStore.CheckpointLoop(ctx, checkpointInterval)
 
 		store = pageStore
 		logger.Info("using page-based storage engine (experimental)")
@@ -120,7 +112,7 @@ func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *
 	return store, serverWAL
 }
 
-func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPort, monitorPort int, store storage.StorageEngine, authManager *auth.Manager, metricsCollector *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, embedder ai.Embedder, activeConnections func() int64, logger *slog.Logger) <-chan error {
+func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPort, monitorPort int, store storage.StorageEngine, authManager *auth.Manager, metricsCollector *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, embedder ai.Embedder, activeConnections func() int64, logger *slog.Logger, tlsCert, tlsKey string) <-chan error {
 	httpSrv := httpserver.New(httpserver.Config{
 		Host:              host,
 		Port:              httpPort,
@@ -136,6 +128,8 @@ func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPor
 		ActiveConnections: activeConnections,
 		Broadcaster:       br,
 		Embedder:          embedder,
+		TLSCertFile:       tlsCert,
+		TLSKeyFile:        tlsKey,
 	})
 	httpErrCh := make(chan error, 1)
 	go func() {
@@ -168,12 +162,13 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 	}()
 
 	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxRequestSize)
+	const maxScannerBuffer = 1024 * 1024
+	scanner.Buffer(make([]byte, 0, 64*1024), maxScannerBuffer)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 
-		var req Request
+		var req protocol.Request
 		if err := json.Unmarshal(line, &req); err != nil {
 			if !sendError(conn, "", "invalid JSON request", logger) {
 				return
@@ -219,7 +214,7 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 // не удалась (клиент отвалился) — в этом случае обрабатывать соединение дальше
 // бессмысленно.
 func sendError(conn net.Conn, id, message string, logger *slog.Logger) bool {
-	resp := Response{
+	resp := protocol.Response{
 		ID:      id,
 		Status:  "error",
 		Type:    "error",
@@ -237,6 +232,9 @@ func sendError(conn net.Conn, id, message string, logger *slog.Logger) bool {
 }
 
 func sendResult(conn net.Conn, id string, result *executor.Result) error {
+	if result == nil {
+		result = &executor.Result{}
+	}
 	columns := result.Columns
 	if columns == nil {
 		columns = []string{}
@@ -247,7 +245,7 @@ func sendResult(conn net.Conn, id string, result *executor.Result) error {
 		rows = [][]string{}
 	}
 
-	resp := Response{
+	resp := protocol.Response{
 		ID:       id,
 		Status:   "ok",
 		Type:     result.Type,
@@ -260,7 +258,7 @@ func sendResult(conn net.Conn, id string, result *executor.Result) error {
 	return writeResponse(conn, resp)
 }
 
-func writeResponse(conn net.Conn, response Response) error {
+func writeResponse(conn net.Conn, response protocol.Response) error {
 	bytes, err := json.Marshal(response)
 	if err != nil {
 		return err
@@ -280,6 +278,7 @@ func main() {
 	healthCheck := flag.Bool("health-check", false, "Run one health check against monitor port and exit")
 	tlsCert := flag.String("tls-cert", "", "Path to TLS certificate file")
 	tlsKey := flag.String("tls-key", "", "Path to TLS private key file")
+	tlsCA := flag.String("tls-ca", "", "Path to CA file for mTLS client verification")
 	flag.Parse()
 
 	if *healthCheck {
@@ -347,7 +346,7 @@ func main() {
 
 	// Start storage metrics background updater
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(metricsUpdateInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -375,9 +374,8 @@ func main() {
 		tokenPath := filepath.Join(cfg.Storage.DataDir, ".generated-token")
 		f, ferr := os.OpenFile(tokenPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if ferr != nil {
-			logger.Warn("could not save token to file, printing to stderr",
+			logger.Error("failed to save generated token to file",
 				"path", tokenPath, "error", ferr)
-			fmt.Fprintf(os.Stderr, "\n  Generated token: %s\n", token)
 		} else {
 			if _, werr := f.WriteString(token + "\n"); werr != nil {
 				logger.Warn("could not write token to file", "path", tokenPath, "error", werr)
@@ -388,10 +386,13 @@ func main() {
 			logger.Warn("no API tokens configured; generated a one-time token",
 				"token_file", tokenPath,
 				"action", "token saved to file, set VAULTDB_API_TOKENS env var for next restart")
-			fmt.Fprintf(os.Stderr, "\n  Token saved to: %s\n", tokenPath)
 		}
 	}
-	authManager := auth.New(authEnabled, tokens, logger)
+	authManager, err := auth.New(authEnabled, tokens, logger)
+	if err != nil {
+		logger.Error("failed to create auth manager", "error", err)
+		os.Exit(1)
+	}
 
 	// Embedding-провайдер для SEMANTIC_MATCH/AI_EMBED. Без настроенного AI
 	// эти операции возвращают понятную ошибку (NoopEmbedder в executor).
@@ -412,7 +413,7 @@ func main() {
 
 	httpErrCh := runHTTPServer(ctx, cfg, *host, *httpPort, *monitorPort, store, authManager, metricsCollector, txm, br, embedder, func() int64 {
 		return activeConnections.Load()
-	}, logger)
+	}, logger, *tlsCert, *tlsKey)
 
 	maxRequestSize := cfg.Server.MaxRequestSizeBytes
 	if maxRequestSize <= 0 {
@@ -423,7 +424,13 @@ func main() {
 	var listener net.Listener
 	if *tlsCert != "" && *tlsKey != "" {
 		// TLS mode
-		tlsCfg, err := tls.LoadTLSConfig(*tlsCert, *tlsKey)
+		var tlsCfg *tls.Config
+		var err error
+		if *tlsCA != "" {
+			tlsCfg, err = vaulttls.LoadMTLSConfig(*tlsCert, *tlsKey, *tlsCA)
+		} else {
+			tlsCfg, err = vaulttls.LoadTLSConfig(*tlsCert, *tlsKey)
+		}
 		if err != nil {
 			logger.Error("failed to load TLS config", "error", err)
 			os.Exit(1)
@@ -433,8 +440,12 @@ func main() {
 			logger.Error("tcp listen failed", "error", err)
 			os.Exit(1)
 		}
-		listener = tls.WrapListener(plainListener, tlsCfg)
-		logger.Info("tcp server started with TLS", "addr", addr)
+		listener = vaulttls.WrapListener(plainListener, tlsCfg)
+		if *tlsCA != "" {
+			logger.Info("tcp server started with mTLS", "addr", addr, "ca_file", *tlsCA)
+		} else {
+			logger.Info("tcp server started with TLS", "addr", addr)
+		}
 	} else {
 		// Plain TCP mode
 		var err error
@@ -448,7 +459,7 @@ func main() {
 
 	// Connection pool
 	maxConns := cfg.Server.MaxConnections
-	connPool := pool.NewPool(10, maxConns, 5*time.Minute)
+	connPool := pool.NewPool(poolInitialCapacity, maxConns, poolIdleTimeout)
 
 	go func() {
 		<-ctx.Done()
@@ -597,11 +608,13 @@ func tokensFromEnv() map[string]string {
 func updateStorageMetrics(s storage.StorageEngine, m *metrics.Collector) {
 	dbs, err := s.ListDatabases()
 	if err != nil {
+		slog.Warn("updateStorageMetrics: list databases", "error", err)
 		return
 	}
 	for _, db := range dbs {
 		tables, err := s.ListTables(db)
 		if err != nil {
+			slog.Warn("updateStorageMetrics: list tables", "db", db, "error", err)
 			continue
 		}
 		for _, t := range tables {

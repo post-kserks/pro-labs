@@ -57,8 +57,5 @@ func computeAcceptKey(key string) string {
 // WriteJSON sends a JSON message over WebSocket.
 // This is a VERY simplified implementation for broadcasting.
 func WriteJSON(bufrw *bufio.ReadWriter, v interface{}) error {
-	// ... implementation of minimal WS framing ...
-	// For now, let's just use SSE if this gets too complex.
-	// Actually, SSE is much simpler for one-way broadcasting.
-	return nil
+	return fmt.Errorf("websocket not implemented; use SSE for live queries")
 }

@@ -12,6 +12,8 @@ type CachedPlan struct {
 	tableName string
 }
 
+const defaultPlanCacheSize = 1000
+
 type PlanCache struct {
 	mu      sync.RWMutex
 	plans   map[string]*CachedPlan
@@ -20,7 +22,7 @@ type PlanCache struct {
 
 func NewPlanCache(maxSize int) *PlanCache {
 	if maxSize <= 0 {
-		maxSize = 1000
+		maxSize = defaultPlanCacheSize
 	}
 	return &PlanCache{
 		plans:   make(map[string]*CachedPlan),
@@ -54,7 +56,7 @@ func (pc *PlanCache) Invalidate(tableName string) {
 }
 
 func planCacheKey(stmt parser.Statement) string {
-	return fmt.Sprintf("%v", stmt)
+	return fmt.Sprintf("%T:%s", stmt, stmt.StatementType())
 }
 
 func tableNameFromStmt(stmt parser.Statement) string {

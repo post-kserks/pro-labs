@@ -15,6 +15,7 @@ type Pool struct {
 	maxSize     int
 	idleTimeout time.Duration
 	stopCh      chan struct{}
+	wg          sync.WaitGroup
 }
 
 // Connection — соединение в пуле.
@@ -46,6 +47,7 @@ func NewPool(minSize, maxSize int, idleTimeout time.Duration) *Pool {
 	}
 
 	// Запускаем фоновую горутину для очистки неиспользуемых соединений
+	p.wg.Add(1)
 	go p.cleanupLoop()
 
 	return p
@@ -94,10 +96,10 @@ func (p *Pool) Release(conn *Connection) {
 
 // Close закрывает пул и все соединения.
 func (p *Pool) Close() {
+	close(p.stopCh)
+	p.wg.Wait()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
-	close(p.stopCh)
 	p.connections = nil
 }
 
@@ -126,6 +128,7 @@ func (p *Pool) Stats() PoolStats {
 // cleanupLoop periodically cleans up idle connections.
 // It exits when the pool's stopCh is closed via Close().
 func (p *Pool) cleanupLoop() {
+	defer p.wg.Done()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 

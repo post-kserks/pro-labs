@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -61,7 +60,11 @@ type pageCatalog struct {
 	TxTimes      []pageTxStamp     `json:"tx_times"`
 }
 
-const pageTupleHeaderSize = 16
+const (
+	pageTupleHeaderSize = 16
+	maxTxTimesEntries   = 10000
+	keepTxTimesEntries  = 5000
+)
 
 // NewPageStorageEngine открывает (или создаёт) страничное хранилище в
 // <dataDir>/pagedb.
@@ -80,7 +83,7 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) 
 		},
 		wal:     w,
 		txMgr:   txMgr,
-		bufPool: NewBufferPool(1024), // 1024 страницы = 8 МБ
+		bufPool: NewBufferPool(defaultBufferPoolCapacity),
 	}
 
 	catalogPath := e.catalogPath()
@@ -472,6 +475,9 @@ func (e *PageStorageEngine) nextTxLocked() uint64 {
 		TxID:      e.catalog.CurrentTxID,
 		Timestamp: time.Now(),
 	})
+	if len(e.catalog.TxTimes) > maxTxTimesEntries {
+		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
+	}
 	return e.catalog.CurrentTxID
 }
 
@@ -524,6 +530,9 @@ func decodePageTuple(tuple []byte, schema *TableSchema) (createdTx, deletedTx ui
 // ── Базы данных ───────────────────────────────────────────────────────────
 
 func (e *PageStorageEngine) CreateDatabase(name string) error {
+	if err := validateObjectName(name); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	path := e.dbPath(name)
@@ -534,6 +543,9 @@ func (e *PageStorageEngine) CreateDatabase(name string) error {
 }
 
 func (e *PageStorageEngine) DropDatabase(name string) error {
+	if err := validateObjectName(name); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := os.Stat(e.dbPath(name)); err != nil {
@@ -581,6 +593,13 @@ func (e *PageStorageEngine) ListDatabases() ([]string, error) {
 // ── Таблицы ───────────────────────────────────────────────────────────────
 
 func (e *PageStorageEngine) CreateTable(dbName string, schema TableSchema) error {
+	if err := validateObjectName(dbName); err != nil {
+		return err
+	}
+	if err := validateObjectName(schema.Name); err != nil {
+		return err
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -669,6 +688,12 @@ func (e *PageStorageEngine) getTableLocked(db, table string, cache bool) (*pageT
 }
 
 func (e *PageStorageEngine) DropTable(dbName, tableName string) error {
+	if err := validateObjectName(dbName); err != nil {
+		return err
+	}
+	if err := validateObjectName(tableName); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	key := dbName + "/" + tableName
@@ -1265,7 +1290,7 @@ func (e *PageStorageEngine) RowHistory(dbName, tableName string, pkValue interfa
 
 	history := []VersionedRow{}
 	err = e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
-		if len(row) > 0 && reflect.DeepEqual(row[0], pk) {
+		if len(row) > 0 && valuesEqual(row[0], pk) {
 			history = append(history, VersionedRow{CreatedTx: createdTx, DeletedTx: deletedTx, Data: row})
 		}
 		return false, nil

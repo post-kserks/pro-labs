@@ -96,12 +96,6 @@ func (hf *HeapFile) getSegment(segNo uint16) (*os.File, error) {
 }
 
 // ReadPage reads a page from disk into buf and verifies its checksum.
-//
-// KNOWN LIMITATION: There is a TOCTOU race between releasing the RLock and
-// performing ReadAt. If Close() runs in that window, the file descriptor is
-// closed and ReadAt returns "bad file descriptor". In practice this is not
-// a problem because Close() is only called during shutdown when no I/O is
-// in progress. The practical impact is a confusing error message, not a crash.
 func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
 	hf.mu.RLock()
 	if hf.closed {
@@ -113,11 +107,12 @@ func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
 		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
 	}
 	seg := hf.segments[pid.SegmentNo]
-	hf.mu.RUnlock()
 
 	if _, err := seg.ReadAt(buf[:], pid.FileOffset()); err != nil {
+		hf.mu.RUnlock()
 		return fmt.Errorf("readpage %v: %w", pid, err)
 	}
+	hf.mu.RUnlock()
 
 	if !buf.VerifyChecksum() {
 		return fmt.Errorf("page %v: stored=%d computed=%d: %w",
@@ -128,10 +123,6 @@ func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
 
 // WritePage computes the page checksum and writes the page to disk.
 // It does NOT fsync — durability ordering is the WAL's responsibility.
-//
-// KNOWN LIMITATION: Same TOCTOU race as ReadPage — releasing the RLock
-// before WriteAt means Close() could run in between. In practice, Close()
-// is only called during shutdown when no I/O is happening.
 func (hf *HeapFile) WritePage(pid page.PageID, buf *page.Page) error {
 	hf.mu.RLock()
 	if hf.closed {
@@ -143,10 +134,10 @@ func (hf *HeapFile) WritePage(pid page.PageID, buf *page.Page) error {
 		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
 	}
 	seg := hf.segments[pid.SegmentNo]
-	hf.mu.RUnlock()
 
 	buf.SetChecksum()
 	_, err := seg.WriteAt(buf[:], pid.FileOffset())
+	hf.mu.RUnlock()
 	return err
 }
 

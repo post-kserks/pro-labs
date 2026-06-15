@@ -146,75 +146,10 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	// Try index lookup (only for single table for now)
 	usedIndex := false
 	if len(c.stmt.Joins) == 0 && c.stmt.Where != nil && c.stmt.AsOf == nil {
-		if cmp, ok := c.stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "=" {
-			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
-				var val parser.Value
-				foundVal := false
-				switch v := cmp.Right.(type) {
-				case parser.Value:
-					val = v
-					foundVal = true
-				case *parser.Value:
-					val = *v
-					foundVal = true
-				}
-
-				if foundVal {
-					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, valueToString(parserValueToRaw(val))); ok {
-						rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
-						if err == nil {
-							usedIndex = true
-						}
-					}
-				}
-			}
-		} else if cmp, ok := c.stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "@@" {
-			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
-				queryVal := valueToString(evalOperandRaw(cmp.Right))
-				if queryVal != "" {
-					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, queryVal); ok && len(positions) > 0 {
-						rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
-						if err == nil {
-							usedIndex = true
-						}
-					}
-				}
-			}
-		} else if cmp, ok := c.stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "@>" {
-			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
-				queryVal := valueToString(evalOperandRaw(cmp.Right))
-				if queryVal != "" {
-					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, queryVal); ok && len(positions) > 0 {
-						rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
-						if err == nil {
-							usedIndex = true
-						}
-					}
-				}
-			}
-		} else if cmp, ok := c.stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "<@" {
-			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
-				queryVal := valueToString(evalOperandRaw(cmp.Right))
-				if queryVal != "" {
-					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, queryVal); ok && len(positions) > 0 {
-						rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
-						if err == nil {
-							usedIndex = true
-						}
-					}
-				}
-			}
-		} else if cmp, ok := c.stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "?" {
-			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
-				queryVal := valueToString(evalOperandRaw(cmp.Right))
-				if queryVal != "" {
-					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, queryVal); ok && len(positions) > 0 {
-						rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
-						if err == nil {
-							usedIndex = true
-						}
-					}
-				}
+		if positions, ok := tryIndexLookup(ctx, dbName, c.stmt.TableName, c.stmt.Where); ok {
+			rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
+			if err == nil {
+				usedIndex = true
 			}
 		}
 	}
@@ -355,6 +290,54 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 		Schema:   resultSchema,
 		AsOfNote: asOfNote,
 	}, nil
+}
+
+var indexOperators = map[string]bool{
+	"=":  true,
+	"@@": true,
+	"@>": true,
+	"<@": true,
+	"?":  true,
+}
+
+func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parser.Expression) ([]int, bool) {
+	cmp, ok := where.(*parser.BinaryExpr)
+	if !ok {
+		return nil, false
+	}
+	if !indexOperators[cmp.Operator] {
+		return nil, false
+	}
+	col, ok := cmp.Left.(*parser.ColumnRef)
+	if !ok {
+		return nil, false
+	}
+
+	var queryVal string
+	if cmp.Operator == "=" {
+		var val parser.Value
+		switch v := cmp.Right.(type) {
+		case parser.Value:
+			val = v
+		case *parser.Value:
+			val = *v
+		default:
+			return nil, false
+		}
+		queryVal = valueToString(parserValueToRaw(val))
+	} else {
+		queryVal = valueToString(evalOperandRaw(cmp.Right))
+	}
+
+	if queryVal == "" {
+		return nil, false
+	}
+
+	positions, ok := ctx.Storage.IndexLookup(dbName, tableName, col.Name, queryVal)
+	if !ok || len(positions) == 0 {
+		return nil, false
+	}
+	return positions, true
 }
 
 func (c *SelectCommand) executeDerivedTable(ctx *ExecutionContext) (*Result, error) {
@@ -677,81 +660,6 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 }
 
 // hashJoin выполняет Hash Join для equi-join.
-func (c *SelectCommand) hashJoin(leftRows, rightRows []storage.Row, leftSchema, rightSchema, combinedSchema *storage.TableSchema, join parser.JoinClause, ctx *ExecutionContext) []storage.Row {
-	// Определяем столбец для хэширования
-	if join.Condition == nil {
-		return nil
-	}
-
-	cmp, ok := join.Condition.(*parser.BinaryExpr)
-	if !ok || cmp.Operator != "=" {
-		return nil
-	}
-
-	// Определяем левый и правый столбцы
-	leftCol, leftIsCol := cmp.Left.(*parser.ColumnRef)
-	rightCol, rightIsCol := cmp.Right.(*parser.ColumnRef)
-
-	var hashColLeft, hashColRight *parser.ColumnRef
-	if leftIsCol && !rightIsCol {
-		hashColLeft = leftCol
-		hashColRight = rightCol
-	} else if !leftIsCol && rightIsCol {
-		hashColLeft = rightCol
-		hashColRight = leftCol
-	} else {
-		return nil // Не equi-join
-	}
-
-	// Выбираем меньшую таблицу для построения хэш-таблицы
-	hashRows := leftRows
-	probeRows := rightRows
-	hashSchema := leftSchema
-	probeSchema := rightSchema
-	hashCol := hashColLeft
-	probeCol := hashColRight
-
-	if len(rightRows) < len(leftRows) {
-		hashRows = rightRows
-		probeRows = leftRows
-		hashSchema = rightSchema
-		probeSchema = leftSchema
-		hashCol = hashColRight
-		probeCol = hashColLeft
-	}
-
-	// Построение хэш-таблицы
-	hashTable := make(map[string][]storage.Row)
-	for _, row := range hashRows {
-		val, err := evalOperand(hashCol, row, hashSchema, ctx)
-		if err != nil {
-			continue
-		}
-		key := valueToString(val)
-		hashTable[key] = append(hashTable[key], row)
-	}
-
-	// Probe phase
-	var result []storage.Row
-	for _, probeRow := range probeRows {
-		val, err := evalOperand(probeCol, probeRow, probeSchema, ctx)
-		if err != nil {
-			continue
-		}
-		key := valueToString(val)
-
-		if matchingRows, ok := hashTable[key]; ok {
-			for _, hashRow := range matchingRows {
-				// Объединяем строки
-				combinedRow := append(append(storage.Row{}, hashRow...), probeRow...)
-				result = append(result, combinedRow)
-			}
-		}
-	}
-
-	return result
-}
-
 func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.TableSchema, asOfNote string, ctx *ExecutionContext) (*Result, error) {
 	groups := make(map[string][]storage.Row)
 	groupOrder := make([]string, 0)
@@ -803,8 +711,11 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 			for i, col := range c.stmt.Columns {
 				if aggregators[i] != nil {
 					aggExpr := col.Expr.(*parser.AggregateExpr)
-					var val interface{}
-					if len(aggExpr.Args) > 0 {
+					var key, val interface{}
+					if strings.EqualFold(aggExpr.Name, "JSON_OBJECT_AGG") && len(aggExpr.Args) >= 2 {
+						key, _ = evalOperand(aggExpr.Args[0], row, schema, ctx)
+						val, _ = evalOperand(aggExpr.Args[1], row, schema, ctx)
+					} else if len(aggExpr.Args) > 0 {
 						if colRef, ok := aggExpr.Args[0].(*parser.ColumnRef); ok && colRef.Name == "*" {
 							val = int64(1)
 						} else {
@@ -813,7 +724,7 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 					} else {
 						val = int64(1)
 					}
-					aggregators[i].Add(val)
+					aggregators[i].Add(key, val)
 				}
 			}
 		}
@@ -1568,7 +1479,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 			} else {
 				val = int64(1)
 			}
-			agg.Add(val)
+			agg.Add(nil, val)
 		}
 		return agg.Result()
 	}

@@ -273,8 +273,13 @@ func TestTupleHeaderRoundtrip(t *testing.T) {
 		NAttributes: 12,
 	}
 	buf := make([]byte, TupleHeaderSize)
-	h.Serialize(buf)
-	got := ParseTupleHeader(buf)
+	if err := h.Serialize(buf); err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	got, err := ParseTupleHeader(buf)
+	if err != nil {
+		t.Fatalf("ParseTupleHeader: %v", err)
+	}
 	if got != h {
 		t.Errorf("roundtrip = %+v, want %+v", got, h)
 	}

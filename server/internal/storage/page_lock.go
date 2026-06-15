@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"log/slog"
 	"sync"
 	"vaultdb/internal/storage/page"
 )
@@ -23,20 +24,14 @@ func NewPageLockManager() *PageLockManager {
 
 // RLockPage блокирует страницу для чтения.
 func (pm *PageLockManager) RLockPage(pid page.PageID) {
-	pm.mu.RLock()
+	pm.mu.Lock()
 	lock, ok := pm.locks[pid]
-	pm.mu.RUnlock()
-
 	if !ok {
-		pm.mu.Lock()
-		lock, ok = pm.locks[pid]
-		if !ok {
-			lock = &sync.RWMutex{}
-			pm.locks[pid] = lock
-			pm.evictIfTooLarge()
-		}
-		pm.mu.Unlock()
+		lock = &sync.RWMutex{}
+		pm.locks[pid] = lock
+		pm.evictIfTooLarge()
 	}
+	pm.mu.Unlock()
 
 	lock.RLock()
 }
@@ -49,25 +44,21 @@ func (pm *PageLockManager) UnlockPage(pid page.PageID) {
 
 	if ok {
 		lock.RUnlock()
+	} else {
+		slog.Warn("page lock not found on unlock", "pageID", pid)
 	}
 }
 
 // LockPage блокирует страницу для записи.
 func (pm *PageLockManager) LockPage(pid page.PageID) {
-	pm.mu.RLock()
+	pm.mu.Lock()
 	lock, ok := pm.locks[pid]
-	pm.mu.RUnlock()
-
 	if !ok {
-		pm.mu.Lock()
-		lock, ok = pm.locks[pid]
-		if !ok {
-			lock = &sync.RWMutex{}
-			pm.locks[pid] = lock
-			pm.evictIfTooLarge()
-		}
-		pm.mu.Unlock()
+		lock = &sync.RWMutex{}
+		pm.locks[pid] = lock
+		pm.evictIfTooLarge()
 	}
+	pm.mu.Unlock()
 
 	lock.Lock()
 }
@@ -80,6 +71,8 @@ func (pm *PageLockManager) UnlockPageWrite(pid page.PageID) {
 
 	if ok {
 		lock.Unlock()
+	} else {
+		slog.Warn("page lock not found on unlock", "pageID", pid)
 	}
 }
 
@@ -101,16 +94,6 @@ func (pm *PageLockManager) UnlockTable(pids []page.PageID) {
 	}
 }
 
-// evictIfTooLarge удаляет неиспользуемые блокировки если карта выросла слишком большой.
-// Вызывается под write-локом.
-//
-// NOTE: This eviction is best-effort. The TryLock/Unlock/TryRLock/delete
-// sequence is inherently TOCTOU — between releasing the exclusive lock and
-// acquiring the read lock, another goroutine may have taken the lock pointer.
-// Callers must not rely on exact lock counts. The current approach is
-// acceptable because Go's GC prevents use-after-free; the worst case is two
-// goroutines using different lock objects for the same page, which still
-// provides some protection via the page-level locking in page_lock.go.
 func (pm *PageLockManager) evictIfTooLarge() {
 	if len(pm.locks) <= maxLocksBeforeEviction {
 		return
@@ -123,6 +106,9 @@ func (pm *PageLockManager) evictIfTooLarge() {
 		if lock.TryRLock() {
 			lock.RUnlock()
 			delete(pm.locks, pid)
+		}
+		if len(pm.locks) <= maxLocksBeforeEviction/2 {
+			break
 		}
 	}
 }

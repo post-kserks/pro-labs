@@ -2,7 +2,9 @@ package httpserver
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -79,10 +81,27 @@ func (rl *RateLimiter) Allow(key string) bool {
 	return false
 }
 
+// extractClientIP returns the real client IP, preferring X-Forwarded-For
+// and X-Real-IP headers over RemoteAddr.
+func extractClientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[0])
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 // Middleware возвращает HTTP middleware для rate limiting.
 func (rl *RateLimiter) Middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key := r.RemoteAddr
+		key := extractClientIP(r)
 
 		if !rl.Allow(key) {
 			w.Header().Set("Content-Type", "application/json")

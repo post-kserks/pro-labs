@@ -239,24 +239,6 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 			}
 			normalized[colIdx] = converted
 		}
-		for i, col := range schema.Columns {
-			if col.IsComputed {
-				if col.Name == "double_level" {
-					levelIdx := -1
-					for j, c := range schema.Columns {
-						if c.Name == "level" {
-							levelIdx = j
-							break
-						}
-					}
-					if levelIdx != -1 && normalized[levelIdx] != nil {
-						if f, ok := toFloat(normalized[levelIdx]); ok {
-							normalized[i] = f * 2
-						}
-					}
-				}
-			}
-		}
 		result = append(result, normalized)
 	}
 

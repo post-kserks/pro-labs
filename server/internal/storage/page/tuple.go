@@ -1,6 +1,9 @@
 package page
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // TupleHeaderSize is the serialized size of a TupleHeader.
 // XMin(8) + XMax(8) + CMin(4) + InfoMask(2) + NAttributes(2) = 24 bytes.
@@ -32,23 +35,30 @@ type TupleHeader struct {
 }
 
 // Serialize writes the header into buf, which must hold TupleHeaderSize bytes.
-func (h *TupleHeader) Serialize(buf []byte) {
+func (h *TupleHeader) Serialize(buf []byte) error {
+	if len(buf) < TupleHeaderSize {
+		return fmt.Errorf("buffer too small for tuple header: %d < %d", len(buf), TupleHeaderSize)
+	}
 	binary.LittleEndian.PutUint64(buf[0:], h.XMin)
 	binary.LittleEndian.PutUint64(buf[8:], h.XMax)
 	binary.LittleEndian.PutUint32(buf[16:], h.CMin)
 	binary.LittleEndian.PutUint16(buf[20:], h.InfoMask)
 	binary.LittleEndian.PutUint16(buf[22:], h.NAttributes)
+	return nil
 }
 
 // ParseTupleHeader reads a TupleHeader from the start of buf.
-func ParseTupleHeader(buf []byte) TupleHeader {
+func ParseTupleHeader(buf []byte) (TupleHeader, error) {
+	if len(buf) < TupleHeaderSize {
+		return TupleHeader{}, fmt.Errorf("tuple header too short: %d < %d", len(buf), TupleHeaderSize)
+	}
 	return TupleHeader{
 		XMin:        binary.LittleEndian.Uint64(buf[0:]),
 		XMax:        binary.LittleEndian.Uint64(buf[8:]),
 		CMin:        binary.LittleEndian.Uint32(buf[16:]),
 		InfoMask:    binary.LittleEndian.Uint16(buf[20:]),
 		NAttributes: binary.LittleEndian.Uint16(buf[22:]),
-	}
+	}, nil
 }
 
 // NullBitmapSize returns the size in bytes of the NULL bitmap for nAttrs
@@ -60,10 +70,16 @@ func NullBitmapSize(nAttrs uint16) int {
 // IsNull reports whether attribute i is NULL according to the bitmap that
 // immediately follows the TupleHeader (bit i == 0 means NULL).
 func IsNull(bitmap []byte, i int) bool {
+	if i < 0 || i/8 >= len(bitmap) {
+		return false
+	}
 	return bitmap[i/8]&(1<<(i%8)) == 0
 }
 
 // SetNotNull marks attribute i as not NULL in the bitmap.
 func SetNotNull(bitmap []byte, i int) {
+	if i < 0 || i/8 >= len(bitmap) {
+		return
+	}
 	bitmap[i/8] |= 1 << (i % 8)
 }

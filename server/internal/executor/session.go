@@ -36,7 +36,7 @@ func NewSession(store storage.StorageEngine, m *metrics.Collector, txm *txmanage
 		TxManager:          txm,
 		Broadcaster:        b,
 		PreparedStatements: make(map[string]*PreparedStatement),
-		planCache:          NewPlanCache(1000),
+		planCache:          NewPlanCache(defaultPlanCacheSize),
 	}
 }
 

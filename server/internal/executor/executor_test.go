@@ -24,6 +24,18 @@ func executeSQL(t *testing.T, session *Session, sql string) *Result {
 	return result
 }
 
+func executeSQLExpectError(t *testing.T, session *Session, sql string) {
+	t.Helper()
+	stmt, err := parser.Parse(sql)
+	if err != nil {
+		t.Fatalf("Parse failed for %q: %v", sql, err)
+	}
+	_, err = session.Execute(stmt)
+	if err == nil {
+		t.Fatalf("Expected error for %q, but got none", sql)
+	}
+}
+
 func setupSession(t *testing.T) *Session {
 	t.Helper()
 	store := storage.NewFileStorageEngine(t.TempDir(), nil)
@@ -483,7 +495,7 @@ func TestInsertWithExplicitColumns(t *testing.T) {
 	if len(selected.Rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(selected.Rows))
 	}
-	if selected.Rows[0][0] != "NULL" || selected.Rows[0][1] != "NULL" {
+	if selected.Rows[0][0] != "" || selected.Rows[0][1] != "" {
 		t.Fatalf("expected NULL values for omitted columns, got %#v", selected.Rows[0])
 	}
 }

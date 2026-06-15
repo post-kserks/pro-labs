@@ -45,7 +45,7 @@ func NewLogger(filename string) (*Logger, error) {
 		return &Logger{logger: slog.Default()}, nil
 	}
 
-	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,7 +40,9 @@ type StorageConfig struct {
 
 // AuthConfig — параметры аутентификации.
 type AuthConfig struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled    bool   `yaml:"enabled"`
+	MTLSEnabled bool  `yaml:"mtls_enabled"`
+	MTLScaFile string `yaml:"mtls_ca_file"`
 }
 
 // AIConfig — параметры внешнего embedding-провайдера для SEMANTIC_MATCH/AI_EMBED.
@@ -207,6 +210,8 @@ func ApplyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("VAULTDB_PORT"); v != "" {
 		if n, err := strconv.Atoi(v); err != nil {
 			slog.Warn("invalid VAULTDB_PORT, ignoring", "value", v, "error", err)
+		} else if n < 1 || n > 65535 {
+			slog.Warn("VAULTDB_PORT out of range (1-65535), ignoring", "value", v)
 		} else {
 			cfg.Server.Port = n
 		}
@@ -214,6 +219,8 @@ func ApplyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("VAULTDB_HTTP_PORT"); v != "" {
 		if n, err := strconv.Atoi(v); err != nil {
 			slog.Warn("invalid VAULTDB_HTTP_PORT, ignoring", "value", v, "error", err)
+		} else if n < 1 || n > 65535 {
+			slog.Warn("VAULTDB_HTTP_PORT out of range (1-65535), ignoring", "value", v)
 		} else {
 			cfg.Server.HTTPPort = n
 		}
@@ -221,6 +228,8 @@ func ApplyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("VAULTDB_MONITOR_PORT"); v != "" {
 		if n, err := strconv.Atoi(v); err != nil {
 			slog.Warn("invalid VAULTDB_MONITOR_PORT, ignoring", "value", v, "error", err)
+		} else if n < 1 || n > 65535 {
+			slog.Warn("VAULTDB_MONITOR_PORT out of range (1-65535), ignoring", "value", v)
 		} else {
 			cfg.Server.MonitorPort = n
 		}
@@ -231,8 +240,23 @@ func ApplyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("VAULTDB_DATA_DIR"); v != "" {
 		cfg.Storage.DataDir = v
 	}
+	if v := os.Getenv("VAULTDB_MTLS_ENABLED"); v != "" {
+		cfg.Auth.MTLSEnabled = envBoolValue(v)
+	}
+	if v := os.Getenv("VAULTDB_MTLS_CA_FILE"); v != "" {
+		cfg.Auth.MTLScaFile = v
+	}
 	if v := os.Getenv("VAULTDB_AI_API_KEY"); v != "" {
 		cfg.AI.APIKey = v
+	}
+}
+
+func envBoolValue(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }
 

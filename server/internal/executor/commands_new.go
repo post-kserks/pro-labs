@@ -50,6 +50,17 @@ func (c *TruncateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		indices[i] = i
 	}
 
+	triggers, err := loadAllObjectsByType(ctx, dbName, objTypeTrigger)
+	if err == nil {
+		for _, td := range triggers {
+			triggerTable, _ := td["table"].(string)
+			if triggerTable == c.stmt.TableName {
+				return nil, fmt.Errorf("TRUNCATE with triggers not yet supported; use DELETE instead")
+			}
+		}
+	}
+
+	// TODO: fire DELETE triggers for TRUNCATE when trigger infrastructure is ready
 	if len(indices) > 0 {
 		_, err = ctx.Storage.DeleteRows(dbName, c.stmt.TableName, indices)
 		if err != nil {
@@ -260,16 +271,7 @@ type SavepointCommand struct {
 }
 
 func (c *SavepointCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	if !ctx.Session.IsInTx() {
-		return nil, fmt.Errorf("no active transaction")
-	}
-
-	// For now, savepoints are a no-op (simplified implementation)
-	// Full implementation would require saving transaction state
-	return &Result{
-		Type:    "message",
-		Message: fmt.Sprintf("Savepoint '%s' created.", c.stmt.Name),
-	}, nil
+	return nil, fmt.Errorf("SAVEPOINT not yet implemented; use BEGIN/COMMIT/ROLLBACK for transaction control")
 }
 
 // RollbackToSavepointCommand выполняет ROLLBACK TO SAVEPOINT.
@@ -278,15 +280,7 @@ type RollbackToSavepointCommand struct {
 }
 
 func (c *RollbackToSavepointCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	if !ctx.Session.IsInTx() {
-		return nil, fmt.Errorf("no active transaction")
-	}
-
-	// For now, rollback to savepoint is a no-op (simplified implementation)
-	return &Result{
-		Type:    "message",
-		Message: fmt.Sprintf("Rolled back to savepoint '%s'.", c.stmt.Name),
-	}, nil
+	return nil, fmt.Errorf("ROLLBACK TO SAVEPOINT not yet implemented; use BEGIN/COMMIT/ROLLBACK for transaction control")
 }
 
 // ReleaseSavepointCommand выполняет RELEASE SAVEPOINT.
@@ -295,14 +289,6 @@ type ReleaseSavepointCommand struct {
 }
 
 func (c *ReleaseSavepointCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	if !ctx.Session.IsInTx() {
-		return nil, fmt.Errorf("no active transaction")
-	}
-
-	// For now, release savepoint is a no-op (simplified implementation)
-	return &Result{
-		Type:    "message",
-		Message: fmt.Sprintf("Savepoint '%s' released.", c.stmt.Name),
-	}, nil
+	return nil, fmt.Errorf("RELEASE SAVEPOINT not yet implemented; use BEGIN/COMMIT/ROLLBACK for transaction control")
 }
 
