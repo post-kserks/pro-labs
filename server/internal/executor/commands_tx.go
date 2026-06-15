@@ -22,7 +22,7 @@ func (c *BeginCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("transaction already active; COMMIT or ROLLBACK first")
 	}
 
-	ctx.Session.ActiveTx = ctx.Session.TxManager.Begin()
+	ctx.Session.SetActiveTx(ctx.Session.TxManager.Begin())
 
 	return &Result{
 		Type:    "message",
@@ -64,7 +64,7 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 				"xid", tx.ID, "error", undoErr)
 		}
 		tx.Rollback()
-		ctx.Session.ActiveTx = nil
+		ctx.Session.ClearActiveTx()
 		if applied > 0 {
 			return nil, fmt.Errorf("commit failed after applying %d of %d operations; data may be partially updated: %w", applied, opsCount, applyErr)
 		}
@@ -77,13 +77,13 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			// Не смогли записать COMMIT — транзакция считается незакоммиченной
 			undoAppliedOps(ctx, tx.Ops)
 			tx.Rollback()
-			ctx.Session.ActiveTx = nil
+			ctx.Session.ClearActiveTx()
 			return nil, fmt.Errorf("wal commit failed, transaction rolled back: %w", err)
 		}
 	}
 
 	tx.Rollback()
-	ctx.Session.ActiveTx = nil
+	ctx.Session.ClearActiveTx()
 
 	return &Result{
 		Type:    "message",
@@ -108,7 +108,7 @@ func (c *RollbackCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	ctx.Session.ActiveTx.Rollback()
-	ctx.Session.ActiveTx = nil
+	ctx.Session.ClearActiveTx()
 	return &Result{
 		Type:    "message",
 		Message: fmt.Sprintf("Transaction rolled back (%d operations discarded).", opsCount),
@@ -283,9 +283,14 @@ func undoUpdate(ctx *ExecutionContext, op txmanager.PendingOp) error {
 		}
 	}
 
-	for i, idx := range restoreIndices {
-		_, err := ctx.Storage.UpdateRows(op.DB, op.Table, []int{idx}, restoreUpdates[i])
-		if err != nil {
+	if len(restoreIndices) > 0 {
+		mergedUpdates := make(map[string]storage.Value)
+		for _, u := range restoreUpdates {
+			for k, v := range u {
+				mergedUpdates[k] = v
+			}
+		}
+		if _, err := ctx.Storage.UpdateRows(op.DB, op.Table, restoreIndices, mergedUpdates); err != nil {
 			return err
 		}
 	}

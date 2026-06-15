@@ -186,9 +186,11 @@ func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *Executio
 
 	for _, s := range matched {
 		// Re-run the query in the subscription's DB context
+		origDB := ctx.Session.CurrentDatabase()
 		ctx.Session.SetCurrentDatabase(s.DB)
 		cmd := &SelectCommand{stmt: s.Query}
 		res, err := cmd.Execute(ctx)
+		ctx.Session.SetCurrentDatabase(origDB)
 		if err != nil {
 			continue
 		}

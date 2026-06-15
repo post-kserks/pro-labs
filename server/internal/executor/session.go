@@ -95,3 +95,15 @@ func (s *Session) DeletePreparedStatement(name string) {
 	defer s.mu.Unlock()
 	delete(s.PreparedStatements, name)
 }
+
+func (s *Session) SetActiveTx(tx *txmanager.Transaction) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ActiveTx = tx
+}
+
+func (s *Session) ClearActiveTx() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ActiveTx = nil
+}

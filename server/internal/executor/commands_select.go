@@ -4,9 +4,7 @@ package executor
 // set-операции, EXPLAIN, HISTORY.
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -92,7 +90,7 @@ func (c *SelectCommand) executeWithCTE(ctx *ExecutionContext, dbName string) (*R
 
 func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string) (*Result, error) {
 	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
-		viewQuery, err := loadViewQuery(dbName, c.stmt.TableName)
+		viewQuery, err := loadViewQueryWithCtx(ctx, dbName, c.stmt.TableName)
 		if err == nil && viewQuery != "" {
 			subStmt, err := parser.Parse(viewQuery)
 			if err != nil {
@@ -1608,17 +1606,15 @@ func rowKey(row storage.Row) string {
 	return strings.Join(parts, "\x00")
 }
 
-func loadViewQuery(dbName, viewName string) (string, error) {
-	path := fmt.Sprintf("%s/_views/%s.json", dbName, viewName)
-	data, err := os.ReadFile(path)
+func loadViewQueryWithCtx(ctx *ExecutionContext, dbName, viewName string) (string, error) {
+	def, err := loadObject(ctx, dbName, objTypeView, viewName)
 	if err != nil {
 		return "", err
 	}
-	var vd map[string]interface{}
-	if err := json.Unmarshal(data, &vd); err != nil {
-		return "", err
+	if def == nil {
+		return "", fmt.Errorf("view '%s' not found", viewName)
 	}
-	if query, ok := vd["query"].(string); ok {
+	if query, ok := def["query"].(string); ok {
 		return query, nil
 	}
 	return "", fmt.Errorf("view query not found")

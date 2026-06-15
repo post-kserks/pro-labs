@@ -415,12 +415,13 @@ func (e *PageStorageEngine) doCheckpoint() error {
 		e.mu.Unlock()
 		return fmt.Errorf("checkpoint: save catalog: %w", err)
 	}
-	e.mu.Unlock()
 
-	// Шаг 4: записать checkpoint в WAL
+	// Шаг 4: записать checkpoint в WAL (inside lock to prevent races)
 	if _, err := e.wal.Append(wal.OpCheckpoint, wal.CheckpointPayload{LSN: lsn}); err != nil {
+		e.mu.Unlock()
 		return fmt.Errorf("checkpoint: write record: %w", err)
 	}
+	e.mu.Unlock()
 
 	return nil
 }
@@ -1272,10 +1273,10 @@ func (e *PageStorageEngine) TxIDAtTimestamp(dbName, ts string) (uint64, error) {
 }
 
 func (e *PageStorageEngine) RowHistory(dbName, tableName string, pkValue interface{}) ([]VersionedRow, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 
-	t, err := e.getTableLocked(dbName, tableName, true)
+	t, err := e.getTableLocked(dbName, tableName, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1446,10 +1447,10 @@ func (e *PageStorageEngine) tableSizeLocked(db, table string) int64 {
 }
 
 func (e *PageStorageEngine) TableVersionStats(dbName, tableName string) (*TableVersionStats, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 
-	t, err := e.getTableLocked(dbName, tableName, true)
+	t, err := e.getTableLocked(dbName, tableName, false)
 	if err != nil {
 		return nil, err
 	}

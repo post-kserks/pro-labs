@@ -6,7 +6,6 @@ import (
 	"fmt"
 	crypto_rand "crypto/rand"
 	"math"
-	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -90,6 +89,10 @@ func evalFtsMatch(left, right interface{}) (bool, error) {
 	}
 
 	docTerms := strings.Fields(text)
+	if len(docTerms) == 0 {
+		return false, nil
+	}
+
 	docFreq := make(map[string]int)
 	for _, term := range docTerms {
 		docFreq[term]++
@@ -204,6 +207,10 @@ func evalFullTextMatch(left, right interface{}, ctx *ExecutionContext) (interfac
 	}
 	
 	textTerms := strings.Fields(text)
+	if len(textTerms) == 0 {
+		return false, nil
+	}
+	
 	freq := make(map[string]int)
 	for _, term := range textTerms {
 		freq[term]++
@@ -340,6 +347,9 @@ func evalArithmetic(left, right interface{}, op string) (interface{}, error) {
 	}
 
 	if lint && rint && op != "/" {
+		if res > float64(math.MaxInt64) || res < float64(math.MinInt64) {
+			return nil, fmt.Errorf("value out of int64 range")
+		}
 		return int64(res), nil
 	}
 
@@ -491,7 +501,7 @@ func fnSubstring(args []interface{}, ctx *ExecutionContext) (interface{}, error)
 }
 
 func fnTrim(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
-	if len(args) < 1 || len(args) > 1 {
+	if len(args) != 1 {
 		return nil, fmt.Errorf("TRIM requires 1 argument")
 	}
 	s := valueToString(args[0])
@@ -530,11 +540,14 @@ func fnPosition(args []interface{}, ctx *ExecutionContext) (interface{}, error) 
 	}
 	substr := valueToString(args[0])
 	s := valueToString(args[1])
-	idx := strings.Index(s, substr)
-	if idx == -1 {
-		return int64(0), nil
+	runes := []rune(s)
+	subRunes := []rune(substr)
+	for i := 0; i <= len(runes)-len(subRunes); i++ {
+		if string(runes[i:i+len(subRunes)]) == substr {
+			return int64(i + 1), nil
+		}
 	}
-	return int64(idx + 1), nil
+	return int64(0), nil
 }
 
 func fnLeft(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
@@ -585,6 +598,9 @@ func fnLpad(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 		return nil, fmt.Errorf("LPAD length must be integer")
 	}
 	padStr := valueToString(args[2])
+	if padStr == "" {
+		return nil, fmt.Errorf("LPAD: pad string cannot be empty")
+	}
 	runes := []rune(s)
 	if int64(len(runes)) >= n {
 		return string(runes[:n]), nil
@@ -608,6 +624,9 @@ func fnRpad(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 		return nil, fmt.Errorf("RPAD length must be integer")
 	}
 	padStr := valueToString(args[2])
+	if padStr == "" {
+		return nil, fmt.Errorf("RPAD: pad string cannot be empty")
+	}
 	runes := []rune(s)
 	if int64(len(runes)) >= n {
 		return string(runes[:n]), nil
@@ -1236,7 +1255,7 @@ func fnAiEmbed(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 }
 
 func fnUuid(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
-	return generateUUID(), nil
+	return generateUUID()
 }
 
 func fnInterval(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
@@ -1597,16 +1616,14 @@ func parseJSONArray(s string) []interface{} {
 	return arr
 }
 
-func generateUUID() string {
+func generateUUID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := crypto_rand.Read(b); err != nil {
-		for i := range b {
-			b[i] = byte(rand.Intn(256))
-		}
+		return "", fmt.Errorf("failed to generate UUID: %w", err)
 	}
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
 func executeUserDefinedFunction(dbName, funcName string, args []interface{}, ctx *ExecutionContext) (interface{}, error) {
@@ -2081,6 +2098,9 @@ func toInt64(value interface{}) (int64, bool) {
 	case int64:
 		return v, true
 	case float64:
+		if v > float64(math.MaxInt64) || v < float64(math.MinInt64) {
+			return 0, false
+		}
 		return int64(v), true
 	default:
 		return 0, false
@@ -2102,6 +2122,9 @@ func evalCast(e *parser.CastExpr, row storage.Row, schema *storage.TableSchema, 
 			return i, nil
 		}
 		if f, ok := toFloat(val); ok {
+			if f > float64(math.MaxInt64) || f < float64(math.MinInt64) {
+				return nil, fmt.Errorf("value out of int64 range")
+			}
 			return int64(f), nil
 		}
 		if s, ok := val.(string); ok {

@@ -175,14 +175,14 @@ func (s *FileStorageEngine) ListDatabases() ([]string, error) {
 
 func (s *FileStorageEngine) ListTables(dbName string) ([]TableInfo, error) {
 	s.globalMu.RLock()
+	defer s.globalMu.RUnlock()
+
 	dbPath := s.dbDir(dbName)
 	if !dirExists(dbPath) {
-		s.globalMu.RUnlock()
 		return nil, fmt.Errorf("database '%s' does not exist", dbName)
 	}
 
 	entries, err := os.ReadDir(dbPath)
-	s.globalMu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("read database '%s' directory: %w", dbName, err)
 	}
@@ -1024,13 +1024,17 @@ func (s *FileStorageEngine) Close() error {
 	}
 	s.walGate.Lock()
 	defer s.walGate.Unlock()
+	var firstErr error
 	if err := s.flushDataDirty(); err != nil {
-		slog.Warn("flush data on close failed", "error", err)
+		firstErr = err
 	}
-	if err := s.flushTxLogDirty(); err != nil {
-		slog.Warn("flush tx log on close failed", "error", err)
+	if err := s.flushTxLogDirty(); err != nil && firstErr == nil {
+		firstErr = err
 	}
-	return s.wal.Close()
+	if err := s.wal.Close(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
 }
 
 func (s *FileStorageEngine) applyInsertLocked(db, table string, data *tableDataDisk, rows [][]interface{}, txID uint64, idempotent bool) (int, error) {
@@ -1367,15 +1371,17 @@ func (s *FileStorageEngine) maybeCheckpoint() {
 
 func (s *FileStorageEngine) readTxLog(dbName string) (*txLogDisk, error) {
 	s.txLogMu.Lock()
-	defer s.txLogMu.Unlock()
-
 	if cached := s.txLogCache[dbName]; cached != nil {
+		s.txLogMu.Unlock()
 		return cached, nil
 	}
+	s.txLogMu.Unlock()
 
 	path := s.txLogPath(dbName)
 	bytes, err := os.ReadFile(path)
 	if err != nil {
+		s.txLogMu.Lock()
+		defer s.txLogMu.Unlock()
 		if errors.Is(err, os.ErrNotExist) {
 			log := &txLogDisk{Entries: []txLogEntryDisk{}}
 			s.txLogCache[dbName] = log
@@ -1392,6 +1398,8 @@ func (s *FileStorageEngine) readTxLog(dbName string) (*txLogDisk, error) {
 		log.Entries = []txLogEntryDisk{}
 	}
 
+	s.txLogMu.Lock()
+	defer s.txLogMu.Unlock()
 	result := &log
 	if cached := s.txLogCache[dbName]; cached != nil {
 		result = cached

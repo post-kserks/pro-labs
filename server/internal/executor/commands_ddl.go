@@ -143,6 +143,9 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' renamed to '%s'.", c.stmt.TableName, action.NewName)}, nil
 
 	case *parser.AlterAddConstraint:
+		// WARNING: This operation drops and recreates the table.
+		// If the process crashes between Drop and Create, data is lost.
+		// TODO: Use schema rewrite mechanism for atomicity.
 		schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
 		if err != nil {
 			return nil, err
@@ -682,6 +685,7 @@ func (c *DropFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 func fireTriggers(ctx *ExecutionContext, dbName, tableName, event string) {
 	triggers, err := loadAllObjectsByType(ctx, dbName, objTypeTrigger)
 	if err != nil {
+		slog.Warn("failed to load triggers", "error", err)
 		return
 	}
 	for _, td := range triggers {

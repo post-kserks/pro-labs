@@ -132,6 +132,11 @@ func (rl *RateLimiter) cleanupLoop() {
 	}
 }
 
+// Close останавливает фоновый cleanupLoop.
+func (rl *RateLimiter) Close() {
+	close(rl.stopCh)
+}
+
 // doCleanup удаляет токены bucket которые не использовались более 5 минут.
 func (rl *RateLimiter) doCleanup() {
 	rl.mu.Lock()

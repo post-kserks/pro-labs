@@ -40,7 +40,10 @@ func (pc *PlanCache) Put(key string, plan *CachedPlan) {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 	if len(pc.plans) >= pc.maxSize {
-		pc.plans = make(map[string]*CachedPlan)
+		for k := range pc.plans {
+			delete(pc.plans, k)
+			break
+		}
 	}
 	pc.plans[key] = plan
 }

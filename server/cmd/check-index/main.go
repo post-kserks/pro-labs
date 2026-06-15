@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 )
 
@@ -18,7 +19,10 @@ type Response struct {
 }
 
 func main() {
-	conn, _ := net.Dial("tcp", "127.0.0.1:5432")
+	conn, err := net.Dial("tcp", "127.0.0.1:5432")
+	if err != nil {
+		log.Fatal(err)
+	}
 	defer conn.Close()
 
 	mustExecute(conn, "USE bench_db;")
@@ -27,12 +31,22 @@ func main() {
 
 func mustExecute(conn net.Conn, query string) {
 	req := Request{ID: "check", Query: query}
-	bytes, _ := json.Marshal(req)
-	conn.Write(append(bytes, '\n'))
+	bytes, err := json.Marshal(req)
+	if err != nil {
+		log.Fatalf("marshal request: %v", err)
+	}
+	if _, err := conn.Write(append(bytes, '\n')); err != nil {
+		log.Fatalf("write to conn: %v", err)
+	}
 
 	buf := make([]byte, 8192)
-	n, _ := conn.Read(buf)
+	n, err := conn.Read(buf)
+	if err != nil {
+		log.Fatalf("read from conn: %v", err)
+	}
 	var resp Response
-	json.Unmarshal(buf[:n], &resp)
+	if err := json.Unmarshal(buf[:n], &resp); err != nil {
+		log.Fatalf("unmarshal response: %v", err)
+	}
 	fmt.Printf("Query: %s\nResponse: %s\n\n", query, resp.Message)
 }
