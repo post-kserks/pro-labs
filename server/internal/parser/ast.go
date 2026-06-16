@@ -263,6 +263,7 @@ type CreateIndexStatement struct {
 	IndexName string
 	TableName string
 	Column    string
+	Columns   []string // multi-column index
 }
 
 type DropIndexStatement struct {

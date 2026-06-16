@@ -635,6 +635,20 @@ func (e *PageStorageEngine) CreateTable(dbName string, schema TableSchema) error
 	tid := tableIDFromPath(path)
 	e.tables[key] = &pageTable{heap: hf, schema: &schema, tableID: tid}
 	e.catalog.RowCounts[key] = 0
+
+	// Auto-create BTree index on PRIMARY KEY columns
+	for i, col := range schema.Columns {
+		if col.PrimaryKey {
+			mgr := e.getOrCreateIndexManager(dbName, schema.Name)
+			idxName := fmt.Sprintf("pk_%s_%s", schema.Name, col.Name)
+			idx := index.NewBTreeIndex(idxName, col.Name, i)
+			mgr.Add(idx)
+			if err := e.saveIndexesMetadata(dbName, schema.Name, mgr); err != nil {
+				return err
+			}
+		}
+	}
+
 	return e.saveCatalogLocked()
 }
 
@@ -1887,6 +1901,47 @@ func (e *PageStorageEngine) CreateIndex(dbName, tableName, indexName, column str
 	return e.saveIndexesMetadata(dbName, tableName, mgr)
 }
 
+func (e *PageStorageEngine) CreateIndexMulti(dbName, tableName, indexName string, columns []string) error {
+	e.mu.Lock()
+	t, err := e.getTableLocked(dbName, tableName, false)
+	if err != nil {
+		e.mu.Unlock()
+		return err
+	}
+
+	var colIndices []int
+	for _, column := range columns {
+		colIdx := -1
+		for i, col := range t.schema.Columns {
+			if strings.EqualFold(col.Name, column) {
+				colIdx = i
+				break
+			}
+		}
+		if colIdx == -1 {
+			e.mu.Unlock()
+			return fmt.Errorf("column '%s' not found in table '%s'", column, tableName)
+		}
+		colIndices = append(colIndices, colIdx)
+	}
+
+	var rows []Row
+	e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+		if deletedTx == 0 {
+			rows = append(rows, row)
+		}
+		return false, nil
+	})
+	e.mu.Unlock()
+
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	idx := index.NewCompositeIndex(indexName, columns, colIndices)
+	idx.Rebuild(e.rowsToIndexable(rows))
+	mgr.Add(idx)
+
+	return e.saveIndexesMetadata(dbName, tableName, mgr)
+}
+
 func (e *PageStorageEngine) DropIndex(dbName, indexName string) error {
 	e.indexesMu.Lock()
 	for key, mgr := range e.indexes {
@@ -1931,6 +1986,34 @@ func (e *PageStorageEngine) IndexLookup(dbName, tableName, column, value string)
 		return nil, false
 	}
 	return idx.Lookup(value)
+}
+
+func (e *PageStorageEngine) IndexRangeLookup(dbName, tableName, column, low, high string) ([]int, bool) {
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	idxs, ok := mgr.FindForColumnMultiple(column)
+	if !ok || len(idxs) == 0 {
+		return nil, false
+	}
+	for _, idx := range idxs {
+		if btree, ok := idx.(*index.BTreeIndex); ok {
+			return btree.Range(low, high), true
+		}
+	}
+	return nil, false
+}
+
+func (e *PageStorageEngine) IndexFTSLookup(dbName, tableName, column, query string) ([]int, bool) {
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	idxs, ok := mgr.FindForColumnMultiple(column)
+	if !ok || len(idxs) == 0 {
+		return nil, false
+	}
+	for _, idx := range idxs {
+		if gin, ok := idx.(*index.GINIndex); ok {
+			return gin.Search(query), true
+		}
+	}
+	return nil, false
 }
 
 func (e *PageStorageEngine) updateIndexesOnInsert(dbName, tableName string, rows []Row, startPos int) {

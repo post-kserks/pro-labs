@@ -226,6 +226,14 @@ func (m *MockStorage) IndexLookup(dbName, tableName, column, value string) ([]in
 	return nil, false
 }
 
+func (m *MockStorage) IndexRangeLookup(dbName, tableName, column, low, high string) ([]int, bool) {
+	return m.IndexLookup(dbName, tableName, column, low)
+}
+
+func (m *MockStorage) IndexFTSLookup(dbName, tableName, column, query string) ([]int, bool) {
+	return m.IndexLookup(dbName, tableName, column, query)
+}
+
 // WriteEngine
 
 func (m *MockStorage) CreateTable(dbName string, schema storage.TableSchema) error {
@@ -395,6 +403,10 @@ func (m *MockStorage) CreateIndex(dbName, tableName, indexName, column string) e
 	}
 	m.indexes[dbName][tableName][column] = []int{0}
 	return nil
+}
+
+func (m *MockStorage) CreateIndexMulti(dbName, tableName, indexName string, columns []string) error {
+	return m.CreateIndex(dbName, tableName, indexName, columns[0])
 }
 
 func (m *MockStorage) DropIndex(dbName, indexName string) error {

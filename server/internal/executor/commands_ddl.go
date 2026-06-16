@@ -314,7 +314,20 @@ func (c *CreateIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := ctx.Storage.CreateIndex(dbName, c.stmt.TableName, c.stmt.IndexName, c.stmt.Column); err != nil {
+
+	// Multi-column index
+	if len(c.stmt.Columns) > 1 {
+		if err := ctx.Storage.CreateIndexMulti(dbName, c.stmt.TableName, c.stmt.IndexName, c.stmt.Columns); err != nil {
+			return nil, err
+		}
+		return &Result{Type: "message", Message: fmt.Sprintf("Multi-column index '%s' created successfully.", c.stmt.IndexName)}, nil
+	}
+
+ column := c.stmt.Column
+	if column == "" && len(c.stmt.Columns) == 1 {
+		column = c.stmt.Columns[0]
+	}
+	if err := ctx.Storage.CreateIndex(dbName, c.stmt.TableName, c.stmt.IndexName, column); err != nil {
 		return nil, err
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Index '%s' created successfully.", c.stmt.IndexName)}, nil

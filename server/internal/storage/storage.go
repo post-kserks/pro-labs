@@ -94,6 +94,8 @@ type ReadOnlyEngine interface {
 	ListIndexes(dbName, tableName string) ([]string, error)
 	FindIndexForColumn(dbName, tableName, column string) (string, bool)
 	IndexLookup(dbName, tableName, column, value string) ([]int, bool)
+	IndexRangeLookup(dbName, tableName, column, low, high string) ([]int, bool)
+	IndexFTSLookup(dbName, tableName, column, query string) ([]int, bool)
 }
 
 // WriteEngine defines mutating database operations.
@@ -109,6 +111,7 @@ type WriteEngine interface {
 	AlterTableRenameColumn(dbName, tableName, oldName, newName string) error
 	AlterTableRenameTable(dbName, oldName, newName string) error
 	CreateIndex(dbName, tableName, indexName, column string) error
+	CreateIndexMulti(dbName, tableName, indexName string, columns []string) error
 	DropIndex(dbName, indexName string) error
 }
 

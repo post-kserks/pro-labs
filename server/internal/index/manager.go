@@ -29,8 +29,20 @@ func NewByType(name, column string, colIndex int, indexType string) Index {
 		return NewGINJSONBIndex(name, column, colIndex)
 	case "gist":
 		return NewGiSTIndex(name, column, colIndex)
+	case "composite":
+		return NewCompositeIndex(name, []string{column}, []int{colIndex})
 	default:
 		return New(name, column, colIndex)
+	}
+}
+
+// NewCompositeByType создаёт составной индекс.
+func NewCompositeByType(name string, columns []string, colIndices []int, indexType string) Index {
+	switch indexType {
+	case "btree":
+		return NewCompositeIndex(name, columns, colIndices)
+	default:
+		return NewCompositeIndex(name, columns, colIndices)
 	}
 }
 
@@ -121,6 +133,19 @@ func (m *IndexManager) FindForColumn(column string) (Index, bool) {
 		return idxs[0], true
 	}
 	return nil, false
+}
+
+// FindForColumnMultiple возвращает все индексы для указанного столбца.
+func (m *IndexManager) FindForColumnMultiple(column string) ([]Index, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	idxs, ok := m.byColumn[columnKey(column)]
+	if !ok || len(idxs) == 0 {
+		return nil, false
+	}
+	result := make([]Index, len(idxs))
+	copy(result, idxs)
+	return result, true
 }
 
 func (m *IndexManager) All() []Index {

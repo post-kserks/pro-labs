@@ -679,18 +679,23 @@ func (p *sqlParser) parseCreate() (Statement, error) {
 		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
 			return nil, err
 		}
-		column, err := p.consumeIdent("column name")
+		columns, err := p.parseIdentifierListUntilRParen("column name")
 		if err != nil {
 			return nil, err
 		}
 		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 			return nil, err
 		}
-		return &CreateIndexStatement{
+		result := &CreateIndexStatement{
 			IndexName: indexName,
 			TableName: tableName,
-			Column:    column,
-		}, nil
+		}
+		if len(columns) == 1 {
+			result.Column = columns[0]
+		} else {
+			result.Columns = columns
+		}
+		return result, nil
 	default:
 		return nil, p.expectedError("DATABASE, TABLE, VIEW or INDEX", p.current())
 	}

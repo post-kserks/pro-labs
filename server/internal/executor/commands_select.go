@@ -292,6 +292,10 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 
 var indexOperators = map[string]bool{
 	"=":  true,
+	">":  true,
+	"<":  true,
+	">=": true,
+	"<=": true,
 	"@@": true,
 	"@>": true,
 	"<@": true,
@@ -311,31 +315,75 @@ func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parse
 		return nil, false
 	}
 
-	var queryVal string
-	if cmp.Operator == "=" {
-		var val parser.Value
-		switch v := cmp.Right.(type) {
-		case parser.Value:
-			val = v
-		case *parser.Value:
-			val = *v
-		default:
+	// Range operators: > < >= <=
+	switch cmp.Operator {
+	case ">", "<", ">=", "<=":
+		val := valueToString(evalOperandRaw(cmp.Right))
+		if val == "" {
 			return nil, false
 		}
-		queryVal = valueToString(parserValueToRaw(val))
-	} else {
-		queryVal = valueToString(evalOperandRaw(cmp.Right))
+		var low, high string
+		switch cmp.Operator {
+		case ">":
+			low = val
+		case ">=":
+			low = val
+		case "<":
+			high = val
+		case "<=":
+			high = val
+		}
+		positions, ok := ctx.Storage.IndexRangeLookup(dbName, tableName, col.Name, low, high)
+		if !ok || len(positions) == 0 {
+			return nil, false
+		}
+		return positions, true
 	}
 
-	if queryVal == "" {
-		return nil, false
-	}
+	// Equality and other operators
+	switch cmp.Operator {
+	case "LIKE":
+		// LIKE '%pattern%' can use GIN index
+		val := valueToString(evalOperandRaw(cmp.Right))
+		if val == "" || !strings.HasPrefix(val, "%") || !strings.HasSuffix(val, "%") {
+			return nil, false
+		}
+		pattern := val[1 : len(val)-1] // strip %%
+		if pattern == "" {
+			return nil, false
+		}
+		positions, ok := ctx.Storage.IndexFTSLookup(dbName, tableName, col.Name, pattern)
+		if !ok || len(positions) == 0 {
+			return nil, false
+		}
+		return positions, true
+	default:
+		var queryVal string
+		if cmp.Operator == "=" {
+			var val parser.Value
+			switch v := cmp.Right.(type) {
+			case parser.Value:
+				val = v
+			case *parser.Value:
+				val = *v
+			default:
+				return nil, false
+			}
+			queryVal = valueToString(parserValueToRaw(val))
+		} else {
+			queryVal = valueToString(evalOperandRaw(cmp.Right))
+		}
 
-	positions, ok := ctx.Storage.IndexLookup(dbName, tableName, col.Name, queryVal)
-	if !ok || len(positions) == 0 {
-		return nil, false
+		if queryVal == "" {
+			return nil, false
+		}
+
+		positions, ok := ctx.Storage.IndexLookup(dbName, tableName, col.Name, queryVal)
+		if !ok || len(positions) == 0 {
+			return nil, false
+		}
+		return positions, true
 	}
-	return positions, true
 }
 
 func (c *SelectCommand) executeDerivedTable(ctx *ExecutionContext) (*Result, error) {
