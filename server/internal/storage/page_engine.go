@@ -46,8 +46,9 @@ type PageStorageEngine struct {
 }
 
 type pageTable struct {
-	heap   *heap.HeapFile
-	schema *TableSchema
+	heap    *heap.HeapFile
+	schema  *TableSchema
+	tableID uint32
 }
 
 type pageTxStamp struct {
@@ -630,7 +631,8 @@ func (e *PageStorageEngine) CreateTable(dbName string, schema TableSchema) error
 	}
 
 	key := dbName + "/" + schema.Name
-	e.tables[key] = &pageTable{heap: hf, schema: &schema}
+	tid := tableIDFromPath(path)
+	e.tables[key] = &pageTable{heap: hf, schema: &schema, tableID: tid}
 	e.catalog.RowCounts[key] = 0
 	return e.saveCatalogLocked()
 }
@@ -684,7 +686,8 @@ func (e *PageStorageEngine) getTableLocked(db, table string, cache bool) (*pageT
 		return nil, err
 	}
 
-	t := &pageTable{heap: hf, schema: &schema}
+	tid := tableIDFromPath(path)
+	t := &pageTable{heap: hf, schema: &schema, tableID: tid}
 	if cache {
 		e.tables[key] = t
 	}
@@ -769,11 +772,26 @@ func (e *PageStorageEngine) GetTableSchema(dbName, tableName string) (*TableSche
 // ── Сканирование ──────────────────────────────────────────────────────────
 
 // pageIDAt переводит сквозной номер страницы в PageID (сегмент + страница).
-func pageIDAt(global uint32) page.PageID {
+// tableID уникально идентифицирует таблицу в buffer pool.
+func pageIDAt(tableID uint32, global uint32) page.PageID {
 	return page.PageID{
+		TableID:   tableID,
 		SegmentNo: uint16(global / page.PagesPerSegment),
 		PageNo:    global % page.PagesPerSegment,
 	}
+}
+
+// tableIDFromPath вычисляет уникальный ID таблицы из пути.
+func tableIDFromPath(path string) uint32 {
+	h := uint32(2166136261) // FNV-1a offset basis
+	for i := 0; i < len(path); i++ {
+		h ^= uint32(path[i])
+		h *= 16777619 // FNV-1a prime
+	}
+	if h == 0 {
+		h = 1 // избегаем нулевого ID
+	}
+	return h
 }
 
 type tupleVisitor func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (stop bool, err error)
@@ -785,7 +803,7 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 		return err
 	}
 	for g := uint32(0); g < total; g++ {
-		pid := pageIDAt(g)
+		pid := pageIDAt(t.tableID, g)
 		pg, err := e.getPage(pid, t.heap)
 		if err != nil {
 			return err
@@ -840,7 +858,7 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 	var pg *page.Page
 	havePage := false
 	if total > 0 {
-		pid = pageIDAt(total - 1)
+		pid = pageIDAt(t.tableID, total - 1)
 		pg, err = e.getPage(pid, t.heap)
 		if err != nil {
 			return err
@@ -933,7 +951,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		havePage := false
 
 		if total > 0 {
-			pid = pageIDAt(total - 1)
+			pid = pageIDAt(t.tableID, total - 1)
 			if err := t.heap.ReadPage(pid, &pg); err != nil {
 				return 0, err
 			}
@@ -1352,7 +1370,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 
 	rowsBefore, rowsAfter := 0, 0
 	for g := uint32(0); g < total; g++ {
-		pid := pageIDAt(g)
+		pid := pageIDAt(t.tableID, g)
 		var pg page.Page
 		if err := t.heap.ReadPage(pid, &pg); err != nil {
 			os.Remove(shadowPath)
@@ -1625,17 +1643,16 @@ func (e *PageStorageEngine) AlterTableDropColumn(dbName, tableName string, colNa
 		return fmt.Errorf("column '%s' does not exist", colName)
 	}
 
-	// Remove index on dropped column before rewrite
+	// Update indexes: remove index on dropped column
 	key := dbName + "/" + tableName
 	e.indexesMu.RLock()
 	if mgr, ok := e.indexes[key]; ok {
 		for _, idx := range mgr.All() {
 			if idx.ColIndex() == drop {
 				mgr.Remove(idx.Name())
-				e.saveIndexesMetadata(dbName, tableName, mgr)
-				break
 			}
 		}
+		e.saveIndexesMetadata(dbName, tableName, mgr)
 	}
 	e.indexesMu.RUnlock()
 
