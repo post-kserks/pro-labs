@@ -940,19 +940,20 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	}, 0, len(tuples))
 
 	for _, tuple := range tuples {
-		// Находим или выделяем страницу
+		// Находим или выделяем страницу через buffer pool
 		total, err := t.heap.PageCount()
 		if err != nil {
 			return 0, err
 		}
 
 		var pid page.PageID
-		var pg page.Page
+		var pg *page.Page
 		havePage := false
 
 		if total > 0 {
 			pid = pageIDAt(t.tableID, total - 1)
-			if err := t.heap.ReadPage(pid, &pg); err != nil {
+			pg, err = e.getPage(pid, t.heap)
+			if err != nil {
 				return 0, err
 			}
 			havePage = true
@@ -964,7 +965,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 				if err != nil {
 					return 0, err
 				}
-				pid, pg, havePage = newPid, *newPg, true
+				pid, pg, havePage = newPid, newPg, true
 			}
 
 			slot, err := pg.InsertTuple(tuple)
@@ -991,15 +992,18 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 					slot uint16
 				}{pid, slot})
 
-				// Сбрасываем страницу
-				if err := t.heap.WritePage(pid, &pg); err != nil {
+				// Сбрасываем страницу на диск и помечаем как dirty
+				if err := t.heap.WritePage(pid, pg); err != nil {
 					return 0, err
 				}
-				e.bufPool.InvalidatePage(pid)
+				e.bufPool.UnpinPage(pid, true)
 				break
 			}
 
-			// Страница полна — выделяем новую
+			// Страница полна — отпиним старую и выделяем новую
+			if havePage {
+				e.bufPool.UnpinPage(pid, false)
+			}
 			if err := t.heap.Sync(); err != nil {
 				return 0, err
 			}
