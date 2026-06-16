@@ -3,6 +3,7 @@ package executor
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"vaultdb/internal/parser"
@@ -99,6 +100,11 @@ func toFloat(value interface{}) (float64, bool) {
 			return 0, false
 		}
 		return v, true
+	case string:
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f, true
+		}
+		return 0, false
 	default:
 		return 0, false
 	}

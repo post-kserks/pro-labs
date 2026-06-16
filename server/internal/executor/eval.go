@@ -123,6 +123,12 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 	case *parser.SubqueryExpr:
 		return executeSubquery(e, row, schema, ctx)
 	case *parser.WindowFunctionExpr:
+		// Resolve window function to the pre-computed column value
+		if ctx != nil && ctx.WindowCols != nil {
+			if colName, ok := ctx.WindowCols[e]; ok {
+				return resolveColumn(row, schema, colName)
+			}
+		}
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported expression type: %T", expr)
@@ -136,6 +142,55 @@ func evalInExpr(e *parser.InExpr, row storage.Row, schema *storage.TableSchema, 
 	}
 
 	for _, right := range e.Right {
+		// Handle subquery: execute it and compare against all results
+		if sub, ok := right.(*parser.SubqueryExpr); ok {
+			subQuery := *sub.Query
+			if row != nil && schema != nil && subQuery.Where != nil {
+				subQuery.Where = injectOuterColumns(subQuery.Where, row, schema)
+			}
+			cmd, err := CommandFactory(&subQuery)
+			if err != nil {
+				return false, err
+			}
+			res, err := cmd.Execute(ctx)
+			if err != nil {
+				return false, err
+			}
+			for _, r := range res.Rows {
+				if len(r) == 0 {
+					continue
+				}
+				rightVal := r[0]
+				// Try numeric conversion if types don't match
+				if lf, lok := toFloat(leftVal); lok {
+					if rf, rok := toFloat(rightVal); rok {
+						cmp, _ := compareOrdered(lf, rf, "=")
+						if cmp {
+							if e.Not {
+								return false, nil
+							}
+							return true, nil
+						}
+						continue
+					}
+				}
+				cmp, err := compareValues(leftVal, rightVal, "=")
+				if err != nil {
+					continue
+				}
+				if cmp {
+					if e.Not {
+						return false, nil
+					}
+					return true, nil
+				}
+			}
+			if e.Not {
+				return true, nil
+			}
+			return false, nil
+		}
+
 		rightVal, err := evalOperand(right, row, schema, ctx)
 		if err != nil {
 			return false, err
