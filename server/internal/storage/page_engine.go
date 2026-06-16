@@ -212,12 +212,11 @@ func (e *PageStorageEngine) redoInsert(p wal.WALPageInsertPayload) error {
 	key := p.DB + "/" + p.Table
 	t, ok := e.tables[key]
 	if !ok {
-		// Таблица не найдена — пропускаем (возможно, была удалена)
 		return nil
 	}
 
 	// Восстанавливаем tuple на страницу
-	pid := page.PageID{SegmentNo: p.SegmentNo, PageNo: p.PageNo}
+	pid := page.PageID{TableID: t.tableID, SegmentNo: p.SegmentNo, PageNo: p.PageNo}
 	var pg page.Page
 	if err := t.heap.ReadPage(pid, &pg); err != nil {
 		// Страница не существует — создаём новую
@@ -225,6 +224,8 @@ func (e *PageStorageEngine) redoInsert(p wal.WALPageInsertPayload) error {
 		if err != nil {
 			return err
 		}
+		// Fix TableID: AllocatePage не знает о tableID
+		newPid.TableID = t.tableID
 		pg = *newPg
 		pid = newPid
 	}
@@ -253,7 +254,7 @@ func (e *PageStorageEngine) redoDelete(p wal.WALPageDeletePayload) error {
 	}
 
 	// Помечаем tuple как удалённый (устанавливаем XMax)
-	pid := page.PageID{SegmentNo: p.SegmentNo, PageNo: p.PageNo}
+	pid := page.PageID{TableID: t.tableID, SegmentNo: p.SegmentNo, PageNo: p.PageNo}
 	var pg page.Page
 	if err := t.heap.ReadPage(pid, &pg); err != nil {
 		return err
@@ -310,7 +311,7 @@ func (e *PageStorageEngine) undoInsert(p wal.WALPageInsertPayload, xid uint64) e
 	}
 
 	// Undo INSERT = пометить tuple как dead (XMax = xid)
-	pid := page.PageID{SegmentNo: p.SegmentNo, PageNo: p.PageNo}
+	pid := page.PageID{TableID: t.tableID, SegmentNo: p.SegmentNo, PageNo: p.PageNo}
 	var pg page.Page
 	if err := t.heap.ReadPage(pid, &pg); err != nil {
 		return err
