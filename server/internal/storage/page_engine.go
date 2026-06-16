@@ -995,6 +995,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 				if err := t.heap.WritePage(pid, &pg); err != nil {
 					return 0, err
 				}
+				e.bufPool.InvalidatePage(pid)
 				break
 			}
 
@@ -1563,6 +1564,9 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 	t.heap = hf
 	t.schema = newSchema
 
+	// Invalidate all cached pages for this table (old heap file is gone)
+	e.bufPool.InvalidateTable(t.tableID)
+
 	txID := e.nextTxLocked()
 	tuples := make([][]byte, 0, len(rows))
 	for _, row := range rows {
@@ -1619,8 +1623,9 @@ func (e *PageStorageEngine) AlterTableAddColumn(dbName, tableName string, col Co
 
 	newSchema := *t.schema
 	newSchema.Columns = append(append([]ColumnSchema(nil), t.schema.Columns...), col)
+	defaultValCopy := normalizedDefault
 	return e.rewriteTable(dbName, tableName, &newSchema, func(row Row) Row {
-		return append(append(Row(nil), row...), normalizedDefault)
+		return append(append(Row(nil), row...), defaultValCopy)
 	})
 }
 
