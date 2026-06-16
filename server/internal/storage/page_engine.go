@@ -49,6 +49,7 @@ type pageTable struct {
 	heap    *heap.HeapFile
 	schema  *TableSchema
 	tableID uint32
+	mu      sync.RWMutex // per-table lock
 }
 
 type pageTxStamp struct {
@@ -636,6 +637,104 @@ func (e *PageStorageEngine) writeSchemaLocked(db, table string, schema *TableSch
 	return os.WriteFile(e.schemaPathFor(db, table), data, 0o644)
 }
 
+// getTableForRead возвращает таблицу для чтения. Кэширует если ещё не в map.
+// Caller должен вызвать t.mu.RUnlock() когда закончит.
+func (e *PageStorageEngine) getTableForRead(db, table string) (*pageTable, error) {
+	key := db + "/" + table
+
+	// Быстрый путь: таблица уже в кэше
+	e.mu.RLock()
+	t, ok := e.tables[key]
+	e.mu.RUnlock()
+	if ok {
+		t.mu.RLock()
+		return t, nil
+	}
+
+	// Медленный путь: открываем и кэшируем
+	e.mu.Lock()
+	t, ok = e.tables[key]
+	if !ok {
+		path := e.tablePath(db, table)
+		if _, err := os.Stat(path); err != nil {
+			e.mu.Unlock()
+			return nil, fmt.Errorf("table '%s' does not exist", table)
+		}
+		hf, err := heap.OpenHeapFile(path)
+		if err != nil {
+			e.mu.Unlock()
+			return nil, err
+		}
+		data, err := os.ReadFile(e.schemaPathFor(db, table))
+		if err != nil {
+			_ = hf.Close()
+			e.mu.Unlock()
+			return nil, err
+		}
+		var schema TableSchema
+		if err := json.Unmarshal(data, &schema); err != nil {
+			_ = hf.Close()
+			e.mu.Unlock()
+			return nil, err
+		}
+		tid := tableIDFromPath(path)
+		t = &pageTable{heap: hf, schema: &schema, tableID: tid}
+		e.tables[key] = t
+	}
+	e.mu.Unlock()
+	t.mu.RLock()
+	return t, nil
+}
+
+// getTableForWrite возвращает таблицу для записи. Кэширует если ещё не в map.
+// Caller должен вызвать t.mu.Unlock() когда закончит.
+func (e *PageStorageEngine) getTableForWrite(db, table string) (*pageTable, error) {
+	key := db + "/" + table
+
+	// Быстрый путь
+	e.mu.RLock()
+	t, ok := e.tables[key]
+	e.mu.RUnlock()
+	if ok {
+		t.mu.Lock()
+		return t, nil
+	}
+
+	// Медленный путь
+	e.mu.Lock()
+	t, ok = e.tables[key]
+	if !ok {
+		path := e.tablePath(db, table)
+		if _, err := os.Stat(path); err != nil {
+			e.mu.Unlock()
+			return nil, fmt.Errorf("table '%s' does not exist", table)
+		}
+		hf, err := heap.OpenHeapFile(path)
+		if err != nil {
+			e.mu.Unlock()
+			return nil, err
+		}
+		data, err := os.ReadFile(e.schemaPathFor(db, table))
+		if err != nil {
+			_ = hf.Close()
+			e.mu.Unlock()
+			return nil, err
+		}
+		var schema TableSchema
+		if err := json.Unmarshal(data, &schema); err != nil {
+			_ = hf.Close()
+			e.mu.Unlock()
+			return nil, err
+		}
+		tid := tableIDFromPath(path)
+		t = &pageTable{heap: hf, schema: &schema, tableID: tid}
+		e.tables[key] = t
+	}
+	e.mu.Unlock()
+	t.mu.Lock()
+	return t, nil
+}
+
 // getTableLocked открывает таблицу (лениво) и кэширует её.
 // Вызывается под любым из локов e.mu; модификация e.tables безопасна только
 // под write-локом, поэтому readOnly-путь не кэширует при RLock.
@@ -881,15 +980,17 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 }
 
 func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (int, error) {
+	// Получаем txID под e.mu (быстро)
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	txID := e.nextTxLocked()
+	e.mu.Unlock()
 
-	t, err := e.getTableLocked(dbName, tableName, true)
+	// Получаем ссылку на таблицу (освобождает e.mu)
+	t, err := e.getTableForWrite(dbName, tableName)
 	if err != nil {
 		return 0, err
 	}
-
-	txID := e.nextTxLocked()
+	defer t.mu.Unlock()
 	tuples := make([][]byte, 0, len(rows))
 	for _, row := range rows {
 		normalized := make(Row, len(t.schema.Columns))
@@ -1008,13 +1109,16 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 
 // mutateRows помечает версии удалёнными и (для UPDATE) добавляет новые версии.
 func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, updates map[string]Value, isDelete bool) (int, error) {
+	// Получаем txID под e.mu
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	txID := e.nextTxLocked()
+	e.mu.Unlock()
 
-	t, err := e.getTableLocked(dbName, tableName, true)
+	t, err := e.getTableForWrite(dbName, tableName)
 	if err != nil {
 		return 0, err
 	}
+	defer t.mu.Unlock()
 
 	wanted := make(map[int]bool, len(indices))
 	for _, i := range indices {
@@ -1026,7 +1130,6 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		colIndex[strings.ToLower(col.Name)] = i
 	}
 
-	txID := e.nextTxLocked()
 	var newVersions [][]byte
 	affected := 0
 	pos := 0
@@ -1176,13 +1279,11 @@ func (e *PageStorageEngine) DeleteRows(dbName, tableName string, indices []int) 
 
 // readRows возвращает строки, видимые на момент asOf (0 = текущие версии).
 func (e *PageStorageEngine) readRows(dbName, tableName string, asOf uint64) ([]Row, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	t, err := e.getTableLocked(dbName, tableName, false)
+	t, err := e.getTableForRead(dbName, tableName)
 	if err != nil {
 		return nil, err
 	}
+	defer t.mu.RUnlock()
 
 	rows := []Row{}
 	err = e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
