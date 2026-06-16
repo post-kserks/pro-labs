@@ -83,10 +83,10 @@ func NewGiSTIndex(name, column string, colIndex int) *GiSTIndex {
 	}
 }
 
-func (g *GiSTIndex) Type() string             { return "gist" }
-func (g *GiSTIndex) Name() string             { return g.name }
-func (g *GiSTIndex) Column() string           { return g.column }
-func (g *GiSTIndex) ColIndex() int            { return g.colIndex }
+func (g *GiSTIndex) Type() string   { return "gist" }
+func (g *GiSTIndex) Name() string   { return g.name }
+func (g *GiSTIndex) Column() string { return g.column }
+func (g *GiSTIndex) ColIndex() int  { return g.colIndex }
 func (g *GiSTIndex) SetColumn(col string) {
 	g.mu.Lock()
 	g.column = col
@@ -433,17 +433,17 @@ func gistParseRange(s string) (float64, float64) {
 }
 
 type rtreeSerialized struct {
-	Name     string             `json:"name"`
-	Column   string             `json:"column"`
-	ColIndex int                `json:"colIndex"`
-	Root     *rtreeNodeSerial   `json:"root"`
+	Name     string           `json:"name"`
+	Column   string           `json:"column"`
+	ColIndex int              `json:"colIndex"`
+	Root     *rtreeNodeSerial `json:"root"`
 }
 
 type rtreeNodeSerial struct {
-	MBR      MBR              `json:"mbr"`
+	MBR      MBR                `json:"mbr"`
 	Children []*rtreeNodeSerial `json:"children,omitempty"`
-	Entries  []gistEntry      `json:"entries,omitempty"`
-	IsLeaf   bool             `json:"isLeaf"`
+	Entries  []gistEntry        `json:"entries,omitempty"`
+	IsLeaf   bool               `json:"isLeaf"`
 }
 
 func serializeTree(n *rtreeNode) *rtreeNodeSerial {

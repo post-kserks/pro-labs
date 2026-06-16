@@ -11,12 +11,12 @@ import (
 
 // RateLimiter — token bucket rate limiter.
 type RateLimiter struct {
-	mu       sync.Mutex
-	tokens   map[string]*tokenBucket
-	rate     int
-	burst    int
+	mu              sync.Mutex
+	tokens          map[string]*tokenBucket
+	rate            int
+	burst           int
 	cleanupInterval time.Duration
-	stopCh   chan struct{}
+	stopCh          chan struct{}
 }
 
 // tokenBucket — token bucket for a single key.
@@ -36,11 +36,11 @@ func NewRateLimiter(rate int, burst int) *RateLimiter {
 	}
 
 	rl := &RateLimiter{
-		tokens:  make(map[string]*tokenBucket),
-		rate:    rate,
-		burst:   burst,
+		tokens:          make(map[string]*tokenBucket),
+		rate:            rate,
+		burst:           burst,
 		cleanupInterval: 5 * time.Minute,
-		stopCh:  make(chan struct{}),
+		stopCh:          make(chan struct{}),
 	}
 
 	go rl.cleanupLoop()

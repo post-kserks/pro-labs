@@ -23,12 +23,12 @@ type CachedResult struct {
 // Автоматически инвалидируется при INSERT/UPDATE/DELETE.
 // Поддерживает TTL для устаревших записей.
 type ResultCache struct {
-	mu       sync.RWMutex
-	cache    map[string]*list.Element
-	lru      *list.List
-	maxSize  int
-	ttl      time.Duration
-	hitCount int64
+	mu        sync.RWMutex
+	cache     map[string]*list.Element
+	lru       *list.List
+	maxSize   int
+	ttl       time.Duration
+	hitCount  int64
 	missCount int64
 }
 

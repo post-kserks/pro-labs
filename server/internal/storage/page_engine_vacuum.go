@@ -190,7 +190,6 @@ func (e *PageStorageEngine) CurrentTxID() uint64 {
 	return e.catalog.CurrentTxID
 }
 
-
 // FinalCheckpoint сбрасывает все dirty pages на диск.
 func (e *PageStorageEngine) FinalCheckpoint() error {
 	e.mu.Lock()

@@ -620,7 +620,7 @@ func TestParsePrepare(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Parse returned error: %v", err)
 		}
-	 dealloc, ok := stmt.(*DeallocateStatement)
+		dealloc, ok := stmt.(*DeallocateStatement)
 		if !ok {
 			t.Fatalf("expected *DeallocateStatement, got %T", stmt)
 		}

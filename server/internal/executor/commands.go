@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
 
@@ -63,29 +62,6 @@ func resolveProjection(schema *storage.TableSchema, requested []string) ([]int, 
 	return indices, columns, nil
 }
 
-func parserValueToColumnType(value parser.Value, col storage.ColumnSchema) (storage.Value, error) {
-	var raw storage.Value
-	switch value.Type {
-	case "int":
-		raw = value.IntVal
-	case "float":
-		raw = value.FltVal
-	case "string":
-		raw = value.StrVal
-	case "bool":
-		raw = value.BoolVal
-	case "null":
-		raw = nil
-	default:
-		return nil, fmt.Errorf("unsupported value type '%s'", value.Type)
-	}
-
-	converted, err := normalizeForColumn(raw, col)
-	if err != nil {
-		return nil, err
-	}
-	return converted, nil
-}
 
 func normalizeForColumn(value storage.Value, col storage.ColumnSchema) (storage.Value, error) {
 	tmpSchema := storage.TableSchema{Columns: []storage.ColumnSchema{col}}

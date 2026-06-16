@@ -16,8 +16,8 @@ type CompositeIndex struct {
 	columns  []string
 	colIndex []int
 
-	keys   []string
-	values [][]int
+	keys    []string
+	values  [][]int
 	reverse map[int]string
 }
 
@@ -31,10 +31,10 @@ func NewCompositeIndex(name string, columns []string, colIndex []int) *Composite
 	}
 }
 
-func (idx *CompositeIndex) Name() string     { return idx.name }
-func (idx *CompositeIndex) Column() string   { return strings.Join(idx.columns, ",") }
-func (idx *CompositeIndex) ColIndex() int    { return idx.colIndex[0] }
-func (idx *CompositeIndex) Type() string     { return "composite" }
+func (idx *CompositeIndex) Name() string       { return idx.name }
+func (idx *CompositeIndex) Column() string     { return strings.Join(idx.columns, ",") }
+func (idx *CompositeIndex) ColIndex() int      { return idx.colIndex[0] }
+func (idx *CompositeIndex) Type() string       { return "composite" }
 func (idx *CompositeIndex) SetColumn(c string) {}
 
 // compositeKey builds a key from row values at the indexed columns.

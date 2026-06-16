@@ -250,4 +250,3 @@ func (e *PageStorageEngine) AlterTableRenameTable(dbName, oldName, newName strin
 	delete(e.catalog.RowCounts, oldKey)
 	return e.saveCatalogLocked()
 }
-

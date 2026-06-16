@@ -19,11 +19,11 @@ type TableStatistics struct {
 
 // ColumnStatistics хранит статистику по столбцу.
 type ColumnStatistics struct {
-	ColumnName   string
+	ColumnName    string
 	DistinctCount int
-	NullCount    int
-	MinValue     interface{}
-	MaxValue     interface{}
+	NullCount     int
+	MinValue      interface{}
+	MaxValue      interface{}
 }
 
 // StatisticsCollector собирает и кэширует статистику по таблицам.

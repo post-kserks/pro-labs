@@ -846,4 +846,3 @@ func (e *PageStorageEngine) GetTableSchema(dbName, tableName string) (*TableSche
 	copied.Columns = append([]ColumnSchema(nil), t.schema.Columns...)
 	return &copied, nil
 }
-

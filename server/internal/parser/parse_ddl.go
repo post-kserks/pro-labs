@@ -876,7 +876,7 @@ func (p *sqlParser) parseAlterTable() (Statement, error) {
 						return nil, err
 					}
 					action = &AlterAddConstraint{Name: constraintName, Type: "UNIQUE", Columns: cols}
-				} else 			if keyword == "CHECK" {
+				} else if keyword == "CHECK" {
 					p.advance()
 					if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
 						return nil, err
@@ -922,17 +922,17 @@ func (p *sqlParser) parseAlterTable() (Statement, error) {
 						return nil, err
 					}
 					action = &AlterAddConstraint{
-						Name:      constraintName,
-						Type:      "FOREIGN_KEY",
-						Columns:   cols,
-						RefTable:  refTable,
-						RefCols:   refCols,
+						Name:     constraintName,
+						Type:     "FOREIGN_KEY",
+						Columns:  cols,
+						RefTable: refTable,
+						RefCols:  refCols,
 					}
-			} else {
+				} else {
+					return nil, p.expectedError("UNIQUE, CHECK, or FOREIGN KEY", p.current())
+				}
+			default:
 				return nil, p.expectedError("UNIQUE, CHECK, or FOREIGN KEY", p.current())
-			}
-		default:
-			return nil, p.expectedError("UNIQUE, CHECK, or FOREIGN KEY", p.current())
 			}
 		} else {
 			col, err := p.parseColumnDef()

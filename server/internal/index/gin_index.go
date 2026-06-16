@@ -10,10 +10,10 @@ import (
 
 // GINIndex — Generalized Inverted Index для полнотекстового поиска и JSON.
 type GINIndex struct {
-	mu       sync.RWMutex
-	name     string
-	column   string
-	colIndex int
+	mu        sync.RWMutex
+	name      string
+	column    string
+	colIndex  int
 	indexType string // "text" или "jsonb"
 
 	// Инвертированный индекс: токен → []int (позиции строк)
@@ -48,10 +48,10 @@ func NewGINJSONBIndex(name, column string, colIndex int) *GINIndex {
 	}
 }
 
-func (g *GINIndex) Type() string     { return "gin" }
-func (g *GINIndex) Name() string     { return g.name }
-func (g *GINIndex) Column() string   { return g.column }
-func (g *GINIndex) ColIndex() int    { return g.colIndex }
+func (g *GINIndex) Type() string   { return "gin" }
+func (g *GINIndex) Name() string   { return g.name }
+func (g *GINIndex) Column() string { return g.column }
+func (g *GINIndex) ColIndex() int  { return g.colIndex }
 func (g *GINIndex) SetColumn(col string) {
 	g.mu.Lock()
 	g.column = col

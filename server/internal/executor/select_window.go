@@ -301,4 +301,3 @@ func (c *SelectCommand) getFrameIndices(partitionIndices []int, currentPos int, 
 	}
 	return partitionIndices[start:end]
 }
-

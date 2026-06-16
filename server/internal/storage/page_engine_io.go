@@ -77,15 +77,6 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 // ── Запись ────────────────────────────────────────────────────────────────
 
 // flushDirty сбрасывает грязную страницу на диск через heap файл.
-func (e *PageStorageEngine) flushDirty(dirty bool, dirtyPid page.PageID, dirtyPg *page.Page, t *pageTable) error {
-	if dirty {
-		if err := t.heap.WritePage(dirtyPid, dirtyPg); err != nil {
-			return err
-		}
-		dirty = false
-	}
-	return nil
-}
 
 // appendTuplesLocked добавляет кортежи в конец таблицы; вызывается под write-локом.
 func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) error {
@@ -98,7 +89,7 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 	var pg *page.Page
 	havePage := false
 	if total > 0 {
-		pid = pageIDAt(t.tableID, total - 1)
+		pid = pageIDAt(t.tableID, total-1)
 		pg, err = e.getPage(pid, t.heap)
 		if err != nil {
 			return err
@@ -177,7 +168,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	// Сначала вставляем tuples, затем пишем WAL с реальными позициями
 	// Это важно для recovery — WAL должен содержать точные позиции
 	insertedTuples := make([]struct {
-		pid page.PageID
+		pid  page.PageID
 		slot uint16
 	}, 0, len(tuples))
 
@@ -193,7 +184,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		havePage := false
 
 		if total > 0 {
-			pid = pageIDAt(t.tableID, total - 1)
+			pid = pageIDAt(t.tableID, total-1)
 			pg, err = e.getPage(pid, t.heap)
 			if err != nil {
 				return 0, err
@@ -215,13 +206,13 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 				// Успешно вставили — записываем в WAL
 				if e.wal != nil {
 					payload := wal.WALPageInsertPayload{
-						DB:         dbName,
-						Table:      tableName,
-						SegmentNo:  pid.SegmentNo,
-						PageNo:     pid.PageNo,
-						SlotNo:     slot,
-						XID:        txID,
-						TupleData:  tuple,
+						DB:        dbName,
+						Table:     tableName,
+						SegmentNo: pid.SegmentNo,
+						PageNo:    pid.PageNo,
+						SlotNo:    slot,
+						XID:       txID,
+						TupleData: tuple,
 					}
 					if _, err := e.wal.AppendWithTx(txID, wal.OpPageInsert, payload); err != nil {
 						return 0, fmt.Errorf("wal insert: %w", err)
@@ -230,7 +221,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 
 				// Запоминаем позицию для catalog
 				insertedTuples = append(insertedTuples, struct {
-					pid page.PageID
+					pid  page.PageID
 					slot uint16
 				}{pid, slot})
 
@@ -336,12 +327,12 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		// Записываем WAL с реальными физическими слотами
 		for _, ps := range physicalSlots {
 			payload := wal.WALPageDeletePayload{
-				DB:         dbName,
-				Table:      tableName,
-				SegmentNo:  ps.pid.SegmentNo,
-				PageNo:     ps.pid.PageNo,
-				SlotNo:     ps.slot,
-				XMax:       txID,
+				DB:        dbName,
+				Table:     tableName,
+				SegmentNo: ps.pid.SegmentNo,
+				PageNo:    ps.pid.PageNo,
+				SlotNo:    ps.slot,
+				XMax:      txID,
 			}
 			if _, err := e.wal.AppendWithTx(txID, wal.OpPageDelete, payload); err != nil {
 				return 0, fmt.Errorf("wal delete: %w", err)
@@ -577,4 +568,3 @@ func (e *PageStorageEngine) RowHistory(dbName, tableName string, pkValue interfa
 	}
 	return history, nil
 }
-

@@ -283,9 +283,9 @@ func TestResolveProjection(t *testing.T) {
 
 func TestInferType(t *testing.T) {
 	tests := []struct {
-		name  string
-		val   interface{}
-		want  string
+		name string
+		val  interface{}
+		want string
 	}{
 		{"int64", int64(42), "INT"},
 		{"int", int(42), "INT"},
@@ -330,5 +330,3 @@ func TestValueToString(t *testing.T) {
 		})
 	}
 }
-
-

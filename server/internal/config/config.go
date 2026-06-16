@@ -20,16 +20,16 @@ type LiveQueriesConfig struct {
 
 // ServerConfig — сетевые параметры сервера.
 type ServerConfig struct {
-	Host                string          `yaml:"host"`
-	Port                int             `yaml:"port"`
-	HTTPPort            int             `yaml:"http_port"`
-	MonitorPort         int             `yaml:"monitor_port"`
-	MaxRequestSizeBytes int             `yaml:"max_request_size_bytes"`
-	AllowedOrigins      []string        `yaml:"allowed_origins"`
+	Host                string            `yaml:"host"`
+	Port                int               `yaml:"port"`
+	HTTPPort            int               `yaml:"http_port"`
+	MonitorPort         int               `yaml:"monitor_port"`
+	MaxRequestSizeBytes int               `yaml:"max_request_size_bytes"`
+	AllowedOrigins      []string          `yaml:"allowed_origins"`
 	LiveQueries         LiveQueriesConfig `yaml:"live_queries"`
-	QueryTimeoutSec     int             `yaml:"query_timeout_sec"`
-	MaxConnections      int             `yaml:"max_connections"`
-	ShutdownTimeoutSec  int             `yaml:"shutdown_timeout_sec"`
+	QueryTimeoutSec     int               `yaml:"query_timeout_sec"`
+	MaxConnections      int               `yaml:"max_connections"`
+	ShutdownTimeoutSec  int               `yaml:"shutdown_timeout_sec"`
 }
 
 // StorageConfig — параметры хранилища.
@@ -40,9 +40,9 @@ type StorageConfig struct {
 
 // AuthConfig — параметры аутентификации.
 type AuthConfig struct {
-	Enabled    bool   `yaml:"enabled"`
-	MTLSEnabled bool  `yaml:"mtls_enabled"`
-	MTLScaFile string `yaml:"mtls_ca_file"`
+	Enabled     bool   `yaml:"enabled"`
+	MTLSEnabled bool   `yaml:"mtls_enabled"`
+	MTLScaFile  string `yaml:"mtls_ca_file"`
 }
 
 // AIConfig — параметры внешнего embedding-провайдера для SEMANTIC_MATCH/AI_EMBED.

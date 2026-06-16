@@ -56,30 +56,30 @@ type Entry struct {
 
 // WALPageInsertPayload — payload для OpPageInsert
 type WALPageInsertPayload struct {
-	DB          string
-	Table       string
-	SegmentNo  uint16
-	PageNo     uint32
-	SlotNo     uint16
-	XID        uint64   // транзакция, создавшая tuple
-	TupleData  []byte   // полные данные tuple (header + attrs)
+	DB        string
+	Table     string
+	SegmentNo uint16
+	PageNo    uint32
+	SlotNo    uint16
+	XID       uint64 // транзакция, создавшая tuple
+	TupleData []byte // полные данные tuple (header + attrs)
 }
 
 // WALPageDeletePayload — payload для OpPageDelete/OpPageUpdateXMax
 type WALPageDeletePayload struct {
-	DB          string
-	Table       string
-	SegmentNo  uint16
-	PageNo     uint32
-	SlotNo     uint16
-	XMax       uint64   // XID транзакции удаляющей tuple
+	DB        string
+	Table     string
+	SegmentNo uint16
+	PageNo    uint32
+	SlotNo    uint16
+	XMax      uint64 // XID транзакции удаляющей tuple
 }
 
 // WALVacuumPayload — payload для OpVacuumBegin/OpVacuumCommit
 type WALVacuumPayload struct {
-	DB          string
-	Table       string
-	ShadowPath  string
+	DB         string
+	Table      string
+	ShadowPath string
 }
 
 // WALSchemaWritePayload — payload для OpSchemaWrite
@@ -101,11 +101,11 @@ type CheckpointPayload struct {
 }
 
 type WAL struct {
-	file         *os.File
-	mu           sync.Mutex
-	nextTxID     atomic.Uint64
-	path         string
-	syncCounter  int
+	file          *os.File
+	mu            sync.Mutex
+	nextTxID      atomic.Uint64
+	path          string
+	syncCounter   int
 	SyncBatchSize int // number of writes between fsyncs (0 = sync every write)
 }
 

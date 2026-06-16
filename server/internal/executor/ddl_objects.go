@@ -3,7 +3,6 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"vaultdb/internal/storage"
 )
@@ -21,8 +20,6 @@ const systemTableName = "_objects"
 
 // objectRow — представление DDL-объекта как строка таблицы.
 // Колонки: name TEXT, type TEXT, definition TEXT.
-type objectRow = storage.Row
-
 // ensureSystemTable создаёт таблицу _objects, если она ещё не существует.
 func ensureSystemTable(ctx *ExecutionContext, dbName string) error {
 	if ctx.Storage.TableExists(dbName, systemTableName) {
@@ -106,17 +103,6 @@ func loadObject(ctx *ExecutionContext, dbName, objType, name string) (map[string
 }
 
 // loadObjectBody загружает тело (body) DDL-объекта.
-func loadObjectBody(ctx *ExecutionContext, dbName, objType, name string) (string, error) {
-	def, err := loadObject(ctx, dbName, objType, name)
-	if err != nil {
-		return "", err
-	}
-	if def == nil {
-		return "", nil
-	}
-	body, _ := def["body"].(string)
-	return body, nil
-}
 
 // deleteObject удаляет DDL-объект по имени и типу.
 func deleteObject(ctx *ExecutionContext, dbName, objType, name string) error {
@@ -143,22 +129,6 @@ func deleteObject(ctx *ExecutionContext, dbName, objType, name string) error {
 }
 
 // listObjectsByType возвращает список имён объектов указанного типа.
-func listObjectsByType(ctx *ExecutionContext, dbName, objType string) ([]string, error) {
-	rows, err := ctx.Storage.ReadCurrentRows(dbName, systemTableName)
-	if err != nil {
-		return nil, fmt.Errorf("list objects: %w", err)
-	}
-
-	var names []string
-	for _, row := range rows {
-		if len(row) >= 3 && valuesEqual(row[1], objType) {
-			if name, ok := row[0].(string); ok {
-				names = append(names, name)
-			}
-		}
-	}
-	return names, nil
-}
 
 // loadAllObjectsByType загружает все объекты указанного типа.
 func loadAllObjectsByType(ctx *ExecutionContext, dbName, objType string) ([]map[string]interface{}, error) {
@@ -185,12 +155,5 @@ func loadAllObjectsByType(ctx *ExecutionContext, dbName, objType string) ([]map[
 }
 
 // objectExists проверяет, существует ли объект с указанным именем и типом.
-func objectExists(ctx *ExecutionContext, dbName, objType, name string) bool {
-	def, err := loadObject(ctx, dbName, objType, name)
-	return err == nil && def != nil
-}
 
 // objectNamesToCSV конвертирует список имён в строку через запятую.
-func objectNamesToCSV(names []string) string {
-	return strings.Join(names, ", ")
-}

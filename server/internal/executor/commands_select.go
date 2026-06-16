@@ -414,26 +414,7 @@ func distinctRows(rows [][]string) [][]string {
 	return result
 }
 
-func distinctRowsFromSchema(rows []storage.Row, schema *storage.TableSchema) []storage.Row {
-	seen := make(map[string]bool)
-	result := make([]storage.Row, 0, len(rows))
-	for _, row := range rows {
-		key := rowKey(row)
-		if !seen[key] {
-			seen[key] = true
-			result = append(result, row)
-		}
-	}
-	return result
-}
 
-func rowKey(row storage.Row) string {
-	parts := make([]string, len(row))
-	for i, v := range row {
-		parts[i] = fmt.Sprintf("%v", v)
-	}
-	return strings.Join(parts, "\x00")
-}
 
 func loadViewQueryWithCtx(ctx *ExecutionContext, dbName, viewName string) (string, error) {
 	def, err := loadObject(ctx, dbName, objTypeView, viewName)

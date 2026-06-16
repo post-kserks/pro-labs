@@ -54,7 +54,7 @@ type Transaction struct {
 
 // Manager управляет транзакциями всех сессий.
 type Manager struct {
-	counter       atomic.Uint64
+	counter        atomic.Uint64
 	SpillThreshold int
 	SpillDir       string
 

@@ -40,34 +40,34 @@ const (
 var webUIFiles embed.FS
 
 type Config struct {
-	Host              string
-	Port              int
-	MonitorPort       int
-	Version           string
-	MaxRequestSizeBytes int
-	AllowedOrigins    []string
-	Storage           storage.StorageEngine
-	Auth              *auth.Manager
-	Logger            *slog.Logger
-	Metrics           *metrics.Collector
-	TxManager         *txmanager.Manager
-	ActiveConnections func() int64
-	Broadcaster       *executor.Broadcaster
-	Embedder          ai.Embedder
-	RateLimiter       *RateLimiter
-	TLSCertFile       string
-	TLSKeyFile        string
+	Host                      string
+	Port                      int
+	MonitorPort               int
+	Version                   string
+	MaxRequestSizeBytes       int
+	AllowedOrigins            []string
+	Storage                   storage.StorageEngine
+	Auth                      *auth.Manager
+	Logger                    *slog.Logger
+	Metrics                   *metrics.Collector
+	TxManager                 *txmanager.Manager
+	ActiveConnections         func() int64
+	Broadcaster               *executor.Broadcaster
+	Embedder                  ai.Embedder
+	RateLimiter               *RateLimiter
+	TLSCertFile               string
+	TLSKeyFile                string
 	MaxLiveQuerySubscriptions int
 }
 
 type Server struct {
-	cfg                  Config
-	startedAt            time.Time
-	metrics              *metrics.Collector
-	txm                  *txmanager.Manager
-	br                   *executor.Broadcaster
-	activeSubscriptions  atomic.Int64
-	nextSubID            atomic.Int64
+	cfg                 Config
+	startedAt           time.Time
+	metrics             *metrics.Collector
+	txm                 *txmanager.Manager
+	br                  *executor.Broadcaster
+	activeSubscriptions atomic.Int64
+	nextSubID           atomic.Int64
 }
 
 func New(cfg Config) *Server {

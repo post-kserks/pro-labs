@@ -29,46 +29,26 @@ func (e *PageStorageEngine) indexMetadataPath(dbName, tableName string) string {
 	return filepath.Join(e.rootDir, dbName, tableName, ".indexes.json")
 }
 
-func (e *PageStorageEngine) loadIndexesMetadata(dbName, tableName string, mgr *index.IndexManager) {
-	path := e.indexMetadataPath(dbName, tableName)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-	var meta []struct {
-		Name    string `json:"name"`
-		Column  string `json:"column"`
-		ColIdx  int    `json:"col_idx"`
-		Type    string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return
-	}
-	for _, m := range meta {
-		idx := index.NewByType(m.Name, m.Column, m.ColIdx, m.Type)
-		mgr.Add(idx)
-	}
-}
 
 func (e *PageStorageEngine) saveIndexesMetadata(dbName, tableName string, mgr *index.IndexManager) error {
 	indexes := mgr.All()
 	meta := make([]struct {
-		Name    string `json:"name"`
-		Column  string `json:"column"`
-		ColIdx  int    `json:"col_idx"`
-		Type    string `json:"type"`
+		Name   string `json:"name"`
+		Column string `json:"column"`
+		ColIdx int    `json:"col_idx"`
+		Type   string `json:"type"`
 	}, 0, len(indexes))
 	for _, idx := range indexes {
 		meta = append(meta, struct {
-			Name    string `json:"name"`
-			Column  string `json:"column"`
-			ColIdx  int    `json:"col_idx"`
-			Type    string `json:"type"`
+			Name   string `json:"name"`
+			Column string `json:"column"`
+			ColIdx int    `json:"col_idx"`
+			Type   string `json:"type"`
 		}{
-			Name:    idx.Name(),
-			Column:  idx.Column(),
-			ColIdx:  idx.ColIndex(),
-			Type:    idx.Type(),
+			Name:   idx.Name(),
+			Column: idx.Column(),
+			ColIdx: idx.ColIndex(),
+			Type:   idx.Type(),
 		})
 	}
 	data, err := json.MarshalIndent(meta, "", "  ")

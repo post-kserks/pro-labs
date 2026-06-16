@@ -335,9 +335,9 @@ func (c *Collector) Render() string {
 			}
 			sort.Strings(tables)
 			for _, t := range tables {
-			fmt.Fprintf(&b,
-				`vaultdb_storage_rows{database="%s",table="%s"} %d`+"\n",
-				sanitizeMetricLabel(db), sanitizeMetricLabel(t), c.storageRows[db][t])
+				fmt.Fprintf(&b,
+					`vaultdb_storage_rows{database="%s",table="%s"} %d`+"\n",
+					sanitizeMetricLabel(db), sanitizeMetricLabel(t), c.storageRows[db][t])
 			}
 		}
 	}

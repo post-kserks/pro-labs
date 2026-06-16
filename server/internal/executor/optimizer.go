@@ -34,16 +34,17 @@ const (
 	defaultFallbackCost = 1000
 	defaultFallbackRows = 100
 )
+
 // CostEstimate оценка стоимости плана.
 type CostEstimate struct {
-	Cost         float64
+	Cost          float64
 	EstimatedRows int
 }
 
 // Optimizer cost-based query optimizer.
 type Optimizer struct {
-	stats      *StatisticsCollector
-	storage    storage.StorageEngine
+	stats   *StatisticsCollector
+	storage storage.StorageEngine
 }
 
 // NewOptimizer создаёт новый optimizer.

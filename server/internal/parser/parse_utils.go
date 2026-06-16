@@ -763,4 +763,3 @@ func (p *sqlParser) parsePrimaryPost(left Expression) Expression {
 	}
 	return left
 }
-

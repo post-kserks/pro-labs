@@ -14,10 +14,10 @@ const defaultBufferPoolCapacity = 1024
 // Сидит между page engine и HeapFile, кэширует прочитанные страницы в памяти.
 type BufferPool struct {
 	mu       sync.RWMutex
-	capacity int                    // максимальное количество страниц в кэше
+	capacity int                           // максимальное количество страниц в кэше
 	cache    map[page.PageID]*list.Element // PageID → элемент в lru
-	lru      *list.List             // двусвязный список для LRU (front = recently used)
-	count    int                    // текущее количество страниц в кэше
+	lru      *list.List                    // двусвязный список для LRU (front = recently used)
+	count    int                           // текущее количество страниц в кэше
 }
 
 // bufferEntry — запись в кэше.
@@ -145,23 +145,6 @@ func (bp *BufferPool) evict(hf *heap.HeapFile) bool {
 
 // evictDirty сбрасывает грязную страницу на диск перед вытеснением.
 // Вызывается когда known dirty page нужен для записи на диск.
-func (bp *BufferPool) evictDirty(pid page.PageID, hf *heap.HeapFile) error {
-	bp.mu.Lock()
-	defer bp.mu.Unlock()
-
-	elem, ok := bp.cache[pid]
-	if !ok {
-		return nil
-	}
-	entry := elem.Value.(*bufferEntry)
-	if entry.dirty {
-		if err := hf.WritePage(pid, entry.page); err != nil {
-			return err
-		}
-		entry.dirty = false
-	}
-	return nil
-}
 
 // FlushAll сбрасывает все dirty pages на диск.
 func (bp *BufferPool) FlushAll(hf *heap.HeapFile) error {

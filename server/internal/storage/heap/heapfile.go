@@ -83,17 +83,6 @@ func (hf *HeapFile) Close() error {
 	return firstErr
 }
 
-func (hf *HeapFile) getSegment(segNo uint16) (*os.File, error) {
-	hf.mu.RLock()
-	defer hf.mu.RUnlock()
-	if hf.closed {
-		return nil, errors.New("heap file is closed")
-	}
-	if int(segNo) >= len(hf.segments) {
-		return nil, fmt.Errorf("segment %d does not exist", segNo)
-	}
-	return hf.segments[segNo], nil
-}
 
 // ReadPage reads a page from disk into buf and verifies its checksum.
 func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {

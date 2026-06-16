@@ -291,4 +291,3 @@ type ReleaseSavepointCommand struct {
 func (c *ReleaseSavepointCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	return nil, fmt.Errorf("RELEASE SAVEPOINT not yet implemented; use BEGIN/COMMIT/ROLLBACK for transaction control")
 }
-

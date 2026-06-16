@@ -17,7 +17,7 @@ type BTreeIndex struct {
 	colIndex int
 
 	// Отсортированные ключи
-	keys   []string
+	keys []string
 	// Позиции строк для каждого ключа
 	values [][]int
 
@@ -146,8 +146,8 @@ func (idx *BTreeIndex) Rebuild(rows []IndexableRow) {
 	idx.reverse = make(map[int]string)
 
 	type entry struct {
-		key  string
-		pos  int
+		key string
+		pos int
 	}
 
 	var entries []entry
@@ -179,24 +179,24 @@ func (idx *BTreeIndex) Rebuild(rows []IndexableRow) {
 
 // btreeIndexData — структура для сериализации B-tree индекса.
 type btreeIndexData struct {
-	Name    string              `json:"name"`
-	Column  string              `json:"column"`
-	ColIndex int                `json:"col_index"`
-	Keys    []string            `json:"keys"`
-	Values  [][]int             `json:"values"`
-	Reverse map[int]string      `json:"reverse"`
+	Name     string         `json:"name"`
+	Column   string         `json:"column"`
+	ColIndex int            `json:"col_index"`
+	Keys     []string       `json:"keys"`
+	Values   [][]int        `json:"values"`
+	Reverse  map[int]string `json:"reverse"`
 }
 
 // Save сохраняет B-tree индекс в JSON файл.
 func (idx *BTreeIndex) Save(path string) error {
 	idx.mu.RLock()
 	data := btreeIndexData{
-		Name:    idx.name,
-		Column:  idx.column,
+		Name:     idx.name,
+		Column:   idx.column,
 		ColIndex: idx.colIndex,
-		Keys:    idx.keys,
-		Values:  idx.values,
-		Reverse: idx.reverse,
+		Keys:     idx.keys,
+		Values:   idx.values,
+		Reverse:  idx.reverse,
 	}
 	idx.mu.RUnlock()
 

@@ -327,8 +327,6 @@ func idxInSlice(idx int, s []int) bool {
 	return false
 }
 
-
-
 type PrepareCommand struct {
 	stmt *parser.PrepareStatement
 }

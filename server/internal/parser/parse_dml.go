@@ -366,4 +366,3 @@ func (p *sqlParser) parseMerge() (Statement, error) {
 		WhenNotMatched: whenNotMatched,
 	}, nil
 }
-

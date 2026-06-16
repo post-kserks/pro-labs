@@ -14,13 +14,13 @@ type MockStorage struct {
 	rows      map[string]map[string][]storage.Row
 	indexes   map[string]map[string]map[string][]int
 
-	createDBErr error
-	dropDBErr   error
+	createDBErr  error
+	dropDBErr    error
 	createTblErr error
-	insertErr   error
-	selectErr   error
-	deleteErr   error
-	updateErr   error
+	insertErr    error
+	selectErr    error
+	deleteErr    error
+	updateErr    error
 }
 
 func NewMockStorage() *MockStorage {
@@ -67,7 +67,7 @@ func (m *MockStorage) DropDatabase(name string) error {
 }
 
 func (m *MockStorage) FinalCheckpoint() error { return nil }
-func (m *MockStorage) Close() error            { return nil }
+func (m *MockStorage) Close() error           { return nil }
 
 // ReadOnlyEngine
 

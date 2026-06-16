@@ -180,4 +180,3 @@ func compareResultCells(a, b string) int {
 	}
 	return strings.Compare(a, b)
 }
-

@@ -338,7 +338,7 @@ func (c *CreateIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return &Result{Type: "message", Message: fmt.Sprintf("Multi-column index '%s' created successfully.", c.stmt.IndexName)}, nil
 	}
 
- column := c.stmt.Column
+	column := c.stmt.Column
 	if column == "" && len(c.stmt.Columns) == 1 {
 		column = c.stmt.Columns[0]
 	}
@@ -625,11 +625,11 @@ func (c *CreateTriggerCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	td := map[string]interface{}{
-		"name":      c.stmt.Name,
-		"table":     c.stmt.TableName,
-		"timing":    c.stmt.Timing,
-		"event":     c.stmt.Event,
-		"body":      c.stmt.Body,
+		"name":   c.stmt.Name,
+		"table":  c.stmt.TableName,
+		"timing": c.stmt.Timing,
+		"event":  c.stmt.Event,
+		"body":   c.stmt.Body,
 	}
 
 	if err := storeObject(ctx, dbName, objTypeTrigger, c.stmt.Name, td); err != nil {

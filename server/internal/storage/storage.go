@@ -24,9 +24,9 @@ type ColumnSchema struct {
 // TableConstraint represents a constraint on a table.
 type TableConstraint struct {
 	Name     string   `json:"name"`
-	Type     string   `json:"type"`     // "UNIQUE", "CHECK", "FOREIGN_KEY"
+	Type     string   `json:"type"` // "UNIQUE", "CHECK", "FOREIGN_KEY"
 	Columns  []string `json:"columns"`
-	Expr     string   `json:"expr,omitempty"`     // for CHECK constraints
+	Expr     string   `json:"expr,omitempty"`      // for CHECK constraints
 	RefTable string   `json:"ref_table,omitempty"` // for FOREIGN_KEY
 	RefCols  []string `json:"ref_cols,omitempty"`  // for FOREIGN_KEY
 }

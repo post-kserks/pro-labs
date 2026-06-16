@@ -542,4 +542,3 @@ func (c *SelectCommand) executeDerivedTable(ctx *ExecutionContext) (*Result, err
 		Rows:    resultRows,
 	}, nil
 }
-

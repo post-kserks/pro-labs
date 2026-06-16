@@ -104,22 +104,22 @@ func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *
 
 func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPort, monitorPort int, store storage.StorageEngine, authManager *auth.Manager, metricsCollector *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, embedder ai.Embedder, activeConnections func() int64, logger *slog.Logger, tlsCert, tlsKey string) <-chan error {
 	httpSrv := httpserver.New(httpserver.Config{
-		Host:              host,
-		Port:              httpPort,
-		MonitorPort:       monitorPort,
-		Version:           version,
+		Host:                host,
+		Port:                httpPort,
+		MonitorPort:         monitorPort,
+		Version:             version,
 		MaxRequestSizeBytes: cfg.Server.MaxRequestSizeBytes,
-		AllowedOrigins:    cfg.Server.AllowedOrigins,
-		Storage:           store,
-		Auth:              authManager,
-		Logger:            logger,
-		Metrics:           metricsCollector,
-		TxManager:         txm,
-		ActiveConnections: activeConnections,
-		Broadcaster:       br,
-		Embedder:          embedder,
-		TLSCertFile:       tlsCert,
-		TLSKeyFile:        tlsKey,
+		AllowedOrigins:      cfg.Server.AllowedOrigins,
+		Storage:             store,
+		Auth:                authManager,
+		Logger:              logger,
+		Metrics:             metricsCollector,
+		TxManager:           txm,
+		ActiveConnections:   activeConnections,
+		Broadcaster:         br,
+		Embedder:            embedder,
+		TLSCertFile:         tlsCert,
+		TLSKeyFile:          tlsKey,
 	})
 	httpErrCh := make(chan error, 1)
 	go func() {
