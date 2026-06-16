@@ -83,18 +83,26 @@ func (o *Optimizer) OptimizePlan(dbName string, stmt *parser.SelectStatement) (*
 func (o *Optimizer) chooseAccessMethods(dbName string, stmt *parser.SelectStatement, stats *TableStatistics) map[string]AccessMethod {
 	methods := make(map[string]AccessMethod)
 
-	// Анализируем WHERE clause
 	if stmt.Where != nil {
 		if idx := o.findIndexableColumn(dbName, stmt.TableName, stmt.Where); idx != "" {
-			// Есть индексный столбец в WHERE
 			if _, found := o.storage.FindIndexForColumn(dbName, stmt.TableName, idx); found {
-				methods[stmt.TableName] = IndexScan
-				return methods
+				// Compare IndexScan vs SeqScan cost to choose the better one
+				if stats != nil && stats.RowCount > 0 {
+					sel := o.stats.EstimateSelectivity(dbName, stmt.TableName, stmt.Where)
+					indexCost := math.Log2(float64(stats.RowCount)) + sel*float64(stats.RowCount)
+					seqCost := float64(stats.RowCount)
+					if indexCost < seqCost {
+						methods[stmt.TableName] = IndexScan
+						return methods
+					}
+				} else {
+					methods[stmt.TableName] = IndexScan
+					return methods
+				}
 			}
 		}
 	}
 
-	// По умолчанию — Sequential Scan
 	methods[stmt.TableName] = SeqScan
 	return methods
 }

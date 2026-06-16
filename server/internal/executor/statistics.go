@@ -150,14 +150,50 @@ func (sc *StatisticsCollector) EstimateSelectivity(dbName, tableName string, pre
 		return 0.0
 	}
 
-	// Базовая оценка селективности
 	switch p := predicate.(type) {
 	case *parser.BinaryExpr:
+		// Extract column name for column-specific selectivity
+		colName := ""
+		if col, ok := p.Left.(*parser.ColumnRef); ok {
+			colName = strings.ToLower(col.Name)
+		} else if col, ok := p.Right.(*parser.ColumnRef); ok {
+			colName = strings.ToLower(col.Name)
+		}
+		if colName != "" {
+			if colStats, ok := stats.ColumnStats[colName]; ok && colStats.DistinctCount > 0 {
+				return sc.estimateBinarySelectivityWithStats(stats, colStats, p.Operator)
+			}
+		}
 		return sc.estimateBinarySelectivity(stats, p.Operator)
+	case *parser.AndExpr:
+		left := sc.EstimateSelectivity(dbName, tableName, p.Left)
+		right := sc.EstimateSelectivity(dbName, tableName, p.Right)
+		return left * right
+	case *parser.OrExpr:
+		left := sc.EstimateSelectivity(dbName, tableName, p.Left)
+		right := sc.EstimateSelectivity(dbName, tableName, p.Right)
+		return left + right - left*right
 	}
 
-	// По умолчанию — 30% селективность
 	return 0.3
+}
+
+// estimateBinarySelectivityWithStats uses actual column statistics for selectivity.
+func (sc *StatisticsCollector) estimateBinarySelectivityWithStats(tableStats *TableStatistics, colStats *ColumnStatistics, operator string) float64 {
+	switch operator {
+	case "=":
+		// Equality: 1 / distinct_count (uniform distribution assumption)
+		return 1.0 / float64(colStats.DistinctCount)
+	case "!=", "<>":
+		return 1.0 - 1.0/float64(colStats.DistinctCount)
+	case "<", ">", "<=", ">=":
+		// Range: assume uniform distribution, ~30% for open ranges
+		return 0.3
+	case "LIKE":
+		return 0.2
+	default:
+		return 0.3
+	}
 }
 
 // estimateBinarySelectivity оценивает селективность для бинарных операций.

@@ -125,7 +125,7 @@ func Open(path string) (*WAL, error) {
 		SyncBatchSize: 1,
 	}
 
-	_, maxTx, err := w.readEntriesLocked(true)
+	maxTx, err := w.scanAndTruncate()
 	if err != nil {
 		_ = file.Close()
 		return nil, err
@@ -176,13 +176,34 @@ func (w *WAL) Recover() ([]Entry, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	entries, maxTx, err := w.readEntriesLocked(true)
-	if err != nil {
-		return nil, err
+	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("wal: seek start: %w", err)
 	}
-	if maxTx > w.nextTxID.Load() {
-		w.nextTxID.Store(maxTx)
+
+	var entries []Entry
+	var maxTxID uint64
+	for {
+		entry, _, err := w.readEntryFrom(w.file)
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			break
+		}
+		if entry.TxID > maxTxID {
+			maxTxID = entry.TxID
+		}
+		entries = append(entries, entry)
 	}
+
+	if maxTxID > w.nextTxID.Load() {
+		w.nextTxID.Store(maxTxID)
+	}
+
+	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
+		return nil, fmt.Errorf("wal: seek end: %w", err)
+	}
+
 	return entries, nil
 }
 
@@ -313,6 +334,7 @@ func buildRecord(txID uint64, opType byte, payload []byte) ([]byte, error) {
 // readEntryFrom reads a single WAL entry from the current file position.
 // Returns the entry, the number of bytes read, and any error.
 // Returns io.EOF when no more entries.
+// Reuses internal buffers to minimize allocations on hot path.
 func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
 	magic := make([]byte, 4)
 	if _, err := io.ReadFull(f, magic); err != nil {
@@ -322,29 +344,14 @@ func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
 		return Entry{}, 0, io.EOF
 	}
 
-	checksumBuf := bytes.NewBuffer(make([]byte, 0, 64))
-	checksumBuf.Write(magic)
-
-	txIDBytes := make([]byte, 8)
-	if _, err := io.ReadFull(f, txIDBytes); err != nil {
+	hdr := make([]byte, 13) // txID(8) + opType(1) + payloadLen(4)
+	if _, err := io.ReadFull(f, hdr); err != nil {
 		return Entry{}, 0, io.ErrUnexpectedEOF
 	}
-	checksumBuf.Write(txIDBytes)
-	txID := binary.LittleEndian.Uint64(txIDBytes)
+	txID := binary.LittleEndian.Uint64(hdr[0:8])
+	opType := hdr[8]
+	payloadLen := binary.LittleEndian.Uint32(hdr[9:13])
 
-	opBytes := make([]byte, 1)
-	if _, err := io.ReadFull(f, opBytes); err != nil {
-		return Entry{}, 0, io.ErrUnexpectedEOF
-	}
-	checksumBuf.Write(opBytes)
-	opType := opBytes[0]
-
-	lengthBytes := make([]byte, 4)
-	if _, err := io.ReadFull(f, lengthBytes); err != nil {
-		return Entry{}, 0, io.ErrUnexpectedEOF
-	}
-	checksumBuf.Write(lengthBytes)
-	payloadLen := binary.LittleEndian.Uint32(lengthBytes)
 	if payloadLen > maxPayloadSize {
 		return Entry{}, 0, fmt.Errorf("wal: payload too large (%d bytes)", payloadLen)
 	}
@@ -353,132 +360,75 @@ func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
 	if _, err := io.ReadFull(f, payload); err != nil {
 		return Entry{}, 0, io.ErrUnexpectedEOF
 	}
-	checksumBuf.Write(payload)
 
-	crcBytes := make([]byte, 4)
-	if _, err := io.ReadFull(f, crcBytes); err != nil {
+	crcBuf := make([]byte, 4)
+	if _, err := io.ReadFull(f, crcBuf); err != nil {
 		return Entry{}, 0, io.ErrUnexpectedEOF
 	}
-	storedCRC := binary.LittleEndian.Uint32(crcBytes)
-	calculated := crc32.ChecksumIEEE(checksumBuf.Bytes())
+	storedCRC := binary.LittleEndian.Uint32(crcBuf)
+
+	// Verify checksum: magic(4) + hdr(13) + payload
+	checksumData := make([]byte, 0, 4+13+int(payloadLen))
+	checksumData = append(checksumData, magic...)
+	checksumData = append(checksumData, hdr...)
+	checksumData = append(checksumData, payload...)
+	calculated := crc32.ChecksumIEEE(checksumData)
 	if storedCRC != calculated {
 		return Entry{}, 0, fmt.Errorf("wal: checksum mismatch")
 	}
 
-	totalSize := int64(4 + 8 + 1 + 4 + int(payloadLen) + 4)
+	totalSize := int64(4 + 13 + int(payloadLen) + 4)
 	return Entry{TxID: txID, OpType: opType, Payload: payload}, totalSize, nil
 }
 
-// readEntriesLocked reads all WAL entries into memory. Used only for small
-// operations (Open, Recover) where the full list is needed.
-func (w *WAL) readEntriesLocked(resetOnCheckpoint bool) ([]Entry, uint64, error) {
+// scanAndTruncate streams through the WAL to find maxTxID and truncate
+// any corrupt tail. Called only during Open(). Does NOT load entries into memory.
+func (w *WAL) scanAndTruncate() (uint64, error) {
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
-		return nil, 0, fmt.Errorf("wal: seek start: %w", err)
+		return 0, fmt.Errorf("wal: seek start: %w", err)
 	}
 
-	entries := make([]Entry, 0, 16)
 	var maxTxID uint64
 	var validEnd int64
 
 	for {
-		magic := make([]byte, 4)
-		if _, err := io.ReadFull(w.file, magic); err != nil {
+		entry, size, err := w.readEntryFrom(w.file)
+		if err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
-			return nil, 0, fmt.Errorf("wal: read magic: %w", err)
-		}
-		if string(magic) != recordMagic {
 			break
 		}
-
-		checksumBuf := bytes.NewBuffer(make([]byte, 0, 64))
-		checksumBuf.Write(magic)
-
-		txIDBytes := make([]byte, 8)
-		if _, err := io.ReadFull(w.file, txIDBytes); err != nil {
-			break
+		if entry.TxID > maxTxID {
+			maxTxID = entry.TxID
 		}
-		checksumBuf.Write(txIDBytes)
-		txID := binary.LittleEndian.Uint64(txIDBytes)
-		if txID > maxTxID {
-			maxTxID = txID
-		}
-
-		opBytes := make([]byte, 1)
-		if _, err := io.ReadFull(w.file, opBytes); err != nil {
-			break
-		}
-		checksumBuf.Write(opBytes)
-		opType := opBytes[0]
-
-		lengthBytes := make([]byte, 4)
-		if _, err := io.ReadFull(w.file, lengthBytes); err != nil {
-			break
-		}
-		checksumBuf.Write(lengthBytes)
-		payloadLen := binary.LittleEndian.Uint32(lengthBytes)
-		if payloadLen > maxPayloadSize {
-			break
-		}
-
-		payload := make([]byte, payloadLen)
-		if _, err := io.ReadFull(w.file, payload); err != nil {
-			break
-		}
-		checksumBuf.Write(payload)
-
-		crcBytes := make([]byte, 4)
-		if _, err := io.ReadFull(w.file, crcBytes); err != nil {
-			break
-		}
-		storedCRC := binary.LittleEndian.Uint32(crcBytes)
-		calculated := crc32.ChecksumIEEE(checksumBuf.Bytes())
-		if storedCRC != calculated {
-			break
-		}
-
-		validEnd += int64(4 + 8 + 1 + 4 + len(payload) + 4)
-
-		if opType == OpCheckpoint && resetOnCheckpoint {
-			entries = entries[:0]
-			continue
-		}
-
-		entries = append(entries, Entry{
-			TxID:    txID,
-			OpType:  opType,
-			Payload: payload,
-		})
+		validEnd += size
 	}
 
-	// Drop any corrupt or partially written tail. Otherwise future appends
-	// land after the garbage and become unreachable on the next recovery scan.
+	// Drop any corrupt or partially written tail
 	if info, err := w.file.Stat(); err == nil && info.Size() > validEnd {
 		if err := w.file.Truncate(validEnd); err != nil {
-			// Cannot truncate — rename corrupt WAL and create new one
 			corruptPath := w.path + fmt.Sprintf(".corrupt.%d", time.Now().Unix())
 			w.file.Close()
 			if renameErr := os.Rename(w.path, corruptPath); renameErr != nil {
-				return nil, 0, fmt.Errorf(
+				return 0, fmt.Errorf(
 					"FATAL: WAL is corrupt and cannot be truncated or renamed. "+
 						"Manual intervention required. Corrupt WAL: %s. Error: %w", w.path, renameErr)
 			}
-			// Create new empty WAL
 			newFile, openErr := os.OpenFile(w.path, os.O_CREATE|os.O_RDWR, 0o644)
 			if openErr != nil {
-				return nil, 0, fmt.Errorf("failed to create new WAL after corrupt rename: %w", openErr)
+				return 0, fmt.Errorf("failed to create new WAL after corrupt rename: %w", openErr)
 			}
 			w.file = newFile
-			return entries, maxTxID, nil
+			return maxTxID, nil
 		}
 	}
 
 	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
-		return nil, 0, fmt.Errorf("wal: seek end: %w", err)
+		return 0, fmt.Errorf("wal: seek end: %w", err)
 	}
 
-	return entries, maxTxID, nil
+	return maxTxID, nil
 }
 
 // AnalyzeTransactions анализирует WAL потоково, не загружая все записи в память.

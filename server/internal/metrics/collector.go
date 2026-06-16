@@ -68,11 +68,17 @@ type Collector struct {
 	queries QueryCounters
 
 	// Гистограмма времени выполнения (в секундах)
-	// Границы бакетов: 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, +Inf
 	histBuckets []float64
-	histCounts  []atomic.Int64 // количество в каждом бакете
-	histSum     atomic.Int64   // сумма * 1e9 (наносекунды, чтобы работать с int)
-	histTotal   atomic.Int64   // общее количество
+	histCounts  []atomic.Int64
+	histSum     atomic.Int64
+	histTotal   atomic.Int64
+
+	// Percentile tracking via ring buffer (last N samples)
+	latencyMu    sync.Mutex
+	latencyBuf   []int64 // nanoseconds, ring buffer
+	latencyPos   int
+	latencyCount int
+	latencyCap   int
 
 	// Gauge метрики
 	activeConns atomic.Int64
@@ -87,8 +93,10 @@ type Collector struct {
 
 	// Метрики хранилища (обновляются периодически)
 	storageMu   sync.RWMutex
-	storageRows map[string]map[string]int64 // db → table → count
+	storageRows map[string]map[string]int64
 }
+
+const defaultLatencyBufSize = 10000
 
 // Boundaries для histogram в секундах
 var defaultBuckets = []float64{
@@ -99,8 +107,10 @@ func New() *Collector {
 	c := &Collector{
 		startTime:   time.Now(),
 		histBuckets: defaultBuckets,
-		histCounts:  make([]atomic.Int64, len(defaultBuckets)+1), // +1 для +Inf
+		histCounts:  make([]atomic.Int64, len(defaultBuckets)+1),
 		storageRows: make(map[string]map[string]int64),
+		latencyBuf:  make([]int64, defaultLatencyBufSize),
+		latencyCap:  defaultLatencyBufSize,
 	}
 	return c
 }
@@ -123,6 +133,15 @@ func (c *Collector) RecordQuery(queryType, status string, duration time.Duration
 		secs := duration.Seconds()
 		c.histSum.Add(duration.Nanoseconds())
 		c.histTotal.Add(1)
+
+		// Track in ring buffer for percentile computation
+		c.latencyMu.Lock()
+		c.latencyBuf[c.latencyPos] = duration.Nanoseconds()
+		c.latencyPos = (c.latencyPos + 1) % c.latencyCap
+		if c.latencyCount < c.latencyCap {
+			c.latencyCount++
+		}
+		c.latencyMu.Unlock()
 
 		// Найти бакет для этого значения
 		for i, bound := range c.histBuckets {
@@ -180,6 +199,31 @@ func (c *Collector) CleanStaleStorageRows(activeTables map[string]map[string]boo
 	}
 }
 
+// ComputePercentiles computes p50, p95, p99 from the latency ring buffer.
+// Returns values in seconds. Returns 0 if no samples.
+func (c *Collector) ComputePercentiles() (p50, p95, p99 float64) {
+	c.latencyMu.Lock()
+	n := c.latencyCount
+	if n == 0 {
+		c.latencyMu.Unlock()
+		return 0, 0, 0
+	}
+	samples := make([]int64, n)
+	for i := 0; i < n; i++ {
+		samples[i] = c.latencyBuf[i]
+	}
+	c.latencyMu.Unlock()
+
+	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+
+	percentile := func(p float64) float64 {
+		idx := int(float64(n-1) * p)
+		return float64(samples[idx]) / 1e9
+	}
+
+	return percentile(0.5), percentile(0.95), percentile(0.99)
+}
+
 // Render сериализует все метрики в Prometheus text format.
 func (c *Collector) Render() string {
 	var b strings.Builder
@@ -219,6 +263,16 @@ func (c *Collector) Render() string {
 	sumSecs := float64(c.histSum.Load()) / 1e9
 	fmt.Fprintf(&b, "vaultdb_query_duration_seconds_sum %g\n", sumSecs)
 	fmt.Fprintf(&b, "vaultdb_query_duration_seconds_count %d\n", total)
+
+	// ── Percentile метрики (p50, p95, p99) ──────────────────────────────
+
+	if p50, p95, p99 := c.ComputePercentiles(); p99 > 0 {
+		b.WriteString("\n# HELP vaultdb_query_duration_percentile Query duration percentiles (from last 10k samples)\n")
+		b.WriteString("# TYPE vaultdb_query_duration_percentile summary\n")
+		fmt.Fprintf(&b, "vaultdb_query_duration_percentile{quantile=\"0.5\"} %g\n", p50)
+		fmt.Fprintf(&b, "vaultdb_query_duration_percentile{quantile=\"0.95\"} %g\n", p95)
+		fmt.Fprintf(&b, "vaultdb_query_duration_percentile{quantile=\"0.99\"} %g\n", p99)
+	}
 
 	// ── Gauge метрики ─────────────────────────────────────────────────
 
