@@ -490,47 +490,11 @@ func (e *PageStorageEngine) nextTxLocked() uint64 {
 // ── Кодирование кортежей ──────────────────────────────────────────────────
 
 func encodePageTuple(createdTx, deletedTx uint64, row Row) ([]byte, error) {
-	payload, err := json.Marshal(row)
-	if err != nil {
-		return nil, err
-	}
-	buf := make([]byte, pageTupleHeaderSize+len(payload))
-	binary.LittleEndian.PutUint64(buf[0:8], createdTx)
-	binary.LittleEndian.PutUint64(buf[8:16], deletedTx)
-	copy(buf[pageTupleHeaderSize:], payload)
-	if len(buf) > page.MaxTupleLength {
-		return nil, fmt.Errorf("page engine: row of %d bytes does not fit a page (max %d)", len(buf), page.MaxTupleLength)
-	}
-	return buf, nil
+	return encodeBinaryTuple(createdTx, deletedTx, row)
 }
 
 func decodePageTuple(tuple []byte, schema *TableSchema) (createdTx, deletedTx uint64, row Row, err error) {
-	if len(tuple) < pageTupleHeaderSize {
-		return 0, 0, nil, fmt.Errorf("page engine: tuple too short (%d bytes)", len(tuple))
-	}
-	createdTx = binary.LittleEndian.Uint64(tuple[0:8])
-	deletedTx = binary.LittleEndian.Uint64(tuple[8:16])
-
-	var raw []interface{}
-	if err := json.Unmarshal(tuple[pageTupleHeaderSize:], &raw); err != nil {
-		return 0, 0, nil, err
-	}
-
-	row = make(Row, len(schema.Columns))
-	for i := range schema.Columns {
-		if i >= len(raw) {
-			row[i] = nil
-			continue
-		}
-		normalized, nerr := normalizeValue(raw[i], schema.Columns[i])
-		if nerr != nil {
-			// Тип столбца мог измениться после ALTER — отдаём как есть
-			row[i] = raw[i]
-			continue
-		}
-		row[i] = normalized
-	}
-	return createdTx, deletedTx, row, nil
+	return decodeBinaryTuple(tuple, schema)
 }
 
 // ── Базы данных ───────────────────────────────────────────────────────────
