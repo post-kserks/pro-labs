@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -40,6 +41,7 @@ func (m *Manager) hashToken(token string) string {
 // New создаёт менеджер с серверным секретом.
 // secretKey читается из VAULTDB_AUTH_SECRET.
 // Если переменная не задана — генерируем случайный и логируем предупреждение.
+// В production VAULTDB_AUTH_SECRET рекомендуется задавать явно.
 func New(enabled bool, tokens map[string]string, logger *slog.Logger) (*Manager, error) {
 	secret := []byte(os.Getenv("VAULTDB_AUTH_SECRET"))
 
@@ -50,7 +52,7 @@ func New(enabled bool, tokens map[string]string, logger *slog.Logger) (*Manager,
 		}
 		if logger != nil {
 			logger.Warn("VAULTDB_AUTH_SECRET not set, using ephemeral secret. " +
-				"Tokens will be invalidated on restart.")
+				"Tokens will be invalidated on restart. Set VAULTDB_AUTH_SECRET for production.")
 		}
 	}
 
@@ -96,8 +98,12 @@ func (m *Manager) ValidateToken(token string) bool {
 	hash := m.hashToken(token)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	_, ok := m.tokens[hash]
-	return ok
+	for storedHash := range m.tokens {
+		if subtle.ConstantTimeCompare([]byte(hash), []byte(storedHash)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) GetLabel(token string) string {

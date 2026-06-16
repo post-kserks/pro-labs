@@ -310,6 +310,67 @@ func buildRecord(txID uint64, opType byte, payload []byte) ([]byte, error) {
 	return body.Bytes(), nil
 }
 
+// readEntryFrom reads a single WAL entry from the current file position.
+// Returns the entry, the number of bytes read, and any error.
+// Returns io.EOF when no more entries.
+func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
+	magic := make([]byte, 4)
+	if _, err := io.ReadFull(f, magic); err != nil {
+		return Entry{}, 0, err
+	}
+	if string(magic) != recordMagic {
+		return Entry{}, 0, io.EOF
+	}
+
+	checksumBuf := bytes.NewBuffer(make([]byte, 0, 64))
+	checksumBuf.Write(magic)
+
+	txIDBytes := make([]byte, 8)
+	if _, err := io.ReadFull(f, txIDBytes); err != nil {
+		return Entry{}, 0, io.ErrUnexpectedEOF
+	}
+	checksumBuf.Write(txIDBytes)
+	txID := binary.LittleEndian.Uint64(txIDBytes)
+
+	opBytes := make([]byte, 1)
+	if _, err := io.ReadFull(f, opBytes); err != nil {
+		return Entry{}, 0, io.ErrUnexpectedEOF
+	}
+	checksumBuf.Write(opBytes)
+	opType := opBytes[0]
+
+	lengthBytes := make([]byte, 4)
+	if _, err := io.ReadFull(f, lengthBytes); err != nil {
+		return Entry{}, 0, io.ErrUnexpectedEOF
+	}
+	checksumBuf.Write(lengthBytes)
+	payloadLen := binary.LittleEndian.Uint32(lengthBytes)
+	if payloadLen > maxPayloadSize {
+		return Entry{}, 0, fmt.Errorf("wal: payload too large (%d bytes)", payloadLen)
+	}
+
+	payload := make([]byte, payloadLen)
+	if _, err := io.ReadFull(f, payload); err != nil {
+		return Entry{}, 0, io.ErrUnexpectedEOF
+	}
+	checksumBuf.Write(payload)
+
+	crcBytes := make([]byte, 4)
+	if _, err := io.ReadFull(f, crcBytes); err != nil {
+		return Entry{}, 0, io.ErrUnexpectedEOF
+	}
+	storedCRC := binary.LittleEndian.Uint32(crcBytes)
+	calculated := crc32.ChecksumIEEE(checksumBuf.Bytes())
+	if storedCRC != calculated {
+		return Entry{}, 0, fmt.Errorf("wal: checksum mismatch")
+	}
+
+	totalSize := int64(4 + 8 + 1 + 4 + int(payloadLen) + 4)
+	return Entry{TxID: txID, OpType: opType, Payload: payload}, totalSize, nil
+}
+
+// readEntriesLocked reads all WAL entries into memory. Used only for small
+// operations (Open, Recover) where the full list is needed.
 func (w *WAL) readEntriesLocked(resetOnCheckpoint bool) ([]Entry, uint64, error) {
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return nil, 0, fmt.Errorf("wal: seek start: %w", err)
@@ -420,21 +481,28 @@ func (w *WAL) readEntriesLocked(resetOnCheckpoint bool) ([]Entry, uint64, error)
 	return entries, maxTxID, nil
 }
 
-// AnalyzeTransactions анализирует WAL и определяет какие транзакции закоммичены,
-// а какие остались незавершёнными.
+// AnalyzeTransactions анализирует WAL потоково, не загружая все записи в память.
+// Определяет какие транзакции закоммичены, а какие остались незавершёнными.
 func (w *WAL) AnalyzeTransactions() (committed map[uint64]bool, inProgress map[uint64]bool, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	entries, _, err := w.readEntriesLocked(false)
-	if err != nil {
-		return nil, nil, err
+	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		return nil, nil, fmt.Errorf("wal: seek start: %w", err)
 	}
 
 	committed = make(map[uint64]bool)
 	inProgress = make(map[uint64]bool)
 
-	for _, entry := range entries {
+	for {
+		entry, _, err := w.readEntryFrom(w.file)
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			break
+		}
+
 		switch entry.OpType {
 		case OpCommit:
 			committed[entry.TxID] = true
@@ -443,7 +511,6 @@ func (w *WAL) AnalyzeTransactions() (committed map[uint64]bool, inProgress map[u
 			delete(inProgress, entry.TxID)
 			delete(committed, entry.TxID)
 		default:
-			// Все остальные операции принадлежат транзакции
 			if entry.TxID != 0 {
 				if !committed[entry.TxID] {
 					inProgress[entry.TxID] = true
@@ -452,44 +519,68 @@ func (w *WAL) AnalyzeTransactions() (committed map[uint64]bool, inProgress map[u
 		}
 	}
 
+	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
+		return nil, nil, fmt.Errorf("wal: seek end: %w", err)
+	}
+
 	return committed, inProgress, nil
 }
 
-// Replay воспроизводит все записи WAL, вызывая callback для каждой операции.
+// Replay воспроизводит все записи WAL потоково, вызывая callback для каждой операции.
 func (w *WAL) Replay(callback func(Entry) error) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	entries, _, err := w.readEntriesLocked(false)
-	if err != nil {
-		return err
+	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("wal: seek start: %w", err)
 	}
 
-	for _, entry := range entries {
+	for {
+		entry, _, err := w.readEntryFrom(w.file)
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			break
+		}
 		if err := callback(entry); err != nil {
 			return fmt.Errorf("wal replay: %w", err)
 		}
 	}
 
+	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
+		return fmt.Errorf("wal: seek end: %w", err)
+	}
+
 	return nil
 }
 
-// ReplayTransaction воспроизводит записи конкретной транзакции.
+// ReplayTransaction воспроизводит записи конкретной транзакции потоково.
 func (w *WAL) ReplayTransaction(txID uint64, callback func(Entry) error) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	entries, _, err := w.readEntriesLocked(false)
-	if err != nil {
-		return err
+	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("wal: seek start: %w", err)
 	}
 
-	for _, entry := range entries {
+	for {
+		entry, _, err := w.readEntryFrom(w.file)
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			break
+		}
 		if entry.TxID == txID {
 			if err := callback(entry); err != nil {
 				return fmt.Errorf("wal replay tx %d: %w", txID, err)
 			}
 		}
+	}
+
+	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
+		return fmt.Errorf("wal: seek end: %w", err)
 	}
 
 	return nil
@@ -507,32 +598,45 @@ func (w *WAL) Flush() (uint64, error) {
 	return w.nextTxID.Load(), nil
 }
 
-// FindLastVacuumCommit ищет последний OpVacuumCommit для указанной таблицы.
+// FindLastVacuumCommit ищет последний OpVacuumCommit для указанной таблицы потоково.
 func (w *WAL) FindLastVacuumCommit(db, table string) (bool, uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	entries, _, err := w.readEntriesLocked(false)
-	if err != nil {
-		return false, 0, err
+	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		return false, 0, fmt.Errorf("wal: seek start: %w", err)
 	}
 
-	// Сканируем от конца к началу
-	for i := len(entries) - 1; i >= 0; i-- {
-		entry := entries[i]
+	var lastMatch *Entry
+	for {
+		entry, _, err := w.readEntryFrom(w.file)
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			break
+		}
 		if entry.OpType == OpVacuumCommit || entry.OpType == OpVacuumBegin {
 			var payload WALVacuumPayload
 			if err := json.Unmarshal(entry.Payload, &payload); err != nil {
 				continue
 			}
 			if payload.DB == db && payload.Table == table {
-				if entry.OpType == OpVacuumCommit {
-					return true, entry.TxID, nil
-				}
-				return false, entry.TxID, nil
+				e := entry
+				lastMatch = &e
 			}
 		}
 	}
 
-	return false, 0, nil
+	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
+		return false, 0, fmt.Errorf("wal: seek end: %w", err)
+	}
+
+	if lastMatch == nil {
+		return false, 0, nil
+	}
+	if lastMatch.OpType == OpVacuumCommit {
+		return true, lastMatch.TxID, nil
+	}
+	return false, lastMatch.TxID, nil
 }

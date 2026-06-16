@@ -81,14 +81,17 @@ func NewFileStorageEngine(rootDir string, m *metrics.Collector) *FileStorageEngi
 	w, err := wal.Open(walPath)
 	if err != nil {
 		s.walErr = err
-		slog.Warn("WAL unavailable, running without crash recovery", "error", err)
+		slog.Error("WAL unavailable — crash recovery disabled. "+
+			"Server will continue but data may be lost on power failure.",
+			"error", err, "path", walPath)
 		return s
 	}
 
 	s.wal = w
 	if err := s.recoverFromWAL(); err != nil {
 		s.walErr = err
-		slog.Warn("WAL recovery failed, continuing", "error", err)
+		slog.Error("WAL recovery failed — data may be inconsistent",
+			"error", err, "path", walPath)
 	}
 
 	return s
