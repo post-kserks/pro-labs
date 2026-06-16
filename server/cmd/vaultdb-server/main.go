@@ -354,8 +354,8 @@ func main() {
 
 	authEnabled := envBool("VAULTDB_AUTH_ENABLED", cfg.Auth.Enabled)
 	if authEnabled && os.Getenv("VAULTDB_AUTH_SECRET") == "" {
-		logger.Error("VAULTDB_AUTH_SECRET is required when auth is enabled. " +
-			"Set it in the environment or disable auth with VAULTDB_AUTH_ENABLED=false")
+		logger.Error("VAULTDB_AUTH_SECRET is REQUIRED. " +
+			"Set it in the environment before starting the server.")
 		os.Exit(1)
 	}
 	tokens := tokensFromEnv()

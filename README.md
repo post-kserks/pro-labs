@@ -4,19 +4,21 @@ SQL-compatible database server with Go backend and C++ clients.
 
 ## Features
 
-- **SQL Support**: SELECT, INSERT, UPDATE, DELETE, JOIN, CTE, MERGE, TRUNCATE, UPSERT
-- **Dual Storage**: JSON (file-based) and Page (binary heap pages)
-- **WAL**: Write-Ahead Logging for crash recovery (ARIES protocol)
+- **SQL Support**: SELECT, INSERT, UPDATE, DELETE, JOIN, CTE, MERGE, TRUNCATE, UPSERT, window functions
+- **Storage Engine**: Binary page engine with Buffer Pool and page-level locking
+- **WAL**: Write-Ahead Logging for crash recovery (ARIES protocol, streaming)
 - **MVCC**: Multi-Version Concurrency Control with time travel
-- **Query Optimizer**: Cost-based optimizer with statistics
-- **Indexes**: Hash and B-tree indexes
-- **Buffer Pool**: LRU page cache
-- **Concurrent Writes**: Page-level locking
-- **Transactions**: BEGIN/COMMIT/ROLLBACK with conflict detection
-- **Authentication**: HMAC-SHA256 tokens
-- **TLS Support**: Self-signed certificate generation
-- **Rate Limiting**: Token bucket algorithm
-- **Monitoring**: Prometheus metrics, health checks, dashboard
+- **Query Optimizer**: Cost-based optimizer with statistics and selectivity estimation
+- **Indexes**: Hash, B-tree, GIN, GiST, multi-column, auto PK indexes
+- **Buffer Pool**: LRU page cache with per-table locking
+- **Concurrent Writes**: Per-table locking (no global mutex contention)
+- **Transactions**: BEGIN/COMMIT/ROLLBACK with conflict detection and spill to disk
+- **Result Cache**: LRU cache with TTL and auto-invalidation (394x speedup)
+- **Binary Encoding**: Fast tuple serialization (no JSON overhead)
+- **Authentication**: HMAC-SHA256 tokens with timing-safe comparison
+- **TLS Support**: mTLS, self-signed certificate generation
+- **Rate Limiting**: Token bucket with trusted proxy support
+- **Monitoring**: Prometheus metrics (p50/p95/p99), health checks, dashboard
 
 ## Quick Start
 
@@ -64,15 +66,15 @@ server:
   max_request_size_bytes: 67108864
 
 storage:
-  engine: "json"  # или "page"
+  engine: "page"  # binary page engine (default)
   data_dir: "/data"
 
 auth:
   enabled: true
 
 ai:
-  enabled: false
-  provider: "noop"
+  endpoint: ""
+  model: ""
 ```
 
 ### Environment Variables

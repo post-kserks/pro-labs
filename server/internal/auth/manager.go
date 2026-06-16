@@ -40,8 +40,8 @@ func (m *Manager) hashToken(token string) string {
 
 // New создаёт менеджер с серверным секретом.
 // secretKey читается из VAULTDB_AUTH_SECRET.
-// Если переменная не задана — генерируем случайный и логируем предупреждение.
-// В production VAULTDB_AUTH_SECRET рекомендуется задавать явно.
+// Если переменная не задана — генерируем случайный (для тестов/разработки).
+// В production VAULTDB_AUTH_SECRET обязателен (проверяется в main.go).
 func New(enabled bool, tokens map[string]string, logger *slog.Logger) (*Manager, error) {
 	secret := []byte(os.Getenv("VAULTDB_AUTH_SECRET"))
 
@@ -51,8 +51,7 @@ func New(enabled bool, tokens map[string]string, logger *slog.Logger) (*Manager,
 			return nil, fmt.Errorf("generate auth secret: %w", err)
 		}
 		if logger != nil {
-			logger.Warn("VAULTDB_AUTH_SECRET not set, using ephemeral secret. " +
-				"Tokens will be invalidated on restart. Set VAULTDB_AUTH_SECRET for production.")
+			logger.Warn("VAULTDB_AUTH_SECRET not set — using ephemeral secret (tokens invalidated on restart)")
 		}
 	}
 
