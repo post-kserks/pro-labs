@@ -425,7 +425,6 @@ func TestBufferPoolFlush(t *testing.T) {
 }
 
 func TestIndexPersistence(t *testing.T) {
-	t.Skip("page storage engine does not support secondary indexes yet")
 	dir := t.TempDir()
 
 	// Create page engine

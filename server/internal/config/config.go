@@ -90,7 +90,7 @@ func Default() *Config {
 			},
 		},
 		Storage: StorageConfig{
-			Engine:  "json",
+			Engine:  "page",
 			DataDir: "./data",
 		},
 		Auth: AuthConfig{Enabled: true},
@@ -156,7 +156,7 @@ func validateConfig(cfg *Config) error {
 		cfg.Server.LiveQueries.BlockTimeoutS = DefaultLiveQueryBlockTimeout
 	}
 	if cfg.Storage.Engine == "" {
-		cfg.Storage.Engine = "json"
+		cfg.Storage.Engine = "page"
 	}
 	if cfg.Storage.DataDir == "" {
 		return fmt.Errorf("storage.data_dir must not be empty")

@@ -242,15 +242,60 @@ func TestPageEngineManyRowsSpanPages(t *testing.T) {
 	}
 }
 
-func TestPageEngineIndexesNotSupported(t *testing.T) {
+func TestPageEngineSecondaryIndexes(t *testing.T) {
 	e := newPageEngine(t)
 	_ = e.CreateDatabase("db")
 	_ = e.CreateTable("db", usersSchema())
 
-	if err := e.CreateIndex("db", "users", "idx_name", "name"); err == nil {
-		t.Fatal("CreateIndex must return a clear error")
+	// Insert some rows
+	_, err := e.InsertRows("db", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+		{int64(3), "Charlie"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create index
+	if err := e.CreateIndex("db", "users", "idx_name", "name"); err != nil {
+		t.Fatalf("CreateIndex failed: %v", err)
+	}
+
+	// Verify index exists
+	idxName, found := e.FindIndexForColumn("db", "users", "name")
+	if !found || idxName != "idx_name" {
+		t.Fatalf("FindIndexForColumn: got (%q, %v), want (idx_name, true)", idxName, found)
+	}
+
+	// List indexes
+	indexes, err := e.ListIndexes("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indexes) != 1 || indexes[0] != "idx_name" {
+		t.Fatalf("ListIndexes: got %v, want [idx_name]", indexes)
+	}
+
+	// Index lookup
+	positions, ok := e.IndexLookup("db", "users", "name", "Bob")
+	if !ok {
+		t.Fatal("IndexLookup should find Bob")
+	}
+	if len(positions) != 1 {
+		t.Fatalf("IndexLookup: got %d positions, want 1", len(positions))
+	}
+
+	// Duplicate index should fail
+	if err := e.CreateIndex("db", "users", "idx_name2", "name"); err == nil {
+		t.Fatal("duplicate CreateIndex should fail")
+	}
+
+	// Drop index
+	if err := e.DropIndex("db", "idx_name"); err != nil {
+		t.Fatalf("DropIndex failed: %v", err)
 	}
 	if _, found := e.FindIndexForColumn("db", "users", "name"); found {
-		t.Fatal("FindIndexForColumn must report no index")
+		t.Fatal("FindIndexForColumn should report no index after drop")
 	}
 }

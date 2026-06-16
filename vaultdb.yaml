@@ -5,6 +5,7 @@ server:
   monitor_port: 5433
 
 storage:
+  engine: page
   data_dir: /data
 
 auth:

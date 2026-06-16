@@ -104,7 +104,8 @@ func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *
 		go pageStore.CheckpointLoop(ctx, checkpointInterval)
 
 		store = pageStore
-		logger.Info("using page-based storage engine (experimental)")
+		logger.Info("using page-based storage engine",
+			"note", "secondary indexes are not yet supported in page engine")
 	default:
 		store = storage.NewFileStorageEngine(dataDir, metricsCollector)
 		logger.Info("using JSON storage engine")

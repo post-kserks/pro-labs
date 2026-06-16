@@ -14,7 +14,7 @@ func TestDefaults(t *testing.T) {
 	if cfg.Server.MaxRequestSizeBytes != DefaultMaxRequestSize {
 		t.Fatalf("default max request size = %d", cfg.Server.MaxRequestSizeBytes)
 	}
-	if cfg.Storage.Engine != "json" {
+	if cfg.Storage.Engine != "page" {
 		t.Fatalf("default engine = %q", cfg.Storage.Engine)
 	}
 	if cfg.Server.LiveQueries.DropPolicy != "drop" {

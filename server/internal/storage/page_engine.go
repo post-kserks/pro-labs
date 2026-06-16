@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"vaultdb/internal/index"
 	"vaultdb/internal/storage/heap"
 	"vaultdb/internal/storage/page"
 	"vaultdb/internal/txmanager"
@@ -28,9 +29,7 @@ import (
 // записью 8 байт на месте, без перемещения кортежа — на этом строится
 // версионность (time travel) и vacuum.
 //
-// Известные ограничения относительно JSON-движка:
-//   - вторичные индексы не поддерживаются (CREATE INDEX возвращает ошибку);
-//   - строка после сериализации должна помещаться в страницу 8 КБ.
+// Вторичные индексы поддерживаются (Hash, BTree, GIN, GiST).
 type PageStorageEngine struct {
 	mu      sync.RWMutex
 	rootDir string
@@ -41,6 +40,9 @@ type PageStorageEngine struct {
 	wal     *wal.WAL
 	txMgr   *txmanager.Manager
 	bufPool *BufferPool
+
+	indexes   map[string]*index.IndexManager // "db/table" → index manager
+	indexesMu sync.RWMutex
 }
 
 type pageTable struct {
@@ -84,6 +86,7 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) 
 		wal:     w,
 		txMgr:   txMgr,
 		bufPool: NewBufferPool(defaultBufferPoolCapacity),
+		indexes: make(map[string]*index.IndexManager),
 	}
 
 	catalogPath := e.catalogPath()
@@ -995,6 +998,9 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	if err := e.saveCatalogLocked(); err != nil {
 		return 0, err
 	}
+
+	e.updateIndexesOnInsert(dbName, tableName, rows, e.catalog.RowCounts[key]-len(rows))
+
 	return len(rows), nil
 }
 
@@ -1148,6 +1154,11 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	if err := e.saveCatalogLocked(); err != nil {
 		return 0, err
 	}
+
+	if isDelete && affected > 0 {
+		e.updateIndexesOnDelete(dbName, tableName, indices)
+	}
+
 	return affected, nil
 }
 
@@ -1687,26 +1698,202 @@ func (e *PageStorageEngine) AlterTableRenameTable(dbName, oldName, newName strin
 	return e.saveCatalogLocked()
 }
 
-// ── Индексы (не поддерживаются страничным движком) ────────────────────────
+// ── Индексы ────────────────────────────────────────────────────────────────
+
+func (e *PageStorageEngine) getOrCreateIndexManager(db, table string) *index.IndexManager {
+	key := db + "/" + table
+	e.indexesMu.Lock()
+	defer e.indexesMu.Unlock()
+	mgr, ok := e.indexes[key]
+	if !ok {
+		mgr = index.NewManager()
+		e.indexes[key] = mgr
+	}
+	return mgr
+}
+
+func (e *PageStorageEngine) indexMetadataPath(dbName, tableName string) string {
+	return filepath.Join(e.rootDir, dbName, tableName, ".indexes.json")
+}
+
+func (e *PageStorageEngine) loadIndexesMetadata(dbName, tableName string, mgr *index.IndexManager) {
+	path := e.indexMetadataPath(dbName, tableName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var meta []struct {
+		Name    string `json:"name"`
+		Column  string `json:"column"`
+		ColIdx  int    `json:"col_idx"`
+		Type    string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return
+	}
+	for _, m := range meta {
+		idx := index.NewByType(m.Name, m.Column, m.ColIdx, m.Type)
+		mgr.Add(idx)
+	}
+}
+
+func (e *PageStorageEngine) saveIndexesMetadata(dbName, tableName string, mgr *index.IndexManager) error {
+	indexes := mgr.All()
+	meta := make([]struct {
+		Name    string `json:"name"`
+		Column  string `json:"column"`
+		ColIdx  int    `json:"col_idx"`
+		Type    string `json:"type"`
+	}, 0, len(indexes))
+	for _, idx := range indexes {
+		meta = append(meta, struct {
+			Name    string `json:"name"`
+			Column  string `json:"column"`
+			ColIdx  int    `json:"col_idx"`
+			Type    string `json:"type"`
+		}{
+			Name:    idx.Name(),
+			Column:  idx.Column(),
+			ColIdx:  idx.ColIndex(),
+			Type:    idx.Type(),
+		})
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(e.indexMetadataPath(dbName, tableName), data, 0o644)
+}
+
+func (e *PageStorageEngine) rowsToIndexable(rows []Row) []index.IndexableRow {
+	result := make([]index.IndexableRow, len(rows))
+	for i, row := range rows {
+		data := make([]interface{}, len(row))
+		for j, v := range row {
+			data[j] = v
+		}
+		result[i] = index.IndexableRow{Data: data}
+	}
+	return result
+}
 
 func (e *PageStorageEngine) CreateIndex(dbName, tableName, indexName, column string) error {
-	return fmt.Errorf("page storage engine does not support secondary indexes yet; use storage.engine: json")
+	e.mu.Lock()
+	t, err := e.getTableLocked(dbName, tableName, false)
+	if err != nil {
+		e.mu.Unlock()
+		return err
+	}
+
+	colIdx := -1
+	for i, col := range t.schema.Columns {
+		if strings.EqualFold(col.Name, column) {
+			colIdx = i
+			break
+		}
+	}
+	if colIdx == -1 {
+		e.mu.Unlock()
+		return fmt.Errorf("column '%s' not found in table '%s'", column, tableName)
+	}
+
+	// Scan rows directly under existing lock (readRows would deadlock)
+	var rows []Row
+	e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+		if deletedTx == 0 {
+			rows = append(rows, row)
+		}
+		return false, nil
+	})
+	e.mu.Unlock()
+
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	if _, ok := mgr.FindForColumn(column); ok {
+		return fmt.Errorf("index already exists for column '%s' in table '%s'", column, tableName)
+	}
+
+	var idx index.Index
+	if strings.HasPrefix(indexName, "gin_") {
+		idx = index.NewGINIndex(indexName, column, colIdx)
+	} else if strings.HasPrefix(indexName, "gin_jsonb_") {
+		idx = index.NewGINJSONBIndex(indexName, column, colIdx)
+	} else if strings.HasPrefix(indexName, "gist_") {
+		idx = index.NewGiSTIndex(indexName, column, colIdx)
+	} else {
+		idx = index.NewBTreeIndex(indexName, column, colIdx)
+	}
+
+	idx.Rebuild(e.rowsToIndexable(rows))
+	mgr.Add(idx)
+
+	return e.saveIndexesMetadata(dbName, tableName, mgr)
 }
 
 func (e *PageStorageEngine) DropIndex(dbName, indexName string) error {
-	return fmt.Errorf("page storage engine does not support secondary indexes yet; use storage.engine: json")
+	e.indexesMu.Lock()
+	for key, mgr := range e.indexes {
+		if !strings.HasPrefix(key, dbName+"/") {
+			continue
+		}
+		if mgr.Has(indexName) {
+			tableName := strings.TrimPrefix(key, dbName+"/")
+			mgr.Remove(indexName)
+			err := e.saveIndexesMetadata(dbName, tableName, mgr)
+			e.indexesMu.Unlock()
+			return err
+		}
+	}
+	e.indexesMu.Unlock()
+	return fmt.Errorf("index '%s' not found", indexName)
 }
 
 func (e *PageStorageEngine) ListIndexes(dbName, tableName string) ([]string, error) {
-	return []string{}, nil
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	indexes := mgr.All()
+	names := make([]string, len(indexes))
+	for i, idx := range indexes {
+		names[i] = idx.Name()
+	}
+	return names, nil
 }
 
 func (e *PageStorageEngine) FindIndexForColumn(dbName, tableName, column string) (string, bool) {
-	return "", false
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	idx, ok := mgr.FindForColumn(column)
+	if !ok {
+		return "", false
+	}
+	return idx.Name(), true
 }
 
 func (e *PageStorageEngine) IndexLookup(dbName, tableName, column, value string) ([]int, bool) {
-	return nil, false
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	idx, ok := mgr.FindForColumn(column)
+	if !ok {
+		return nil, false
+	}
+	return idx.Lookup(value)
+}
+
+func (e *PageStorageEngine) updateIndexesOnInsert(dbName, tableName string, rows []Row, startPos int) {
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	for _, idx := range mgr.All() {
+		colIdx := idx.ColIndex()
+		for i, row := range rows {
+			if colIdx < len(row) {
+				idx.Insert(fmt.Sprintf("%v", row[colIdx]), startPos+i)
+			}
+		}
+	}
+}
+
+func (e *PageStorageEngine) updateIndexesOnDelete(dbName, tableName string, rowPositions []int) {
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	for _, idx := range mgr.All() {
+		for _, pos := range rowPositions {
+			idx.Delete(pos)
+		}
+	}
 }
 
 // ── Жизненный цикл ────────────────────────────────────────────────────────
