@@ -1,6 +1,8 @@
 package vaultdb
 
 import (
+	"fmt"
+
 	"vaultdb/internal/ai"
 	"vaultdb/internal/executor"
 	"vaultdb/internal/metrics"
@@ -22,11 +24,15 @@ type VaultDB struct {
 // Open creates a new embedded database instance.
 func Open(dataDir string) (*VaultDB, error) {
 	m := metrics.New()
-	s := storage.NewFileStorageEngine(dataDir, m)
+	txm := txmanager.NewManager()
+	s, err := storage.NewPageStorageEngine(dataDir, nil, txm)
+	if err != nil {
+		return nil, fmt.Errorf("open vaultdb: %w", err)
+	}
 	return &VaultDB{
 		Storage:     s,
 		Metrics:     m,
-		TxManager:   txmanager.NewManager(),
+		TxManager:   txm,
 		Broadcaster: executor.NewBroadcaster(),
 	}, nil
 }

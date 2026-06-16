@@ -19,7 +19,12 @@ import (
 
 func newTestServer(t *testing.T, authMgr *auth.Manager) *Server {
 	t.Helper()
-	store := storage.NewFileStorageEngine(t.TempDir(), metrics.New())
+	dir := t.TempDir()
+	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = store.Close() })
 
 	sess := executor.NewSession(store, metrics.New(), txmanager.NewManager(), executor.NewBroadcaster())

@@ -4,11 +4,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
+
+func validateObjectName(name string) error {
+	if len(name) == 0 {
+		return fmt.Errorf("object name cannot be empty")
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("object name contains invalid path separator: %s", name)
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("object name contains invalid path traversal: %s", name)
+	}
+	if strings.ContainsRune(name, 0) {
+		return fmt.Errorf("object name contains null byte: %s", name)
+	}
+	return nil
+}
 
 func normalizeValue(value interface{}, col ColumnSchema) (Value, error) {
 	if value == nil {
@@ -180,35 +195,19 @@ func toFloat(v interface{}) (float64, bool) {
 	}
 }
 
-func coerceRow(raw []interface{}, schema *TableSchema) (Row, error) {
-	if len(raw) != len(schema.Columns) {
-		return nil, fmt.Errorf("row width mismatch: expected %d, got %d", len(schema.Columns), len(raw))
+func parseTimestampFlexible(ts string) (time.Time, error) {
+	layouts := []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+		time.RFC3339,
+		time.RFC3339Nano,
 	}
-	row := make(Row, len(raw))
-	for i, cell := range raw {
-		v, err := normalizeValue(cell, schema.Columns[i])
-		if err != nil {
-			return nil, fmt.Errorf("column '%s': %w", schema.Columns[i].Name, err)
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, ts); err == nil {
+			return t.UTC(), nil
 		}
-		row[i] = v
 	}
-	return row, nil
-}
-
-func rowToInterfaceSlice(row Row) []interface{} {
-	out := make([]interface{}, len(row))
-	for i, v := range row {
-		out[i] = v
-	}
-	return out
-}
-
-func interfaceSliceToRow(values []interface{}) Row {
-	out := make(Row, len(values))
-	for i, v := range values {
-		out[i] = v
-	}
-	return out
+	return time.Time{}, fmt.Errorf("unsupported timestamp format")
 }
 
 func valuesEqual(left, right interface{}) bool {
@@ -235,70 +234,4 @@ func valuesEqual(left, right interface{}) bool {
 	default:
 		return fmt.Sprintf("%v", left) == fmt.Sprintf("%v", right)
 	}
-}
-
-func writeJSONAtomic(path string, payload interface{}) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-
-	bytes, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, bytes, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
-	}
-	return nil
-}
-
-func writeDataJSONAtomic(path string, payload interface{}) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-
-	bytes, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, bytes, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
-	}
-	return nil
-}
-
-func parseTimestampFlexible(ts string) (time.Time, error) {
-	layouts := []string{
-		"2006-01-02 15:04:05",
-		"2006-01-02T15:04:05",
-		time.RFC3339,
-		time.RFC3339Nano,
-	}
-	for _, layout := range layouts {
-		if t, err := time.Parse(layout, ts); err == nil {
-			return t.UTC(), nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("unsupported timestamp format")
-}
-
-func parsePayloadTimestamp(ts string) time.Time {
-	if ts == "" {
-		return time.Now().UTC()
-	}
-	t, err := time.Parse(time.RFC3339Nano, ts)
-	if err != nil {
-		return time.Now().UTC()
-	}
-	return t.UTC()
 }

@@ -12,9 +12,14 @@ import (
 
 func newSmokeSession(t *testing.T) *Session {
 	t.Helper()
-	store := storage.NewFileStorageEngine(t.TempDir(), metrics.New())
+	dir := t.TempDir()
+	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = store.Close() })
-	sess := NewSession(store, metrics.New(), txmanager.NewManager(), NewBroadcaster())
+	sess := NewSession(store, metrics.New(), txm, NewBroadcaster())
 
 	mustExec(t, sess, "CREATE DATABASE smoke;")
 	sess.SetCurrentDatabase("smoke")
@@ -134,9 +139,13 @@ func TestMultipleWindowFunctions(t *testing.T) {
 }
 
 func TestCommitConflictDetected(t *testing.T) {
-	store := storage.NewFileStorageEngine(t.TempDir(), metrics.New())
-	t.Cleanup(func() { _ = store.Close() })
+	dir := t.TempDir()
 	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	br := NewBroadcaster()
 
 	sess1 := NewSession(store, metrics.New(), txm, br)

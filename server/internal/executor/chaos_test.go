@@ -37,13 +37,12 @@ func TestChaosRecovery(t *testing.T) {
 	for cycle := 0; cycle < numCycles; cycle++ {
 		t.Run(fmt.Sprintf("Cycle-%d", cycle), func(t *testing.T) {
 			// 1. Инициализация инстанса
-			// NewFileStorageEngine автоматически откроет WAL и выполнит восстановление
-			store := storage.NewFileStorageEngine(dbPath, metrics.New())
-			
 			txm := txmanager.NewManager()
+			store, err := storage.NewPageStorageEngine(dbPath, nil, txm)
+			if err != nil {
+				t.Fatal(err)
+			}
 			exec := New(store, metrics.New(), txm, nil)
-			
-			// WAL доступен через store
 			
 			// Если это первый цикл, создаем БД и таблицу
 			if cycle == 0 {
@@ -94,8 +93,11 @@ func TestChaosRecovery(t *testing.T) {
 			}
 
 			// 5. Восстановление и проверка
-			// При повторном открытии NewFileStorageEngine вызовет recoverFromWAL()
-			storeRecover := storage.NewFileStorageEngine(dbPath, metrics.New())
+			txm2 := txmanager.NewManager()
+			storeRecover, err := storage.NewPageStorageEngine(dbPath, nil, txm2)
+			if err != nil {
+				t.Fatal(err)
+			}
 			
 			// Проверяем количество строк
 			count, err := storeRecover.CountRows(dbName, tableName)

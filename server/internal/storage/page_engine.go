@@ -1625,6 +1625,20 @@ func (e *PageStorageEngine) AlterTableDropColumn(dbName, tableName string, colNa
 		return fmt.Errorf("column '%s' does not exist", colName)
 	}
 
+	// Remove index on dropped column before rewrite
+	key := dbName + "/" + tableName
+	e.indexesMu.RLock()
+	if mgr, ok := e.indexes[key]; ok {
+		for _, idx := range mgr.All() {
+			if idx.ColIndex() == drop {
+				mgr.Remove(idx.Name())
+				e.saveIndexesMetadata(dbName, tableName, mgr)
+				break
+			}
+		}
+	}
+	e.indexesMu.RUnlock()
+
 	newSchema := *t.schema
 	newSchema.Columns = append([]ColumnSchema(nil), t.schema.Columns...)
 	newSchema.Columns = append(newSchema.Columns[:drop], newSchema.Columns[drop+1:]...)
@@ -1646,11 +1660,13 @@ func (e *PageStorageEngine) AlterTableRenameColumn(dbName, tableName, oldName, n
 		return err
 	}
 	found := false
+	colIdx := -1
 	newSchema := *t.schema
 	newSchema.Columns = append([]ColumnSchema(nil), t.schema.Columns...)
 	for i := range newSchema.Columns {
 		if strings.EqualFold(newSchema.Columns[i].Name, oldName) {
 			newSchema.Columns[i].Name = newName
+			colIdx = i
 			found = true
 			break
 		}
@@ -1658,6 +1674,21 @@ func (e *PageStorageEngine) AlterTableRenameColumn(dbName, tableName, oldName, n
 	if !found {
 		return fmt.Errorf("column '%s' does not exist", oldName)
 	}
+
+	// Update index column reference
+	key := dbName + "/" + tableName
+	e.indexesMu.RLock()
+	if mgr, ok := e.indexes[key]; ok {
+		for _, idx := range mgr.All() {
+			if idx.ColIndex() == colIdx {
+				mgr.RenameColumn(idx.Name(), newName)
+				e.saveIndexesMetadata(dbName, tableName, mgr)
+				break
+			}
+		}
+	}
+	e.indexesMu.RUnlock()
+
 	t.schema = &newSchema
 	return e.writeSchemaLocked(dbName, tableName, &newSchema)
 }

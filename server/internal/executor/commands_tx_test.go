@@ -9,8 +9,13 @@ import (
 
 func setupTxSession(t *testing.T) *Session {
 	t.Helper()
-	store := storage.NewFileStorageEngine(t.TempDir(), nil)
+	dir := t.TempDir()
 	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	session := NewSession(store, nil, txm, nil)
 	executeSQL(t, session, "CREATE DATABASE txdb;")
 	executeSQL(t, session, "USE txdb;")
@@ -142,8 +147,13 @@ func TestRollbackClearsPendingOps(t *testing.T) {
 }
 
 func TestWALAbortOnRollback(t *testing.T) {
-	store := storage.NewFileStorageEngine(t.TempDir(), nil)
+	dir := t.TempDir()
 	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	sess := NewSession(store, nil, txm, nil)
 
 	executeSQL(t, sess, "CREATE DATABASE waldb;")

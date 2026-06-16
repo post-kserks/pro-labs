@@ -2,14 +2,11 @@ package storage
 
 import (
 	"testing"
-
-	"vaultdb/internal/metrics"
 )
 
-func newAlterTestEngine(t *testing.T) *FileStorageEngine {
+func newAlterTestEngine(t *testing.T) *PageStorageEngine {
 	t.Helper()
-	s := NewFileStorageEngine(t.TempDir(), metrics.New())
-	t.Cleanup(func() { _ = s.Close() })
+	s := newTestPageEngine(t)
 
 	if err := s.CreateDatabase("shop"); err != nil {
 		t.Fatal(err)

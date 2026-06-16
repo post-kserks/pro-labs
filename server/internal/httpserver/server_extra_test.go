@@ -10,6 +10,7 @@ import (
 
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/txmanager"
 )
 
 func TestHandleHealth(t *testing.T) {
@@ -96,7 +97,12 @@ func TestCORSMiddleware(t *testing.T) {
 }
 
 func TestWithMethod(t *testing.T) {
-	store := storage.NewFileStorageEngine(t.TempDir(), metrics.New())
+	dir := t.TempDir()
+	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer store.Close()
 
 	srv := &Server{

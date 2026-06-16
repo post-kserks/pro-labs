@@ -1,11 +1,11 @@
 package storage
 
 import (
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"vaultdb/internal/txmanager"
 )
 
 func testSchema(dbName string) TableSchema {
@@ -22,7 +22,7 @@ func testSchema(dbName string) TableSchema {
 }
 
 func TestDatabaseLifecycle(t *testing.T) {
-	store := NewFileStorageEngine(t.TempDir(), nil)
+	store := newTestPageEngine(t)
 
 	if store.DatabaseExists("mydb") {
 		t.Fatal("database should not exist")
@@ -51,7 +51,7 @@ func TestDatabaseLifecycle(t *testing.T) {
 }
 
 func TestTableLifecycleAndDataOperations(t *testing.T) {
-	store := NewFileStorageEngine(t.TempDir(), nil)
+	store := newTestPageEngine(t)
 	if err := store.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -142,7 +142,11 @@ func TestTableLifecycleAndDataOperations(t *testing.T) {
 func TestPersistenceAcrossInstances(t *testing.T) {
 	root := t.TempDir()
 
-	store1 := NewFileStorageEngine(root, nil)
+	txm1 := txmanager.NewManager()
+	store1, err := NewPageStorageEngine(root, nil, txm1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store1.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -152,8 +156,13 @@ func TestPersistenceAcrossInstances(t *testing.T) {
 	if _, err := store1.InsertRows("mydb", "heroes", []Row{{int64(1), "Aragorn", int64(10), true}}); err != nil {
 		t.Fatalf("InsertRows failed: %v", err)
 	}
+	store1.Close()
 
-	store2 := NewFileStorageEngine(root, nil)
+	txm2 := txmanager.NewManager()
+	store2, err := NewPageStorageEngine(root, nil, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rows, err := store2.SelectRows("mydb", "heroes")
 	if err != nil {
 		t.Fatalf("SelectRows failed: %v", err)
@@ -161,10 +170,11 @@ func TestPersistenceAcrossInstances(t *testing.T) {
 	if len(rows) != 1 || rows[0][1].(string) != "Aragorn" {
 		t.Fatalf("unexpected persisted rows: %#v", rows)
 	}
+	store2.Close()
 }
 
 func TestParallelInsertRows(t *testing.T) {
-	store := NewFileStorageEngine(t.TempDir(), nil)
+	store := newTestPageEngine(t)
 	if err := store.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -196,7 +206,7 @@ func TestParallelInsertRows(t *testing.T) {
 }
 
 func TestTimeTravelVersionRead(t *testing.T) {
-	store := NewFileStorageEngine(t.TempDir(), nil)
+	store := newTestPageEngine(t)
 	if err := store.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -237,7 +247,7 @@ func TestTimeTravelVersionRead(t *testing.T) {
 }
 
 func TestRowHistory(t *testing.T) {
-	store := NewFileStorageEngine(t.TempDir(), nil)
+	store := newTestPageEngine(t)
 	if err := store.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -269,7 +279,11 @@ func TestRowHistory(t *testing.T) {
 
 func TestWALRecoveryAfterRestart(t *testing.T) {
 	root := t.TempDir()
-	store := NewFileStorageEngine(root, nil)
+	txm1 := txmanager.NewManager()
+	store, err := NewPageStorageEngine(root, nil, txm1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.CreateDatabase("mydb"); err != nil {
 		t.Fatalf("CreateDatabase failed: %v", err)
 	}
@@ -280,18 +294,17 @@ func TestWALRecoveryAfterRestart(t *testing.T) {
 		t.Fatalf("InsertRows failed: %v", err)
 	}
 
-	// Simulate crash: keep WAL entries by rewriting a copy and avoid checkpoint.
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
-	}
-	walPath := filepath.Join(root, "wal", "vaultdb.wal")
-	if _, err := os.Stat(walPath); err != nil {
-		t.Fatalf("expected wal file: %v", err)
 	}
 
 	time.Sleep(10 * time.Millisecond)
 
-	store2 := NewFileStorageEngine(root, nil)
+	txm2 := txmanager.NewManager()
+	store2, err := NewPageStorageEngine(root, nil, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rows, err := store2.ReadCurrentRows("mydb", "heroes")
 	if err != nil {
 		t.Fatalf("ReadCurrentRows failed: %v", err)

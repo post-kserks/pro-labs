@@ -78,39 +78,28 @@ func loadConfig(cfgPath string, logger *slog.Logger) *config.Config {
 }
 
 func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *txmanager.Manager, metricsCollector *metrics.Collector, logger *slog.Logger) (storage.StorageEngine, *wal.WAL) {
-	var store storage.StorageEngine
-	var serverWAL *wal.WAL
-	switch cfg.Storage.Engine {
-	case "page":
-		walPath := filepath.Join(dataDir, "wal", "vaultdb.wal")
-		w, err := wal.Open(walPath)
-		if err != nil {
-			logger.Error("failed to open WAL", "error", err)
-			os.Exit(1)
-		}
-		serverWAL = w
-
-		pageStore, err := storage.NewPageStorageEngine(dataDir, w, txm)
-		if err != nil {
-			logger.Error("failed to open page storage engine", "error", err)
-			os.Exit(1)
-		}
-
-		if err := pageStore.RecoverFromWAL(); err != nil {
-			logger.Error("WAL recovery failed", "error", err)
-			os.Exit(1)
-		}
-
-		go pageStore.CheckpointLoop(ctx, checkpointInterval)
-
-		store = pageStore
-		logger.Info("using page-based storage engine",
-			"note", "secondary indexes are not yet supported in page engine")
-	default:
-		store = storage.NewFileStorageEngine(dataDir, metricsCollector)
-		logger.Info("using JSON storage engine")
+	walPath := filepath.Join(dataDir, "wal", "vaultdb.wal")
+	w, err := wal.Open(walPath)
+	if err != nil {
+		logger.Error("failed to open WAL", "error", err)
+		os.Exit(1)
 	}
-	return store, serverWAL
+
+	pageStore, err := storage.NewPageStorageEngine(dataDir, w, txm)
+	if err != nil {
+		logger.Error("failed to open page storage engine", "error", err)
+		os.Exit(1)
+	}
+
+	if err := pageStore.RecoverFromWAL(); err != nil {
+		logger.Error("WAL recovery failed", "error", err)
+		os.Exit(1)
+	}
+
+	go pageStore.CheckpointLoop(ctx, checkpointInterval)
+
+	logger.Info("using page-based storage engine")
+	return pageStore, w
 }
 
 func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPort, monitorPort int, store storage.StorageEngine, authManager *auth.Manager, metricsCollector *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, embedder ai.Embedder, activeConnections func() int64, logger *slog.Logger, tlsCert, tlsKey string) <-chan error {
