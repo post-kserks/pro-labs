@@ -14,6 +14,7 @@ import (
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
+	"vaultdb/internal/wal"
 )
 
 // TestChaosRecovery имитирует серию аварийных завершений и проверяет целостность данных.
@@ -36,10 +37,15 @@ func TestChaosRecovery(t *testing.T) {
 
 	for cycle := 0; cycle < numCycles; cycle++ {
 		t.Run(fmt.Sprintf("Cycle-%d", cycle), func(t *testing.T) {
-			// 1. Инициализация инстанса
+			// 1. Инициализация инстанса с WAL для crash recovery
 			txm := txmanager.NewManager()
-			store, err := storage.NewPageStorageEngine(dbPath, nil, txm)
+			w, err := wal.Open(walPath)
 			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := storage.NewPageStorageEngine(dbPath, w, txm)
+			if err != nil {
+				w.Close()
 				t.Fatal(err)
 			}
 			exec := New(store, metrics.New(), txm, nil)
@@ -94,8 +100,16 @@ func TestChaosRecovery(t *testing.T) {
 
 			// 5. Восстановление и проверка
 			txm2 := txmanager.NewManager()
-			storeRecover, err := storage.NewPageStorageEngine(dbPath, nil, txm2)
+			w2, err := wal.Open(walPath)
 			if err != nil {
+				t.Fatal(err)
+			}
+			storeRecover, err := storage.NewPageStorageEngine(dbPath, w2, txm2)
+			if err != nil {
+				w2.Close()
+				t.Fatal(err)
+			}
+			if err := storeRecover.RecoverFromWAL(); err != nil {
 				t.Fatal(err)
 			}
 			
