@@ -1,0 +1,248 @@
+package executor
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"vaultdb/internal/parser"
+	"vaultdb/internal/storage"
+)
+
+func (c *SelectCommand) hasAggregates() bool {
+	for _, col := range c.stmt.Columns {
+		if c.containsAggregate(col.Expr) {
+			return true
+		}
+	}
+	if c.containsAggregate(c.stmt.Having) {
+		return true
+	}
+	return false
+}
+
+func (c *SelectCommand) containsAggregate(expr parser.Expression) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *parser.AggregateExpr:
+		return true
+	case *parser.BinaryExpr:
+		return c.containsAggregate(e.Left) || c.containsAggregate(e.Right)
+	case *parser.AndExpr:
+		return c.containsAggregate(e.Left) || c.containsAggregate(e.Right)
+	case *parser.OrExpr:
+		return c.containsAggregate(e.Left) || c.containsAggregate(e.Right)
+	case *parser.NotExpr:
+		return c.containsAggregate(e.Expr)
+	case *parser.FunctionCall:
+		for _, arg := range e.Args {
+			if c.containsAggregate(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.TableSchema, asOfNote string, ctx *ExecutionContext) (*Result, error) {
+	groups := make(map[string][]storage.Row)
+	groupOrder := make([]string, 0)
+
+	for _, row := range rows {
+		keyParts := make([]string, len(c.stmt.GroupBy))
+		for i, expr := range c.stmt.GroupBy {
+			val, _ := evalOperand(expr, row, schema, ctx)
+			keyParts[i] = valueToString(val)
+		}
+		key := strings.Join(keyParts, "\x00")
+		if _, ok := groups[key]; !ok {
+			groupOrder = append(groupOrder, key)
+		}
+		groups[key] = append(groups[key], row)
+	}
+
+	// If no GROUP BY but has aggregates, treat everything as one group
+	if len(c.stmt.GroupBy) == 0 && len(groupOrder) == 0 && c.hasAggregates() {
+		groupOrder = append(groupOrder, "")
+		groups[""] = rows
+	}
+
+	projectColumns := make([]string, len(c.stmt.Columns))
+	for i, col := range c.stmt.Columns {
+		if col.Alias != "" {
+			projectColumns[i] = col.Alias
+		} else if colRef, ok := col.Expr.(*parser.ColumnRef); ok {
+			projectColumns[i] = colRef.Name
+		} else {
+			projectColumns[i] = fmt.Sprintf("col%d", i)
+		}
+	}
+
+	resultRows := make([][]string, 0)
+	for _, key := range groupOrder {
+		groupRows := groups[key]
+
+		// Create aggregators for this group
+		aggregators := make([]Aggregator, len(c.stmt.Columns))
+		for i, col := range c.stmt.Columns {
+			if aggExpr, ok := col.Expr.(*parser.AggregateExpr); ok {
+				aggregators[i] = NewAggregator(aggExpr.Name, aggExpr.Distinct)
+			}
+		}
+
+		// Process all rows in group
+		for _, row := range groupRows {
+			for i, col := range c.stmt.Columns {
+				if aggregators[i] != nil {
+					aggExpr := col.Expr.(*parser.AggregateExpr)
+					var key, val interface{}
+					if strings.EqualFold(aggExpr.Name, "JSON_OBJECT_AGG") && len(aggExpr.Args) >= 2 {
+						key, _ = evalOperand(aggExpr.Args[0], row, schema, ctx)
+						val, _ = evalOperand(aggExpr.Args[1], row, schema, ctx)
+					} else if len(aggExpr.Args) > 0 {
+						if colRef, ok := aggExpr.Args[0].(*parser.ColumnRef); ok && colRef.Name == "*" {
+							val = int64(1)
+						} else {
+							val, _ = evalOperand(aggExpr.Args[0], row, schema, ctx)
+						}
+					} else {
+						val = int64(1)
+					}
+					aggregators[i].Add(key, val)
+				}
+			}
+		}
+
+		// Calculate result for this group
+		resultRow := make([]string, len(c.stmt.Columns))
+		// We need a virtual row for HAVING evaluation if it uses aggregates
+		virtualRow := make(storage.Row, len(c.stmt.Columns))
+
+		for i, col := range c.stmt.Columns {
+			if aggregators[i] != nil {
+				res := aggregators[i].Result()
+				resultRow[i] = valueToString(res)
+				virtualRow[i] = res
+			} else {
+				// Pick from first row of group for non-aggregates
+				if len(groupRows) > 0 {
+					val, _ := evalOperand(col.Expr, groupRows[0], schema, ctx)
+					resultRow[i] = valueToString(val)
+					virtualRow[i] = val
+				} else {
+					resultRow[i] = "NULL"
+					virtualRow[i] = nil
+				}
+			}
+		}
+
+		// Handle HAVING
+		if c.stmt.Having != nil {
+			// Build a temporary schema for the projected results
+			projectedSchema := &storage.TableSchema{
+				Columns: make([]storage.ColumnSchema, len(c.stmt.Columns)),
+			}
+			for i, name := range projectColumns {
+				projectedSchema.Columns[i] = storage.ColumnSchema{Name: name}
+			}
+
+			// Evaluate HAVING on the projected (aggregated) result row
+			ok, err := evalExpr(c.stmt.Having, virtualRow, projectedSchema, ctx)
+			if err != nil {
+				// Fallback to original row if HAVING uses non-aggregates
+				ok, err = evalExpr(c.stmt.Having, groupRows[0], schema, ctx)
+				if err != nil {
+					continue
+				}
+			}
+			if !ok {
+				continue
+			}
+		}
+
+		resultRows = append(resultRows, resultRow)
+	}
+
+	resultRows = c.orderAndPageGrouped(resultRows, projectColumns)
+
+	return &Result{
+		Type:     "rows",
+		Columns:  projectColumns,
+		Rows:     resultRows,
+		AsOfNote: asOfNote,
+	}, nil
+}
+
+// orderAndPageGrouped applies ORDER BY / OFFSET / LIMIT to grouped output.
+// Sort keys are resolved against the projected columns: by alias or column
+// name, or by 1-based position (ORDER BY 2).
+func (c *SelectCommand) orderAndPageGrouped(rows [][]string, projectColumns []string) [][]string {
+	if len(c.stmt.OrderBy) > 0 {
+		colIndexByName := make(map[string]int, len(projectColumns))
+		for i, name := range projectColumns {
+			colIndexByName[strings.ToLower(name)] = i
+		}
+
+		type sortKey struct {
+			idx  int
+			desc bool
+		}
+		keys := make([]sortKey, 0, len(c.stmt.OrderBy))
+		for _, item := range c.stmt.OrderBy {
+			idx := -1
+			switch expr := item.Expr.(type) {
+			case *parser.ColumnRef:
+				if i, ok := colIndexByName[strings.ToLower(expr.Name)]; ok {
+					idx = i
+				}
+			case parser.Value:
+				if expr.Type == "int" && expr.IntVal >= 1 && int(expr.IntVal) <= len(projectColumns) {
+					idx = int(expr.IntVal) - 1
+				}
+			case *parser.Value:
+				if expr.Type == "int" && expr.IntVal >= 1 && int(expr.IntVal) <= len(projectColumns) {
+					idx = int(expr.IntVal) - 1
+				}
+			}
+			if idx >= 0 {
+				keys = append(keys, sortKey{idx: idx, desc: item.Direction == "DESC"})
+			}
+		}
+
+		if len(keys) > 0 {
+			sort.SliceStable(rows, func(i, j int) bool {
+				for _, k := range keys {
+					cmp := compareResultCells(rows[i][k.idx], rows[j][k.idx])
+					if cmp == 0 {
+						continue
+					}
+					if k.desc {
+						return cmp > 0
+					}
+					return cmp < 0
+				}
+				return false
+			})
+		}
+	}
+
+	start := 0
+	if c.stmt.HasOffset {
+		start = c.stmt.Offset
+		if start > len(rows) {
+			start = len(rows)
+		}
+	}
+	end := len(rows)
+	if c.stmt.HasLimit {
+		end = start + c.stmt.Limit
+		if end > len(rows) {
+			end = len(rows)
+		}
+	}
+	return rows[start:end]
+}
+
+// compareResultCells compares rendered cells numerically when both parse as
+// numbers, lexically otherwise.
