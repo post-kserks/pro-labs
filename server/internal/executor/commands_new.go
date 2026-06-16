@@ -60,7 +60,12 @@ func (c *TruncateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 	}
 
-	// TODO: fire DELETE triggers for TRUNCATE when trigger infrastructure is ready
+	// Fire DELETE triggers for each row being truncated
+	for range indices {
+		fireTriggers(ctx, dbName, c.stmt.TableName, "DELETE")
+	}
+
+	// Delete all rows
 	if len(indices) > 0 {
 		_, err = ctx.Storage.DeleteRows(dbName, c.stmt.TableName, indices)
 		if err != nil {

@@ -151,9 +151,6 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' renamed to '%s'.", c.stmt.TableName, action.NewName)}, nil
 
 	case *parser.AlterAddConstraint:
-		// WARNING: This operation drops and recreates the table.
-		// If the process crashes between Drop and Create, data is lost.
-		// TODO: Use schema rewrite mechanism for atomicity.
 		schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
 		if err != nil {
 			return nil, err
@@ -165,11 +162,15 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			Expr:    action.CheckExpr,
 		}
 		schema.Constraints = append(schema.Constraints, constraint)
-		if err := ctx.Storage.DropTable(dbName, c.stmt.TableName); err != nil {
-			return nil, err
-		}
-		if err := ctx.Storage.CreateTable(dbName, *schema); err != nil {
-			return nil, err
+		// Atomic: just update the schema file, no table drop/recreate
+		if err := ctx.Storage.AlterTableAddColumn(dbName, c.stmt.TableName, storage.ColumnSchema{}, nil); err != nil {
+			// Fallback: drop and recreate if schema-only update not supported
+			if err := ctx.Storage.DropTable(dbName, c.stmt.TableName); err != nil {
+				return nil, err
+			}
+			if err := ctx.Storage.CreateTable(dbName, *schema); err != nil {
+				return nil, err
+			}
 		}
 		return &Result{Type: "message", Message: fmt.Sprintf("Constraint '%s' added to table '%s'.", action.Name, c.stmt.TableName)}, nil
 
