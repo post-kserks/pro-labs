@@ -64,6 +64,17 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 	}
 
+	// Check result cache (only for simple SELECT, not CTEs or subqueries)
+	if ctx.Session.resultCache != nil && c.stmt.TableName != "" && c.stmt.FromSubquery == nil && len(c.stmt.CTEs) == 0 {
+		dbName, err := requireCurrentDB(ctx)
+		if err == nil {
+			cacheKey := ResultCacheKey(c.stmt, dbName)
+			if cached := ctx.Session.resultCache.Get(cacheKey); cached != nil {
+				return cached, nil
+			}
+		}
+	}
+
 	if c.stmt.TableName == "" && c.stmt.FromSubquery == nil {
 		return c.executeDual(ctx)
 	}
@@ -81,7 +92,16 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return c.executeWithCTE(ctx, dbName)
 	}
 
-	return c.executeSimpleSelect(ctx, dbName)
+	result, err := c.executeSimpleSelect(ctx, dbName)
+
+	// Cache the result (only successful SELECT without mutations)
+	if err == nil && ctx.Session.resultCache != nil && result != nil {
+		cacheKey := ResultCacheKey(c.stmt, dbName)
+		tables := map[string]bool{c.stmt.TableName: true}
+		ctx.Session.resultCache.Put(cacheKey, result, tables)
+	}
+
+	return result, err
 }
 
 func (c *SelectCommand) executeWithCTE(ctx *ExecutionContext, dbName string) (*Result, error) {

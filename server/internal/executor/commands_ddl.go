@@ -105,6 +105,14 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
 
+	// Invalidate caches for this table
+	if ctx.Session.planCache != nil {
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	}
+	if ctx.Session.resultCache != nil {
+		ctx.Session.resultCache.Invalidate(c.stmt.TableName)
+	}
+
 	switch action := c.stmt.Action.(type) {
 	case *parser.AlterAddColumn:
 		col := storage.ColumnSchema{
@@ -278,6 +286,13 @@ func (c *DropTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	if _, err := sanitizeObjectName(c.stmt.TableName); err != nil {
 		return nil, fmt.Errorf("drop table: %w", err)
+	}
+	// Invalidate caches for this table
+	if ctx.Session.planCache != nil {
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	}
+	if ctx.Session.resultCache != nil {
+		ctx.Session.resultCache.Invalidate(c.stmt.TableName)
 	}
 	if err := ctx.Storage.DropTable(dbName, c.stmt.TableName); err != nil {
 		return nil, err

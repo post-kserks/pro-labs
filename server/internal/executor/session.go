@@ -26,6 +26,7 @@ type Session struct {
 
 	PreparedStatements map[string]*PreparedStatement
 	planCache          *PlanCache
+	resultCache        *ResultCache
 }
 
 type PreparedStatement struct {
@@ -40,6 +41,7 @@ func NewSession(store storage.StorageEngine, m *metrics.Collector, txm *txmanage
 		Broadcaster:        b,
 		PreparedStatements: make(map[string]*PreparedStatement),
 		planCache:          NewPlanCache(defaultPlanCacheSize),
+		resultCache:        NewResultCache(defaultResultCacheSize, defaultResultCacheTTL),
 	}
 }
 

@@ -166,7 +166,12 @@ func (c *InsertCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+		if ctx.Session.planCache != nil {
+			ctx.Session.planCache.Invalidate(c.stmt.TableName)
+		}
+		if ctx.Session.resultCache != nil {
+			ctx.Session.resultCache.Invalidate(c.stmt.TableName)
+		}
 	}
 	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
 
@@ -323,7 +328,12 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+		if ctx.Session.planCache != nil {
+			ctx.Session.planCache.Invalidate(c.stmt.TableName)
+		}
+		if ctx.Session.resultCache != nil {
+			ctx.Session.resultCache.Invalidate(c.stmt.TableName)
+		}
 	}
 
 	return &Result{Type: "affected", Affected: affected}, nil
@@ -366,7 +376,12 @@ func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+		if ctx.Session.planCache != nil {
+			ctx.Session.planCache.Invalidate(c.stmt.TableName)
+		}
+		if ctx.Session.resultCache != nil {
+			ctx.Session.resultCache.Invalidate(c.stmt.TableName)
+		}
 	}
 
 	// Handle RETURNING
@@ -572,7 +587,12 @@ func (c *UpdateCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+		if ctx.Session.planCache != nil {
+			ctx.Session.planCache.Invalidate(c.stmt.TableName)
+		}
+		if ctx.Session.resultCache != nil {
+			ctx.Session.resultCache.Invalidate(c.stmt.TableName)
+		}
 	}
 
 	fireTriggers(ctx, dbName, c.stmt.TableName, "UPDATE")
@@ -679,7 +699,12 @@ func (c *DeleteCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+		if ctx.Session.planCache != nil {
+			ctx.Session.planCache.Invalidate(c.stmt.TableName)
+		}
+		if ctx.Session.resultCache != nil {
+			ctx.Session.resultCache.Invalidate(c.stmt.TableName)
+		}
 	}
 
 	fireTriggers(ctx, dbName, c.stmt.TableName, "DELETE")
