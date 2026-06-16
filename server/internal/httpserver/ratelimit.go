@@ -13,9 +13,9 @@ import (
 type RateLimiter struct {
 	mu       sync.Mutex
 	tokens   map[string]*tokenBucket
-	rate     int           // tokens per second
-	burst    int           // max tokens
-	cleanupInterval time.Duration // cleanup interval
+	rate     int
+	burst    int
+	cleanupInterval time.Duration
 	stopCh   chan struct{}
 }
 
@@ -29,10 +29,10 @@ type tokenBucket struct {
 // NewRateLimiter создаёт новый rate limiter.
 func NewRateLimiter(rate int, burst int) *RateLimiter {
 	if rate <= 0 {
-		rate = 100 // по умолчанию 100 rps
+		rate = 100
 	}
 	if burst <= 0 {
-		burst = rate * 2 // burst = 2x rate
+		burst = rate * 2
 	}
 
 	rl := &RateLimiter{
@@ -63,7 +63,6 @@ func (rl *RateLimiter) Allow(key string) bool {
 		rl.tokens[key] = bucket
 	}
 
-	// Пополняем токены
 	now := time.Now()
 	elapsed := now.Sub(bucket.lastTime).Seconds()
 	bucket.tokens += elapsed * float64(rl.rate)
@@ -72,7 +71,6 @@ func (rl *RateLimiter) Allow(key string) bool {
 	}
 	bucket.lastTime = now
 
-	// Проверяем наличие токена
 	if bucket.tokens >= 1 {
 		bucket.tokens--
 		return true
@@ -81,27 +79,47 @@ func (rl *RateLimiter) Allow(key string) bool {
 	return false
 }
 
-// extractClientIP returns the real client IP, preferring X-Forwarded-For
-// and X-Real-IP headers over RemoteAddr.
-func extractClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
+// extractClientIP extracts the real client IP from the request.
+// trustedProxies is a list of CIDR ranges of trusted reverse proxies.
+// If the request comes from a trusted proxy, X-Forwarded-For is used.
+// Otherwise, RemoteAddr is used directly — spoofed headers are ignored.
+func extractClientIP(r *http.Request, trustedProxies []net.IPNet) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
 	}
+
+	clientIP := net.ParseIP(host)
+	isTrusted := false
+	if clientIP != nil {
+		for _, cidr := range trustedProxies {
+			if cidr.Contains(clientIP) {
+				isTrusted = true
+				break
+			}
+		}
+	}
+
+	if isTrusted {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			trimmed := strings.TrimSpace(parts[0])
+			if trimmed != "" {
+				return trimmed
+			}
+		}
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return strings.TrimSpace(xri)
+		}
+	}
+
 	return host
 }
 
 // Middleware возвращает HTTP middleware для rate limiting.
 func (rl *RateLimiter) Middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key := extractClientIP(r)
+		key := extractClientIP(r, nil)
 
 		if !rl.Allow(key) {
 			w.Header().Set("Content-Type", "application/json")

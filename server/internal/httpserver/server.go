@@ -67,6 +67,7 @@ type Server struct {
 	txm                  *txmanager.Manager
 	br                   *executor.Broadcaster
 	activeSubscriptions  atomic.Int64
+	nextSubID            atomic.Int64
 }
 
 func New(cfg Config) *Server {
@@ -189,7 +190,9 @@ func (s *Server) apiMux() *http.ServeMux {
 	distFS, err := fs.Sub(webUIFiles, "web/dist")
 	if err == nil {
 		fileServer := http.FileServer(http.FS(distFS))
-		mux.Handle("/", fileServer)
+		mux.Handle("/", s.cfg.Auth.Middleware(func(w http.ResponseWriter, r *http.Request) {
+			fileServer.ServeHTTP(w, r)
+		}))
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "web UI is not embedded", http.StatusNotFound)
@@ -232,7 +235,7 @@ func (s *Server) withMethod(method string, next http.HandlerFunc) http.HandlerFu
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.RateLimiter != nil {
-		key := extractClientIP(r)
+		key := extractClientIP(r, nil)
 		if !s.cfg.RateLimiter.Allow(key) {
 			writeError(w, http.StatusTooManyRequests, errCodeRateLimited, "rate limit exceeded")
 			return
@@ -274,6 +277,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	session := s.newSession()
+	defer session.Close()
 	if req.Database != "" {
 		session.SetCurrentDatabase(req.Database)
 	}
@@ -281,7 +285,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	result, err := session.Execute(stmt)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
+		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
 	}
 	duration := float64(time.Since(start).Microseconds()) / 1000.0
@@ -307,7 +311,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListDatabases(w http.ResponseWriter, _ *http.Request) {
 	names, err := s.cfg.Storage.ListDatabases()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+		writeStorageError(w, http.StatusInternalServerError, errCodeInternal, err, s.cfg.Logger)
 		return
 	}
 
@@ -363,7 +367,7 @@ func (s *Server) handleDatabasesSubroutes(w http.ResponseWriter, r *http.Request
 func (s *Server) handleListTables(w http.ResponseWriter, dbName string) {
 	tables, err := s.cfg.Storage.ListTables(dbName)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
+		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
 	}
 
@@ -385,12 +389,12 @@ func (s *Server) handleListTables(w http.ResponseWriter, dbName string) {
 func (s *Server) handleSchema(w http.ResponseWriter, dbName, tableName string) {
 	schema, err := s.cfg.Storage.GetTableSchema(dbName, tableName)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
+		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
 	}
 	rowCount, err := s.cfg.Storage.CountRows(dbName, tableName)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
+		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
 	}
 
@@ -417,8 +421,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		status = "degraded"
 		checks["storage"] = map[string]interface{}{
 			"status": "fail",
-			"error":  err.Error(),
 		}
+		s.cfg.Logger.Warn("health check: storage degraded", "error", err)
 	} else {
 		checks["storage"] = map[string]interface{}{
 			"status": "pass",
@@ -442,9 +446,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 	if _, err := s.cfg.Storage.ListDatabases(); err != nil {
+		s.cfg.Logger.Warn("readiness check failed", "error", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
 			"status": "not ready",
-			"error":  err.Error(),
 		})
 		return
 	}
@@ -516,7 +520,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			}
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-VaultDB-Token")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -536,6 +540,15 @@ func writeError(w http.ResponseWriter, status, code int, message string) {
 		"status":     "error",
 		"error_code": code,
 		"message":    message,
+	})
+}
+
+func writeStorageError(w http.ResponseWriter, status, code int, err error, logger *slog.Logger) {
+	logger.Warn("storage error", "error", err)
+	writeJSON(w, status, map[string]interface{}{
+		"status":     "error",
+		"error_code": code,
+		"message":    "internal storage error",
 	})
 }
 
@@ -588,7 +601,7 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	sub := s.br.NewSubscription(fmt.Sprintf("sub-%d", time.Now().UnixNano()), selectStmt, db)
+	sub := s.br.NewSubscription(fmt.Sprintf("sub-%d", s.nextSubID.Add(1)), selectStmt, db)
 	send := sub.Send
 
 	s.br.Subscribe(sub)
@@ -601,6 +614,7 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 
 	// Send initial result
 	sess := s.newSession()
+	defer sess.Close()
 	if db != "" {
 		sess.SetCurrentDatabase(db)
 	}
@@ -633,7 +647,7 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 	// Dynamically generate OpenAPI spec based on existing databases and tables
 	dbs, err := s.cfg.Storage.ListDatabases()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+		writeStorageError(w, http.StatusInternalServerError, errCodeInternal, err, s.cfg.Logger)
 		return
 	}
 
@@ -684,11 +698,9 @@ func (s *Server) handleTableData(w http.ResponseWriter, r *http.Request, dbName,
 }
 
 func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
-	// Support simple filtering: ?col=eq.val, ?col=gt.val. The statement is
-	// built as an AST (never as SQL text) so request values cannot inject SQL.
 	schema, err := s.cfg.Storage.GetTableSchema(dbName, tableName)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
+		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
 	}
 	columnsByName := make(map[string]string, len(schema.Columns))
@@ -739,7 +751,7 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 	sess.SetCurrentDatabase(dbName)
 	res, err := sess.Execute(stmt)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errCodeStorageError, err.Error())
+		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

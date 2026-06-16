@@ -49,13 +49,13 @@ func TestMiddlewareAcceptsQueryParamToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Query param token allowed for SSE endpoints
+	// Query param token rejected for SSE endpoints (security: tokens must not appear in URLs)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/live?token=sekret", nil)
 	req.Header.Set("Accept", "text/event-stream")
 	handler(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("query param token rejected for SSE: status %d", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("query param token should be rejected for SSE: status %d", rec.Code)
 	}
 
 	// Query param token rejected for non-SSE endpoints

@@ -122,7 +122,7 @@ func Open(path string) (*WAL, error) {
 	w := &WAL{
 		file:          file,
 		path:          path,
-		SyncBatchSize: 10,
+		SyncBatchSize: 1,
 	}
 
 	_, maxTx, err := w.readEntriesLocked(true)

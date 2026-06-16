@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -123,9 +124,21 @@ func TestExtractClientIPXForwardedFor(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
 	req.RemoteAddr = "9.10.11.12:12345"
 
-	ip := extractClientIP(req)
+	ip := extractClientIP(req, nil)
+	if ip != "9.10.11.12" {
+		t.Fatalf("X-Forwarded-For without trusted proxy: got %q, want %q", ip, "9.10.11.12")
+	}
+}
+
+func TestExtractClientIPXForwardedForTrusted(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
+	req.RemoteAddr = "10.0.0.1:12345"
+
+	_, trusted, _ := net.ParseCIDR("10.0.0.0/8")
+	ip := extractClientIP(req, []net.IPNet{*trusted})
 	if ip != "1.2.3.4" {
-		t.Fatalf("X-Forwarded-For: got %q, want %q", ip, "1.2.3.4")
+		t.Fatalf("X-Forwarded-For trusted: got %q, want %q", ip, "1.2.3.4")
 	}
 }
 
@@ -134,9 +147,9 @@ func TestExtractClientIPXRealIP(t *testing.T) {
 	req.Header.Set("X-Real-IP", "10.0.0.1")
 	req.RemoteAddr = "9.10.11.12:12345"
 
-	ip := extractClientIP(req)
-	if ip != "10.0.0.1" {
-		t.Fatalf("X-Real-IP: got %q, want %q", ip, "10.0.0.1")
+	ip := extractClientIP(req, nil)
+	if ip != "9.10.11.12" {
+		t.Fatalf("X-Real-IP without trusted proxy: got %q, want %q", ip, "9.10.11.12")
 	}
 }
 
@@ -144,7 +157,7 @@ func TestExtractClientIPRemoteAddr(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.168.1.1:5432"
 
-	ip := extractClientIP(req)
+	ip := extractClientIP(req, nil)
 	if ip != "192.168.1.1" {
 		t.Fatalf("RemoteAddr: got %q, want %q", ip, "192.168.1.1")
 	}
@@ -154,7 +167,7 @@ func TestExtractClientIPRemoteAddrNoPort(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.168.1.1"
 
-	ip := extractClientIP(req)
+	ip := extractClientIP(req, nil)
 	if ip != "192.168.1.1" {
 		t.Fatalf("RemoteAddr no port: got %q, want %q", ip, "192.168.1.1")
 	}

@@ -98,19 +98,33 @@ func (pm *PageLockManager) evictIfTooLarge() {
 	if len(pm.locks) <= maxLocksBeforeEviction {
 		return
 	}
+	target := maxLocksBeforeEviction / 2
 	for pid, lock := range pm.locks {
-		if !lock.TryLock() {
-			continue
-		}
-		lock.Unlock()
-		if lock.TryRLock() {
-			lock.RUnlock()
-			delete(pm.locks, pid)
-		}
-		if len(pm.locks) <= maxLocksBeforeEviction/2 {
+		if len(pm.locks) <= target {
 			break
 		}
+		if lock.TryLock() {
+			lock.Unlock()
+			delete(pm.locks, pid)
+		}
 	}
+}
+
+// EvictUnused вызывается извне (без mu.Lock) для массовой очистки.
+// Удаляет все незаблокированные записи. Возвращает количество удалённых.
+func (pm *PageLockManager) EvictUnused() int {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	removed := 0
+	for pid, lock := range pm.locks {
+		if lock.TryLock() {
+			lock.Unlock()
+			delete(pm.locks, pid)
+			removed++
+		}
+	}
+	return removed
 }
 
 // sortPageIDs сортирует PageID для предотвращения deadlock.

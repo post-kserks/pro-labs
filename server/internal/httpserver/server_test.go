@@ -146,8 +146,9 @@ func TestLiveQueryStreamsWithToken(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/live?database=shop&query=SELECT+*+FROM+users%3B&token=sekret", nil).WithContext(ctx)
+		"/api/live?database=shop&query=SELECT+*+FROM+users%3B", nil).WithContext(ctx)
 	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer sekret")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

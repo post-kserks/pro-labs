@@ -165,16 +165,25 @@ func (bp *BufferPool) evictDirty(pid page.PageID, hf *heap.HeapFile) error {
 
 // FlushAll сбрасывает все dirty pages на диск.
 func (bp *BufferPool) FlushAll(hf *heap.HeapFile) error {
-	bp.mu.Lock()
-	defer bp.mu.Unlock()
+	type dirtyEntry struct {
+		pid  page.PageID
+		page *page.Page
+	}
 
+	bp.mu.Lock()
+	var dirty []dirtyEntry
 	for pid, elem := range bp.cache {
 		entry := elem.Value.(*bufferEntry)
 		if entry.dirty {
-			if err := hf.WritePage(pid, entry.page); err != nil {
-				return err
-			}
+			dirty = append(dirty, dirtyEntry{pid: pid, page: entry.page})
 			entry.dirty = false
+		}
+	}
+	bp.mu.Unlock()
+
+	for _, d := range dirty {
+		if err := hf.WritePage(d.pid, d.page); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -372,7 +372,7 @@ func main() {
 		}
 		tokens = map[string]string{token: "generated"}
 		tokenPath := filepath.Join(cfg.Storage.DataDir, ".generated-token")
-		f, ferr := os.OpenFile(tokenPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		f, ferr := os.OpenFile(tokenPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o400)
 		if ferr != nil {
 			logger.Error("failed to save generated token to file",
 				"path", tokenPath, "error", ferr)
@@ -385,7 +385,13 @@ func main() {
 			f.Close()
 			logger.Warn("no API tokens configured; generated a one-time token",
 				"token_file", tokenPath,
-				"action", "token saved to file, set VAULTDB_API_TOKENS env var for next restart")
+				"action", "read the token, then delete the file and set VAULTDB_API_TOKENS env var")
+			defer func() {
+				if err := os.Remove(tokenPath); err != nil {
+					logger.Warn("could not delete generated token file",
+						"path", tokenPath, "error", err)
+				}
+			}()
 		}
 	}
 	authManager, err := auth.New(authEnabled, tokens, logger)
@@ -535,6 +541,8 @@ func main() {
 		logger.Warn("shutdown timeout reached, forcing close of remaining connections")
 	}
 
+	connPool.Close()
+
 	// Final checkpoint
 	logger.Info("writing final WAL checkpoint")
 	if err := store.FinalCheckpoint(); err != nil {
@@ -611,14 +619,18 @@ func updateStorageMetrics(s storage.StorageEngine, m *metrics.Collector) {
 		slog.Warn("updateStorageMetrics: list databases", "error", err)
 		return
 	}
+	active := make(map[string]map[string]bool)
 	for _, db := range dbs {
 		tables, err := s.ListTables(db)
 		if err != nil {
 			slog.Warn("updateStorageMetrics: list tables", "db", db, "error", err)
 			continue
 		}
+		active[db] = make(map[string]bool)
 		for _, t := range tables {
 			m.UpdateStorageRows(db, t.Name, int64(t.RowCount))
+			active[db][t.Name] = true
 		}
 	}
+	m.CleanStaleStorageRows(active)
 }

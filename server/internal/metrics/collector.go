@@ -162,6 +162,24 @@ func (c *Collector) UpdateStorageRows(db, table string, count int64) {
 	c.storageRows[db][table] = count
 }
 
+// CleanStaleStorageRows удаляет метрики таблиц, которые больше не существуют.
+// activeTables — map[db]set(tableNames).
+func (c *Collector) CleanStaleStorageRows(activeTables map[string]map[string]bool) {
+	c.storageMu.Lock()
+	defer c.storageMu.Unlock()
+	for db, tables := range c.storageRows {
+		active := activeTables[db]
+		for table := range tables {
+			if active == nil || !active[table] {
+				delete(tables, table)
+			}
+		}
+		if len(tables) == 0 {
+			delete(c.storageRows, db)
+		}
+	}
+}
+
 // Render сериализует все метрики в Prometheus text format.
 func (c *Collector) Render() string {
 	var b strings.Builder

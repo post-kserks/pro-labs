@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"vaultdb/internal/txmanager"
 	"vaultdb/internal/wal"
 )
+
+const maxPreparedStatements = 1000
 
 type Session struct {
 	executor  *Executor
@@ -84,10 +87,14 @@ func (s *Session) GetPreparedStatement(name string) (*PreparedStatement, bool) {
 	return ps, ok
 }
 
-func (s *Session) SetPreparedStatement(name string, ps *PreparedStatement) {
+func (s *Session) SetPreparedStatement(name string, ps *PreparedStatement) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, exists := s.PreparedStatements[name]; !exists && len(s.PreparedStatements) >= maxPreparedStatements {
+		return fmt.Errorf("too many prepared statements (max %d)", maxPreparedStatements)
+	}
 	s.PreparedStatements[name] = ps
+	return nil
 }
 
 func (s *Session) DeletePreparedStatement(name string) {
@@ -105,5 +112,13 @@ func (s *Session) SetActiveTx(tx *txmanager.Transaction) {
 func (s *Session) ClearActiveTx() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.ActiveTx = nil
+}
+
+// Close очищает ресурсы сессии.
+func (s *Session) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.PreparedStatements = make(map[string]*PreparedStatement)
 	s.ActiveTx = nil
 }

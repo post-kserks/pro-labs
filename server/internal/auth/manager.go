@@ -132,16 +132,6 @@ func (m *Manager) Middleware(next http.HandlerFunc) http.HandlerFunc {
 			})
 			return
 		}
-		if tokenFromQueryString(r) && !isSSERequest(r) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"status":     "error",
-				"error_code": 2001,
-				"message":    "Unauthorized: token query parameter is only allowed for SSE endpoints.",
-			})
-			return
-		}
 
 		ctx := context.WithValue(r.Context(), tokenLabelContextKey, m.GetLabel(token))
 		next(w, r.WithContext(ctx))
@@ -156,13 +146,5 @@ func tokenFromRequest(r *http.Request) string {
 	if token := r.Header.Get("X-VaultDB-Token"); token != "" {
 		return token
 	}
-	return r.URL.Query().Get("token")
-}
-
-func tokenFromQueryString(r *http.Request) bool {
-	return r.URL.Query().Get("token") != ""
-}
-
-func isSSERequest(r *http.Request) bool {
-	return strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+	return ""
 }

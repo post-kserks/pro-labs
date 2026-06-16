@@ -327,10 +327,12 @@ type PrepareCommand struct {
 }
 
 func (c *PrepareCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	ctx.Session.SetPreparedStatement(c.stmt.Name, &PreparedStatement{
+	if err := ctx.Session.SetPreparedStatement(c.stmt.Name, &PreparedStatement{
 		Name:  c.stmt.Name,
 		Query: c.stmt.Query,
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return &Result{
 		Type:    "message",
 		Message: fmt.Sprintf("Statement '%s' prepared.", c.stmt.Name),
