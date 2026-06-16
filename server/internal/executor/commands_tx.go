@@ -40,26 +40,31 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	tx := ctx.Session.ActiveTx
-	opsCount := len(tx.Ops)
+
+	// Читаем ops (из памяти или из spill файла)
+	ops, err := tx.ReadOps()
+	if err != nil {
+		return nil, fmt.Errorf("read transaction ops: %w", err)
+	}
+	opsCount := len(ops)
 
 	// Проверка конфликтов и применение выполняются под commit-локами только
 	// тех таблиц, которые затронуты транзакцией: коммиты по разным таблицам
 	// идут параллельно, а конфликт обнаруживается по версиям таблиц.
 	var applied int
 	var applyErr error
-	commitErr := ctx.Session.TxManager.Commit(tx, func(ops []txmanager.PendingOp) error {
-		applied, applyErr = applyOps(ctx, ops)
+	commitErr := ctx.Session.TxManager.Commit(tx, func(pendingOps []txmanager.PendingOp) error {
+		applied, applyErr = applyOps(ctx, pendingOps)
 		return applyErr
 	})
 
 	if commitErr != nil && applyErr == nil {
-		// Конфликт версий: операции не применялись, транзакция остаётся
-		// активной — клиент решает, делать ли ROLLBACK.
 		return nil, commitErr
 	}
 	if applyErr != nil {
-		// Применение упало частично — нам нужно откатить уже применённые ops.
-		if undoErr := undoAppliedOps(ctx, tx.Ops[:applied]); undoErr != nil {
+		// Применение упало частично — откатываем уже применённые ops
+		undoOps := ops[:applied]
+		if undoErr := undoAppliedOps(ctx, undoOps); undoErr != nil {
 			slog.Error("could not undo partial commit, data may be inconsistent",
 				"xid", tx.ID, "error", undoErr)
 		}
@@ -75,7 +80,7 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.WAL != nil {
 		if _, err := ctx.WAL.Append(wal.OpCommit, nil); err != nil {
 			// Не смогли записать COMMIT — транзакция считается незакоммиченной
-			undoAppliedOps(ctx, tx.Ops)
+			undoAppliedOps(ctx, ops)
 			tx.Rollback()
 			ctx.Session.ClearActiveTx()
 			return nil, fmt.Errorf("wal commit failed, transaction rolled back: %w", err)
@@ -99,15 +104,17 @@ func (c *RollbackCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if !ctx.Session.IsInTx() {
 		return nil, fmt.Errorf("no active transaction")
 	}
-	opsCount := len(ctx.Session.ActiveTx.Ops)
+	tx := ctx.Session.ActiveTx
+	ops, _ := tx.ReadOps()
+	opsCount := len(ops)
 
 	if ctx.WAL != nil && opsCount > 0 {
 		if _, err := ctx.WAL.Append(wal.OpAbort, nil); err != nil {
-			slog.Error("failed to write WAL abort record", "xid", ctx.Session.ActiveTx.ID, "error", err)
+			slog.Error("failed to write WAL abort record", "xid", tx.ID, "error", err)
 		}
 	}
 
-	ctx.Session.ActiveTx.Rollback()
+	tx.Rollback()
 	ctx.Session.ClearActiveTx()
 	return &Result{
 		Type:    "message",

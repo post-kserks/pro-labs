@@ -1,8 +1,12 @@
 package txmanager
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -17,19 +21,20 @@ const (
 	TxActive                // BEGIN выполнен, ожидаем COMMIT/ROLLBACK
 )
 
-// ErrTxConflict — конфликт транзакций: таблица изменена другой транзакцией
-// между BEGIN и COMMIT. Клиент должен выполнить ROLLBACK и повторить.
+// ErrTxConflict — конфликт транзакций.
 var ErrTxConflict = errors.New("transaction conflict")
+
+const defaultSpillThreshold = 10000
 
 // PendingOp — одна буферизованная операция внутри транзакции.
 type PendingOp struct {
-	Type    string      // "insert", "update", "delete"
+	Type    string
 	DB      string
 	Table   string
-	Payload interface{} // зависит от Type (обычно AST узел)
-	OldRow  interface{} // для update: старые значения (BeforeImage)
-	Row     interface{} // данные строки
-	Pos     int         // позиция строки (для update/delete)
+	Payload interface{}
+	OldRow  interface{}
+	Row     interface{}
+	Pos     int
 }
 
 // Transaction — активная транзакция одной сессии.
@@ -37,36 +42,34 @@ type Transaction struct {
 	ID        uint64
 	StartedAt time.Time
 	State     TxState
-	Ops       []PendingOp // буфер операций
+	Ops       []PendingOp
 
-	// TableSnapshots — версии таблиц на момент первого обращения транзакции
-	// к каждой таблице (ключ — "db/table"). Используется для обнаружения
-	// конфликтов при COMMIT.
 	TableSnapshots map[string]uint64
+
+	// Spill to disk
+	spilled   bool
+	spillPath string
+	spillDir  string
 }
 
 // Manager управляет транзакциями всех сессий.
-//
-// Вместо одного глобального commit-лока используется версионный счётчик на
-// таблицу: коммит блокирует только таблицы, затронутые транзакцией, поэтому
-// транзакции по разным таблицам коммитятся параллельно.
 type Manager struct {
-	counter atomic.Uint64
+	counter       atomic.Uint64
+	SpillThreshold int
+	SpillDir       string
 
-	// Версия каждой таблицы; инкрементируется при каждой записи.
 	tableVersionsMu sync.RWMutex
-	tableVersions   map[string]*atomic.Uint64 // "db/table" → версия
+	tableVersions   map[string]*atomic.Uint64
 
-	// Per-table commit-локи (берутся в отсортированном порядке,
-	// чтобы исключить deadlock при пересекающихся транзакциях).
 	commitLocksMu sync.Mutex
 	commitLocks   map[string]*sync.Mutex
 }
 
 func NewManager() *Manager {
 	return &Manager{
-		tableVersions: make(map[string]*atomic.Uint64),
-		commitLocks:   make(map[string]*sync.Mutex),
+		tableVersions:  make(map[string]*atomic.Uint64),
+		commitLocks:    make(map[string]*sync.Mutex),
+		SpillThreshold: defaultSpillThreshold,
 	}
 }
 
@@ -74,7 +77,6 @@ func tableKey(db, table string) string {
 	return db + "/" + table
 }
 
-// TableVersion возвращает текущую версию таблицы.
 func (m *Manager) TableVersion(db, table string) uint64 {
 	m.tableVersionsMu.RLock()
 	v, ok := m.tableVersions[tableKey(db, table)]
@@ -85,9 +87,6 @@ func (m *Manager) TableVersion(db, table string) uint64 {
 	return v.Load()
 }
 
-// BumpTableVersion инкрементирует версию таблицы. Вызывается executor'ом
-// после каждой применённой записи (в том числе вне транзакций), чтобы
-// конфликт-детекция видела все изменения.
 func (m *Manager) BumpTableVersion(db, table string) {
 	key := tableKey(db, table)
 	m.tableVersionsMu.RLock()
@@ -104,29 +103,92 @@ func (m *Manager) BumpTableVersion(db, table string) {
 	v.Add(1)
 }
 
-// Begin создаёт новую транзакцию. Версии таблиц фиксируются лениво —
-// при первом обращении транзакции к таблице (см. AddOp).
 func (m *Manager) Begin() *Transaction {
-	return &Transaction{
+	tx := &Transaction{
 		ID:             m.counter.Add(1),
 		StartedAt:      time.Now(),
 		State:          TxActive,
 		TableSnapshots: make(map[string]uint64),
+		spillDir:       m.SpillDir,
 	}
+	return tx
 }
 
-// AddOp добавляет операцию в буфер транзакции и фиксирует версию таблицы
-// при первом обращении к ней.
+// AddOp добавляет операцию в буфер транзакции.
+// При превышении SpillThreshold сериализует буфер во временный файл.
 func (m *Manager) AddOp(tx *Transaction, op PendingOp) {
 	key := tableKey(op.DB, op.Table)
 	if _, exists := tx.TableSnapshots[key]; !exists {
 		tx.TableSnapshots[key] = m.TableVersion(op.DB, op.Table)
 	}
-	tx.Ops = append(tx.Ops, op)
+
+	if tx.spilled {
+		// Дописываем в существующий файл
+		tx.appendOpToFile(op)
+	} else {
+		tx.Ops = append(tx.Ops, op)
+		// Проверяем порог
+		if len(tx.Ops) >= m.SpillThreshold && m.SpillDir != "" {
+			tx.spillToDisk()
+		}
+	}
 }
 
-// lockTables берёт commit-локи всех таблиц в отсортированном порядке
-// и возвращает функцию разблокировки.
+func (tx *Transaction) spillToDisk() {
+	if tx.spillDir == "" {
+		return
+	}
+
+	path := filepath.Join(tx.spillDir, fmt.Sprintf("tx_%d.tmp", tx.ID))
+	f, err := os.Create(path)
+	if err != nil {
+		return // silently ignore — continue in-memory
+	}
+	enc := json.NewEncoder(f)
+	for _, op := range tx.Ops {
+		enc.Encode(op)
+	}
+	f.Close()
+
+	tx.spilled = true
+	tx.spillPath = path
+	tx.Ops = nil // освобождаем RAM
+}
+
+func (tx *Transaction) appendOpToFile(op PendingOp) {
+	f, err := os.OpenFile(tx.spillPath, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	enc := json.NewEncoder(f)
+	enc.Encode(op)
+	f.Close()
+}
+
+// ReadOps возвращает операции: из памяти или из файла.
+func (tx *Transaction) ReadOps() ([]PendingOp, error) {
+	if !tx.spilled {
+		return tx.Ops, nil
+	}
+
+	f, err := os.Open(tx.spillPath)
+	if err != nil {
+		return nil, fmt.Errorf("open spill file: %w", err)
+	}
+	defer f.Close()
+
+	var ops []PendingOp
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var op PendingOp
+		if err := json.Unmarshal(scanner.Bytes(), &op); err != nil {
+			continue
+		}
+		ops = append(ops, op)
+	}
+	return ops, nil
+}
+
 func (m *Manager) lockTables(keys []string) func() {
 	sort.Strings(keys)
 	locks := make([]*sync.Mutex, 0, len(keys))
@@ -149,7 +211,6 @@ func (m *Manager) lockTables(keys []string) func() {
 }
 
 // Commit проверяет конфликты и применяет операции транзакции.
-// Блокируются только таблицы, затронутые этой транзакцией.
 func (m *Manager) Commit(tx *Transaction, applyFn func([]PendingOp) error) error {
 	tables := make([]string, 0, len(tx.TableSnapshots))
 	for t := range tx.TableSnapshots {
@@ -160,7 +221,6 @@ func (m *Manager) Commit(tx *Transaction, applyFn func([]PendingOp) error) error
 	unlock := m.lockTables(tables)
 	defer unlock()
 
-	// Конфликты: не изменились ли таблицы с момента первого обращения?
 	for _, t := range tables {
 		m.tableVersionsMu.RLock()
 		v, ok := m.tableVersions[t]
@@ -180,16 +240,38 @@ func (m *Manager) Commit(tx *Transaction, applyFn func([]PendingOp) error) error
 		}
 	}
 
-	// Конфликтов нет — применяем. Версии таблиц инкрементирует сам
-	// executor при применении каждой операции (BumpTableVersion).
-	if err := applyFn(tx.Ops); err != nil {
+	// Читаем ops (из памяти или из файла)
+	ops, err := tx.ReadOps()
+	if err != nil {
+		return fmt.Errorf("read ops: %w", err)
+	}
+
+	if err := applyFn(ops); err != nil {
 		return err
 	}
 	return nil
 }
 
-// Rollback очищает буфер без применения.
+// Rollback очищает буфер и удаляет spill файл.
 func (tx *Transaction) Rollback() {
 	tx.Ops = nil
 	tx.State = TxIdle
+	if tx.spilled && tx.spillPath != "" {
+		os.Remove(tx.spillPath)
+		tx.spilled = false
+		tx.spillPath = ""
+	}
+}
+
+// CleanupSpillFiles удаляет старые spill файлы (вызывается при старте сервера).
+func CleanupSpillFiles(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".tmp" {
+			os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
 }
