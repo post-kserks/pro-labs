@@ -191,7 +191,7 @@ func (s *Server) apiMux() *http.ServeMux {
 
 	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleHealth))
 	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
-	mux.HandleFunc("/metrics", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics)))
+	mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics))))
 	mux.HandleFunc("/dashboard", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleDashboard)))
 
 	distFS, err := fs.Sub(webUIFiles, "web/dist")
@@ -214,9 +214,9 @@ func (s *Server) monitorMux() *http.ServeMux {
 	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleMonitorHealth))
 	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
 	if s.cfg.Auth.Enabled() {
-		mux.HandleFunc("/metrics", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics)))
+		mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics))))
 	} else {
-		mux.HandleFunc("/metrics", s.withMethod(http.MethodGet, s.handleMetrics))
+		mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.handleMetrics)))
 	}
 	return mux
 }

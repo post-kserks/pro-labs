@@ -212,6 +212,30 @@ func TestRateLimitingOnAllEndpoints(t *testing.T) {
 	}
 }
 
+func TestRateLimitingOnMetrics(t *testing.T) {
+	rl := NewRateLimiter(1, 1)
+	defer rl.Close()
+
+	srv := newTestServer(t, mustAuth(t, false, nil))
+	srv.cfg.RateLimiter = rl
+
+	mux := srv.apiMux()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	mux.ServeHTTP(rec, req)
+	if rec.Code == http.StatusTooManyRequests {
+		t.Fatal("first request to /metrics should not be rate limited")
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request to /metrics should be rate limited, got %d", rec.Code)
+	}
+}
+
 func TestHealthEndpointMonitorPort(t *testing.T) {
 	srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "ci"}))
 
