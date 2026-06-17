@@ -19,34 +19,38 @@ const (
 	embeddingTimeout       = 10 * time.Second
 )
 
-// evalFtsMatch выполняет полнотекстовый поиск.
+// evalFtsMatch выполняет полнотекстовый поиск (FTS_MATCH и @@).
 func evalFtsMatch(left, right interface{}) (bool, error) {
-	text := strings.ToLower(valueToString(left))
-	query := strings.ToLower(valueToString(right))
+	return evalFtsMatchScored(valueToString(left), valueToString(right)) > ftsScoreThreshold, nil
+}
+
+// evalFtsMatchScored вычисляет score полнотекстового совпадения.
+func evalFtsMatchScored(text, query string) float64 {
+	text = strings.ToLower(text)
+	query = strings.ToLower(query)
 
 	queryTerms := strings.Fields(query)
 	if len(queryTerms) == 0 {
-		return true, nil
+		return 1.0
 	}
 
-	docTerms := strings.Fields(text)
-	if len(docTerms) == 0 {
-		return false, nil
+	textTerms := strings.Fields(text)
+	if len(textTerms) == 0 {
+		return 0.0
 	}
 
-	docFreq := make(map[string]int)
-	for _, term := range docTerms {
-		docFreq[term]++
+	freq := make(map[string]int)
+	for _, term := range textTerms {
+		freq[term]++
 	}
 
 	score := 0.0
 	for _, q := range queryTerms {
-		if count, ok := docFreq[q]; ok {
-			score += float64(count) / float64(len(docTerms))
+		if count, ok := freq[q]; ok {
+			score += float64(count) / float64(len(textTerms))
 		}
 	}
-
-	return score > ftsScoreThreshold, nil
+	return score
 }
 
 // evalJsonContains проверяет содержит ли JSON массив все элементы другого массива.
@@ -138,38 +142,6 @@ func evalOperandRaw(expr parser.Expression) interface{} {
 	default:
 		return nil
 	}
-}
-
-// evalFullTextMatch выполняет полнотекстовый匹配.
-func evalFullTextMatch(left, right interface{}, ctx *ExecutionContext) (interface{}, error) {
-	leftStr := valueToString(left)
-	query := valueToString(right)
-
-	text := strings.ToLower(leftStr)
-	queryTerms := strings.Fields(strings.ToLower(query))
-
-	if len(queryTerms) == 0 {
-		return true, nil
-	}
-
-	textTerms := strings.Fields(text)
-	if len(textTerms) == 0 {
-		return false, nil
-	}
-
-	freq := make(map[string]int)
-	for _, term := range textTerms {
-		freq[term]++
-	}
-
-	score := 0.0
-	for _, q := range queryTerms {
-		if count, ok := freq[q]; ok {
-			score += float64(count) / float64(len(textTerms))
-		}
-	}
-
-	return score > ftsScoreThreshold, nil
 }
 
 // evalSemanticMatch сравнивает операнды по косинусной близости.

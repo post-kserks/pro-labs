@@ -281,6 +281,69 @@ func TestResolveProjection(t *testing.T) {
 	})
 }
 
+func TestFtsMatchConsolidated(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE TABLE fts_docs (id INT, content TEXT);")
+	executeSQL(t, session, "INSERT INTO fts_docs VALUES (1, 'the quick brown fox jumps over the lazy dog');")
+	executeSQL(t, session, "INSERT INTO fts_docs VALUES (2, 'a completely different document about databases');")
+	executeSQL(t, session, "INSERT INTO fts_docs VALUES (3, 'the fox is quick and brown');")
+
+	t.Run("FTS_MATCH_operator", func(t *testing.T) {
+		res := executeSQL(t, session, "SELECT id FROM fts_docs WHERE content FTS_MATCH 'quick fox' ORDER BY id;")
+		if len(res.Rows) != 2 {
+			t.Fatalf("FTS_MATCH: expected 2 rows, got %d: %#v", len(res.Rows), res.Rows)
+		}
+		if res.Rows[0][0] != "1" || res.Rows[1][0] != "3" {
+			t.Fatalf("FTS_MATCH: expected ids [1,3], got %#v", res.Rows)
+		}
+	})
+
+	t.Run("FULLTEXT_MATCH_operator", func(t *testing.T) {
+		res := executeSQL(t, session, "SELECT id FROM fts_docs WHERE content @@ 'quick fox' ORDER BY id;")
+		if len(res.Rows) != 2 {
+			t.Fatalf("@@: expected 2 rows, got %d: %#v", len(res.Rows), res.Rows)
+		}
+		if res.Rows[0][0] != "1" || res.Rows[1][0] != "3" {
+			t.Fatalf("@@: expected ids [1,3], got %#v", res.Rows)
+		}
+	})
+
+	t.Run("empty_query_matches_all", func(t *testing.T) {
+		res := executeSQL(t, session, "SELECT COUNT(*) FROM fts_docs WHERE content FTS_MATCH '';")
+		if res.Rows[0][0] != "3" {
+			t.Fatalf("empty FTS_MATCH: expected 3, got %s", res.Rows[0][0])
+		}
+		res2 := executeSQL(t, session, "SELECT COUNT(*) FROM fts_docs WHERE content @@ '';")
+		if res2.Rows[0][0] != "3" {
+			t.Fatalf("empty @@: expected 3, got %s", res2.Rows[0][0])
+		}
+	})
+
+	t.Run("no_match", func(t *testing.T) {
+		res := executeSQL(t, session, "SELECT id FROM fts_docs WHERE content FTS_MATCH 'zzzzz';")
+		if len(res.Rows) != 0 {
+			t.Fatalf("FTS_MATCH no match: expected 0 rows, got %d", len(res.Rows))
+		}
+		res2 := executeSQL(t, session, "SELECT id FROM fts_docs WHERE content @@ 'zzzzz';")
+		if len(res2.Rows) != 0 {
+			t.Fatalf("@@ no match: expected 0 rows, got %d", len(res2.Rows))
+		}
+	})
+
+	t.Run("both_operators_produce_same_results", func(t *testing.T) {
+		resFts := executeSQL(t, session, "SELECT id FROM fts_docs WHERE content FTS_MATCH 'quick brown' ORDER BY id;")
+		resAt := executeSQL(t, session, "SELECT id FROM fts_docs WHERE content @@ 'quick brown' ORDER BY id;")
+		if len(resFts.Rows) != len(resAt.Rows) {
+			t.Fatalf("FTS_MATCH and @@ returned different row counts: %d vs %d", len(resFts.Rows), len(resAt.Rows))
+		}
+		for i := range resFts.Rows {
+			if resFts.Rows[i][0] != resAt.Rows[i][0] {
+				t.Fatalf("row %d differs: FTS_MATCH=%s, @@=%s", i, resFts.Rows[i][0], resAt.Rows[i][0])
+			}
+		}
+	})
+}
+
 func TestInferType(t *testing.T) {
 	tests := []struct {
 		name string

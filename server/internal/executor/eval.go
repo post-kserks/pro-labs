@@ -57,7 +57,7 @@ func evalBinary(expr *parser.BinaryExpr, row storage.Row, schema *storage.TableS
 	case "||":
 		return evalJsonMerge(left, right)
 	case "@@":
-		return evalFullTextMatch(left, right, ctx)
+		return evalFtsMatch(left, right)
 	default:
 		return nil, fmt.Errorf("unsupported operator '%s'", expr.Operator)
 	}
