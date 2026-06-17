@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const maxRateLimitKeys = 100000
+
 // RateLimiter — token bucket rate limiter.
 type RateLimiter struct {
 	mu              sync.Mutex
@@ -17,6 +19,7 @@ type RateLimiter struct {
 	burst           int
 	cleanupInterval time.Duration
 	stopCh          chan struct{}
+	maxKeys         int
 }
 
 // tokenBucket — token bucket for a single key.
@@ -41,6 +44,7 @@ func NewRateLimiter(rate int, burst int) *RateLimiter {
 		burst:           burst,
 		cleanupInterval: 5 * time.Minute,
 		stopCh:          make(chan struct{}),
+		maxKeys:         maxRateLimitKeys,
 	}
 
 	go rl.cleanupLoop()
@@ -55,6 +59,9 @@ func (rl *RateLimiter) Allow(key string) bool {
 
 	bucket, ok := rl.tokens[key]
 	if !ok {
+		if len(rl.tokens) >= rl.maxKeys {
+			rl.evictOldest()
+		}
 		bucket = &tokenBucket{
 			tokens:    float64(rl.burst),
 			lastTime:  time.Now(),
@@ -77,6 +84,21 @@ func (rl *RateLimiter) Allow(key string) bool {
 	}
 
 	return false
+}
+
+// evictOldest removes the least recently used token bucket.
+func (rl *RateLimiter) evictOldest() {
+	var oldestKey string
+	var oldestTime time.Time
+	for key, bucket := range rl.tokens {
+		if oldestKey == "" || bucket.lastTime.Before(oldestTime) {
+			oldestKey = key
+			oldestTime = bucket.lastTime
+		}
+	}
+	if oldestKey != "" {
+		delete(rl.tokens, oldestKey)
+	}
 }
 
 // extractClientIP extracts the real client IP from the request.
