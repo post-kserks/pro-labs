@@ -434,9 +434,7 @@ func (s *Server) handleSchema(w http.ResponseWriter, dbName, tableName string) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	uptime := int(time.Since(s.startedAt).Seconds())
-
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	status := "ok"
 	checks := map[string]interface{}{}
 
@@ -456,15 +454,33 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"status": "pass",
 	}
 
+	if s.cfg.Auth == nil || !s.cfg.Auth.Enabled() || s.cfg.Auth.ValidateToken(extractHealthToken(r)) {
+		uptime := int(time.Since(s.startedAt).Seconds())
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":      status,
+			"version":     s.cfg.Version,
+			"uptime_s":    uptime,
+			"connections": s.cfg.ActiveConnections(),
+			"wal_enabled": true,
+			"time_travel": true,
+			"checks":      checks,
+		})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":      status,
-		"version":     s.cfg.Version,
-		"uptime_s":    uptime,
-		"connections": s.cfg.ActiveConnections(),
-		"wal_enabled": true,
-		"time_travel": true,
-		"checks":      checks,
+		"status": status,
 	})
+}
+
+func extractHealthToken(r *http.Request) string {
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	if token := r.Header.Get("X-VaultDB-Token"); token != "" {
+		return token
+	}
+	return r.URL.Query().Get("token")
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {

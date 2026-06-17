@@ -169,6 +169,78 @@ func TestExtractClientIPRemoteAddr(t *testing.T) {
 	}
 }
 
+func TestHealthEndpointAuth(t *testing.T) {
+	t.Run("unauthenticated minimal", func(t *testing.T) {
+		srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "ci"}))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		srv.apiMux().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var body map[string]interface{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		if body["status"] != "ok" {
+			t.Fatalf("status = %v, want ok", body["status"])
+		}
+		for _, key := range []string{"version", "uptime_s", "connections", "checks"} {
+			if _, exists := body[key]; exists {
+				t.Fatalf("unauthenticated response should not contain %q, got: %s", key, rec.Body.String())
+			}
+		}
+	})
+
+	t.Run("authenticated full", func(t *testing.T) {
+		srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "ci"}))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		req.Header.Set("Authorization", "Bearer sekret")
+		srv.apiMux().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var body map[string]interface{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		if body["status"] != "ok" {
+			t.Fatalf("status = %v, want ok", body["status"])
+		}
+		for _, key := range []string{"version", "uptime_s", "connections", "checks"} {
+			if _, exists := body[key]; !exists {
+				t.Fatalf("authenticated response should contain %q", key)
+			}
+		}
+	})
+
+	t.Run("auth disabled full", func(t *testing.T) {
+		srv := newTestServer(t, mustAuth(t, false, nil))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		srv.apiMux().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var body map[string]interface{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		for _, key := range []string{"version", "uptime_s", "connections", "checks"} {
+			if _, exists := body[key]; !exists {
+				t.Fatalf("auth-disabled response should contain %q", key)
+			}
+		}
+	})
+}
+
 func TestExtractClientIPRemoteAddrNoPort(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.168.1.1"
