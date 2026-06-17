@@ -191,6 +191,12 @@ func (e *PageStorageEngine) redoPhase() error {
 				"txid", entry.TxID)
 		case wal.OpRewriteCommit, wal.OpRewriteData:
 			// Rewrite already completed — nothing to redo (data was written to heap)
+		case wal.OpFullPageImage:
+			var p wal.FullPageImagePayload
+			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+				return err
+			}
+			return e.replayFullPageImage(p)
 		}
 		return nil // другие типы — пропускаем
 	})
@@ -304,6 +310,53 @@ func (e *PageStorageEngine) redoSchemaWrite(p wal.WALSchemaWritePayload) error {
 	defer e.mu.Unlock()
 
 	return os.WriteFile(e.schemaPathFor(p.DB, p.Table), []byte(p.Schema), 0o644)
+}
+
+func (e *PageStorageEngine) replayFullPageImage(p wal.FullPageImagePayload) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	key := p.DB + "/" + p.Table
+	t, ok := e.tables[key]
+	if !ok {
+		path := e.tablePath(p.DB, p.Table)
+		if _, err := os.Stat(path); err != nil {
+			return nil
+		}
+		hf, err := heap.OpenHeapFile(path)
+		if err != nil {
+			return nil
+		}
+		data, err := os.ReadFile(e.schemaPathFor(p.DB, p.Table))
+		if err != nil {
+			_ = hf.Close()
+			return nil
+		}
+		var schema TableSchema
+		if err := json.Unmarshal(data, &schema); err != nil {
+			_ = hf.Close()
+			return nil
+		}
+		tid := tableIDFromPath(path)
+		t = &pageTable{heap: hf, schema: &schema, tableID: tid}
+		e.tables[key] = t
+	}
+
+	if len(p.PageData) != page.PageSize {
+		return fmt.Errorf("full page image: invalid page data size %d (expected %d)", len(p.PageData), page.PageSize)
+	}
+
+	pid := page.PageID{TableID: t.tableID, SegmentNo: p.SegmentNo, PageNo: p.PageNo}
+	var pg page.Page
+	copy(pg[:], p.PageData)
+
+	if err := t.heap.WritePage(pid, &pg); err != nil {
+		return fmt.Errorf("full page image: write page %v: %w", pid, err)
+	}
+
+	slog.Info("WAL recovery: replayed full page image",
+		"db", p.DB, "table", p.Table, "segment", p.SegmentNo, "page", p.PageNo)
+	return nil
 }
 
 func extractFieldFromPayload(payload []byte, field string) string {

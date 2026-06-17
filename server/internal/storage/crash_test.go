@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"vaultdb/internal/index"
+	"vaultdb/internal/storage/page"
 	"vaultdb/internal/txmanager"
 	"vaultdb/internal/wal"
 )
@@ -1000,5 +1001,108 @@ func TestVacuumRecovery(t *testing.T) {
 	}
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+}
+
+func TestFullPageWriteRecovery(t *testing.T) {
+	dir := t.TempDir()
+
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a full page image for an empty page BEFORE the insert.
+	// This simulates what the buffer pool does: capture pre-mod state.
+	var emptyPage page.Page
+	emptyPage.Init(page.PageTypeHeap)
+	emptyPage.SetChecksum()
+	if err := w.WriteFullPageImage(0, "testdb", "users", 0, 0, emptyPage[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now insert rows — this writes OpPageInsert to WAL and to disk.
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a commit record for the insert transaction so it survives recovery.
+	if _, err := w.AppendWithTx(1, wal.OpCommit, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Corrupt the page on disk (simulate torn page / crash mid-write).
+	heapDir := filepath.Join(dir, "pagedb", "testdb", "users")
+	segPath := filepath.Join(heapDir, "0000.heap")
+	data, err := os.ReadFile(segPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < page.PageSize && i < len(data); i++ {
+		data[i] = 0
+	}
+	if err := os.WriteFile(segPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate crash — close without checkpoint.
+	w.Close()
+
+	// Reopen and recover.
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := engine2.RecoverFromWAL(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Full page image restores the empty page, then OpPageInsert re-inserts data.
+	// Verify actual data content (catalog row counts may be stale from pre-crash state).
+	rows, err := engine2.ReadCurrentRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows after full page recovery, got %d", len(rows))
+	}
+	if rows[0][0] != int64(1) || rows[0][1] != "Alice" {
+		t.Fatalf("row 0 mismatch: got %v", rows[0])
+	}
+	if rows[1][0] != int64(2) || rows[1][1] != "Bob" {
+		t.Fatalf("row 1 mismatch: got %v", rows[1])
 	}
 }
