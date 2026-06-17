@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"vaultdb/internal/auth"
 	"vaultdb/internal/executor"
@@ -272,5 +273,61 @@ func TestHealthEndpointMonitorPort(t *testing.T) {
 	}
 	if checks["storage"] == nil {
 		t.Fatal("monitor /health should return storage check")
+	}
+}
+
+func TestSSEMaxDuration(t *testing.T) {
+	dir := t.TempDir()
+	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	br := executor.NewBroadcaster()
+	sess := executor.NewSession(store, metrics.New(), txmanager.NewManager(), br)
+	for _, q := range []string{
+		"CREATE DATABASE testdb;",
+		"USE testdb;",
+		"CREATE TABLE t1 (id INT, val TEXT);",
+		"INSERT INTO t1 (id, val) VALUES (1, 'a');",
+	} {
+		stmt, err := parser.Parse(q)
+		if err != nil {
+			t.Fatalf("parse %q: %v", q, err)
+		}
+		if _, err := sess.Execute(stmt); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+
+	srv := New(Config{
+		Storage:                  store,
+		Auth:                     mustAuth(t, false, nil),
+		Metrics:                  metrics.New(),
+		TxManager:                txmanager.NewManager(),
+		Broadcaster:              br,
+		MaxLiveQueryDurationSec:  1,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/live?database=testdb&query=SELECT+*+FROM+t1%3B", nil).WithContext(ctx)
+	req.Header.Set("Accept", "text/event-stream")
+
+	go srv.apiMux().ServeHTTP(rec, req)
+
+	time.Sleep(2 * time.Second)
+	cancel()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "data: ") {
+		t.Fatalf("no SSE payload in response: %q", rec.Body.String())
 	}
 }

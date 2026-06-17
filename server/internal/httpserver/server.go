@@ -64,6 +64,7 @@ type Config struct {
 	TLSCertFile               string
 	TLSKeyFile                string
 	MaxLiveQuerySubscriptions int
+	MaxLiveQueryDurationSec   int
 }
 
 type Server struct {
@@ -700,7 +701,12 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	defer s.activeSubscriptions.Add(-1)
 	defer s.br.Unsubscribe(sub.ID)
 
-	ctx, cancel := context.WithCancel(r.Context())
+	maxDuration := time.Duration(s.cfg.MaxLiveQueryDurationSec) * time.Second
+	if maxDuration <= 0 {
+		maxDuration = 1 * time.Hour
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), maxDuration)
 	defer cancel()
 
 	// Send initial result
