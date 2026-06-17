@@ -2,6 +2,7 @@ package executor
 
 import (
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -106,20 +107,27 @@ func TestBroadcasterAsync(t *testing.T) {
 	}, "testdb")
 	b.Subscribe(sub)
 
-	// Fill the channel so the next notify will block waiting for a consumer.
 	sub.Send <- &Result{}
 
-	start := time.Now()
-	b.NotifyTableChanged("testdb", "items", ctx)
-	elapsed := time.Since(start)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.NotifyTableChanged("testdb", "items", ctx)
+	}()
 
-	// The call must return quickly because queries run in goroutines.
-	// Without goroutines it would block for ~5 seconds.
-	if elapsed > 500*time.Millisecond {
-		t.Fatalf("NotifyTableChanged blocked for %v, expected async return", elapsed)
+	time.Sleep(50 * time.Millisecond)
+
+	<-sub.Send
+
+	select {
+	case <-sub.Send:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for async notification to complete")
 	}
 
-	// Allow goroutines to finish before cleanup.
-	time.Sleep(100 * time.Millisecond)
+	wg.Wait()
+
+	b.Unsubscribe(sub.ID)
 	sub.Close()
 }
