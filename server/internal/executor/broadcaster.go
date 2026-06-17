@@ -193,11 +193,18 @@ func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *Executio
 				}
 			}()
 
-			origDB := ctx.Session.CurrentDatabase()
-			ctx.Session.SetCurrentDatabase(sub.DB)
-			cmd := &SelectCommand{stmt: sub.Query}
-			res, err := cmd.Execute(ctx)
-			ctx.Session.SetCurrentDatabase(origDB)
+			sess := NewSession(ctx.Storage, ctx.Metrics, ctx.TxManager, ctx.Broadcaster)
+			sess.SetCurrentDatabase(sub.DB)
+			if ctx.WAL != nil {
+				sess.SetWAL(ctx.WAL)
+			}
+			if ctx.Embedder != nil {
+				sess.SetEmbedder(ctx.Embedder)
+			}
+
+			res, err := sess.Execute(sub.Query)
+			sess.Close()
+
 			if err != nil {
 				return
 			}
