@@ -208,8 +208,7 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 	connLimiter := NewConnectionRateLimiter(100, 200)
 
 	scanner := bufio.NewScanner(conn)
-	const maxScannerBuffer = 1024 * 1024
-	scanner.Buffer(make([]byte, 0, 64*1024), maxScannerBuffer)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxRequestSize)
 
 	for scanner.Scan() {
 		// Reset deadline on successful read
