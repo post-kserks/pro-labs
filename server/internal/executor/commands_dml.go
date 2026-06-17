@@ -266,12 +266,12 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 		colIdxMap[strings.ToLower(col.Name)] = i
 	}
 
-	for _, row := range rowsToInsert {
-		existingRows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
-		if err != nil {
-			return nil, err
-		}
+	existingRows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, err
+	}
 
+	for _, row := range rowsToInsert {
 		conflict := false
 		conflictIdx := -1
 
@@ -316,6 +316,7 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 					return nil, err
 				}
 				affected++
+				existingRows, _ = ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 			}
 		} else {
 			_, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, []storage.Row{row})
@@ -323,6 +324,7 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 				return nil, err
 			}
 			affected++
+			existingRows, _ = ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 		}
 	}
 

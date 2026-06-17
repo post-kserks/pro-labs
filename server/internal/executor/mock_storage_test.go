@@ -715,3 +715,148 @@ func TestCommandFactoryUnknown(t *testing.T) {
 		t.Fatal("expected error for nil statement")
 	}
 }
+
+func TestUpsertTOCTOU(t *testing.T) {
+	t.Run("insert-then-conflict detects re-read", func(t *testing.T) {
+		store := NewMockStorage()
+		store.databases["mydb"] = true
+		store.ensureDB("mydb")
+		store.tables["mydb"]["items"] = &storage.TableSchema{
+			Name: "items",
+			Columns: []storage.ColumnSchema{
+				{Name: "id", Type: "INT"},
+				{Name: "val", Type: "TEXT"},
+			},
+		}
+
+		session := newTestSession(store)
+		session.SetCurrentDatabase("mydb")
+		ctx := &ExecutionContext{Storage: store, Session: session}
+
+		stmt := &parser.InsertStatement{
+			TableName: "items",
+			Columns:   []string{"id", "val"},
+			Rows: [][]parser.Expression{
+				{&parser.Value{Type: "int", IntVal: 1}, &parser.Value{Type: "string", StrVal: "new"}},
+				{&parser.Value{Type: "int", IntVal: 1}, &parser.Value{Type: "string", StrVal: "dup"}},
+			},
+			OnConflict: &parser.OnConflictClause{
+				Columns: []string{"id"},
+				Action:  "NOTHING",
+			},
+		}
+
+		cmd := &InsertCommand{stmt: stmt}
+		result, err := cmd.Execute(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Affected != 1 {
+			t.Fatalf("expected 1 affected (second row should be conflict), got %d", result.Affected)
+		}
+		if len(store.rows["mydb"]["items"]) != 1 {
+			t.Fatalf("expected 1 row in storage, got %d", len(store.rows["mydb"]["items"]))
+		}
+	})
+
+	t.Run("update-then-conflict detects re-read", func(t *testing.T) {
+		store := NewMockStorage()
+		store.databases["mydb"] = true
+		store.ensureDB("mydb")
+		store.tables["mydb"]["items"] = &storage.TableSchema{
+			Name: "items",
+			Columns: []storage.ColumnSchema{
+				{Name: "id", Type: "INT"},
+				{Name: "val", Type: "TEXT"},
+			},
+		}
+		store.rows["mydb"]["items"] = []storage.Row{
+			{int64(1), "old1"},
+			{int64(2), "old2"},
+		}
+
+		session := newTestSession(store)
+		session.SetCurrentDatabase("mydb")
+		ctx := &ExecutionContext{Storage: store, Session: session}
+
+		stmt := &parser.InsertStatement{
+			TableName: "items",
+			Columns:   []string{"id", "val"},
+			Rows: [][]parser.Expression{
+				{&parser.Value{Type: "int", IntVal: 1}, &parser.Value{Type: "string", StrVal: "updated1"}},
+				{&parser.Value{Type: "int", IntVal: 2}, &parser.Value{Type: "string", StrVal: "updated2"}},
+			},
+			OnConflict: &parser.OnConflictClause{
+				Columns: []string{"id"},
+				Action:  "UPDATE",
+				Assignments: []parser.Assignment{
+					{Column: "val", Value: &parser.ColumnRef{Name: "val"}},
+				},
+			},
+		}
+
+		cmd := &InsertCommand{stmt: stmt}
+		result, err := cmd.Execute(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Affected != 2 {
+			t.Fatalf("expected 2 affected, got %d", result.Affected)
+		}
+		if len(store.rows["mydb"]["items"]) != 2 {
+			t.Fatalf("expected 2 rows, got %d", len(store.rows["mydb"]["items"]))
+		}
+		if store.rows["mydb"]["items"][0][1] != "updated1" {
+			t.Fatalf("expected updated1, got %v", store.rows["mydb"]["items"][0][1])
+		}
+		if store.rows["mydb"]["items"][1][1] != "updated2" {
+			t.Fatalf("expected updated2, got %v", store.rows["mydb"]["items"][1][1])
+		}
+	})
+
+	t.Run("batch insert with mixed conflicts", func(t *testing.T) {
+		store := NewMockStorage()
+		store.databases["mydb"] = true
+		store.ensureDB("mydb")
+		store.tables["mydb"]["items"] = &storage.TableSchema{
+			Name: "items",
+			Columns: []storage.ColumnSchema{
+				{Name: "id", Type: "INT"},
+				{Name: "val", Type: "TEXT"},
+			},
+		}
+		store.rows["mydb"]["items"] = []storage.Row{
+			{int64(10), "existing"},
+		}
+
+		session := newTestSession(store)
+		session.SetCurrentDatabase("mydb")
+		ctx := &ExecutionContext{Storage: store, Session: session}
+
+		stmt := &parser.InsertStatement{
+			TableName: "items",
+			Columns:   []string{"id", "val"},
+			Rows: [][]parser.Expression{
+				{&parser.Value{Type: "int", IntVal: 20}, &parser.Value{Type: "string", StrVal: "new1"}},
+				{&parser.Value{Type: "int", IntVal: 10}, &parser.Value{Type: "string", StrVal: "conflict"}},
+				{&parser.Value{Type: "int", IntVal: 30}, &parser.Value{Type: "string", StrVal: "new2"}},
+			},
+			OnConflict: &parser.OnConflictClause{
+				Columns: []string{"id"},
+				Action:  "NOTHING",
+			},
+		}
+
+		cmd := &InsertCommand{stmt: stmt}
+		result, err := cmd.Execute(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Affected != 2 {
+			t.Fatalf("expected 2 affected (row 20 and 30), got %d", result.Affected)
+		}
+		if len(store.rows["mydb"]["items"]) != 3 {
+			t.Fatalf("expected 3 rows in storage, got %d", len(store.rows["mydb"]["items"]))
+		}
+	})
+}
