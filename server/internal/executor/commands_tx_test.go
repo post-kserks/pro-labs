@@ -198,8 +198,8 @@ func TestUndoTypeAssertionSafety(t *testing.T) {
 			OldRow: "not a []storage.Row",
 		}
 		err := undoUpdate(ctx, op)
-		if err != nil {
-			t.Fatalf("expected nil for undoUpdate with wrong OldRow type, got: %v", err)
+		if err == nil {
+			t.Fatal("expected error for undoUpdate with wrong OldRow type")
 		}
 	})
 
@@ -211,8 +211,8 @@ func TestUndoTypeAssertionSafety(t *testing.T) {
 			Row:   "not a []storage.Row",
 		}
 		err := undoDelete(ctx, op)
-		if err != nil {
-			t.Fatalf("expected nil for undoDelete with wrong Row type, got: %v", err)
+		if err == nil {
+			t.Fatal("expected error for undoDelete with wrong Row type")
 		}
 	})
 }

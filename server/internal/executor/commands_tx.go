@@ -254,12 +254,18 @@ func undoUpdate(ctx *ExecutionContext, op txmanager.PendingOp) error {
 	}
 
 	oldRows, ok := op.OldRow.([]storage.Row)
-	if !ok || len(oldRows) == 0 {
+	if !ok {
+		return fmt.Errorf("undo update: invalid old row type")
+	}
+	if len(oldRows) == 0 {
 		return nil
 	}
 
 	oldIndices, ok := op.Row.([]int)
-	if !ok || len(oldIndices) != len(oldRows) {
+	if !ok {
+		return fmt.Errorf("undo update: invalid row indices type")
+	}
+	if len(oldIndices) != len(oldRows) {
 		return nil
 	}
 
@@ -316,7 +322,10 @@ func undoDelete(ctx *ExecutionContext, op txmanager.PendingOp) error {
 	}
 
 	deletedRows, ok := op.Row.([]storage.Row)
-	if !ok || len(deletedRows) == 0 {
+	if !ok {
+		return fmt.Errorf("undo delete: invalid deleted rows type")
+	}
+	if len(deletedRows) == 0 {
 		return nil
 	}
 
