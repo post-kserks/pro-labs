@@ -2,6 +2,8 @@ package storage
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"vaultdb/internal/index"
@@ -704,5 +706,186 @@ func TestBTreeIndexSaveLoad(t *testing.T) {
 	result := loadedIdx.Range("Alice", "Charlie")
 	if len(result) != 3 {
 		t.Errorf("Range(Alice, Charlie) returned %d positions, want 3", len(result))
+	}
+}
+
+func TestAlterTableRewriteRecovery(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create WAL and page engine
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert some rows
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+		{int64(3), "Charlie"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify original row count
+	count, err := engine.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 rows before crash, got %d", count)
+	}
+
+	// Close the engine to simulate a clean state
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate incomplete rewrite: create a .rewrite.tmp directory
+	// This mimics the state after a crash during rewriteTable (before atomic rename)
+	tmpRewritePath := filepath.Join(dir, "pagedb", "testdb", "users.rewrite.tmp")
+	if err := os.MkdirAll(tmpRewritePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Write some dummy data into the temp directory to make it realistic
+	if err := os.WriteFile(filepath.Join(tmpRewritePath, "_schema.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the temp dir exists before recovery
+	if _, err := os.Stat(tmpRewritePath); os.IsNotExist(err) {
+		t.Fatal("expected .rewrite.tmp directory to exist before recovery")
+	}
+
+	// Reopen WAL and engine — recovery should clean up the temp dir
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// WAL recovery (including incomplete rewrite cleanup)
+	if err := engine2.RecoverFromWAL(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify original table is intact
+	count, err = engine2.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 rows after recovery, got %d", count)
+	}
+
+	// Verify the .rewrite.tmp directory was cleaned up
+	if _, err := os.Stat(tmpRewritePath); !os.IsNotExist(err) {
+		t.Fatal("expected .rewrite.tmp directory to be removed after recovery")
+	}
+
+	// Verify data content
+	rows, err := engine2.ReadCurrentRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+}
+
+func TestAlterTableRewriteRecoveryNoTempDir(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create WAL and page engine
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Close and reopen (no temp dir this time — normal crash)
+	w.Close()
+
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Recovery should succeed even with no incomplete rewrites
+	if err := engine2.RecoverFromWAL(); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := engine2.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 row after recovery, got %d", count)
 	}
 }

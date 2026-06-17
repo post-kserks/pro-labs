@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,61 @@ import (
 	"vaultdb/internal/storage/page"
 	"vaultdb/internal/wal"
 )
+
+// ── ALTER TABLE RECOVERY ──────────────────────────────────────────────────
+
+// recoverRewrite cleans up an incomplete ALTER TABLE rewrite for a specific table.
+// If a .rewrite.tmp directory exists for the given db/table, it means the rewrite
+// was interrupted before the atomic rename completed. The original table data is
+// still intact, so we simply remove the stale temp directory.
+func (e *PageStorageEngine) recoverRewrite(db, table string) error {
+	originalPath := e.tablePath(db, table)
+	tmpPath := originalPath + ".rewrite.tmp"
+
+	if _, err := os.Stat(tmpPath); os.IsNotExist(err) {
+		return nil // No incomplete rewrite
+	}
+
+	// Incomplete rewrite found — clean up temp directory
+	slog.Warn("recovering from incomplete ALTER TABLE rewrite",
+		"db", db, "table", table)
+	os.RemoveAll(tmpPath)
+	return nil
+}
+
+// recoverIncompleteRewrites scans the pagedb root directory for any leftover
+// .rewrite.tmp directories and removes them. Called during startup to ensure
+// the storage engine is in a consistent state after a crash.
+func (e *PageStorageEngine) recoverIncompleteRewrites() {
+	dbs, err := os.ReadDir(e.rootDir)
+	if err != nil {
+		return
+	}
+	for _, dbEntry := range dbs {
+		if !dbEntry.IsDir() {
+			continue
+		}
+		dbName := dbEntry.Name()
+		dbDir := filepath.Join(e.rootDir, dbName)
+		tables, err := os.ReadDir(dbDir)
+		if err != nil {
+			continue
+		}
+		for _, tblEntry := range tables {
+			if !tblEntry.IsDir() {
+				continue
+			}
+			name := tblEntry.Name()
+			if strings.HasSuffix(name, ".rewrite.tmp") {
+				tableName := strings.TrimSuffix(name, ".rewrite.tmp")
+				if err := e.recoverRewrite(dbName, tableName); err != nil {
+					slog.Error("failed to recover rewrite",
+						"db", dbName, "table", tableName, "error", err)
+				}
+			}
+		}
+	}
+}
 
 // ── ALTER TABLE ───────────────────────────────────────────────────────────
 

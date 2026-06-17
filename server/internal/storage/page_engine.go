@@ -109,6 +109,9 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) 
 // RecoverFromWAL воспроизводит WAL при старте page engine.
 // Три фазы: Analysis → Redo → Undo (как в PostgreSQL ARIES).
 func (e *PageStorageEngine) RecoverFromWAL() error {
+	// Clean up any incomplete ALTER TABLE rewrites before WAL replay
+	e.recoverIncompleteRewrites()
+
 	if e.wal == nil {
 		return nil
 	}
