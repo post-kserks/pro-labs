@@ -132,6 +132,39 @@ func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPor
 	return httpErrCh
 }
 
+// ConnectionRateLimiter is a simple token bucket for per-connection rate limiting.
+type ConnectionRateLimiter struct {
+	tokens    float64
+	lastTime  time.Time
+	rate      float64
+	maxTokens float64
+}
+
+func NewConnectionRateLimiter(rate, burst int) *ConnectionRateLimiter {
+	return &ConnectionRateLimiter{
+		tokens:    float64(burst),
+		lastTime:  time.Now(),
+		rate:      float64(rate),
+		maxTokens: float64(burst),
+	}
+}
+
+func (l *ConnectionRateLimiter) Allow() bool {
+	now := time.Now()
+	elapsed := now.Sub(l.lastTime).Seconds()
+	l.tokens += elapsed * l.rate
+	if l.tokens > l.maxTokens {
+		l.tokens = l.maxTokens
+	}
+	l.lastTime = now
+
+	if l.tokens >= 1 {
+		l.tokens--
+		return true
+	}
+	return false
+}
+
 func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, embedder ai.Embedder, serverWAL *wal.WAL, logger *slog.Logger, maxRequestSize int, queryTimeoutSec int, maxRows int) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -171,6 +204,9 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 		}
 	}()
 
+	// Per-connection rate limiter: 100 requests/second, burst 200
+	connLimiter := NewConnectionRateLimiter(100, 200)
+
 	scanner := bufio.NewScanner(conn)
 	const maxScannerBuffer = 1024 * 1024
 	scanner.Buffer(make([]byte, 0, 64*1024), maxScannerBuffer)
@@ -179,6 +215,14 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 		// Reset deadline on successful read
 		conn.SetDeadline(time.Now().Add(5 * time.Minute))
 		line := scanner.Bytes()
+
+		// Rate limit check
+		if !connLimiter.Allow() {
+			if !sendError(conn, "", "rate limit exceeded", logger) {
+				return
+			}
+			continue
+		}
 
 		var req protocol.Request
 		if err := json.Unmarshal(line, &req); err != nil {
