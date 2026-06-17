@@ -146,6 +146,77 @@ func TestRollbackClearsPendingOps(t *testing.T) {
 	executeSQL(t, session, "COMMIT;")
 }
 
+func TestUndoTypeAssertionSafety(t *testing.T) {
+	dir := t.TempDir()
+	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	session := NewSession(store, nil, txm, nil)
+	executeSQL(t, session, "CREATE DATABASE safetydb;")
+	executeSQL(t, session, "USE safetydb;")
+	executeSQL(t, session, "CREATE TABLE items (id INT, name TEXT, qty INT);")
+
+	ctx := &ExecutionContext{
+		Storage: store,
+		Session: session,
+	}
+
+	t.Run("undoInsert wrong payload type", func(t *testing.T) {
+		op := txmanager.PendingOp{
+			Type:    "insert",
+			DB:      "safetydb",
+			Table:   "items",
+			Payload: "not an InsertStatement",
+		}
+		err := undoInsert(ctx, op)
+		if err == nil {
+			t.Fatal("expected error for undoInsert with wrong payload type, got nil")
+		}
+	})
+
+	t.Run("undoInsert nil payload", func(t *testing.T) {
+		op := txmanager.PendingOp{
+			Type:    "insert",
+			DB:      "safetydb",
+			Table:   "items",
+			Payload: nil,
+		}
+		err := undoInsert(ctx, op)
+		if err == nil {
+			t.Fatal("expected error for undoInsert with nil payload, got nil")
+		}
+	})
+
+	t.Run("undoUpdate wrong OldRow type", func(t *testing.T) {
+		op := txmanager.PendingOp{
+			Type:   "update",
+			DB:     "safetydb",
+			Table:  "items",
+			OldRow: "not a []storage.Row",
+		}
+		err := undoUpdate(ctx, op)
+		if err != nil {
+			t.Fatalf("expected nil for undoUpdate with wrong OldRow type, got: %v", err)
+		}
+	})
+
+	t.Run("undoDelete wrong Row type", func(t *testing.T) {
+		op := txmanager.PendingOp{
+			Type:  "delete",
+			DB:    "safetydb",
+			Table: "items",
+			Row:   "not a []storage.Row",
+		}
+		err := undoDelete(ctx, op)
+		if err != nil {
+			t.Fatalf("expected nil for undoDelete with wrong Row type, got: %v", err)
+		}
+	})
+}
+
 func TestWALAbortOnRollback(t *testing.T) {
 	dir := t.TempDir()
 	txm := txmanager.NewManager()
