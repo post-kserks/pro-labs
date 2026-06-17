@@ -162,6 +162,13 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 		}
 	}
 
+	// Apply server-side max rows limit (before GROUP BY to limit aggregation input)
+	if ctx.Session != nil && ctx.Session.executor.maxRows > 0 && !c.hasAggregates() && len(c.stmt.GroupBy) == 0 {
+		if len(filtered) > ctx.Session.executor.maxRows {
+			filtered = filtered[:ctx.Session.executor.maxRows]
+		}
+	}
+
 	// Handle GROUP BY or global aggregates
 	if len(c.stmt.GroupBy) > 0 || c.hasAggregates() {
 		res, err := c.executeWithGrouping(filtered, combinedSchema, asOfNote, ctx)

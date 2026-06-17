@@ -432,10 +432,10 @@ func newTestSession(store storage.StorageEngine) *Session {
 func TestCreateDatabaseCommand(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		store := NewMockStorage()
-		currentDB := ""
+		session := newTestSession(store)
 		ctx := &ExecutionContext{
-			Storage:   store,
-			CurrentDB: &currentDB,
+			Storage: store,
+			Session: session,
 		}
 		stmt := &parser.CreateDatabaseStatement{DatabaseName: "testdb"}
 		cmd := &CreateDatabaseCommand{stmt: stmt}
@@ -455,10 +455,10 @@ func TestCreateDatabaseCommand(t *testing.T) {
 	t.Run("error", func(t *testing.T) {
 		store := NewMockStorage()
 		store.createDBErr = fmt.Errorf("disk full")
-		currentDB := ""
+		session := newTestSession(store)
 		ctx := &ExecutionContext{
-			Storage:   store,
-			CurrentDB: &currentDB,
+			Storage: store,
+			Session: session,
 		}
 		stmt := &parser.CreateDatabaseStatement{DatabaseName: "testdb"}
 		cmd := &CreateDatabaseCommand{stmt: stmt}
@@ -475,7 +475,6 @@ func TestCreateDatabaseCommand(t *testing.T) {
 
 func TestInsertCommand(t *testing.T) {
 	store := NewMockStorage()
-	currentDB := "mydb"
 	store.databases["mydb"] = true
 	store.ensureDB("mydb")
 	store.tables["mydb"]["users"] = &storage.TableSchema{
@@ -487,10 +486,10 @@ func TestInsertCommand(t *testing.T) {
 	}
 
 	session := newTestSession(store)
+	session.SetCurrentDatabase("mydb")
 	ctx := &ExecutionContext{
-		Storage:   store,
-		CurrentDB: &currentDB,
-		Session:   session,
+		Storage: store,
+		Session: session,
 	}
 
 	stmt := &parser.InsertStatement{
@@ -526,7 +525,6 @@ func TestInsertCommand(t *testing.T) {
 
 func TestSelectCommand(t *testing.T) {
 	store := NewMockStorage()
-	currentDB := "mydb"
 	store.databases["mydb"] = true
 	store.ensureDB("mydb")
 	store.tables["mydb"]["items"] = &storage.TableSchema{
@@ -543,10 +541,10 @@ func TestSelectCommand(t *testing.T) {
 	}
 
 	session := newTestSession(store)
+	session.SetCurrentDatabase("mydb")
 	ctx := &ExecutionContext{
-		Storage:   store,
-		CurrentDB: &currentDB,
-		Session:   session,
+		Storage: store,
+		Session: session,
 	}
 
 	t.Run("select all", func(t *testing.T) {

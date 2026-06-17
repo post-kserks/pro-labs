@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -96,13 +95,9 @@ func (m *Manager) ValidateToken(token string) bool {
 	}
 	hash := m.hashToken(token)
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for storedHash := range m.tokens {
-		if subtle.ConstantTimeCompare([]byte(hash), []byte(storedHash)) == 1 {
-			return true
-		}
-	}
-	return false
+	_, ok := m.tokens[hash]
+	m.mu.RUnlock()
+	return ok
 }
 
 func (m *Manager) GetLabel(token string) string {

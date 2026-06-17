@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -22,6 +23,8 @@ import (
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
 )
+
+var validPathName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 const (
 	errCodeBadRequest     = 3001
@@ -45,6 +48,8 @@ type Config struct {
 	MonitorPort               int
 	Version                   string
 	MaxRequestSizeBytes       int
+	MaxRows                   int
+	QueryTimeoutSec           int
 	AllowedOrigins            []string
 	Storage                   storage.StorageEngine
 	Auth                      *auth.Manager
@@ -121,6 +126,7 @@ func (s *Server) Start(ctx context.Context) error {
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MB
 	}
 	monitorServer := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.MonitorPort),
@@ -129,6 +135,7 @@ func (s *Server) Start(ctx context.Context) error {
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MB
 	}
 
 	errCh := make(chan error, 2)
@@ -219,6 +226,12 @@ func (s *Server) newSession() *executor.Session {
 	sess := executor.NewSession(s.cfg.Storage, s.metrics, s.txm, s.br)
 	if s.cfg.Embedder != nil {
 		sess.SetEmbedder(s.cfg.Embedder)
+	}
+	if s.cfg.QueryTimeoutSec > 0 {
+		sess.SetQueryTimeout(time.Duration(s.cfg.QueryTimeoutSec) * time.Second)
+	}
+	if s.cfg.MaxRows > 0 {
+		sess.SetMaxRows(s.cfg.MaxRows)
 	}
 	return sess
 }
@@ -333,7 +346,7 @@ func (s *Server) handleDatabasesSubroutes(w http.ResponseWriter, r *http.Request
 	}
 
 	dbName := segments[0]
-	if dbName == "" {
+	if dbName == "" || !validPathName.MatchString(dbName) {
 		http.NotFound(w, r)
 		return
 	}
@@ -348,7 +361,12 @@ func (s *Server) handleDatabasesSubroutes(w http.ResponseWriter, r *http.Request
 	}
 
 	if len(segments) == 4 && segments[1] == "tables" && segments[3] == "data" {
-		s.handleTableData(w, r, dbName, segments[2])
+		tableName := segments[2]
+		if !validPathName.MatchString(tableName) {
+			http.NotFound(w, r)
+			return
+		}
+		s.handleTableData(w, r, dbName, tableName)
 		return
 	}
 
@@ -357,7 +375,12 @@ func (s *Server) handleDatabasesSubroutes(w http.ResponseWriter, r *http.Request
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		s.handleSchema(w, dbName, segments[2])
+		tableName := segments[2]
+		if !validPathName.MatchString(tableName) {
+			http.NotFound(w, r)
+			return
+		}
+		s.handleSchema(w, dbName, tableName)
 		return
 	}
 
@@ -567,9 +590,14 @@ func emptyRowsIfNil(rows [][]string) [][]string {
 }
 
 func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.MaxLiveQuerySubscriptions > 0 && s.activeSubscriptions.Load() >= int64(s.cfg.MaxLiveQuerySubscriptions) {
-		writeError(w, http.StatusTooManyRequests, errCodeRateLimited, "too many active live query subscriptions")
-		return
+	if s.cfg.MaxLiveQuerySubscriptions > 0 {
+		if s.activeSubscriptions.Add(1) > int64(s.cfg.MaxLiveQuerySubscriptions) {
+			s.activeSubscriptions.Add(-1)
+			writeError(w, http.StatusTooManyRequests, errCodeRateLimited, "too many active live query subscriptions")
+			return
+		}
+	} else {
+		s.activeSubscriptions.Add(1)
 	}
 
 	db := r.URL.Query().Get("database")
@@ -748,6 +776,7 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 
 	stmt := &parser.SelectStatement{TableName: tableName, Where: where}
 	sess := s.newSession()
+	defer sess.Close()
 	sess.SetCurrentDatabase(dbName)
 	res, err := sess.Execute(stmt)
 	if err != nil {

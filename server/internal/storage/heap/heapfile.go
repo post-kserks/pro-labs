@@ -96,12 +96,11 @@ func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
 		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
 	}
 	seg := hf.segments[pid.SegmentNo]
+	hf.mu.RUnlock()
 
 	if _, err := seg.ReadAt(buf[:], pid.FileOffset()); err != nil {
-		hf.mu.RUnlock()
 		return fmt.Errorf("readpage %v: %w", pid, err)
 	}
-	hf.mu.RUnlock()
 
 	if !buf.VerifyChecksum() {
 		return fmt.Errorf("page %v: stored=%d computed=%d: %w",
@@ -123,10 +122,10 @@ func (hf *HeapFile) WritePage(pid page.PageID, buf *page.Page) error {
 		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
 	}
 	seg := hf.segments[pid.SegmentNo]
+	hf.mu.RUnlock()
 
 	buf.SetChecksum()
 	_, err := seg.WriteAt(buf[:], pid.FileOffset())
-	hf.mu.RUnlock()
 	return err
 }
 

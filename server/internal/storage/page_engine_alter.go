@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,8 @@ import (
 // rewriteTable перезаписывает все живые строки таблицы функцией transform
 // (используется ADD/DROP COLUMN, когда меняется арность строк).
 // Перед началом и после завершения эмитятся WAL-записи OpRewriteBegin/OpRewriteCommit.
+// Используется безопасный подход: данные пишутся во временную директорию,
+// затем атомарно заменяют оригинальную.
 func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchema, transform func(Row) Row) error {
 	t, err := e.getTableLocked(db, table, true)
 	if err != nil {
@@ -41,59 +44,91 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 		return err
 	}
 
-	// Полная перезапись heap-файла: история версий при ALTER не сохраняется
-	if err := t.heap.Close(); err != nil {
+	// Write new data to a temporary directory first (crash-safe approach)
+	originalPath := e.tablePath(db, table)
+	tmpPath := originalPath + ".rewrite.tmp"
+	if err := os.RemoveAll(tmpPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	path := e.tablePath(db, table)
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".heap") {
-			if err := os.Remove(filepath.Join(path, entry.Name())); err != nil {
-				return err
-			}
-		}
-	}
-	hf, err := heap.CreateHeapFile(path)
-	if err != nil {
-		return err
-	}
-	t.heap = hf
-	t.schema = newSchema
 
-	// Invalidate all cached pages for this table (old heap file is gone)
-	e.bufPool.InvalidateTable(t.tableID)
+	hf, err := heap.CreateHeapFile(tmpPath)
+	if err != nil {
+		return err
+	}
 
 	txID := e.nextTxLocked()
 	tuples := make([][]byte, 0, len(rows))
 	for _, row := range rows {
 		tuple, err := encodePageTuple(txID, 0, row)
 		if err != nil {
+			hf.Close()
+			os.RemoveAll(tmpPath)
 			return err
 		}
 		tuples = append(tuples, tuple)
 	}
-	if err := e.appendTuplesLocked(t, tuples); err != nil {
+
+	// Create a temporary pageTable for writing
+	tmpTable := &pageTable{heap: hf, schema: newSchema, tableID: t.tableID}
+	if err := e.appendTuplesLocked(tmpTable, tuples); err != nil {
+		hf.Close()
+		os.RemoveAll(tmpPath)
 		return err
 	}
-	if err := t.heap.Sync(); err != nil {
+	if err := hf.Sync(); err != nil {
+		hf.Close()
+		os.RemoveAll(tmpPath)
+		return err
+	}
+	if err := hf.Close(); err != nil {
+		os.RemoveAll(tmpPath)
 		return err
 	}
 
-	if err := e.writeSchemaLocked(db, table, newSchema); err != nil {
+	// Write schema to temp directory
+	tmpSchemaPath := filepath.Join(tmpPath, "_schema.json")
+	schemaData, err := json.MarshalIndent(newSchema, "", "  ")
+	if err != nil {
+		os.RemoveAll(tmpPath)
+		return err
+	}
+	if err := os.WriteFile(tmpSchemaPath, schemaData, 0o644); err != nil {
+		os.RemoveAll(tmpPath)
 		return err
 	}
 
-	// Emit WAL rewrite commit
+	// Emit WAL rewrite commit BEFORE atomic rename
 	if e.wal != nil {
 		rewritePayload := wal.WALRewritePayload{DB: db, Table: table}
 		if _, err := e.wal.Append(wal.OpRewriteCommit, rewritePayload); err != nil {
+			os.RemoveAll(tmpPath)
 			return err
 		}
 	}
+
+	// Atomically replace: close old heap, rename temp to original
+	if err := t.heap.Close(); err != nil {
+		os.RemoveAll(tmpPath)
+		return err
+	}
+	e.bufPool.InvalidateTable(t.tableID)
+
+	if err := os.RemoveAll(originalPath); err != nil && !os.IsNotExist(err) {
+		os.RemoveAll(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, originalPath); err != nil {
+		os.RemoveAll(tmpPath)
+		return err
+	}
+
+	// Reopen the heap file at the original path
+	hf, err = heap.OpenHeapFile(originalPath)
+	if err != nil {
+		return err
+	}
+	t.heap = hf
+	t.schema = newSchema
 
 	e.catalog.LastModified[db+"/"+table] = txID
 	return e.saveCatalogLocked()

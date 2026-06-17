@@ -15,6 +15,7 @@ type Pool struct {
 	maxSize     int
 	idleTimeout time.Duration
 	stopCh      chan struct{}
+	closed      bool
 	wg          sync.WaitGroup
 }
 
@@ -96,6 +97,14 @@ func (p *Pool) Release(conn *Connection) {
 
 // Close закрывает пул и все соединения.
 func (p *Pool) Close() {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.closed = true
+	p.mu.Unlock()
+
 	close(p.stopCh)
 	p.wg.Wait()
 	p.mu.Lock()

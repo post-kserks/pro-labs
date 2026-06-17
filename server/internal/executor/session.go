@@ -60,10 +60,23 @@ func (s *Session) SetQueryTimeout(d time.Duration) {
 	s.executor.SetQueryTimeout(d)
 }
 
+// SetMaxRows задаёт максимальное количество строк в результате SELECT.
+func (s *Session) SetMaxRows(n int) {
+	s.executor.SetMaxRows(n)
+}
+
 func (s *Session) IsInTx() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ActiveTx != nil && s.ActiveTx.State == txmanager.TxActive
+}
+
+// GetActiveTx возвращает текущую транзакцию под блокировкой.
+// Если транзакции нет — возвращает nil.
+func (s *Session) GetActiveTx() *txmanager.Transaction {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ActiveTx
 }
 
 func (s *Session) Execute(stmt parser.Statement) (*Result, error) {

@@ -25,6 +25,7 @@ type ServerConfig struct {
 	HTTPPort            int               `yaml:"http_port"`
 	MonitorPort         int               `yaml:"monitor_port"`
 	MaxRequestSizeBytes int               `yaml:"max_request_size_bytes"`
+	MaxRows             int               `yaml:"max_rows"`
 	AllowedOrigins      []string          `yaml:"allowed_origins"`
 	LiveQueries         LiveQueriesConfig `yaml:"live_queries"`
 	QueryTimeoutSec     int               `yaml:"query_timeout_sec"`
@@ -69,6 +70,7 @@ const (
 	DefaultQueryTimeoutSec       = 30
 	DefaultMaxConnections        = 1000
 	DefaultShutdownTimeoutSec    = 30
+	DefaultMaxRows               = 1000000
 )
 
 // Default возвращает конфигурацию со значениями по умолчанию.
@@ -80,6 +82,7 @@ func Default() *Config {
 			HTTPPort:            8080,
 			MonitorPort:         5433,
 			MaxRequestSizeBytes: DefaultMaxRequestSize,
+			MaxRows:             DefaultMaxRows,
 			QueryTimeoutSec:     DefaultQueryTimeoutSec,
 			MaxConnections:      DefaultMaxConnections,
 			ShutdownTimeoutSec:  DefaultShutdownTimeoutSec,
@@ -136,6 +139,9 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Server.MaxRequestSizeBytes == 0 {
 		cfg.Server.MaxRequestSizeBytes = DefaultMaxRequestSize
+	}
+	if cfg.Server.MaxRows == 0 {
+		cfg.Server.MaxRows = DefaultMaxRows
 	}
 	if cfg.Server.QueryTimeoutSec == 0 {
 		cfg.Server.QueryTimeoutSec = DefaultQueryTimeoutSec

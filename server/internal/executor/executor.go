@@ -93,7 +93,6 @@ type Result struct {
 // ExecutionContext carries mutable session state and dependencies.
 type ExecutionContext struct {
 	Storage     storage.StorageEngine
-	CurrentDB   *string
 	Session     *Session
 	Metrics     *metrics.Collector
 	TxManager   *txmanager.Manager
@@ -117,6 +116,7 @@ type Executor struct {
 	embedder     ai.Embedder
 	wal          *wal.WAL
 	queryTimeout time.Duration
+	maxRows      int
 }
 
 func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Executor {
@@ -142,6 +142,13 @@ func (e *Executor) SetQueryTimeout(d time.Duration) {
 	e.queryTimeout = d
 }
 
+// SetMaxRows задаёт максимальное количество строк в результате SELECT.
+func (e *Executor) SetMaxRows(n int) {
+	if n > 0 {
+		e.maxRows = n
+	}
+}
+
 func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	start := time.Now()
 	cmd, err := CommandFactory(stmt)
@@ -149,7 +156,7 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 		return nil, err
 	}
 
-	var queryCtx context.Context
+	queryCtx := context.Background()
 	if e.queryTimeout > 0 {
 		var cancel context.CancelFunc
 		queryCtx, cancel = context.WithTimeout(context.Background(), e.queryTimeout)
@@ -158,7 +165,6 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 
 	ctx := &ExecutionContext{
 		Storage:     e.storage,
-		CurrentDB:   &sess.currentDB,
 		Session:     sess,
 		Metrics:     e.metrics,
 		TxManager:   e.txm,

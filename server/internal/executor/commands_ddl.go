@@ -53,8 +53,8 @@ func (c *DropDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if err := ctx.Storage.DropDatabase(c.stmt.DatabaseName); err != nil {
 		return nil, err
 	}
-	if ctx.CurrentDB != nil && strings.EqualFold(*ctx.CurrentDB, c.stmt.DatabaseName) {
-		*ctx.CurrentDB = ""
+	if strings.EqualFold(ctx.Session.CurrentDatabase(), c.stmt.DatabaseName) {
+		ctx.Session.SetCurrentDatabase("")
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Database '%s' dropped successfully.", c.stmt.DatabaseName)}, nil
 }
@@ -70,7 +70,7 @@ func (c *UseDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if !ctx.Storage.DatabaseExists(c.stmt.DatabaseName) {
 		return nil, fmt.Errorf("database '%s' does not exist", c.stmt.DatabaseName)
 	}
-	*ctx.CurrentDB = c.stmt.DatabaseName
+	ctx.Session.SetCurrentDatabase(c.stmt.DatabaseName)
 	return &Result{Type: "message", Message: fmt.Sprintf("Using database '%s'.", c.stmt.DatabaseName)}, nil
 }
 
@@ -539,7 +539,12 @@ func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	// NOTE: The USING expression is not yet parsed or stored.
 	// The policy is created but NOT enforced. This is prototype-only.
-	row := storage.Row{c.stmt.Name, c.stmt.TableName, c.stmt.ToUser, "HACK_USING"}
+	// TODO: Implement USING expression parsing and enforcement
+	usingSQL := ""
+	if c.stmt.Using != nil {
+		usingSQL = fmt.Sprintf("%v", c.stmt.Using)
+	}
+	row := storage.Row{c.stmt.Name, c.stmt.TableName, c.stmt.ToUser, usingSQL}
 	if _, err := ctx.Storage.InsertRows(dbName, policyTable, []storage.Row{row}); err != nil {
 		return nil, fmt.Errorf("insert policy: %w", err)
 	}

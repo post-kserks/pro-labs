@@ -63,7 +63,7 @@ func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.IsInTx() {
 		ctx.Session.TxManager.AddOp(ctx.Session.ActiveTx, txmanager.PendingOp{
 			Type:    "insert",
-			DB:      *ctx.CurrentDB,
+			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
 			Payload: c.stmt,
 		})
@@ -452,7 +452,7 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 		ctx.Session.TxManager.AddOp(ctx.Session.ActiveTx, txmanager.PendingOp{
 			Type:    "update",
-			DB:      *ctx.CurrentDB,
+			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
 			Payload: c.stmt,
 			OldRow:  oldRows,
@@ -641,7 +641,7 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 		ctx.Session.TxManager.AddOp(ctx.Session.ActiveTx, txmanager.PendingOp{
 			Type:    "delete",
-			DB:      *ctx.CurrentDB,
+			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
 			Payload: c.stmt,
 			Row:     deletedRows,

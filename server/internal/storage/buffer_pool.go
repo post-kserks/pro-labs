@@ -2,10 +2,12 @@ package storage
 
 import (
 	"container/list"
+	"fmt"
 	"sync"
 
 	"vaultdb/internal/storage/heap"
 	"vaultdb/internal/storage/page"
+	"vaultdb/internal/wal"
 )
 
 const defaultBufferPoolCapacity = 1024
@@ -18,14 +20,16 @@ type BufferPool struct {
 	cache    map[page.PageID]*list.Element // PageID → элемент в lru
 	lru      *list.List                    // двусвязный список для LRU (front = recently used)
 	count    int                           // текущее количество страниц в кэше
+	wal      *wal.WAL                      // WAL для записи full page images
 }
 
 // bufferEntry — запись в кэше.
 type bufferEntry struct {
-	pid    page.PageID
-	page   *page.Page
-	dirty  bool // страница была изменена и не сброшена на диск
-	pinCnt int  // количество активных пользователей (нельзя вытеснить)
+	pid          page.PageID
+	page         *page.Page
+	dirty        bool   // страница была изменена и не сброшена на диск
+	pinCnt       int    // количество активных пользователей (нельзя вытеснить)
+	imageWritten bool   // full page image уже записан в WAL
 }
 
 // NewBufferPool создаёт новый buffer pool с указанным capacity.
@@ -38,6 +42,13 @@ func NewBufferPool(capacity int) *BufferPool {
 		cache:    make(map[page.PageID]*list.Element, capacity),
 		lru:      list.New(),
 	}
+}
+
+// SetWAL устанавливает WAL для записи full page images.
+func (bp *BufferPool) SetWAL(w *wal.WAL) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+	bp.wal = w
 }
 
 // FetchPage загружает страницу из кэша или с диска.
@@ -70,8 +81,8 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile) (*page.Page,
 
 	// Если кэш полон — вытесняем LRU
 	for bp.count >= bp.capacity {
-		if !bp.evict(hf) {
-			// Не удалось вытестить (все страницы запинованы)
+		if err := bp.evict(hf); err != nil {
+			// Не удалось вытестить (все страницы запинованы или ошибка записи)
 			break
 		}
 	}
@@ -99,11 +110,33 @@ func (bp *BufferPool) UnpinPage(pid page.PageID, dirty bool) {
 		entry := elem.Value.(*bufferEntry)
 		if entry.pinCnt > 0 {
 			entry.pinCnt--
-			if dirty {
+			if dirty && !entry.dirty {
+				// Страница впервые помечена как грязная — записываем full page image в WAL
 				entry.dirty = true
+				if bp.wal != nil && !entry.imageWritten {
+					go bp.writeFullPageImage(entry)
+				}
 			}
 		}
 	}
+}
+
+// writeFullPageImage записывает полный образ страницы в WAL для защиты от torn pages.
+func (bp *BufferPool) writeFullPageImage(entry *bufferEntry) {
+	bp.mu.RLock()
+	if bp.wal == nil {
+		bp.mu.RUnlock()
+		return
+	}
+	w := bp.wal
+	pid := entry.pid
+	pageData := make([]byte, len(entry.page))
+	copy(pageData, entry.page[:])
+	entry.imageWritten = true
+	bp.mu.RUnlock()
+
+	// Пишем full page image в WAL (не блокируя buffer pool)
+	_ = w.WriteFullPageImage(0, "", "", pid.SegmentNo, pid.PageNo, pageData)
 }
 
 // InvalidatePage удаляет страницу из кэша (после прямой записи на диск).
@@ -125,22 +158,24 @@ func (bp *BufferPool) InvalidatePage(pid page.PageID) {
 // evict вытесняет самую старую незапинованную страницу из кэша.
 // Грязные страницы сбрасываются на диск перед удалением.
 // Возвращает true если удалось, false если все страницы запинованы.
-func (bp *BufferPool) evict(hf *heap.HeapFile) bool {
+func (bp *BufferPool) evict(hf *heap.HeapFile) error {
 	for elem := bp.lru.Back(); elem != nil; elem = elem.Prev() {
 		entry := elem.Value.(*bufferEntry)
 		if entry.pinCnt > 0 {
 			continue
 		}
 		if entry.dirty && hf != nil {
-			_ = hf.WritePage(entry.pid, entry.page)
+			if err := hf.WritePage(entry.pid, entry.page); err != nil {
+				return fmt.Errorf("evict: write page %v: %w", entry.pid, err)
+			}
 			entry.dirty = false
 		}
 		bp.lru.Remove(elem)
 		delete(bp.cache, entry.pid)
 		bp.count--
-		return true
+		return nil
 	}
-	return false
+	return fmt.Errorf("evict: all pages pinned")
 }
 
 // evictDirty сбрасывает грязную страницу на диск перед вытеснением.

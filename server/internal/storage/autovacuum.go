@@ -35,6 +35,11 @@ func NewAutoVacuum(engine StorageEngine, threshold float64, interval time.Durati
 }
 
 func (av *AutoVacuum) Run(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			av.logger.Error("panic in autovacuum", "panic", r)
+		}
+	}()
 	ticker := time.NewTicker(av.interval)
 	defer ticker.Stop()
 

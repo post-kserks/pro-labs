@@ -41,6 +41,9 @@ const (
 	OpRewriteBegin  byte = 0x61 // start table rewrite (ALTER TABLE ADD/DROP COLUMN)
 	OpRewriteData   byte = 0x62 // rewrite data chunk
 	OpRewriteCommit byte = 0x63 // rewrite complete
+
+	// Full page image for torn page protection
+	OpFullPageImage byte = 0x70 // полный образ страницы перед модификацией
 )
 
 const (
@@ -98,6 +101,15 @@ type WALRewritePayload struct {
 // CheckpointPayload — payload для OpCheckpoint
 type CheckpointPayload struct {
 	LSN uint64
+}
+
+// FullPageImagePayload — payload для OpFullPageImage (защита от torn pages)
+type FullPageImagePayload struct {
+	DB        string
+	Table     string
+	SegmentNo uint16
+	PageNo    uint32
+	PageData  []byte // полный образ страницы (8KB)
 }
 
 type WAL struct {
@@ -236,6 +248,27 @@ func (w *WAL) AppendWithTx(txID uint64, opType byte, payload interface{}) (uint6
 		return 0, fmt.Errorf("wal: marshal payload: %w", err)
 	}
 	return w.appendBytesLockedWithTx(txID, opType, payloadBytes)
+}
+
+// WriteFullPageImage записывает полный образ страницы в WAL для защиты от torn pages.
+// Вызывается ПЕРЕД модификацией страницы на диске.
+func (w *WAL) WriteFullPageImage(txID uint64, db, table string, segmentNo uint16, pageNo uint32, pageData []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	payload := FullPageImagePayload{
+		DB:        db,
+		Table:     table,
+		SegmentNo: segmentNo,
+		PageNo:    pageNo,
+		PageData:  pageData,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("wal: marshal full page image: %w", err)
+	}
+	_, err = w.appendBytesLockedWithTx(txID, OpFullPageImage, payloadBytes)
+	return err
 }
 
 func (w *WAL) appendBytesLockedWithTx(txID uint64, opType byte, payload []byte) (uint64, error) {

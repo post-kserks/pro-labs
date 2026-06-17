@@ -172,6 +172,13 @@ func (b *Broadcaster) Unsubscribe(id string) {
 }
 
 func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *ExecutionContext) {
+	defer func() {
+		if r := recover(); r != nil {
+			b.logger.Error("panic in live query notification",
+				"db", dbName, "table", tableName, "panic", r)
+		}
+	}()
+
 	// Snapshot matching subscriptions first so subscriber queries do not run
 	// while holding the broadcaster lock.
 	b.mu.RLock()

@@ -100,9 +100,12 @@ func evalFunctionCall(fn *parser.FunctionCall, row storage.Row, schema *storage.
 	if fn, ok := builtinFuncs[name]; ok {
 		return fn(args, ctx)
 	}
-	if ctx != nil && ctx.CurrentDB != nil && *ctx.CurrentDB != "" {
-		if result, err := executeUserDefinedFunction(*ctx.CurrentDB, name, args, ctx); err == nil {
-			return result, nil
+	if ctx != nil && ctx.Session != nil {
+		db := ctx.Session.CurrentDatabase()
+		if db != "" {
+			if result, err := executeUserDefinedFunction(db, name, args, ctx); err == nil {
+				return result, nil
+			}
 		}
 	}
 	return nil, fmt.Errorf("unknown function: %s", name)
@@ -513,6 +516,9 @@ func fnLpad(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 		return string(runes[:length]), nil
 	}
 	padRunes := []rune(pad)
+	if len(padRunes) == 0 {
+		return nil, fmt.Errorf("LPAD: pad string must not be empty")
+	}
 	var result []rune
 	remaining := length - int64(len(runes))
 	for int64(len(result)) < remaining {
@@ -540,6 +546,9 @@ func fnRpad(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 		return string(runes[:length]), nil
 	}
 	padRunes := []rune(pad)
+	if len(padRunes) == 0 {
+		return nil, fmt.Errorf("RPAD: pad string must not be empty")
+	}
 	result := make([]rune, 0, length)
 	result = append(result, runes...)
 	for int64(len(result)) < length {

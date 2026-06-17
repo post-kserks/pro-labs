@@ -9,10 +9,11 @@ import (
 )
 
 func requireCurrentDB(ctx *ExecutionContext) (string, error) {
-	if ctx.CurrentDB == nil || strings.TrimSpace(*ctx.CurrentDB) == "" {
+	db := ctx.Session.CurrentDatabase()
+	if strings.TrimSpace(db) == "" {
 		return "", fmt.Errorf("no active database selected; use USE <database>; first")
 	}
-	return *ctx.CurrentDB, nil
+	return db, nil
 }
 
 func resolveDatabase(ctx *ExecutionContext, requested string) (string, error) {

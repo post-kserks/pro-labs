@@ -39,7 +39,10 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("no active transaction")
 	}
 
-	tx := ctx.Session.ActiveTx
+	tx := ctx.Session.GetActiveTx()
+	if tx == nil {
+		return nil, fmt.Errorf("no active transaction")
+	}
 
 	// Читаем ops (из памяти или из spill файла)
 	ops, err := tx.ReadOps()
@@ -104,7 +107,10 @@ func (c *RollbackCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if !ctx.Session.IsInTx() {
 		return nil, fmt.Errorf("no active transaction")
 	}
-	tx := ctx.Session.ActiveTx
+	tx := ctx.Session.GetActiveTx()
+	if tx == nil {
+		return nil, fmt.Errorf("no active transaction")
+	}
 	ops, _ := tx.ReadOps()
 	opsCount := len(ops)
 

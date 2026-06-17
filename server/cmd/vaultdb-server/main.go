@@ -109,6 +109,8 @@ func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPor
 		MonitorPort:         monitorPort,
 		Version:             version,
 		MaxRequestSizeBytes: cfg.Server.MaxRequestSizeBytes,
+		MaxRows:             cfg.Server.MaxRows,
+		QueryTimeoutSec:     cfg.Server.QueryTimeoutSec,
 		AllowedOrigins:      cfg.Server.AllowedOrigins,
 		Storage:             store,
 		Auth:                authManager,
@@ -130,8 +132,23 @@ func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPor
 	return httpErrCh
 }
 
-func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, embedder ai.Embedder, serverWAL *wal.WAL, logger *slog.Logger, maxRequestSize int, queryTimeoutSec int) {
+func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, embedder ai.Embedder, serverWAL *wal.WAL, logger *slog.Logger, maxRequestSize int, queryTimeoutSec int, maxRows int) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("panic in connection handler",
+				"remote", conn.RemoteAddr(),
+				"panic", r)
+			sendError(conn, "", "internal server error", logger)
+		}
+	}()
 	defer conn.Close()
+
+	// Set TCP keepalive and idle timeout
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+	conn.SetDeadline(time.Now().Add(5 * time.Minute))
 
 	session := executor.NewSession(store, m, txm, br)
 	if embedder != nil {
@@ -142,6 +159,9 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 	}
 	if queryTimeoutSec > 0 {
 		session.SetQueryTimeout(time.Duration(queryTimeoutSec) * time.Second)
+	}
+	if maxRows > 0 {
+		session.SetMaxRows(maxRows)
 	}
 	defer func() {
 		if session.IsInTx() {
@@ -156,6 +176,8 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 	scanner.Buffer(make([]byte, 0, 64*1024), maxScannerBuffer)
 
 	for scanner.Scan() {
+		// Reset deadline on successful read
+		conn.SetDeadline(time.Now().Add(5 * time.Minute))
 		line := scanner.Bytes()
 
 		var req protocol.Request
@@ -210,7 +232,7 @@ func sendError(conn net.Conn, id, message string, logger *slog.Logger) bool {
 		Type:    "error",
 		Columns: []string{},
 		Rows:    [][]string{},
-		Message: message,
+		Message: sanitizeErrorMessage(message),
 	}
 	if err := writeResponse(conn, resp); err != nil {
 		logger.Debug("failed to send error response, client disconnected",
@@ -219,6 +241,21 @@ func sendError(conn net.Conn, id, message string, logger *slog.Logger) bool {
 		return false
 	}
 	return true
+}
+
+// sanitizeErrorMessage удаляет внутренние детали из сообщений об ошибках
+// перед отправкой клиенту. Сохраняет общее описание, но скрывает пути файлов
+// и технические детали реализации.
+func sanitizeErrorMessage(msg string) string {
+	// Если сообщение содержит путь к файлу — заменяем на общее описание
+	if strings.Contains(msg, "/") || strings.Contains(msg, "\\") {
+		return "internal storage error"
+	}
+	// Если сообщение слишком длинное — обрезаем
+	if len(msg) > 200 {
+		return msg[:200] + "..."
+	}
+	return msg
 }
 
 func sendResult(conn net.Conn, id string, result *executor.Result) error {
@@ -336,6 +373,11 @@ func main() {
 
 	// Start storage metrics background updater
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in metrics updater", "panic", r)
+			}
+		}()
 		ticker := time.NewTicker(metricsUpdateInterval)
 		defer ticker.Stop()
 		for {
@@ -505,7 +547,7 @@ func main() {
 				defer activeConnections.Add(-1)
 				defer metricsCollector.DecConnections()
 				defer connPool.Release(connInfo) // Release back to pool
-				handleConnection(c, store, metricsCollector, txm, br, authManager, embedder, serverWAL, logger, maxRequestSize, cfg.Server.QueryTimeoutSec)
+				handleConnection(c, store, metricsCollector, txm, br, authManager, embedder, serverWAL, logger, maxRequestSize, cfg.Server.QueryTimeoutSec, cfg.Server.MaxRows)
 			}(conn, connObj)
 		}
 	}()

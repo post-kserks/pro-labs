@@ -133,6 +133,18 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 		return fmt.Errorf("wal undo: %w", err)
 	}
 
+	// Сначала fsync все heap-файлы, чтобы данные были на диске
+	e.mu.RLock()
+	for _, t := range e.tables {
+		if t.heap != nil {
+			if err := t.heap.Sync(); err != nil {
+				e.mu.RUnlock()
+				return fmt.Errorf("heap sync during recovery: %w", err)
+			}
+		}
+	}
+	e.mu.RUnlock()
+
 	// Очищаем WAL после успешного recovery
 	if err := e.wal.Checkpoint(); err != nil {
 		return fmt.Errorf("wal checkpoint after recovery: %w", err)
@@ -201,7 +213,7 @@ func (e *PageStorageEngine) undoPhase(inProgress map[uint64]bool) error {
 		}
 
 		// Записать в WAL что транзакция откатилась
-		e.wal.Append(wal.OpAbort, nil)
+		e.wal.AppendWithTx(xid, wal.OpAbort, nil)
 	}
 	return nil
 }
@@ -349,7 +361,7 @@ func (e *PageStorageEngine) undoDelete(p wal.WALPageDeletePayload) error {
 	}
 
 	// Undo DELETE = снять XMax (восстановить tuple)
-	pid := page.PageID{SegmentNo: p.SegmentNo, PageNo: p.PageNo}
+	pid := page.PageID{TableID: t.tableID, SegmentNo: p.SegmentNo, PageNo: p.PageNo}
 	var pg page.Page
 	if err := t.heap.ReadPage(pid, &pg); err != nil {
 		return err
@@ -428,6 +440,12 @@ func (e *PageStorageEngine) doCheckpoint() error {
 		return fmt.Errorf("checkpoint: write record: %w", err)
 	}
 	e.mu.Unlock()
+
+	// Шаг 5: truncate WAL после успешного checkpoint
+	// Все dirty pages уже сброшены на диск, безопасно удалять старые записи
+	if err := e.wal.Checkpoint(); err != nil {
+		return fmt.Errorf("checkpoint: truncate wal: %w", err)
+	}
 
 	return nil
 }
@@ -525,7 +543,9 @@ func (e *PageStorageEngine) DropDatabase(name string) error {
 	prefix := name + "/"
 	for key, t := range e.tables {
 		if strings.HasPrefix(key, prefix) {
-			_ = t.heap.Close()
+			if err := t.heap.Close(); err != nil {
+				slog.Warn("failed to close heap during drop database", "key", key, "error", err)
+			}
 			delete(e.tables, key)
 			delete(e.catalog.LastModified, key)
 			delete(e.catalog.RowCounts, key)
@@ -645,11 +665,12 @@ func (e *PageStorageEngine) getTableForRead(db, table string) (*pageTable, error
 	// Быстрый путь: таблица уже в кэше
 	e.mu.RLock()
 	t, ok := e.tables[key]
-	e.mu.RUnlock()
 	if ok {
 		t.mu.RLock()
+		e.mu.RUnlock()
 		return t, nil
 	}
+	e.mu.RUnlock()
 
 	// Медленный путь: открываем и кэшируем
 	e.mu.Lock()
@@ -694,11 +715,12 @@ func (e *PageStorageEngine) getTableForWrite(db, table string) (*pageTable, erro
 	// Быстрый путь
 	e.mu.RLock()
 	t, ok := e.tables[key]
-	e.mu.RUnlock()
 	if ok {
 		t.mu.Lock()
+		e.mu.RUnlock()
 		return t, nil
 	}
+	e.mu.RUnlock()
 
 	// Медленный путь
 	e.mu.Lock()
@@ -783,7 +805,9 @@ func (e *PageStorageEngine) DropTable(dbName, tableName string) error {
 	defer e.mu.Unlock()
 	key := dbName + "/" + tableName
 	if t, ok := e.tables[key]; ok {
-		_ = t.heap.Close()
+		if err := t.heap.Close(); err != nil {
+			slog.Warn("failed to close heap during drop table", "key", key, "error", err)
+		}
 		delete(e.tables, key)
 	}
 	path := e.tablePath(dbName, tableName)
