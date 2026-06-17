@@ -112,6 +112,9 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 	// Clean up any incomplete ALTER TABLE rewrites before WAL replay
 	e.recoverIncompleteRewrites()
 
+	// Clean up any orphaned vacuum shadow directories
+	e.recoverOrphanedVacuums()
+
 	if e.wal == nil {
 		return nil
 	}

@@ -889,3 +889,116 @@ func TestAlterTableRewriteRecoveryNoTempDir(t *testing.T) {
 		t.Fatalf("expected 1 row after recovery, got %d", count)
 	}
 }
+
+func TestVacuumRecovery(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create WAL and page engine
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create database and table
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+		{int64(3), "Charlie"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify original row count
+	count, err := engine.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 rows before crash, got %d", count)
+	}
+
+	// Close engine cleanly
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate incomplete vacuum: create a .vacuum shadow directory
+	// This mimics the state after a crash during vacuum (shadow created, but rename not done)
+	vacuumPath := filepath.Join(dir, "pagedb", "testdb", "users.vacuum")
+	if err := os.MkdirAll(vacuumPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Write some dummy data to make the shadow directory realistic
+	if err := os.WriteFile(filepath.Join(vacuumPath, "_schema.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the .vacuum directory exists before recovery
+	if _, err := os.Stat(vacuumPath); os.IsNotExist(err) {
+		t.Fatal("expected .vacuum directory to exist before recovery")
+	}
+
+	// Reopen WAL and engine — recovery should clean up the orphaned vacuum
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Run WAL recovery (including orphaned vacuum cleanup)
+	if err := engine2.RecoverFromWAL(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify original table is intact
+	count, err = engine2.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 rows after recovery, got %d", count)
+	}
+
+	// Verify the .vacuum directory was cleaned up
+	if _, err := os.Stat(vacuumPath); !os.IsNotExist(err) {
+		t.Fatal("expected .vacuum directory to be removed after recovery")
+	}
+
+	// Verify data content
+	rows, err := engine2.ReadCurrentRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+}

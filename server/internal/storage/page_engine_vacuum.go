@@ -3,7 +3,10 @@ package storage
 import (
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"vaultdb/internal/storage/heap"
@@ -138,6 +141,36 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		FileSizeAfter:  e.tableSizeLocked(dbName, tableName),
 		DurationMs:     float64(time.Since(start).Microseconds()) / 1000.0,
 	}, nil
+}
+
+// recoverOrphanedVacuums scans all database directories for leftover .vacuum
+// shadow directories created during incomplete vacuum operations. If a crash
+// occurs after the shadow file is created but before the atomic rename, the
+// orphaned .vacuum directory is left behind. Since the original table file
+// is still intact (rename hasn't happened yet), we simply remove the orphan.
+func (e *PageStorageEngine) recoverOrphanedVacuums() {
+	dbs, err := os.ReadDir(e.rootDir)
+	if err != nil {
+		return
+	}
+	for _, dbEntry := range dbs {
+		if !dbEntry.IsDir() {
+			continue
+		}
+		dbDir := filepath.Join(e.rootDir, dbEntry.Name())
+		entries, err := os.ReadDir(dbDir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() && strings.HasSuffix(entry.Name(), ".vacuum") {
+				vacuumPath := filepath.Join(dbDir, entry.Name())
+				slog.Warn("recovering orphaned vacuum directory",
+					"path", vacuumPath)
+				os.RemoveAll(vacuumPath)
+			}
+		}
+	}
 }
 
 func (e *PageStorageEngine) tableSizeLocked(db, table string) int64 {
