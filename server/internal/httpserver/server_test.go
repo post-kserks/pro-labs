@@ -166,3 +166,42 @@ func TestLiveQueryStreamsWithToken(t *testing.T) {
 		t.Fatalf("no SSE payload in response: %q", rec.Body.String())
 	}
 }
+
+func TestHealthEndpointMonitorPort(t *testing.T) {
+	srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "ci"}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	srv.monitorMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("monitor /health status %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	var body map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["version"] == nil {
+		t.Fatal("monitor /health should return version field")
+	}
+	if body["uptime_s"] == nil {
+		t.Fatal("monitor /health should return uptime_s field")
+	}
+	if body["connections"] == nil {
+		t.Fatal("monitor /health should return connections field")
+	}
+	if body["wal_enabled"] == nil {
+		t.Fatal("monitor /health should return wal_enabled field")
+	}
+	if body["time_travel"] == nil {
+		t.Fatal("monitor /health should return time_travel field")
+	}
+	checks, ok := body["checks"].(map[string]interface{})
+	if !ok {
+		t.Fatal("monitor /health should return checks field")
+	}
+	if checks["storage"] == nil {
+		t.Fatal("monitor /health should return storage check")
+	}
+}

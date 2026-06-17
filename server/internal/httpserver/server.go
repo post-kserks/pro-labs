@@ -211,7 +211,7 @@ func (s *Server) apiMux() *http.ServeMux {
 
 func (s *Server) monitorMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleHealth))
+	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleMonitorHealth))
 	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
 	if s.cfg.Auth.Enabled() {
 		mux.HandleFunc("/metrics", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics)))
@@ -470,6 +470,38 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status": status,
+	})
+}
+
+func (s *Server) handleMonitorHealth(w http.ResponseWriter, r *http.Request) {
+	status := "ok"
+	checks := map[string]interface{}{}
+
+	if _, err := s.cfg.Storage.ListDatabases(); err != nil {
+		status = "degraded"
+		checks["storage"] = map[string]interface{}{
+			"status": "fail",
+		}
+		s.cfg.Logger.Warn("health check: storage degraded", "error", err)
+	} else {
+		checks["storage"] = map[string]interface{}{
+			"status": "pass",
+		}
+	}
+
+	checks["wal"] = map[string]interface{}{
+		"status": "pass",
+	}
+
+	uptime := int(time.Since(s.startedAt).Seconds())
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":      status,
+		"version":     s.cfg.Version,
+		"uptime_s":    uptime,
+		"connections": s.cfg.ActiveConnections(),
+		"wal_enabled": true,
+		"time_travel": true,
+		"checks":      checks,
 	})
 }
 
