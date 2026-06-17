@@ -2,6 +2,8 @@ package storage
 
 import (
 	"testing"
+
+	"vaultdb/internal/txmanager"
 )
 
 // Компайл-проверка: PageStorageEngine реализует StorageEngine.
@@ -297,5 +299,54 @@ func TestPageEngineSecondaryIndexes(t *testing.T) {
 	}
 	if _, found := e.FindIndexForColumn("db", "users", "name"); found {
 		t.Fatal("FindIndexForColumn should report no index after drop")
+	}
+}
+
+func TestMVCCVisibility(t *testing.T) {
+	mgr := txmanager.NewManager()
+	dir := t.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, mgr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("db", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert row via auto-commit (page engine assigns createdTx)
+	_, err = e.InsertRows("db", "users", []Row{{int64(1), "alice", 1.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Begin a new transaction — previously committed rows must remain visible
+	_ = mgr.Begin()
+	rows, err := e.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("committed row not visible after Begin: got %d rows, want 1", len(rows))
+	}
+	if rows[0][0] != int64(1) || rows[0][1] != "alice" {
+		t.Fatalf("wrong row data: %#v", rows[0])
+	}
+
+	// Insert another row, commit via auto-commit
+	_, err = e.InsertRows("db", "users", []Row{{int64(2), "bob", 2.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err = e.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
 	}
 }

@@ -263,6 +263,27 @@ func (tx *Transaction) Rollback() {
 	}
 }
 
+// IsCommitted возвращает true, если транзакция с указанным xid считается завершённой.
+// Упрощение: все xid < текущего счётчика считаются committed.
+func (m *Manager) IsCommitted(xid uint64) bool {
+	return xid < m.counter.Load()
+}
+
+// EnsureCounterAtLeast гарантирует, что счётчик txid не меньше n.
+// Используется при загрузке catalog page engine, чтобы ранее выделенные
+// txid считались committed.
+func (m *Manager) EnsureCounterAtLeast(n uint64) {
+	for {
+		cur := m.counter.Load()
+		if n <= cur {
+			return
+		}
+		if m.counter.CompareAndSwap(cur, n) {
+			return
+		}
+	}
+}
+
 // CleanupSpillFiles удаляет старые spill файлы (вызывается при старте сервера).
 func CleanupSpillFiles(dir string) {
 	entries, err := os.ReadDir(dir)

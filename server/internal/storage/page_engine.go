@@ -102,6 +102,9 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) 
 		if e.catalog.RowCounts == nil {
 			e.catalog.RowCounts = make(map[string]int)
 		}
+		if txMgr != nil && e.catalog.CurrentTxID > 0 {
+			txMgr.EnsureCounterAtLeast(e.catalog.CurrentTxID + 1)
+		}
 	}
 	return e, nil
 }
@@ -561,6 +564,9 @@ func (e *PageStorageEngine) nextTxLocked() uint64 {
 	})
 	if len(e.catalog.TxTimes) > maxTxTimesEntries {
 		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
+	}
+	if e.txMgr != nil {
+		e.txMgr.EnsureCounterAtLeast(e.catalog.CurrentTxID + 1)
 	}
 	return e.catalog.CurrentTxID
 }

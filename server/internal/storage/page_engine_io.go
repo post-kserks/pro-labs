@@ -442,6 +442,9 @@ func (e *PageStorageEngine) readRows(dbName, tableName string, asOf uint64) ([]R
 	err = e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
 		if asOf == 0 {
 			if deletedTx == 0 {
+				if e.txMgr != nil && !e.txMgr.IsCommitted(createdTx) {
+					return false, nil
+				}
 				rows = append(rows, row)
 			}
 			return false, nil
