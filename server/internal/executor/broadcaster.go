@@ -172,17 +172,9 @@ func (b *Broadcaster) Unsubscribe(id string) {
 }
 
 func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *ExecutionContext) {
-	defer func() {
-		if r := recover(); r != nil {
-			b.logger.Error("panic in live query notification",
-				"db", dbName, "table", tableName, "panic", r)
-		}
-	}()
-
 	// Snapshot matching subscriptions first so subscriber queries do not run
 	// while holding the broadcaster lock.
 	b.mu.RLock()
-	logger := b.logger
 	matched := make([]*Subscription, 0, len(b.subscriptions))
 	for _, s := range b.subscriptions {
 		if s.DB == dbName && s.Query.TableName == tableName {
@@ -192,20 +184,27 @@ func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *Executio
 	b.mu.RUnlock()
 
 	for _, s := range matched {
-		// Re-run the query in the subscription's DB context
-		origDB := ctx.Session.CurrentDatabase()
-		ctx.Session.SetCurrentDatabase(s.DB)
-		cmd := &SelectCommand{stmt: s.Query}
-		res, err := cmd.Execute(ctx)
-		ctx.Session.SetCurrentDatabase(origDB)
-		if err != nil {
-			continue
-		}
-		if !s.notify(res, logger) {
-			// Клиент отвалился или слишком медленный — отписываем и
-			// закрываем канал, чтобы читатель узнал об отписке.
-			b.Unsubscribe(s.ID)
-			s.Close()
-		}
+		sub := s
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					b.logger.Error("panic in live query notification",
+						"db", dbName, "table", tableName, "panic", r)
+				}
+			}()
+
+			origDB := ctx.Session.CurrentDatabase()
+			ctx.Session.SetCurrentDatabase(sub.DB)
+			cmd := &SelectCommand{stmt: sub.Query}
+			res, err := cmd.Execute(ctx)
+			ctx.Session.SetCurrentDatabase(origDB)
+			if err != nil {
+				return
+			}
+			if !sub.notify(res, b.logger) {
+				b.Unsubscribe(sub.ID)
+				sub.Close()
+			}
+		}()
 	}
 }

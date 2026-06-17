@@ -4,6 +4,9 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	"vaultdb/internal/parser"
+	"vaultdb/internal/storage"
 )
 
 func TestSubscriptionPolicyEvict(t *testing.T) {
@@ -71,4 +74,52 @@ func TestSubscriptionCloseIsIdempotent(t *testing.T) {
 	if s.notify(&Result{}, slog.Default()) {
 		t.Fatal("notify after close must request unsubscribe")
 	}
+}
+
+func TestBroadcasterAsync(t *testing.T) {
+	store := NewMockStorage()
+	store.databases["testdb"] = true
+	store.ensureDB("testdb")
+	store.tables["testdb"]["items"] = &storage.TableSchema{
+		Name: "items",
+		Columns: []storage.ColumnSchema{
+			{Name: "id", Type: "INT"},
+		},
+	}
+	store.rows["testdb"]["items"] = []storage.Row{{int64(1)}}
+
+	session := newTestSession(store)
+	session.SetCurrentDatabase("testdb")
+	ctx := &ExecutionContext{
+		Storage: store,
+		Session: session,
+	}
+
+	b := NewBroadcaster()
+	b.Configure(PolicyBlock, 5*time.Second, 1, slog.Default())
+
+	sub := b.NewSubscription("slow", &parser.SelectStatement{
+		TableName: "items",
+		Columns: []parser.SelectColumn{
+			{Expr: &parser.ColumnRef{Name: "id"}},
+		},
+	}, "testdb")
+	b.Subscribe(sub)
+
+	// Fill the channel so the next notify will block waiting for a consumer.
+	sub.Send <- &Result{}
+
+	start := time.Now()
+	b.NotifyTableChanged("testdb", "items", ctx)
+	elapsed := time.Since(start)
+
+	// The call must return quickly because queries run in goroutines.
+	// Without goroutines it would block for ~5 seconds.
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("NotifyTableChanged blocked for %v, expected async return", elapsed)
+	}
+
+	// Allow goroutines to finish before cleanup.
+	time.Sleep(100 * time.Millisecond)
+	sub.Close()
 }
