@@ -219,9 +219,11 @@ func (a *boolOrAgg) Result() interface{} {
 	return a.result
 }
 
-// stddevAgg handles STDDEV(col).
+// stddevAgg handles STDDEV(col) using Welford's algorithm — O(1) memory.
 type stddevAgg struct {
-	values []float64
+	n    int64
+	mean float64
+	m2   float64
 }
 
 func (a *stddevAgg) Add(_, v interface{}) {
@@ -229,39 +231,30 @@ func (a *stddevAgg) Add(_, v interface{}) {
 		return
 	}
 	if f, ok := toFloat(v); ok {
-		a.values = append(a.values, f)
+		a.n++
+		delta := f - a.mean
+		a.mean += delta / float64(a.n)
+		delta2 := f - a.mean
+		a.m2 += delta * delta2
 	}
 }
 
 func (a *stddevAgg) Result() interface{} {
-	n := len(a.values)
-	if n == 0 {
-		return nil
-	}
-	if n == 1 {
+	if a.n < 2 {
+		if a.n == 0 {
+			return nil
+		}
 		return 0.0
 	}
-	// Вычисляем среднее
-	var sum float64
-	for _, v := range a.values {
-		sum += v
-	}
-	mean := sum / float64(n)
-
-	// Вычисляем дисперсию
-	var variance float64
-	for _, v := range a.values {
-		diff := v - mean
-		variance += diff * diff
-	}
-	variance /= float64(n - 1) // sample variance
-
+	variance := a.m2 / float64(a.n-1)
 	return math.Sqrt(variance)
 }
 
-// varianceAgg handles VARIANCE(col).
+// varianceAgg handles VARIANCE(col) using Welford's algorithm — O(1) memory.
 type varianceAgg struct {
-	values []float64
+	n    int64
+	mean float64
+	m2   float64
 }
 
 func (a *varianceAgg) Add(_, v interface{}) {
@@ -269,30 +262,22 @@ func (a *varianceAgg) Add(_, v interface{}) {
 		return
 	}
 	if f, ok := toFloat(v); ok {
-		a.values = append(a.values, f)
+		a.n++
+		delta := f - a.mean
+		a.mean += delta / float64(a.n)
+		delta2 := f - a.mean
+		a.m2 += delta * delta2
 	}
 }
 
 func (a *varianceAgg) Result() interface{} {
-	n := len(a.values)
-	if n == 0 {
-		return nil
-	}
-	if n == 1 {
+	if a.n < 2 {
+		if a.n == 0 {
+			return nil
+		}
 		return 0.0
 	}
-	var sum float64
-	for _, v := range a.values {
-		sum += v
-	}
-	mean := sum / float64(n)
-
-	var variance float64
-	for _, v := range a.values {
-		diff := v - mean
-		variance += diff * diff
-	}
-	return variance / float64(n-1) // sample variance
+	return a.m2 / float64(a.n-1)
 }
 
 // jsonObjectAgg собирает ключи и значения в JSON объект.
