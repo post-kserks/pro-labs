@@ -167,6 +167,51 @@ func TestLiveQueryStreamsWithToken(t *testing.T) {
 	}
 }
 
+func TestRateLimitingOnAllEndpoints(t *testing.T) {
+	endpoints := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, "/api/query", `{"database":"shop","query":"SELECT * FROM users;"}`},
+		{http.MethodGet, "/api/databases", ""},
+		{http.MethodGet, "/api/databases/shop/tables", ""},
+		{http.MethodGet, "/api/databases/shop/tables/users/data", ""},
+	}
+
+	for _, ep := range endpoints {
+		rl := NewRateLimiter(1, 1)
+		defer rl.Close()
+
+		srv := newTestServer(t, mustAuth(t, false, nil))
+		srv.cfg.RateLimiter = rl
+		mux := srv.apiMux()
+
+		rec := httptest.NewRecorder()
+		var req *http.Request
+		if ep.body != "" {
+			req = httptest.NewRequest(ep.method, ep.path, strings.NewReader(ep.body))
+		} else {
+			req = httptest.NewRequest(ep.method, ep.path, nil)
+		}
+		mux.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			t.Fatalf("first request to %s should not be rate limited", ep.path)
+		}
+
+		rec = httptest.NewRecorder()
+		if ep.body != "" {
+			req = httptest.NewRequest(ep.method, ep.path, strings.NewReader(ep.body))
+		} else {
+			req = httptest.NewRequest(ep.method, ep.path, nil)
+		}
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("second request to %s should be rate limited, got %d", ep.path, rec.Code)
+		}
+	}
+}
+
 func TestHealthEndpointMonitorPort(t *testing.T) {
 	srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "ci"}))
 

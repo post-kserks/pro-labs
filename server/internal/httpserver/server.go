@@ -183,11 +183,11 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) apiMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/api/query", s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleQuery)))
-	mux.HandleFunc("/api/live", s.cfg.Auth.Middleware(s.handleLiveQuery))
-	mux.HandleFunc("/api/docs/openapi.json", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleOpenAPI)))
-	mux.HandleFunc("/api/databases", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleListDatabases)))
-	mux.HandleFunc("/api/databases/", s.cfg.Auth.Middleware(s.handleDatabasesSubroutes))
+	mux.HandleFunc("/api/query", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleQuery))))
+	mux.HandleFunc("/api/live", s.withRateLimit(s.cfg.Auth.Middleware(s.handleLiveQuery)))
+	mux.HandleFunc("/api/docs/openapi.json", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleOpenAPI))))
+	mux.HandleFunc("/api/databases", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleListDatabases))))
+	mux.HandleFunc("/api/databases/", s.withRateLimit(s.cfg.Auth.Middleware(s.handleDatabasesSubroutes)))
 
 	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleHealth))
 	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
@@ -236,6 +236,13 @@ func (s *Server) newSession() *executor.Session {
 	return sess
 }
 
+func (s *Server) withRateLimit(next http.HandlerFunc) http.HandlerFunc {
+	if s.cfg.RateLimiter == nil {
+		return next
+	}
+	return s.cfg.RateLimiter.Middleware(next)
+}
+
 func (s *Server) withMethod(method string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != method {
@@ -247,13 +254,6 @@ func (s *Server) withMethod(method string, next http.HandlerFunc) http.HandlerFu
 }
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.RateLimiter != nil {
-		key := extractClientIP(r, nil)
-		if !s.cfg.RateLimiter.Allow(key) {
-			writeError(w, http.StatusTooManyRequests, errCodeRateLimited, "rate limit exceeded")
-			return
-		}
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
 	var req struct {
 		Database string `json:"database"`
