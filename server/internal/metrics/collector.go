@@ -96,7 +96,10 @@ type Collector struct {
 	storageRows map[string]map[string]int64
 }
 
-const defaultLatencyBufSize = 10000
+const (
+	defaultLatencyBufSize = 10000
+	maxStorageRowMetrics  = 1000
+)
 
 // Boundaries для histogram в секундах
 var defaultBuckets = []float64{
@@ -321,12 +324,14 @@ func (c *Collector) Render() string {
 			"\n# HELP vaultdb_storage_rows Total rows per table (current versions)\n")
 		b.WriteString("# TYPE vaultdb_storage_rows gauge\n")
 
-		// Сортируем для детерминированного вывода
 		dbs := make([]string, 0, len(c.storageRows))
 		for db := range c.storageRows {
 			dbs = append(dbs, db)
 		}
 		sort.Strings(dbs)
+
+		totalMetrics := 0
+		overflow := false
 
 		for _, db := range dbs {
 			tables := make([]string, 0, len(c.storageRows[db]))
@@ -335,10 +340,22 @@ func (c *Collector) Render() string {
 			}
 			sort.Strings(tables)
 			for _, t := range tables {
+				if totalMetrics >= maxStorageRowMetrics {
+					overflow = true
+					break
+				}
 				fmt.Fprintf(&b,
 					`vaultdb_storage_rows{database="%s",table="%s"} %d`+"\n",
 					sanitizeMetricLabel(db), sanitizeMetricLabel(t), c.storageRows[db][t])
+				totalMetrics++
 			}
+			if overflow {
+				break
+			}
+		}
+
+		if overflow {
+			fmt.Fprintf(&b, "vaultdb_storage_rows_overflow 1\n")
 		}
 	}
 

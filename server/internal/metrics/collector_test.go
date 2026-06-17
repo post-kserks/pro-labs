@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -37,4 +38,56 @@ func BenchmarkRecordQuery(b *testing.B) {
 			c.RecordQuery("select", "ok", time.Millisecond)
 		}
 	})
+}
+
+func TestMetricsCardinalityLimit(t *testing.T) {
+	c := New()
+
+	for i := 0; i < 1005; i++ {
+		db := "db"
+		if i >= 1000 {
+			db = "overflow_db"
+		}
+		c.UpdateStorageRows(db, fmt.Sprintf("table_%d", i), int64(i))
+	}
+
+	out := c.Render()
+
+	count := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "vaultdb_storage_rows{") {
+			count++
+		}
+	}
+	if count != maxStorageRowMetrics {
+		t.Errorf("expected %d storage_rows metrics, got %d", maxStorageRowMetrics, count)
+	}
+
+	if !strings.Contains(out, "vaultdb_storage_rows_overflow 1") {
+		t.Error("expected vaultdb_storage_rows_overflow 1 when limit exceeded")
+	}
+}
+
+func TestMetricsCardinalityNoOverflow(t *testing.T) {
+	c := New()
+
+	for i := 0; i < 100; i++ {
+		c.UpdateStorageRows("db", fmt.Sprintf("table_%d", i), int64(i))
+	}
+
+	out := c.Render()
+
+	count := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "vaultdb_storage_rows{") {
+			count++
+		}
+	}
+	if count != 100 {
+		t.Errorf("expected 100 storage_rows metrics, got %d", count)
+	}
+
+	if strings.Contains(out, "vaultdb_storage_rows_overflow") {
+		t.Error("unexpected vaultdb_storage_rows_overflow when under limit")
+	}
 }
