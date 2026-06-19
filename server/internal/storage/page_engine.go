@@ -154,6 +154,9 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 	}
 	e.mu.RUnlock()
 
+	// Recalculate catalog from actual table state to fix any inconsistencies
+	e.recalculateCatalog()
+
 	// Очищаем WAL после успешного recovery
 	if err := e.wal.Checkpoint(); err != nil {
 		return fmt.Errorf("wal checkpoint after recovery: %w", err)
@@ -163,6 +166,71 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 		"replayed", len(committed),
 		"rolled_back", len(inProgress))
 
+	return nil
+}
+
+// recalculateCatalog rebuilds catalog row counts from actual table state.
+// Called after WAL replay to fix any inconsistencies between catalog and heap.
+func (e *PageStorageEngine) recalculateCatalog() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Ensure all tables on disk are opened in e.tables
+	if err := e.ensureAllTablesOpen(); err != nil {
+		slog.Warn("failed to discover tables for catalog recalculation", "error", err)
+	}
+
+	for key, t := range e.tables {
+		count := 0
+		if err := e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, _ Row) (bool, error) {
+			if deletedTx == 0 {
+				if e.txMgr != nil && !e.txMgr.IsCommitted(createdTx) {
+					return false, nil
+				}
+				count++
+			}
+			return false, nil
+		}); err != nil {
+			slog.Warn("failed to recalculate catalog", "table", key, "error", err)
+			continue
+		}
+		e.catalog.RowCounts[key] = count
+	}
+
+	if err := e.saveCatalogLocked(); err != nil {
+		slog.Error("failed to save recalculated catalog", "error", err)
+	}
+}
+
+// ensureAllTablesOpen discovers all tables on disk and opens them into e.tables.
+func (e *PageStorageEngine) ensureAllTablesOpen() error {
+	dbs, err := os.ReadDir(e.rootDir)
+	if err != nil {
+		return err
+	}
+	for _, dbEntry := range dbs {
+		if !dbEntry.IsDir() || strings.HasPrefix(dbEntry.Name(), "_") {
+			continue
+		}
+		dbName := dbEntry.Name()
+		tables, err := os.ReadDir(e.dbPath(dbName))
+		if err != nil {
+			continue
+		}
+		for _, tblEntry := range tables {
+			if !tblEntry.IsDir() {
+				continue
+			}
+			tableName := tblEntry.Name()
+			key := dbName + "/" + tableName
+			if _, ok := e.tables[key]; ok {
+				continue
+			}
+			if _, err := e.getTableLocked(dbName, tableName, true); err != nil {
+				slog.Warn("failed to open table for catalog recalculation", "db", dbName, "table", tableName, "error", err)
+			}
+		}
+	}
 	return nil
 }
 

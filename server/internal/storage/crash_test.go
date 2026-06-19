@@ -1106,3 +1106,113 @@ func TestFullPageWriteRecovery(t *testing.T) {
 		t.Fatalf("row 1 mismatch: got %v", rows[1])
 	}
 }
+
+func TestCatalogRecalculationAfterWALRecovery(t *testing.T) {
+	dir := t.TempDir()
+
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert 3 rows
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+		{int64(3), "Charlie"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete 1 row (Bob)
+	if _, err := engine.DeleteRows("testdb", "users", []int{1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify catalog before crash
+	count, err := engine.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 rows before crash, got %d", count)
+	}
+
+	// Simulate crash: close WAL without checkpoint (catalog is NOT saved after last operations)
+	w.Close()
+
+	// Corrupt the catalog to simulate inconsistency
+	catalogPath := filepath.Join(dir, "pagedb", "_catalog.json")
+	catalogData := []byte(`{"current_tx_id":100,"last_modified":{},"row_counts":{"testdb/users":999},"tx_times":[]}`)
+	if err := os.WriteFile(catalogPath, catalogData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopen — catalog will load with wrong row count (999)
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Before recovery, catalog shows stale wrong count
+	wrongCount, err := engine2.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wrongCount != 999 {
+		t.Fatalf("expected stale count 999 before recovery, got %d", wrongCount)
+	}
+
+	// Run WAL recovery — should recalculate catalog from heap
+	if err := engine2.RecoverFromWAL(); err != nil {
+		t.Fatal(err)
+	}
+
+	// After recovery, catalog should match actual table state
+	correctCount, err := engine2.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if correctCount != 2 {
+		t.Fatalf("expected 2 rows after catalog recalculation, got %d", correctCount)
+	}
+
+	// Verify actual data is accessible
+	rows, err := engine2.ReadCurrentRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 readable rows, got %d", len(rows))
+	}
+}
