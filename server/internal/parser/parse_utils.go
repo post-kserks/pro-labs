@@ -588,22 +588,6 @@ func (p *sqlParser) parseLiteralValue() (Value, error) {
 	return value, nil
 }
 
-func (p *sqlParser) parseIdentifierList(context string) ([]string, error) {
-	items := make([]string, 0, 4)
-	for {
-		name, err := p.consumeIdent(context)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, name)
-		if p.current().Type != lexer.TOKEN_COMMA {
-			break
-		}
-		p.advance()
-	}
-	return items, nil
-}
-
 func (p *sqlParser) parseIdentifierListUntilRParen(context string) ([]string, error) {
 	items := make([]string, 0, 4)
 	for {

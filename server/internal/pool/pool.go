@@ -195,9 +195,9 @@ func (p *Pool) Stats() PoolStats {
 
 // isHealthy проверяет, живо ли соединение.
 func (p *Pool) isHealthy(conn *Connection) bool {
-	conn.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+	_ = conn.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 	_, err := conn.conn.Read(make([]byte, 0))
-	conn.conn.SetReadDeadline(time.Time{})
+	_ = conn.conn.SetReadDeadline(time.Time{})
 
 	if err == nil {
 		return true

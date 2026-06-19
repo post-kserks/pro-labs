@@ -46,7 +46,7 @@ func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float64, error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			// Exponential backoff: 500ms, 1s, 2s
-			backoff := time.Duration(500<<uint(attempt-1)) * time.Millisecond
+			backoff := time.Duration(500<<uint(attempt-1)) * time.Millisecond //nolint:gosec // attempt is bounded by maxAttempts=3
 
 			select {
 			case <-ctx.Done():

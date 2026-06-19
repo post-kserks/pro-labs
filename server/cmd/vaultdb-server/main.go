@@ -290,8 +290,14 @@ func sendError(conn net.Conn, id, message string, logger *slog.Logger) bool {
 // перед отправкой клиенту. Сохраняет общее описание, но скрывает пути файлов
 // и технические детали реализации.
 func sanitizeErrorMessage(msg string) string {
-	// Если сообщение содержит путь к файлу — заменяем на общее описание
-	if strings.Contains(msg, "/") || strings.Contains(msg, "\\") {
+	// Detect filesystem paths: starts with / or contains common path patterns
+	lower := strings.ToLower(msg)
+	if strings.HasPrefix(msg, "/") ||
+		strings.Contains(lower, "/go/src/") ||
+		strings.Contains(lower, "\\go\\src\\") ||
+		strings.Contains(lower, "/tmp/") ||
+		strings.Contains(lower, "heapfile") ||
+		strings.Contains(lower, ".go:") {
 		return "internal storage error"
 	}
 	// Если сообщение слишком длинное — обрезаем
@@ -634,12 +640,22 @@ func main() {
 
 func runHealthCheck(monitorPort int) int {
 	url := fmt.Sprintf("http://127.0.0.1:%d/health", monitorPort)
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 
 	resp, err := client.Get(url)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "health check failed: %v\n", err)
-		return 1
+		// Try HTTPS if HTTP fails (TLS might be enabled)
+		httpsURL := fmt.Sprintf("https://127.0.0.1:%d/health", monitorPort)
+		resp, err = client.Get(httpsURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "health check failed: %v\n", err)
+			return 1
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

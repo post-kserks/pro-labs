@@ -50,20 +50,7 @@ const (
 	maxPayloadSize = 32 << 20
 )
 
-var (
-	walReadBufPool = sync.Pool{
-		New: func() interface{} {
-			buf := make([]byte, 0, 8192)
-			return &buf
-		},
-	}
-	walChecksumBufPool = sync.Pool{
-		New: func() interface{} {
-			buf := make([]byte, 0, 8192)
-			return &buf
-		},
-	}
-)
+
 
 type Entry struct {
 	TxID    uint64

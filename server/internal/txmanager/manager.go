@@ -146,7 +146,11 @@ func (tx *Transaction) spillToDisk() {
 	}
 	enc := json.NewEncoder(f)
 	for _, op := range tx.Ops {
-		enc.Encode(op)
+		if err := enc.Encode(op); err != nil {
+			f.Close()
+			os.Remove(path)
+			return // write error — continue in-memory
+		}
 	}
 	f.Close()
 
@@ -161,7 +165,7 @@ func (tx *Transaction) appendOpToFile(op PendingOp) {
 		return
 	}
 	enc := json.NewEncoder(f)
-	enc.Encode(op)
+	_ = enc.Encode(op)
 	f.Close()
 }
 

@@ -33,11 +33,12 @@ func NewRotator(filename string, maxSizeMB int, maxBackups int) (*Rotator, error
 		return nil, err
 	}
 
-	info, _ := file.Stat()
-	var currentSize int64
-	if info != nil {
-		currentSize = info.Size()
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
 	}
+	currentSize := info.Size()
 
 	return &Rotator{
 		file:        file,

@@ -139,14 +139,22 @@ func (hf *HeapFile) AllocatePage(pageType uint8) (page.PageID, *page.Page, error
 		return page.PageID{}, nil, errors.New("heap file is closed")
 	}
 
-	segNo := uint16(len(hf.segments) - 1)
+	segCount := len(hf.segments) - 1
+	if segCount < 0 || segCount > 0xFFFF {
+		return page.PageID{}, nil, fmt.Errorf("segment count out of range: %d", len(hf.segments))
+	}
+	segNo := uint16(segCount)
 	seg := hf.segments[segNo]
 
 	info, err := seg.Stat()
 	if err != nil {
 		return page.PageID{}, nil, err
 	}
-	pageNo := uint32(info.Size() / page.PageSize)
+	pagesInSeg := info.Size() / page.PageSize
+	if pagesInSeg < 0 || pagesInSeg > 0xFFFFFFFF {
+		return page.PageID{}, nil, fmt.Errorf("page count out of range for segment %d", segNo)
+	}
+	pageNo := uint32(pagesInSeg)
 
 	if pageNo >= page.PagesPerSegment {
 		segNo++
@@ -176,15 +184,18 @@ func (hf *HeapFile) PageCount() (uint32, error) {
 	if hf.closed {
 		return 0, errors.New("heap file is closed")
 	}
-	var total uint32
+	var total uint64
 	for _, seg := range hf.segments {
 		info, err := seg.Stat()
 		if err != nil {
 			return 0, err
 		}
-		total += uint32(info.Size() / page.PageSize)
+		total += uint64(info.Size() / page.PageSize) //nolint:gosec // single segment page count fits in uint64
 	}
-	return total, nil
+	if total > 0xFFFFFFFF {
+		return 0, fmt.Errorf("total page count exceeds uint32 range: %d", total)
+	}
+	return uint32(total), nil
 }
 
 // SegmentCount returns the number of segment files.

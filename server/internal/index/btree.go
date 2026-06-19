@@ -205,7 +205,7 @@ func (idx *BTreeIndex) Save(path string) error {
 		return err
 	}
 
-	return os.WriteFile(path, jsonData, 0644)
+	return os.WriteFile(path, jsonData, 0644) //nolint:gosec // index metadata, not sensitive
 }
 
 // LoadBTreeIndex загружает B-tree индекс из JSON файла.

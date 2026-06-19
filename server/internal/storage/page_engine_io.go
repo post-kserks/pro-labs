@@ -254,13 +254,14 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	e.mu.Lock()
 	e.catalog.LastModified[key] = txID
 	e.catalog.RowCounts[key] += len(rows)
+	startPos := e.catalog.RowCounts[key] - len(rows)
 	if err := e.saveCatalogLocked(); err != nil {
 		e.mu.Unlock()
 		return 0, err
 	}
 	e.mu.Unlock()
 
-	e.updateIndexesOnInsert(dbName, tableName, rows, e.catalog.RowCounts[key]-len(rows))
+	e.updateIndexesOnInsert(dbName, tableName, rows, startPos)
 
 	return len(rows), nil
 }
@@ -276,7 +277,6 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	if err != nil {
 		return 0, err
 	}
-	defer t.mu.Unlock()
 
 	wanted := make(map[int]bool, len(indices))
 	for _, i := range indices {
@@ -391,22 +391,36 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		return false, nil
 	})
 	if err != nil {
+		t.mu.Unlock()
 		return 0, err
 	}
 	if err := flushDirty(); err != nil {
+		t.mu.Unlock()
 		return 0, err
 	}
 
 	if len(newVersions) > 0 {
 		if err := e.appendTuplesLocked(t, newVersions); err != nil {
+			t.mu.Unlock()
 			return 0, err
 		}
 	}
 	if err := t.heap.Sync(); err != nil {
+		t.mu.Unlock()
 		return 0, err
 	}
 
+	// Обновляем индексы до освобождения t.mu (они не требуют e.mu)
+	if isDelete && affected > 0 {
+		e.updateIndexesOnDelete(dbName, tableName, indices)
+	}
+
+	// Освобождаем t.mu ПЕРЕД e.mu, чтобы избежать deadlock:
+	// t.mu → e.mu vs e.mu.RLock → t.mu
+	t.mu.Unlock()
+
 	key := dbName + "/" + tableName
+	e.mu.Lock()
 	e.catalog.LastModified[key] = txID
 	if isDelete {
 		e.catalog.RowCounts[key] -= affected
@@ -415,12 +429,10 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		}
 	}
 	if err := e.saveCatalogLocked(); err != nil {
+		e.mu.Unlock()
 		return 0, err
 	}
-
-	if isDelete && affected > 0 {
-		e.updateIndexesOnDelete(dbName, tableName, indices)
-	}
+	e.mu.Unlock()
 
 	return affected, nil
 }

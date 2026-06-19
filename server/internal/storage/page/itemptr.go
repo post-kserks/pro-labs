@@ -25,10 +25,13 @@ func NewItemPointer(offset, length uint16, flags uint8) ItemPointer {
 }
 
 // Offset returns the byte offset of the tuple inside the page.
-func (ip ItemPointer) Offset() uint16 { return uint16(ip >> 17) }
+// Safe: shifted value is at most 15 bits (fits in uint16).
+func (ip ItemPointer) Offset() uint16 { return uint16(ip >> 17) } //nolint:gosec // value is at most 15 bits
 
 // Length returns the tuple length in bytes.
-func (ip ItemPointer) Length() uint16 { return uint16((ip >> 3) & 0x3FFF) }
+// Safe: masked value is at most 14 bits (fits in uint16).
+func (ip ItemPointer) Length() uint16 { return uint16((ip >> 3) & 0x3FFF) } //nolint:gosec // value is at most 14 bits
 
 // Flags returns the item flags.
-func (ip ItemPointer) Flags() uint8 { return uint8(ip & 0x7) }
+// Safe: masked value is at most 3 bits (fits in uint8).
+func (ip ItemPointer) Flags() uint8 { return uint8(ip & 0x7) } //nolint:gosec // value is at most 3 bits

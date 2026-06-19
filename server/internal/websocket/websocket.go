@@ -48,7 +48,7 @@ func Upgrade(w http.ResponseWriter, r *http.Request) (net.Conn, *bufio.ReadWrite
 
 func computeAcceptKey(key string) string {
 	const magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-	h := sha1.New()
+	h := sha1.New() //nolint:gosec // SHA1 required by WebSocket protocol RFC 6455
 	h.Write([]byte(key))
 	h.Write([]byte(magic))
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))

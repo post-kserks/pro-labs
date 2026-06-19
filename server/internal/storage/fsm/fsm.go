@@ -44,7 +44,7 @@ func (f *FSM) resize(nPages uint32) {
 	nodes := make([]uint8, 2*capacity)
 
 	if f.nodes != nil {
-		oldLeaf := uint32(len(f.nodes) / 2)
+		oldLeaf := uint32(len(f.nodes) / 2) //nolint:gosec // FSM tree is always power-of-2 sized
 		for p := uint32(0); p < f.nPages; p++ {
 			nodes[capacity+p] = f.nodes[oldLeaf+p]
 		}
@@ -76,7 +76,7 @@ func category(freeBytes uint16) uint8 {
 	if c > 255 {
 		c = 255
 	}
-	return uint8(c)
+	return uint8(c) //nolint:gosec // c is bounded to [0,255]
 }
 
 // requestCategory converts a request to a category, rounding up, so any
@@ -88,7 +88,7 @@ func requestCategory(minFree uint16) uint8 {
 	if c > 255 {
 		c = 255
 	}
-	return uint8(c)
+	return uint8(c) //nolint:gosec // c is bounded to [0,255]
 }
 
 // PageCount returns the number of tracked pages.
@@ -105,7 +105,7 @@ func (f *FSM) Grow(nPages uint32) {
 	if nPages <= f.nPages {
 		return
 	}
-	if nPages <= uint32(len(f.nodes)/2) {
+	if nPages <= uint32(len(f.nodes)/2) { //nolint:gosec // FSM tree is always power-of-2 sized
 		f.nPages = nPages
 		return
 	}

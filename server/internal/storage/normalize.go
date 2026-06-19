@@ -3,7 +3,6 @@ package storage
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -175,22 +174,6 @@ func toFloat64(value interface{}) (float64, bool) {
 		return float64(v), true
 	case float64:
 		return v, true
-	default:
-		return 0, false
-	}
-}
-
-func toFloat(v interface{}) (float64, bool) {
-	switch n := v.(type) {
-	case int:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	case float64:
-		return n, true
-	case string:
-		f, err := strconv.ParseFloat(n, 64)
-		return f, err == nil
 	default:
 		return 0, false
 	}

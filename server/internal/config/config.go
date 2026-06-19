@@ -241,7 +241,7 @@ func ApplyEnvOverrides(cfg *Config) {
 		}
 	}
 	if v := os.Getenv("VAULTDB_LOG_LEVEL"); v != "" {
-		// Logging config handled separately
+		_ = v // Logging config handled separately in main.go
 	}
 	if v := os.Getenv("VAULTDB_DATA_DIR"); v != "" {
 		cfg.Storage.DataDir = v

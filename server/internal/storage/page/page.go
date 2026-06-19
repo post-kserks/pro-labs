@@ -233,7 +233,9 @@ func (p *Page) Compact() {
 		if data == nil {
 			continue
 		}
-		tmp.InsertTuple(data)
+		// Compact copies live tuples into a fresh page of the same size;
+		// InsertTuple cannot fail here because all tuples already fit.
+		_, _ = tmp.InsertTuple(data)
 	}
 
 	tmp.SetLSN(h.LSN)

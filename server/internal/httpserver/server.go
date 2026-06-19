@@ -132,7 +132,7 @@ func (s *Server) Start(ctx context.Context) error {
 			},
 		}
 		apiServer.TLSConfig = tlsCfg
-		monitorServer.TLSConfig = tlsCfg
+		monitorServer.TLSConfig = tlsCfg.Clone()
 	}
 
 	errCh := make(chan error, 2)

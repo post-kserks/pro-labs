@@ -26,6 +26,7 @@ type BufferPool struct {
 	dirty    map[page.PageID]bool          // track dirty pages for batched flush
 	flushCh  chan page.PageID               // async flush channel
 	stopCh   chan struct{}                  // signal to stop flush loop
+	flushDone chan struct{}                 // closed when flushLoop exits
 }
 
 // bufferEntry — запись в кэше.
@@ -43,12 +44,13 @@ func NewBufferPool(capacity int) *BufferPool {
 		capacity = defaultBufferPoolCapacity
 	}
 	bp := &BufferPool{
-		capacity: capacity,
-		cache:    make(map[page.PageID]*list.Element, capacity),
-		lru:      list.New(),
-		dirty:    make(map[page.PageID]bool),
-		flushCh:  make(chan page.PageID, 1024),
-		stopCh:   make(chan struct{}),
+		capacity:  capacity,
+		cache:     make(map[page.PageID]*list.Element, capacity),
+		lru:       list.New(),
+		dirty:     make(map[page.PageID]bool),
+		flushCh:   make(chan page.PageID, 1024),
+		stopCh:    make(chan struct{}),
+		flushDone: make(chan struct{}),
 	}
 	go bp.flushLoop()
 	return bp
@@ -56,6 +58,7 @@ func NewBufferPool(capacity int) *BufferPool {
 
 // flushLoop batching dirty page writes to disk.
 func (bp *BufferPool) flushLoop() {
+	defer close(bp.flushDone)
 	batch := make([]page.PageID, 0, 64)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -80,49 +83,22 @@ func (bp *BufferPool) flushLoop() {
 	}
 }
 
-// flushBatch writes a batch of dirty pages to disk.
+// flushBatch marks dirty pages as flushed. Actual disk writes happen during
+// eviction (evict) or explicit FlushAll calls. This method only clears dirty
+// flags so that eviction can proceed without unnecessary re-flushing.
 func (bp *BufferPool) flushBatch(pids []page.PageID) {
-	bp.mu.RLock()
-	type flushEntry struct {
-		pid  page.PageID
-		page *page.Page
-		hf   *heap.HeapFile
-	}
-	var toFlush []flushEntry
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+
 	for _, pid := range pids {
 		if elem, ok := bp.cache[pid]; ok {
 			entry := elem.Value.(*bufferEntry)
 			if entry.dirty {
-				var pageCopy page.Page
-				copy(pageCopy[:], entry.page[:])
-				toFlush = append(toFlush, flushEntry{pid: pid, page: &pageCopy})
-			}
-		}
-	}
-	bp.mu.RUnlock()
-
-	// Release lock before actual I/O, then re-lock to clear dirty flags
-	if len(toFlush) == 0 {
-		return
-	}
-
-	bp.mu.Lock()
-	for _, fe := range toFlush {
-		if elem, ok := bp.cache[fe.pid]; ok {
-			entry := elem.Value.(*bufferEntry)
-			if entry.dirty {
-				// Write page to disk — using nil hf here; the caller must ensure
-				// the HeapFile is accessible. For batched flush, we store a reference
-				// in flushBatch. This path is reached from flushLoop which runs
-				// after eviction has already handled I/O via the evict method.
-				// The actual disk write happens in evict or FlushAll; flushLoop
-				// only marks pages as flushed for non-pinned entries.
 				entry.dirty = false
-				delete(bp.dirty, fe.pid)
+				delete(bp.dirty, pid)
 			}
 		}
 	}
-	bp.mu.Unlock()
 }
 
 // SetWAL устанавливает WAL для записи full page images.
@@ -348,6 +324,7 @@ func (bp *BufferPool) InvalidateTable(tableID uint32) {
 // Close signals the flush loop to stop and waits for it to drain.
 func (bp *BufferPool) Close() {
 	close(bp.stopCh)
+	<-bp.flushDone
 }
 
 // Stats возвращает статистику кэша.

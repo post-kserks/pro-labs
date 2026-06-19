@@ -229,5 +229,5 @@ func (idx *CompositeIndex) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, bytes, 0644)
+	return os.WriteFile(path, bytes, 0644) //nolint:gosec // index metadata, not sensitive
 }
