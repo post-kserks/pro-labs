@@ -1,7 +1,6 @@
 package wal
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -49,6 +48,21 @@ const (
 const (
 	recordMagic    = "VDB1"
 	maxPayloadSize = 32 << 20
+)
+
+var (
+	walReadBufPool = sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, 0, 8192)
+			return &buf
+		},
+	}
+	walChecksumBufPool = sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, 0, 8192)
+			return &buf
+		},
+	}
 )
 
 type Entry struct {
@@ -340,50 +354,38 @@ func buildRecord(txID uint64, opType byte, payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("wal: payload too large (%d bytes)", len(payload))
 	}
 
-	var body bytes.Buffer
-	body.WriteString(recordMagic)
-	if err := binary.Write(&body, binary.LittleEndian, txID); err != nil {
-		return nil, fmt.Errorf("wal: encode tx id: %w", err)
-	}
-	body.WriteByte(opType)
-	if err := binary.Write(&body, binary.LittleEndian, uint32(len(payload))); err != nil {
-		return nil, fmt.Errorf("wal: encode payload length: %w", err)
-	}
-	body.Write(payload)
+	// Fixed layout: magic(4) + txID(8) + opType(1) + payloadLen(4) + payload + crc(4)
+	recordLen := 4 + 8 + 1 + 4 + len(payload) + 4
+	record := make([]byte, recordLen)
 
-	// CRC32 используется для целостности данных (обнаружение битовых сбоев,
-	// неполных записей на диске), НЕ для криптографической безопасности.
-	// WAL хранится на локальном диске — если атакующий имеет доступ к файловой
-	// системе, он уже может модифицировать heap-файлы напрямую.
-	// Для security boundary используется HMAC-SHA256 в auth/manager.go.
-	crc := crc32.ChecksumIEEE(body.Bytes())
-	if err := binary.Write(&body, binary.LittleEndian, crc); err != nil {
-		return nil, fmt.Errorf("wal: encode checksum: %w", err)
-	}
+	copy(record[0:4], recordMagic)
+	binary.LittleEndian.PutUint64(record[4:12], txID)
+	record[12] = opType
+	binary.LittleEndian.PutUint32(record[13:17], uint32(len(payload)))
+	copy(record[17:17+len(payload)], payload)
 
-	return body.Bytes(), nil
+	// CRC32 over everything except the CRC field itself
+	crc := crc32.ChecksumIEEE(record[:17+len(payload)])
+	binary.LittleEndian.PutUint32(record[17+len(payload):], crc)
+
+	return record, nil
 }
 
 // readEntryFrom reads a single WAL entry from the current file position.
 // Returns the entry, the number of bytes read, and any error.
 // Returns io.EOF when no more entries.
-// Reuses internal buffers to minimize allocations on hot path.
+// Uses a single 17-byte read for the fixed header to minimize I/O syscalls.
 func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
-	magic := make([]byte, 4)
-	if _, err := io.ReadFull(f, magic); err != nil {
+	fixedHdr := make([]byte, 17) // magic(4) + txID(8) + opType(1) + payloadLen(4)
+	if _, err := io.ReadFull(f, fixedHdr); err != nil {
 		return Entry{}, 0, err
 	}
-	if string(magic) != recordMagic {
+	if string(fixedHdr[:4]) != recordMagic {
 		return Entry{}, 0, io.EOF
 	}
-
-	hdr := make([]byte, 13) // txID(8) + opType(1) + payloadLen(4)
-	if _, err := io.ReadFull(f, hdr); err != nil {
-		return Entry{}, 0, io.ErrUnexpectedEOF
-	}
-	txID := binary.LittleEndian.Uint64(hdr[0:8])
-	opType := hdr[8]
-	payloadLen := binary.LittleEndian.Uint32(hdr[9:13])
+	txID := binary.LittleEndian.Uint64(fixedHdr[4:12])
+	opType := fixedHdr[12]
+	payloadLen := binary.LittleEndian.Uint32(fixedHdr[13:17])
 
 	if payloadLen > maxPayloadSize {
 		return Entry{}, 0, fmt.Errorf("wal: payload too large (%d bytes)", payloadLen)
@@ -400,17 +402,14 @@ func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
 	}
 	storedCRC := binary.LittleEndian.Uint32(crcBuf)
 
-	// Verify checksum: magic(4) + hdr(13) + payload
-	checksumData := make([]byte, 0, 4+13+int(payloadLen))
-	checksumData = append(checksumData, magic...)
-	checksumData = append(checksumData, hdr...)
-	checksumData = append(checksumData, payload...)
-	calculated := crc32.ChecksumIEEE(checksumData)
+	// Verify checksum incrementally: fixedHdr(17) + payload
+	calculated := crc32.ChecksumIEEE(fixedHdr)
+	calculated = crc32.Update(calculated, crc32.IEEETable, payload)
 	if storedCRC != calculated {
 		return Entry{}, 0, fmt.Errorf("wal: checksum mismatch")
 	}
 
-	totalSize := int64(4 + 13 + int(payloadLen) + 4)
+	totalSize := int64(17 + int(payloadLen) + 4)
 	return Entry{TxID: txID, OpType: opType, Payload: payload}, totalSize, nil
 }
 

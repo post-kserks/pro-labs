@@ -39,7 +39,8 @@ type PageStorageEngine struct {
 
 	wal     *wal.WAL
 	txMgr   *txmanager.Manager
-	bufPool *BufferPool
+	bufPool  *BufferPool
+	pageLock *PageLockManager
 
 	indexes   map[string]*index.IndexManager // "db/table" → index manager
 	indexesMu sync.RWMutex
@@ -87,8 +88,9 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) 
 		},
 		wal:     w,
 		txMgr:   txMgr,
-		bufPool: NewBufferPool(defaultBufferPoolCapacity),
-		indexes: make(map[string]*index.IndexManager),
+		bufPool:  NewBufferPool(defaultBufferPoolCapacity),
+		pageLock: NewPageLockManager(),
+		indexes:  make(map[string]*index.IndexManager),
 	}
 
 	catalogPath := e.catalogPath()

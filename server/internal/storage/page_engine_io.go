@@ -165,15 +165,12 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		tuples = append(tuples, tuple)
 	}
 
-	// Сначала вставляем tuples, затем пишем WAL с реальными позициями
-	// Это важно для recovery — WAL должен содержать точные позиции
 	insertedTuples := make([]struct {
 		pid  page.PageID
 		slot uint16
 	}, 0, len(tuples))
 
 	for _, tuple := range tuples {
-		// Находим или выделяем страницу через buffer pool
 		total, err := t.heap.PageCount()
 		if err != nil {
 			return 0, err
@@ -185,7 +182,9 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 
 		if total > 0 {
 			pid = pageIDAt(t.tableID, total-1)
+			e.pageLock.RLockPage(pid)
 			pg, err = e.getPage(pid, t.heap)
+			e.pageLock.UnlockPage(pid)
 			if err != nil {
 				return 0, err
 			}
@@ -201,9 +200,9 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 				pid, pg, havePage = newPid, newPg, true
 			}
 
+			e.pageLock.LockPage(pid)
 			slot, err := pg.InsertTuple(tuple)
 			if err == nil {
-				// Успешно вставили — записываем в WAL
 				if e.wal != nil {
 					payload := wal.WALPageInsertPayload{
 						DB:        dbName,
@@ -215,25 +214,26 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 						TupleData: tuple,
 					}
 					if _, err := e.wal.AppendWithTx(txID, wal.OpPageInsert, payload); err != nil {
+						e.pageLock.UnlockPageWrite(pid)
 						return 0, fmt.Errorf("wal insert: %w", err)
 					}
 				}
 
-				// Запоминаем позицию для catalog
 				insertedTuples = append(insertedTuples, struct {
 					pid  page.PageID
 					slot uint16
 				}{pid, slot})
 
-				// Сбрасываем страницу на диск и помечаем как dirty
 				if err := t.heap.WritePage(pid, pg); err != nil {
+					e.pageLock.UnlockPageWrite(pid)
 					return 0, err
 				}
 				e.bufPool.UnpinPage(pid, true)
+				e.pageLock.UnlockPageWrite(pid)
 				break
 			}
+			e.pageLock.UnlockPageWrite(pid)
 
-			// Страница полна — отпиним старую и выделяем новую
 			if havePage {
 				e.bufPool.UnpinPage(pid, false)
 			}
@@ -243,14 +243,13 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 			havePage = false
 		}
 	}
-	// Отпускаем t.mu перед обновлением каталога
+
 	t.mu.Unlock()
 
 	if err := t.heap.Sync(); err != nil {
 		return 0, err
 	}
 
-	// Обновляем каталог под e.mu
 	key := dbName + "/" + tableName
 	e.mu.Lock()
 	e.catalog.LastModified[key] = txID
