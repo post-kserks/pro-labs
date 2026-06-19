@@ -141,6 +141,93 @@ func testClose(t *testing.T) {
 	}
 }
 
+func TestPoolCleanupEdgeCase(t *testing.T) {
+	t.Run("keeps_minSize_when_all_expired", func(t *testing.T) {
+		p := NewPool(2, 10, time.Millisecond)
+		defer p.Close()
+
+		var conns []*Connection
+		for i := 0; i < 5; i++ {
+			conn := p.Acquire()
+			if conn == nil {
+				t.Fatalf("expected connection at index %d, got nil", i)
+			}
+			conns = append(conns, conn)
+		}
+
+		for _, conn := range conns {
+			p.Release(conn)
+			conn.LastUsed = time.Now().Add(-time.Second)
+		}
+
+		p.cleanup()
+
+		stats := p.Stats()
+		if stats.Total < p.minSize {
+			t.Errorf("expected at least %d connections after cleanup, got %d", p.minSize, stats.Total)
+		}
+	})
+
+	t.Run("removes_expired_beyond_minSize", func(t *testing.T) {
+		p := NewPool(2, 10, time.Millisecond)
+		defer p.Close()
+
+		var conns []*Connection
+		for i := 0; i < 5; i++ {
+			conn := p.Acquire()
+			if conn == nil {
+				t.Fatalf("expected connection at index %d, got nil", i)
+			}
+			conns = append(conns, conn)
+		}
+
+		for _, conn := range conns {
+			p.Release(conn)
+			conn.LastUsed = time.Now().Add(-time.Second)
+		}
+
+		p.cleanup()
+
+		stats := p.Stats()
+		if stats.Total != p.minSize {
+			t.Errorf("expected exactly %d connections after cleanup (all expired), got %d", p.minSize, stats.Total)
+		}
+	})
+
+	t.Run("preserves_active_connections", func(t *testing.T) {
+		p := NewPool(2, 10, time.Millisecond)
+		defer p.Close()
+
+		active1 := p.Acquire()
+		active2 := p.Acquire()
+
+		var idleConns []*Connection
+		for i := 0; i < 3; i++ {
+			conn := p.Acquire()
+			if conn == nil {
+				t.Fatalf("expected connection at index %d, got nil", i)
+			}
+			p.Release(conn)
+			conn.LastUsed = time.Now().Add(-time.Second)
+			idleConns = append(idleConns, conn)
+		}
+
+		_ = idleConns
+		p.cleanup()
+
+		stats := p.Stats()
+		if stats.Active != 2 {
+			t.Errorf("expected 2 active connections after cleanup, got %d", stats.Active)
+		}
+		if stats.Total < 2 {
+			t.Errorf("expected at least 2 total connections after cleanup, got %d", stats.Total)
+		}
+
+		p.Release(active1)
+		p.Release(active2)
+	})
+}
+
 func testConcurrentAcquireRelease(t *testing.T) {
 	p := NewPool(1, 20, time.Minute)
 	defer p.Close()
