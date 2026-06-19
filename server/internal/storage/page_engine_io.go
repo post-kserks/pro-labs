@@ -143,7 +143,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	if err != nil {
 		return 0, err
 	}
-	defer t.mu.Unlock()
+
 	tuples := make([][]byte, 0, len(rows))
 	for _, row := range rows {
 		normalized := make(Row, len(t.schema.Columns))
@@ -243,17 +243,23 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 			havePage = false
 		}
 	}
+	// Отпускаем t.mu перед обновлением каталога
+	t.mu.Unlock()
 
 	if err := t.heap.Sync(); err != nil {
 		return 0, err
 	}
 
+	// Обновляем каталог под e.mu
 	key := dbName + "/" + tableName
+	e.mu.Lock()
 	e.catalog.LastModified[key] = txID
 	e.catalog.RowCounts[key] += len(rows)
 	if err := e.saveCatalogLocked(); err != nil {
+		e.mu.Unlock()
 		return 0, err
 	}
+	e.mu.Unlock()
 
 	e.updateIndexesOnInsert(dbName, tableName, rows, e.catalog.RowCounts[key]-len(rows))
 
