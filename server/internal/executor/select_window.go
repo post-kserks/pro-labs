@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -49,7 +50,10 @@ func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage
 			if len(wf.Over.PartitionBy) > 0 {
 				var keyParts []string
 				for _, p := range wf.Over.PartitionBy {
-					val, _ := evalOperand(p, row, schema, ctx)
+					val, err := evalOperand(p, row, schema, ctx)
+					if err != nil {
+						return nil, nil, fmt.Errorf("eval partition key: %w", err)
+					}
 					keyParts = append(keyParts, valueToString(val))
 				}
 				key = strings.Join(keyParts, "\x00")
@@ -63,8 +67,16 @@ func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage
 				sort.SliceStable(indices, func(i, j int) bool {
 					rowI, rowJ := newRows[indices[i]], newRows[indices[j]]
 					for _, item := range wf.Over.OrderBy {
-						vi, _ := evalOperand(item.Expr, rowI, schema, ctx)
-						vj, _ := evalOperand(item.Expr, rowJ, schema, ctx)
+						vi, err := evalOperand(item.Expr, rowI, schema, ctx)
+						if err != nil {
+							slog.Error("eval order by expression", "error", err)
+							return false
+						}
+						vj, err := evalOperand(item.Expr, rowJ, schema, ctx)
+						if err != nil {
+							slog.Error("eval order by expression", "error", err)
+							return false
+						}
 						cmp := CompareValues(vi, vj)
 						if cmp == 0 {
 							continue
@@ -80,7 +92,10 @@ func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage
 
 			// Compute window function
 			for i, globalIdx := range indices {
-				val := c.computeWindowValue(wf, indices, newRows, i, schema, ctx)
+				val, err := c.computeWindowValue(wf, indices, newRows, i, schema, ctx)
+				if err != nil {
+					return nil, nil, fmt.Errorf("compute window value: %w", err)
+				}
 				newRows[globalIdx] = append(newRows[globalIdx], val)
 			}
 		}
@@ -89,31 +104,39 @@ func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage
 	return newRows, newSchema, nil
 }
 
-func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partitionIndices []int, allRows []storage.Row, currentPosInPartition int, schema *storage.TableSchema, ctx *ExecutionContext) interface{} {
+func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partitionIndices []int, allRows []storage.Row, currentPosInPartition int, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
 	name := strings.ToUpper(wf.FuncName)
 	switch name {
 	case "ROW_NUMBER":
-		return int64(currentPosInPartition + 1)
+		return int64(currentPosInPartition + 1), nil
 	case "RANK":
 		rank := 1
 		currentRow := allRows[partitionIndices[currentPosInPartition]]
 		for i := 0; i < currentPosInPartition; i++ {
 			prevRow := allRows[partitionIndices[i]]
-			if !c.rowsEqualByOrderBy(currentRow, prevRow, wf.Over.OrderBy, schema, ctx) {
+			equal, err := c.rowsEqualByOrderBy(currentRow, prevRow, wf.Over.OrderBy, schema, ctx)
+			if err != nil {
+				return nil, err
+			}
+			if !equal {
 				rank = i + 2
 			}
 		}
-		return int64(rank)
+		return int64(rank), nil
 	case "DENSE_RANK":
 		rank := 1
 		currentRow := allRows[partitionIndices[currentPosInPartition]]
 		for i := 0; i < currentPosInPartition; i++ {
 			prevRow := allRows[partitionIndices[i]]
-			if !c.rowsEqualByOrderBy(currentRow, prevRow, wf.Over.OrderBy, schema, ctx) {
+			equal, err := c.rowsEqualByOrderBy(currentRow, prevRow, wf.Over.OrderBy, schema, ctx)
+			if err != nil {
+				return nil, err
+			}
+			if !equal {
 				rank++
 			}
 		}
-		return int64(rank)
+		return int64(rank), nil
 	case "NTILE":
 		n := 1
 		if len(wf.Args) > 0 {
@@ -124,7 +147,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 			}
 		}
 		if n <= 0 {
-			return int64(0)
+			return int64(0), nil
 		}
 		total := len(partitionIndices)
 		bucketSize := total / n
@@ -132,7 +155,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 		if currentPosInPartition >= bucketSize*n {
 			bucket = n
 		}
-		return int64(bucket)
+		return int64(bucket), nil
 	case "LAG":
 		offset := 1
 		if len(wf.Args) >= 2 {
@@ -144,23 +167,22 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 		}
 		prevPos := currentPosInPartition - offset
 		if prevPos < 0 {
-			// Default value
 			if len(wf.Args) >= 2 {
-				return nil
+				return nil, nil
 			}
 			if len(wf.Args) >= 1 {
 				if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
-					return v
+					return v, nil
 				}
 			}
-			return nil
+			return nil, nil
 		}
 		if len(wf.Args) >= 1 {
 			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[prevPos]], schema, ctx); err == nil {
-				return v
+				return v, nil
 			}
 		}
-		return nil
+		return nil, nil
 	case "LEAD":
 		offset := 1
 		if len(wf.Args) >= 2 {
@@ -172,43 +194,42 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 		}
 		nextPos := currentPosInPartition + offset
 		if nextPos >= len(partitionIndices) {
-			// Default value
 			if len(wf.Args) >= 2 {
-				return nil
+				return nil, nil
 			}
 			if len(wf.Args) >= 1 {
 				if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
-					return v
+					return v, nil
 				}
 			}
-			return nil
+			return nil, nil
 		}
 		if len(wf.Args) >= 1 {
 			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[nextPos]], schema, ctx); err == nil {
-				return v
+				return v, nil
 			}
 		}
-		return nil
+		return nil, nil
 	case "FIRST_VALUE":
 		if len(partitionIndices) == 0 {
-			return nil
+			return nil, nil
 		}
 		if len(wf.Args) >= 1 {
 			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
-				return v
+				return v, nil
 			}
 		}
-		return nil
+		return nil, nil
 	case "LAST_VALUE":
 		if len(partitionIndices) == 0 {
-			return nil
+			return nil, nil
 		}
 		if len(wf.Args) >= 1 {
 			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[len(partitionIndices)-1]], schema, ctx); err == nil {
-				return v
+				return v, nil
 			}
 		}
-		return nil
+		return nil, nil
 	case "NTH_VALUE":
 		n := 1
 		if len(wf.Args) >= 2 {
@@ -220,14 +241,14 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 		}
 		idx := n - 1
 		if idx < 0 || idx >= len(partitionIndices) {
-			return nil
+			return nil, nil
 		}
 		if len(wf.Args) >= 1 {
 			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[idx]], schema, ctx); err == nil {
-				return v
+				return v, nil
 			}
 		}
-		return nil
+		return nil, nil
 	case "COUNT", "SUM", "AVG", "MIN", "MAX":
 		frameIndices := c.getFrameIndices(partitionIndices, currentPosInPartition, wf.Over.Frame, len(wf.Over.OrderBy) > 0)
 		agg := NewAggregator(name, false)
@@ -237,27 +258,38 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 				if colRef, ok := wf.Args[0].(*parser.ColumnRef); ok && colRef.Name == "*" {
 					val = int64(1)
 				} else {
-					val, _ = evalOperand(wf.Args[0], allRows[idx], schema, ctx)
+					v, err := evalOperand(wf.Args[0], allRows[idx], schema, ctx)
+					if err != nil {
+						slog.Error("eval window aggregate argument", "error", err)
+						continue
+					}
+					val = v
 				}
 			} else {
 				val = int64(1)
 			}
 			agg.Add(nil, val)
 		}
-		return agg.Result()
+		return agg.Result(), nil
 	}
-	return nil
+	return nil, nil
 }
 
-func (c *SelectCommand) rowsEqualByOrderBy(r1, r2 storage.Row, orderBy []parser.OrderItem, schema *storage.TableSchema, ctx *ExecutionContext) bool {
+func (c *SelectCommand) rowsEqualByOrderBy(r1, r2 storage.Row, orderBy []parser.OrderItem, schema *storage.TableSchema, ctx *ExecutionContext) (bool, error) {
 	for _, item := range orderBy {
-		v1, _ := evalOperand(item.Expr, r1, schema, ctx)
-		v2, _ := evalOperand(item.Expr, r2, schema, ctx)
+		v1, err := evalOperand(item.Expr, r1, schema, ctx)
+		if err != nil {
+			return false, fmt.Errorf("eval order by expression: %w", err)
+		}
+		v2, err := evalOperand(item.Expr, r2, schema, ctx)
+		if err != nil {
+			return false, fmt.Errorf("eval order by expression: %w", err)
+		}
 		if CompareValues(v1, v2) != 0 {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 func (c *SelectCommand) getFrameIndices(partitionIndices []int, currentPos int, frame *parser.FrameSpec, hasOrderBy bool) []int {

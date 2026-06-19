@@ -52,7 +52,10 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 	for _, row := range rows {
 		keyParts := make([]string, len(c.stmt.GroupBy))
 		for i, expr := range c.stmt.GroupBy {
-			val, _ := evalOperand(expr, row, schema, ctx)
+			val, err := evalOperand(expr, row, schema, ctx)
+			if err != nil {
+				return nil, fmt.Errorf("eval group by key: %w", err)
+			}
 			keyParts[i] = valueToString(val)
 		}
 		key := strings.Join(keyParts, "\x00")
@@ -98,13 +101,24 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 					aggExpr := col.Expr.(*parser.AggregateExpr)
 					var key, val interface{}
 					if strings.EqualFold(aggExpr.Name, "JSON_OBJECT_AGG") && len(aggExpr.Args) >= 2 {
-						key, _ = evalOperand(aggExpr.Args[0], row, schema, ctx)
-						val, _ = evalOperand(aggExpr.Args[1], row, schema, ctx)
+						var err error
+						key, err = evalOperand(aggExpr.Args[0], row, schema, ctx)
+						if err != nil {
+							return nil, fmt.Errorf("eval JSON_OBJECT_AGG key: %w", err)
+						}
+						val, err = evalOperand(aggExpr.Args[1], row, schema, ctx)
+						if err != nil {
+							return nil, fmt.Errorf("eval JSON_OBJECT_AGG value: %w", err)
+						}
 					} else if len(aggExpr.Args) > 0 {
 						if colRef, ok := aggExpr.Args[0].(*parser.ColumnRef); ok && colRef.Name == "*" {
 							val = int64(1)
 						} else {
-							val, _ = evalOperand(aggExpr.Args[0], row, schema, ctx)
+							var err error
+							val, err = evalOperand(aggExpr.Args[0], row, schema, ctx)
+							if err != nil {
+								return nil, fmt.Errorf("eval aggregate argument: %w", err)
+							}
 						}
 					} else {
 						val = int64(1)
@@ -127,7 +141,10 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 			} else {
 				// Pick from first row of group for non-aggregates
 				if len(groupRows) > 0 {
-					val, _ := evalOperand(col.Expr, groupRows[0], schema, ctx)
+					val, err := evalOperand(col.Expr, groupRows[0], schema, ctx)
+					if err != nil {
+						return nil, fmt.Errorf("eval column expression: %w", err)
+					}
 					resultRow[i] = valueToString(val)
 					virtualRow[i] = val
 				} else {

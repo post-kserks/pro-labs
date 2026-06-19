@@ -3,6 +3,7 @@ package storage
 import (
 	"container/list"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"vaultdb/internal/storage/heap"
@@ -136,7 +137,9 @@ func (bp *BufferPool) writeFullPageImage(entry *bufferEntry) {
 	bp.mu.RUnlock()
 
 	// Пишем full page image в WAL (не блокируя buffer pool)
-	_ = w.WriteFullPageImage(0, "", "", pid.SegmentNo, pid.PageNo, pageData)
+	if err := w.WriteFullPageImage(0, "", "", pid.SegmentNo, pid.PageNo, pageData); err != nil {
+		slog.Error("failed to write full page image to WAL", "segment", pid.SegmentNo, "page", pid.PageNo, "error", err)
+	}
 }
 
 // InvalidatePage удаляет страницу из кэша (после прямой записи на диск).

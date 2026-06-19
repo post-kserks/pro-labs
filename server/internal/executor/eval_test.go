@@ -393,3 +393,16 @@ func TestValueToString(t *testing.T) {
 		})
 	}
 }
+
+func TestEvalOperandErrorPropagation(t *testing.T) {
+	session := mockSetupSession(t)
+
+	// Test: GROUP BY with non-existent column should propagate error
+	executeSQLExpectError(t, session, "SELECT nonexistent, COUNT(*) FROM t GROUP BY nonexistent;")
+
+	// Test: Window PARTITION BY with non-existent column should propagate error
+	executeSQLExpectError(t, session, "SELECT id, ROW_NUMBER() OVER (PARTITION BY nonexistent ORDER BY id) FROM t;")
+
+	// Test: SELECT with non-existent column in aggregate should propagate error
+	executeSQLExpectError(t, session, "SELECT COUNT(nonexistent) FROM t;")
+}
