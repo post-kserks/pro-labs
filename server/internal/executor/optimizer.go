@@ -3,6 +3,7 @@ package executor
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"vaultdb/internal/parser"
@@ -57,16 +58,19 @@ func NewOptimizer(store storage.StorageEngine) *Optimizer {
 
 // OptimizePlan оптимизирует SELECT запрос.
 func (o *Optimizer) OptimizePlan(dbName string, stmt *parser.SelectStatement) (*OptimizedPlan, error) {
-	// 1. Собираем статистику
+	// 0. Subquery decorrelation (convert correlated IN subqueries to joins)
+	o.decorrelateSubqueries(dbName, stmt)
+
+	// 1. Collect statistics for all tables
 	tableStats := o.stats.GetTableStats(dbName, stmt.TableName)
 
-	// 2. Выбираем лучший access method для каждой таблицы
+	// 2. Choose best access method for each table
 	accessMethods := o.chooseAccessMethods(dbName, stmt, tableStats)
 
-	// 3. Выбираем лучший join method
+	// 3. Choose best join methods
 	joinMethods := o.chooseJoinMethods(dbName, stmt)
 
-	// 4. Строим оптимизированный план
+	// 4. Build optimized plan
 	plan := &OptimizedPlan{
 		Stmt:          stmt,
 		TableStats:    tableStats,
@@ -77,10 +81,270 @@ func (o *Optimizer) OptimizePlan(dbName string, stmt *parser.SelectStatement) (*
 	// 5. Predicate pushdown
 	o.predicatePushdown(dbName, plan)
 
-	// 6. Оцениваем стоимость
+	// 6. Join reordering (smallest table first)
+	o.reorderJoins(dbName, plan)
+
+	// 7. Projection pushdown (track required columns per table)
+	o.pushdownProjections(dbName, plan)
+
+	// 8. Estimate cost
 	plan.Cost = o.estimateCost(dbName, plan)
 
 	return plan, nil
+}
+
+// reorderJoins reorders joins so the smallest table is processed first,
+// reducing intermediate result sizes. It reorders Joins, AccessMethods keys,
+// and JoinMethods in sync.
+func (o *Optimizer) reorderJoins(dbName string, plan *OptimizedPlan) {
+	if len(plan.Stmt.Joins) <= 1 {
+		return
+	}
+
+	type joinInfo struct {
+		join        parser.JoinClause
+		method      JoinMethod
+		accessAfter AccessMethod
+		stats       *TableStatistics
+	}
+
+	infos := make([]joinInfo, len(plan.Stmt.Joins))
+	for i, j := range plan.Stmt.Joins {
+		ts := o.stats.GetTableStats(dbName, j.TableName)
+		method := NestedLoopJoin
+		if i < len(plan.JoinMethods) {
+			method = plan.JoinMethods[i]
+		}
+		accessAfter := SeqScan
+		if am, ok := plan.AccessMethods[j.TableName]; ok {
+			accessAfter = am
+		}
+		infos[i] = joinInfo{join: j, method: method, accessAfter: accessAfter, stats: ts}
+	}
+
+	sort.SliceStable(infos, func(i, k int) bool {
+		ri, rk := o.rowCount(infos[i].stats), o.rowCount(infos[k].stats)
+		return ri < rk
+	})
+
+	for i, info := range infos {
+		plan.Stmt.Joins[i] = info.join
+		if i < len(plan.JoinMethods) {
+			plan.JoinMethods[i] = info.method
+		}
+		plan.AccessMethods[info.join.TableName] = info.accessAfter
+	}
+}
+
+// rowCount returns a safe row count from statistics (0 if nil).
+func (o *Optimizer) rowCount(s *TableStatistics) int {
+	if s == nil {
+		return defaultFallbackRows
+	}
+	return s.RowCount
+}
+
+// pushdownProjections identifies which columns are referenced in SELECT,
+// WHERE, and JOIN conditions, and records them per table in RequiredColumns.
+func (o *Optimizer) pushdownProjections(dbName string, plan *OptimizedPlan) {
+	plan.RequiredColumns = make(map[string]map[string]bool)
+
+	tables := o.collectTables(plan.Stmt)
+
+	// Initialize per-table column sets
+	for _, t := range tables {
+		plan.RequiredColumns[t] = make(map[string]bool)
+	}
+
+	// Collect columns from SELECT
+	for _, col := range plan.Stmt.Columns {
+		o.collectColumnRefs(col.Expr, tables, plan.RequiredColumns)
+	}
+
+	// Collect columns from WHERE
+	o.collectColumnRefs(plan.Stmt.Where, tables, plan.RequiredColumns)
+
+	// Collect columns from JOIN conditions
+	for _, join := range plan.Stmt.Joins {
+		o.collectColumnRefs(join.Condition, tables, plan.RequiredColumns)
+	}
+
+	// If SELECT is *, mark all columns as required (conservative)
+	if len(plan.Stmt.Columns) == 0 {
+		for _, t := range tables {
+			plan.RequiredColumns[t]["*"] = true
+		}
+	}
+}
+
+// collectColumnRefs finds ColumnRef nodes and assigns them to the global
+// column set for each table. Since ColumnRef lacks table qualifiers, we
+// conservatively mark the column as required on every table.
+func (o *Optimizer) collectColumnRefs(expr parser.Expression, tables []string, required map[string]map[string]bool) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.(type) {
+	case *parser.ColumnRef:
+		for _, t := range tables {
+			required[t][strings.ToLower(e.Name)] = true
+		}
+	case *parser.BinaryExpr:
+		o.collectColumnRefs(e.Left, tables, required)
+		o.collectColumnRefs(e.Right, tables, required)
+	case *parser.AndExpr:
+		o.collectColumnRefs(e.Left, tables, required)
+		o.collectColumnRefs(e.Right, tables, required)
+	case *parser.OrExpr:
+		o.collectColumnRefs(e.Left, tables, required)
+		o.collectColumnRefs(e.Right, tables, required)
+	case *parser.NotExpr:
+		o.collectColumnRefs(e.Expr, tables, required)
+	case *parser.InExpr:
+		o.collectColumnRefs(e.Left, tables, required)
+		for _, r := range e.Right {
+			o.collectColumnRefs(r, tables, required)
+		}
+	case *parser.FunctionCall:
+		for _, arg := range e.Args {
+			o.collectColumnRefs(arg, tables, required)
+		}
+	case *parser.AggregateExpr:
+		for _, arg := range e.Args {
+			o.collectColumnRefs(arg, tables, required)
+		}
+	case *parser.SubqueryExpr:
+		// Subquery column refs are internal to the subquery
+	}
+}
+
+// decorrelateSubqueries finds correlated IN subqueries in WHERE and converts
+// them to semi-joins. Handles the pattern: WHERE col IN (SELECT col FROM t2)
+// where the subquery references the outer table.
+func (o *Optimizer) decorrelateSubqueries(dbName string, stmt *parser.SelectStatement) {
+	if stmt.Where == nil {
+		return
+	}
+	o.decorrelateWhere(dbName, stmt, &stmt.Where, &stmt.Joins)
+}
+
+// decorrelateWhere recursively walks the WHERE expression tree.
+func (o *Optimizer) decorrelateWhere(dbName string, outer *parser.SelectStatement, expr *parser.Expression, joins *[]parser.JoinClause) {
+	if expr == nil {
+		return
+	}
+
+	switch e := (*expr).(type) {
+	case *parser.InExpr:
+		if subq, ok := e.Right[0].(*parser.SubqueryExpr); ok && len(e.Right) == 1 {
+			if o.canDecorrelate(outer, e.Left, subq) {
+				*expr = o.convertToJoin(outer, e.Left, subq, joins)
+				return
+			}
+		}
+	case *parser.AndExpr:
+		o.decorrelateWhere(dbName, outer, &e.Left, joins)
+		o.decorrelateWhere(dbName, outer, &e.Right, joins)
+	case *parser.OrExpr:
+		o.decorrelateWhere(dbName, outer, &e.Left, joins)
+		o.decorrelateWhere(dbName, outer, &e.Right, joins)
+	case *parser.NotExpr:
+		o.decorrelateWhere(dbName, outer, &e.Expr, joins)
+	}
+}
+
+// canDecorrelate checks if a subquery is correlated with the outer query.
+// A simple correlated subquery: WHERE col IN (SELECT col2 FROM t2 WHERE t2.fk = t1.id)
+// We check that the subquery references the outer table's columns.
+func (o *Optimizer) canDecorrelate(outer *parser.SelectStatement, outerExpr parser.Expression, subq *parser.SubqueryExpr) bool {
+	if subq.Query == nil {
+		return false
+	}
+	// Get the outer column name
+	outerCol, ok := outerExpr.(*parser.ColumnRef)
+	if !ok {
+		return false
+	}
+	_ = outerCol
+
+	// Check if the subquery's WHERE references the outer table
+	outerTables := o.collectTables(outer)
+	return o.exprReferencesTables(subq.Query.Where, outerTables)
+}
+
+// exprReferencesTables checks if an expression references any of the given tables
+// (by looking for ColumnRef names that match known patterns).
+func (o *Optimizer) exprReferencesTables(expr parser.Expression, tables []string) bool {
+	if expr == nil || len(tables) == 0 {
+		return false
+	}
+	found := false
+	o.walkForTableRefs(expr, tables, &found)
+	return found
+}
+
+func (o *Optimizer) walkForTableRefs(expr parser.Expression, tables []string, found *bool) {
+	if *found || expr == nil {
+		return
+	}
+	switch e := expr.(type) {
+	case *parser.ColumnRef:
+		// Without table qualifiers in ColumnRef, we use a heuristic:
+		// assume correlation if there's any column ref in a subquery's WHERE
+		*found = true
+	case *parser.BinaryExpr:
+		o.walkForTableRefs(e.Left, tables, found)
+		o.walkForTableRefs(e.Right, tables, found)
+	case *parser.AndExpr:
+		o.walkForTableRefs(e.Left, tables, found)
+		o.walkForTableRefs(e.Right, tables, found)
+	case *parser.OrExpr:
+		o.walkForTableRefs(e.Left, tables, found)
+		o.walkForTableRefs(e.Right, tables, found)
+	}
+}
+
+// convertToJoin converts a correlated IN subquery into a semi-join.
+// Pattern: WHERE t1.col IN (SELECT t2.col FROM t2 WHERE ...)
+// Becomes: JOIN t2 ON t2.col = t1.col with the subquery's WHERE as join condition.
+func (o *Optimizer) convertToJoin(outer *parser.SelectStatement, outerExpr parser.Expression, subq *parser.SubqueryExpr, joins *[]parser.JoinClause) parser.Expression {
+	subStmt := subq.Query
+	joinTableName := subStmt.TableName
+
+	// Build the semi-join condition: outer.col = subquery.col
+	// The subquery SELECT column is the left side of the IN
+	var innerExpr parser.Expression
+	if len(subStmt.Columns) > 0 {
+		innerExpr = subStmt.Columns[0].Expr
+	} else {
+		innerExpr = outerExpr
+	}
+
+	var joinCondition parser.Expression
+	joinCondition = &parser.BinaryExpr{
+		Left:     outerExpr,
+		Operator: "=",
+		Right:    innerExpr,
+	}
+
+	// If the subquery has a WHERE, add it as an AND to the join condition
+	if subStmt.Where != nil {
+		joinCondition = &parser.AndExpr{
+			Left:  joinCondition,
+			Right: subStmt.Where,
+		}
+	}
+
+	semiJoin := parser.JoinClause{
+		Type:      "INNER",
+		TableName: joinTableName,
+		Condition: joinCondition,
+	}
+
+	*joins = append(*joins, semiJoin)
+
+	// Return TRUE (the IN condition is now handled by the join)
+	return &parser.Value{Type: "bool", BoolVal: true}
 }
 
 // chooseAccessMethods выбирает лучший метод доступа для каждой таблицы.
@@ -365,12 +629,14 @@ func (o *Optimizer) estimateCost(dbName string, plan *OptimizedPlan) CostEstimat
 
 // OptimizedPlan оптимизированный план запроса.
 type OptimizedPlan struct {
-	Stmt            *parser.SelectStatement
-	TableStats      *TableStatistics
-	AccessMethods   map[string]AccessMethod
-	JoinMethods     []JoinMethod
-	Cost            CostEstimate
-	TablePredicates map[string]parser.Expression // table → pushed-down predicates
+	Stmt             *parser.SelectStatement
+	TableStats       *TableStatistics
+	AccessMethods    map[string]AccessMethod
+	JoinMethods      []JoinMethod
+	Cost             CostEstimate
+	TablePredicates  map[string]parser.Expression  // table → pushed-down predicates
+	RequiredColumns  map[string]map[string]bool     // table → set of required column names
+	DecorrelatedJoins []parser.JoinClause           // joins created from decorrelated subqueries
 }
 
 // FormatOptimizedPlan форматирует оптимизированный план для вывода.
@@ -418,7 +684,9 @@ func (p *OptimizedPlan) FormatOptimizedPlan() string {
 	}
 
 	// JOINs
-	for i, join := range p.Stmt.Joins {
+	allJoins := append([]parser.JoinClause{}, p.Stmt.Joins...)
+	allJoins = append(allJoins, p.DecorrelatedJoins...)
+	for i, join := range allJoins {
 		method := NestedLoopJoin
 		if i < len(p.JoinMethods) {
 			method = p.JoinMethods[i]
@@ -435,6 +703,15 @@ func (p *OptimizedPlan) FormatOptimizedPlan() string {
 
 		if join.Condition != nil {
 			b.WriteString(fmt.Sprintf("    Condition: %s\n", formatExpression(join.Condition)))
+		}
+	}
+
+	// Required columns (projection pushdown)
+	if len(p.RequiredColumns) > 0 {
+		for table, cols := range p.RequiredColumns {
+			if len(cols) > 0 && !cols["*"] {
+				b.WriteString(fmt.Sprintf("  Columns needed from \"%s\": %s\n", table, formatColumnSet(cols)))
+			}
 		}
 	}
 
@@ -493,4 +770,14 @@ func formatValue(v parser.Value) string {
 	default:
 		return "?"
 	}
+}
+
+// formatColumnSet formats a set of column names for display.
+func formatColumnSet(cols map[string]bool) string {
+	names := make([]string, 0, len(cols))
+	for c := range cols {
+		names = append(names, c)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }

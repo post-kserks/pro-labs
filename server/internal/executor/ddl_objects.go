@@ -3,6 +3,7 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"vaultdb/internal/storage"
 )
@@ -31,6 +32,7 @@ func ensureSystemTable(ctx *ExecutionContext, dbName string) error {
 			{Name: "name", Type: "TEXT"},
 			{Name: "type", Type: "TEXT"},
 			{Name: "definition", Type: "TEXT"},
+			{Name: "created_at", Type: "INT"},
 		},
 	}
 	return ctx.Storage.CreateTable(dbName, schema)
@@ -54,11 +56,17 @@ func storeObject(ctx *ExecutionContext, dbName, objType, name string, definition
 		return fmt.Errorf("store object: %w", err)
 	}
 
-	// Ищем существующую запись
+	// Ищем существующую запись и сохраняем её created_at
 	var existingIdx []int
+	var createdAt int64
 	for i, row := range existing {
 		if len(row) >= 3 && valuesEqual(row[0], name) && valuesEqual(row[1], objType) {
 			existingIdx = append(existingIdx, i)
+			if len(row) >= 4 {
+				if ts, ok := row[3].(int64); ok {
+					createdAt = ts
+				}
+			}
 		}
 	}
 
@@ -69,8 +77,13 @@ func storeObject(ctx *ExecutionContext, dbName, objType, name string, definition
 		}
 	}
 
+	// Используем существующий created_at или текущее время
+	if createdAt == 0 {
+		createdAt = time.Now().Unix()
+	}
+
 	// Вставляем новую
-	newRow := storage.Row{name, objType, string(defJSON)}
+	newRow := storage.Row{name, objType, string(defJSON), createdAt}
 	if _, err := ctx.Storage.InsertRows(dbName, systemTableName, []storage.Row{newRow}); err != nil {
 		return fmt.Errorf("store object: insert: %w", err)
 	}

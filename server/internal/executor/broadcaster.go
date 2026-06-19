@@ -42,7 +42,8 @@ type Subscription struct {
 	DropPolicy   DropPolicy
 	BlockTimeout time.Duration
 
-	closed atomic.Bool
+	closed       atomic.Bool
+	snapshotTxID uint64
 }
 
 // Close закрывает канал подписки ровно один раз.
@@ -146,7 +147,7 @@ func (b *Broadcaster) Configure(policy DropPolicy, blockTimeout time.Duration, b
 }
 
 // NewSubscription создаёт подписку с настроенными политикой и буфером.
-func (b *Broadcaster) NewSubscription(id string, query *parser.SelectStatement, db string) *Subscription {
+func (b *Broadcaster) NewSubscription(id string, query *parser.SelectStatement, db string, snapshotTxID uint64) *Subscription {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return &Subscription{
@@ -156,6 +157,7 @@ func (b *Broadcaster) NewSubscription(id string, query *parser.SelectStatement, 
 		Send:         make(chan *Result, b.bufferSize),
 		DropPolicy:   b.defaultPolicy,
 		BlockTimeout: b.blockTimeout,
+		snapshotTxID: snapshotTxID,
 	}
 }
 
@@ -200,6 +202,9 @@ func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *Executio
 			}
 			if ctx.Embedder != nil {
 				sess.SetEmbedder(ctx.Embedder)
+			}
+			if sub.snapshotTxID > 0 {
+				sess.SetSnapshotTxID(sub.snapshotTxID)
 			}
 
 			res, err := sess.Execute(sub.Query)

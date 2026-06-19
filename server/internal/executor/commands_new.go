@@ -6,6 +6,7 @@ import (
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/txmanager"
 )
 
 const maxMergeRows = 1000000
@@ -19,15 +20,11 @@ func (c *CTECommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	return ExecuteCTEStatement(c.stmt, ctx)
 }
 
-// TruncateCommand выполняет TRUNCATE TABLE.
+// TruncateCommand performs TRUNCATE TABLE.
 type TruncateCommand struct {
 	stmt *parser.TruncateStatement
 }
 
-// NOTE: TRUNCATE is NOT atomic. It reads all rows, builds an index list, then
-// deletes in batches. Concurrent INSERTs between the scan and delete may result
-// in deleted rows or missed rows. For atomic truncation, wrap the operation
-// inside a transaction.
 func (c *TruncateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	dbName, err := requireCurrentDB(ctx)
 	if err != nil {
@@ -38,42 +35,56 @@ func (c *TruncateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
 
-	// Read all rows to get count
-	rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
-	if err != nil {
-		return nil, err
+	// If inside an explicit user transaction, buffer the truncate for deferred execution.
+	if ctx.Session.IsInTx() {
+		ctx.Session.TxManager.AddOp(ctx.Session.ActiveTx, txmanager.PendingOp{
+			Type:    "truncate",
+			DB:      dbName,
+			Table:   c.stmt.TableName,
+			Payload: c.stmt,
+		})
+		return &Result{
+			Type:    "message",
+			Message: fmt.Sprintf("Buffered TRUNCATE (tx %d). Not committed yet.", ctx.Session.ActiveTx.ID),
+		}, nil
 	}
 
-	// Delete all rows
-	indices := make([]int, len(rows))
-	for i := range indices {
-		indices[i] = i
-	}
+	// Begin implicit transaction for atomicity.
+	tx := ctx.TxManager.Begin()
+	defer tx.Rollback()
 
-	triggers, err := loadAllObjectsByType(ctx, dbName, objTypeTrigger)
-	if err == nil {
-		for _, td := range triggers {
-			triggerTable, _ := td["table"].(string)
-			if triggerTable == c.stmt.TableName {
-				return nil, fmt.Errorf("TRUNCATE with triggers not yet supported; use DELETE instead")
+	// Register the table so Commit captures the version snapshot and
+	// detects concurrent modifications.
+	ctx.TxManager.AddOp(tx, txmanager.PendingOp{
+		Type:    "truncate",
+		DB:      dbName,
+		Table:   c.stmt.TableName,
+		Payload: c.stmt,
+	})
+
+	if err := ctx.TxManager.Commit(tx, func(pendingOps []txmanager.PendingOp) error {
+		for _, op := range pendingOps {
+			if op.Type == "truncate" {
+				rows, err := ctx.Storage.ReadCurrentRows(op.DB, op.Table)
+				if err != nil {
+					return err
+				}
+				if len(rows) > 0 {
+					indices := make([]int, len(rows))
+					for i := range indices {
+						indices[i] = i
+					}
+					if _, err := ctx.Storage.DeleteRows(op.DB, op.Table, indices); err != nil {
+						return err
+					}
+				}
+				notifyMutation(ctx, op.DB, op.Table)
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-
-	// Fire DELETE triggers for each row being truncated
-	for range indices {
-		fireTriggers(ctx, dbName, c.stmt.TableName, "DELETE")
-	}
-
-	// Delete all rows
-	if len(indices) > 0 {
-		_, err = ctx.Storage.DeleteRows(dbName, c.stmt.TableName, indices)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	notifyMutation(ctx, dbName, c.stmt.TableName)
 
 	return &Result{
 		Type:    "message",

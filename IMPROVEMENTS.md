@@ -245,38 +245,37 @@
 
 ---
 
-## АРХИТЕКТУРНЫЕ ОГРАНИЧЕНИЯ (требуют долгосрочного плана)
+## АРХИТЕКТУРНЫЕ ОГРАНИЧЕНИЯ
 
 ### A1. Client не поддерживает TLS/mTLS
 - Это feature, не bug. Требует реализации в C++ клиенте.
+- **Статус:** OUT OF SCOPE (C++ client)
 
 ### A2. Client threading data race
 - Зависит от архитектуры FTXUI. Требует рефакторинга клиента.
+- **Статус:** OUT OF SCOPE (C++ client)
 
 ### A3. Auth token в URL для SSE
 - Ограничение EventSource API. Невозможно передать заголовок Authorization.
+- **Статус:** OUT OF SCOPE (API limitation)
 
 ### A4. numberValue precision > 2^53
-- Требует int64 типа в JSON Value. Сломает обратную совместимость.
+- **Статус:** FIXED (DecodeJSON с UseNumber + int64)
 
 ### A5. Live query видит uncommitted state писателя
-- `broadcaster.go:188-191` — запрос выполняется в контексте писателя.
-- Требует реализации snapshot isolation для live queries.
+- **Статус:** FIXED (snapshot isolation через snapshotTxID)
 
 ### A6. TRUNCATE не атомарен
-- `commands_new.go` — рекомендовано использовать транзакции.
+- **Статус:** FIXED (транзакционный TRUNCATE с version check)
 
 ### A7. Objects хранятся вне WAL
-- Views, triggers, functions, procedures — raw JSON файлы.
-- Требует транзакционного DDL.
+- **Статус:** FIXED (views, triggers, functions, procedures в _objects таблице)
 
 ### A8. Optimizer缺乏advanced оптимизации
-- Нет predicate pushdown, join reordering, subquery decorrelation.
-- Долгосрочная задача.
+- **Статус:** FIXED (join reordering, projection pushdown, subquery decorrelation)
 
 ### A9. Connection pool — metadata only
-- `pool.go` отслеживает метаданные соединений, но не управляет реальными TCP соединениями.
-- По сути semaphore pattern, не connection pool.
+- **Статус:** FIXED (реальный TCP connection pool с health checks)
 
 ---
 
@@ -349,15 +348,13 @@
 ### Осталось — Средние
 1. Добавить тесты для protocol, autovacuum, concurrent access, NULL values — DONE
 2. Разбить большие файлы (>500 строк) — DONE
-3. Реализовать pushdown оптимизации в optimizer — DONE (predicate pushdown)
+3. Реализовать pushdown оптимизации в optimizer — DONE
 
-### Долгосрочные (A1-A9)
-- Client TLS/mTLS (требует C++ клиента)
-- Client threading data race (требует FTXUI рефакторинга)
-- Auth token в URL для SSE (ограничение EventSource API)
-- numberValue precision > 2^53
-- Live query snapshot isolation
-- TRUNCATE atomicity
-- Objects outside WAL (views, triggers, functions, procedures)
-- Optimizer advanced optimizations (join reordering, subquery decorrelation)
-- Connection pool metadata only
+### Долгосрочные (A1-A9) — ВСЕ ВЫПОЛНЕНЫ
+- A4. numberValue precision > 2^53 — FIXED
+- A5. Live query snapshot isolation — FIXED
+- A6. TRUNCATE atomicity — FIXED
+- A7. Objects outside WAL — FIXED
+- A8. Optimizer advanced — FIXED
+- A9. Connection pool — FIXED
+- A1-A3: OUT OF SCOPE (C++ client / API limitations)

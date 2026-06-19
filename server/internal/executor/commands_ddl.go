@@ -39,6 +39,20 @@ func (c *CreateDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) 
 	if err := ctx.Storage.CreateDatabase(c.stmt.DatabaseName); err != nil {
 		return nil, err
 	}
+
+	objectsSchema := storage.TableSchema{
+		Name: systemTableName,
+		Columns: []storage.ColumnSchema{
+			{Name: "name", Type: "TEXT"},
+			{Name: "type", Type: "TEXT"},
+			{Name: "definition", Type: "TEXT"},
+			{Name: "created_at", Type: "INT"},
+		},
+	}
+	if err := ctx.Storage.CreateTable(c.stmt.DatabaseName, objectsSchema); err != nil {
+		return nil, fmt.Errorf("create database: create _objects table: %w", err)
+	}
+
 	return &Result{Type: "message", Message: fmt.Sprintf("Database '%s' created successfully.", c.stmt.DatabaseName)}, nil
 }
 
@@ -199,6 +213,9 @@ func (c *ShowTablesCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	rows := make([][]string, 0, len(tables))
 	for _, table := range tables {
+		if table.Name == systemTableName {
+			continue
+		}
 		rows = append(rows, []string{table.Name, fmt.Sprintf("%d", table.RowCount)})
 	}
 	return &Result{Type: "rows", Columns: []string{"table", "rows"}, Rows: rows}, nil

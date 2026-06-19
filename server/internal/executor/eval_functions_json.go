@@ -3,6 +3,8 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+
+	"vaultdb/internal/storage"
 )
 
 // ─── JSON Functions ─────────────────────────────────────────────────────────
@@ -30,8 +32,8 @@ func fnJsonExtract(args []interface{}, ctx *ExecutionContext) (interface{}, erro
 		return nil, fmt.Errorf("JSON_EXTRACT requires at least 2 arguments")
 	}
 	leftStr := valueToString(args[0])
-	var data interface{}
-	if err := json.Unmarshal([]byte(leftStr), &data); err != nil {
+	data, err := storage.DecodeJSON([]byte(leftStr))
+	if err != nil {
 		return nil, fmt.Errorf("JSON_EXTRACT: not valid JSON")
 	}
 
@@ -81,8 +83,12 @@ func fnJsonbArrayElements(args []interface{}, ctx *ExecutionContext) (interface{
 		return nil, fmt.Errorf("JSONB_ARRAY_ELEMENTS requires 1 argument")
 	}
 	s := valueToString(args[0])
-	var arr []interface{}
-	if err := json.Unmarshal([]byte(s), &arr); err != nil {
+	raw, err := storage.DecodeJSON([]byte(s))
+	if err != nil {
+		return nil, fmt.Errorf("JSONB_ARRAY_ELEMENTS: not a JSON array")
+	}
+	arr, ok := raw.([]interface{})
+	if !ok {
 		return nil, fmt.Errorf("JSONB_ARRAY_ELEMENTS: not a JSON array")
 	}
 	if len(arr) == 0 {
@@ -96,8 +102,8 @@ func fnJsonbTypeof(args []interface{}, ctx *ExecutionContext) (interface{}, erro
 		return nil, fmt.Errorf("JSONB_TYPEOF requires 1 argument")
 	}
 	s := valueToString(args[0])
-	var v interface{}
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
+	v, err := storage.DecodeJSON([]byte(s))
+	if err != nil {
 		return "string", nil
 	}
 	switch v.(type) {
@@ -105,7 +111,7 @@ func fnJsonbTypeof(args []interface{}, ctx *ExecutionContext) (interface{}, erro
 		return "null", nil
 	case bool:
 		return "boolean", nil
-	case float64:
+	case int64, float64:
 		return "number", nil
 	case string:
 		return "string", nil
@@ -126,8 +132,12 @@ func fnJsonbSet(args []interface{}, ctx *ExecutionContext) (interface{}, error) 
 	path := valueToString(args[1])
 	newVal := args[2]
 
-	var data map[string]interface{}
-	if err := json.Unmarshal([]byte(targetStr), &data); err != nil {
+	raw, err := storage.DecodeJSON([]byte(targetStr))
+	if err != nil {
+		return nil, fmt.Errorf("JSONB_SET: target is not JSON object")
+	}
+	data, ok := raw.(map[string]interface{})
+	if !ok {
 		return nil, fmt.Errorf("JSONB_SET: target is not JSON object")
 	}
 	data[path] = newVal
@@ -140,8 +150,8 @@ func fnJsonbExtractPath(args []interface{}, ctx *ExecutionContext) (interface{},
 		return nil, fmt.Errorf("JSONB_EXTRACT_PATH requires at least 2 arguments")
 	}
 	leftStr := valueToString(args[0])
-	var data interface{}
-	if err := json.Unmarshal([]byte(leftStr), &data); err != nil {
+	data, err := storage.DecodeJSON([]byte(leftStr))
+	if err != nil {
 		return nil, fmt.Errorf("JSONB_EXTRACT_PATH: not valid JSON")
 	}
 

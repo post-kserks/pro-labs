@@ -229,9 +229,13 @@ func decodeColumnValue(data []byte) (interface{}, error) {
 			return nil, fmt.Errorf("jsonb data truncated")
 		}
 		jsonStr := string(data[3 : 3+int(jsonLen)])
-		var m map[string]interface{}
-		if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
-			// Not a JSON object — return as string
+		raw, err := DecodeJSON([]byte(jsonStr))
+		if err != nil {
+			// Not valid JSON — return as string
+			return jsonStr, nil
+		}
+		m, ok := raw.(map[string]interface{})
+		if !ok {
 			return jsonStr, nil
 		}
 		return m, nil

@@ -104,7 +104,7 @@ func TestBroadcasterAsync(t *testing.T) {
 		Columns: []parser.SelectColumn{
 			{Expr: &parser.ColumnRef{Name: "id"}},
 		},
-	}, "testdb")
+	}, "testdb", 0)
 	b.Subscribe(sub)
 
 	sub.Send <- &Result{}
@@ -130,4 +130,147 @@ func TestBroadcasterAsync(t *testing.T) {
 
 	b.Unsubscribe(sub.ID)
 	sub.Close()
+}
+
+// versionedMockStorage tracks rows at different snapshot versions.
+type versionedMockStorage struct {
+	*MockStorage
+	snapshotRows map[string][]storage.Row
+	snapshotTxID uint64
+}
+
+func newVersionedMockStorage(snapshotTxID uint64) *versionedMockStorage {
+	return &versionedMockStorage{
+		MockStorage:  NewMockStorage(),
+		snapshotRows: make(map[string][]storage.Row),
+		snapshotTxID: snapshotTxID,
+	}
+}
+
+func (v *versionedMockStorage) ReadRowsAsOf(dbName, tableName string, txID uint64) ([]storage.Row, error) {
+	if txID <= v.snapshotTxID {
+		if rows, ok := v.snapshotRows[dbName+"/"+tableName]; ok {
+			return rows, nil
+		}
+	}
+	return v.rows[dbName][tableName], nil
+}
+
+func TestLiveQuerySnapshotIsolation(t *testing.T) {
+	store := newVersionedMockStorage(5)
+	store.databases["mydb"] = true
+	store.ensureDB("mydb")
+	store.tables["mydb"]["orders"] = &storage.TableSchema{
+		Name: "orders",
+		Columns: []storage.ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "status", Type: "TEXT"},
+		},
+	}
+	// Snapshot data: 2 rows
+	store.rows["mydb"]["orders"] = []storage.Row{
+		{int64(1), "pending"},
+		{int64(2), "shipped"},
+	}
+	store.snapshotRows["mydb/orders"] = []storage.Row{
+		{int64(1), "pending"},
+		{int64(2), "shipped"},
+	}
+
+	// Simulate a mutation: add a third row
+	store.rows["mydb"]["orders"] = append(store.rows["mydb"]["orders"],
+		storage.Row{int64(3), "delivered"},
+	)
+
+	session := newTestSession(store)
+	session.SetCurrentDatabase("testdb")
+
+	b := NewBroadcaster()
+	b.Configure(PolicyDrop, 5*time.Second, 256, slog.Default())
+
+	// Create subscription with snapshot txID=5 — should see only the 2 original rows
+	sub := b.NewSubscription("snap-test", &parser.SelectStatement{
+		TableName: "orders",
+		Columns: []parser.SelectColumn{
+			{Expr: &parser.ColumnRef{Name: "id"}},
+			{Expr: &parser.ColumnRef{Name: "status"}},
+		},
+	}, "mydb", 5)
+	b.Subscribe(sub)
+	defer b.Unsubscribe(sub.ID)
+	defer sub.Close()
+
+	ctx := &ExecutionContext{
+		Storage:      store,
+		Session:      session,
+		SnapshotTxID: 5,
+	}
+
+	b.NotifyTableChanged("mydb", "orders", ctx)
+
+	select {
+	case res := <-sub.Send:
+		if res == nil {
+			t.Fatal("expected non-nil result")
+		}
+		// Should see only the 2 rows from the snapshot
+		if len(res.Rows) != 2 {
+			t.Fatalf("expected 2 rows (snapshot), got %d: %v", len(res.Rows), res.Rows)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for live query notification")
+	}
+}
+
+func TestLiveQueryNoSnapshotSeesCurrent(t *testing.T) {
+	store := NewMockStorage()
+	store.databases["mydb"] = true
+	store.ensureDB("mydb")
+	store.tables["mydb"]["orders"] = &storage.TableSchema{
+		Name: "orders",
+		Columns: []storage.ColumnSchema{
+			{Name: "id", Type: "INT"},
+		},
+	}
+	store.rows["mydb"]["orders"] = []storage.Row{
+		{int64(1)},
+		{int64(2)},
+		{int64(3)},
+	}
+
+	session := newTestSession(store)
+	session.SetCurrentDatabase("mydb")
+
+	b := NewBroadcaster()
+	b.Configure(PolicyDrop, 5*time.Second, 256, slog.Default())
+
+	// No snapshot (txID=0) — should see all current rows
+	sub := b.NewSubscription("no-snap", &parser.SelectStatement{
+		TableName: "orders",
+		Columns: []parser.SelectColumn{
+			{Expr: &parser.ColumnRef{Name: "id"}},
+		},
+	}, "mydb", 0)
+	b.Subscribe(sub)
+	defer b.Unsubscribe(sub.ID)
+	defer sub.Close()
+
+	ctx := &ExecutionContext{
+		Storage: store,
+		Session: session,
+	}
+
+	b.NotifyTableChanged("mydb", "orders", ctx)
+
+	select {
+	case res := <-sub.Send:
+		if res == nil {
+			t.Fatal("expected non-nil result")
+		}
+		if len(res.Rows) != 3 {
+			t.Fatalf("expected 3 rows (current), got %d", len(res.Rows))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for live query notification")
+	}
 }

@@ -545,7 +545,7 @@ func main() {
 
 	// Connection pool
 	maxConns := cfg.Server.MaxConnections
-	connPool := pool.NewPool(poolInitialCapacity, maxConns, poolIdleTimeout)
+	connPool := pool.NewPool(poolInitialCapacity, maxConns, poolIdleTimeout, nil)
 
 	go func() {
 		<-ctx.Done()
@@ -572,12 +572,13 @@ func main() {
 			}
 
 			// Acquire connection from pool (non-blocking)
-			connObj := connPool.Acquire()
+			connObj, err := connPool.Acquire()
 			if connObj == nil {
 				// Pool is full — reject connection
 				logger.Warn("connection pool full, rejecting connection",
 					"remote", conn.RemoteAddr(),
-					"max_connections", maxConns)
+					"max_connections", maxConns,
+					"error", err)
 				conn.Close()
 				continue
 			}

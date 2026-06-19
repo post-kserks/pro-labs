@@ -57,11 +57,20 @@ func evalFtsMatchScored(text, query string) float64 {
 func evalJsonContains(left, right interface{}) (interface{}, error) {
 	leftStr := valueToString(left)
 	rightStr := valueToString(right)
-	var leftArr, rightArr []interface{}
-	if err := json.Unmarshal([]byte(leftStr), &leftArr); err != nil {
+	rawLeft, err := storage.DecodeJSON([]byte(leftStr))
+	if err != nil {
 		return nil, fmt.Errorf("JSON contains: left is not JSON array")
 	}
-	if err := json.Unmarshal([]byte(rightStr), &rightArr); err != nil {
+	leftArr, ok := rawLeft.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("JSON contains: left is not JSON array")
+	}
+	rawRight, err := storage.DecodeJSON([]byte(rightStr))
+	if err != nil {
+		return nil, fmt.Errorf("JSON contains: right is not JSON array")
+	}
+	rightArr, ok := rawRight.([]interface{})
+	if !ok {
 		return nil, fmt.Errorf("JSON contains: right is not JSON array")
 	}
 	leftSet := make(map[string]bool)
@@ -80,11 +89,20 @@ func evalJsonContains(left, right interface{}) (interface{}, error) {
 func evalJsonContainedBy(left, right interface{}) (interface{}, error) {
 	leftStr := valueToString(left)
 	rightStr := valueToString(right)
-	var leftArr, rightArr []interface{}
-	if err := json.Unmarshal([]byte(leftStr), &leftArr); err != nil {
+	rawLeft, err := storage.DecodeJSON([]byte(leftStr))
+	if err != nil {
 		return nil, fmt.Errorf("JSON contained by: left is not JSON array")
 	}
-	if err := json.Unmarshal([]byte(rightStr), &rightArr); err != nil {
+	leftArr, ok := rawLeft.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("JSON contained by: left is not JSON array")
+	}
+	rawRight, err := storage.DecodeJSON([]byte(rightStr))
+	if err != nil {
+		return nil, fmt.Errorf("JSON contained by: right is not JSON array")
+	}
+	rightArr, ok := rawRight.([]interface{})
+	if !ok {
 		return nil, fmt.Errorf("JSON contained by: right is not JSON array")
 	}
 	rightSet := make(map[string]bool)
@@ -103,8 +121,12 @@ func evalJsonContainedBy(left, right interface{}) (interface{}, error) {
 func evalJsonHasKey(left, right interface{}) (interface{}, error) {
 	leftStr := valueToString(left)
 	key := valueToString(right)
-	var data map[string]interface{}
-	if err := json.Unmarshal([]byte(leftStr), &data); err != nil {
+	raw, err := storage.DecodeJSON([]byte(leftStr))
+	if err != nil {
+		return nil, fmt.Errorf("JSON has key: left is not JSON object")
+	}
+	data, ok := raw.(map[string]interface{})
+	if !ok {
 		return nil, fmt.Errorf("JSON has key: left is not JSON object")
 	}
 	_, exists := data[key]
@@ -115,11 +137,20 @@ func evalJsonHasKey(left, right interface{}) (interface{}, error) {
 func evalJsonMerge(left, right interface{}) (interface{}, error) {
 	leftStr := valueToString(left)
 	rightStr := valueToString(right)
-	var leftObj, rightObj map[string]interface{}
-	if err := json.Unmarshal([]byte(leftStr), &leftObj); err != nil {
+	rawLeft, err := storage.DecodeJSON([]byte(leftStr))
+	if err != nil {
 		return nil, fmt.Errorf("JSON merge: left is not JSON object")
 	}
-	if err := json.Unmarshal([]byte(rightStr), &rightObj); err != nil {
+	leftObj, ok := rawLeft.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("JSON merge: left is not JSON object")
+	}
+	rawRight, err := storage.DecodeJSON([]byte(rightStr))
+	if err != nil {
+		return nil, fmt.Errorf("JSON merge: right is not JSON object")
+	}
+	rightObj, ok := rawRight.(map[string]interface{})
+	if !ok {
 		return nil, fmt.Errorf("JSON merge: right is not JSON object")
 	}
 	for k, v := range rightObj {
@@ -230,7 +261,12 @@ func evalJsonPath(e *parser.JsonPathExpr, row storage.Row, schema *storage.Table
 	case map[string]interface{}:
 		data = v
 	case string:
-		if err := json.Unmarshal([]byte(v), &data); err != nil {
+		raw, err := storage.DecodeJSON([]byte(v))
+		if err != nil {
+			return nil, nil
+		}
+		data, _ = raw.(map[string]interface{})
+		if data == nil {
 			return nil, nil
 		}
 	default:

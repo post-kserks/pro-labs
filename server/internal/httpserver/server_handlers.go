@@ -345,7 +345,7 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	sub := s.br.NewSubscription(fmt.Sprintf("sub-%d", s.nextSubID.Add(1)), selectStmt, db)
+	sub := s.br.NewSubscription(fmt.Sprintf("sub-%d", s.nextSubID.Add(1)), selectStmt, db, s.cfg.Storage.CurrentTxID())
 	send := sub.Send
 
 	s.br.Subscribe(sub)

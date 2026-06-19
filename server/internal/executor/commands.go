@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -148,11 +147,13 @@ func coerceToColumn(value storage.Value, column storage.ColumnSchema) (storage.V
 		case map[string]interface{}:
 			return v, nil
 		case string:
-			var m map[string]interface{}
-			if err := json.Unmarshal([]byte(v), &m); err == nil {
-				return m, nil
+			raw, err := storage.DecodeJSON([]byte(v))
+			if err == nil {
+				if m, ok := raw.(map[string]interface{}); ok {
+					return m, nil
+				}
 			}
-			return v, nil // fallback to string if not JSON
+			return v, nil // fallback to string if not JSON object
 		default:
 			return valueToString(value), nil
 		}
@@ -206,9 +207,11 @@ func inferType(val interface{}) string {
 		return "FLEXIBLE"
 	case string:
 		// Try to see if it's JSON
-		var m map[string]interface{}
-		if err := json.Unmarshal([]byte(v), &m); err == nil {
-			return "FLEXIBLE"
+		raw, err := storage.DecodeJSON([]byte(v))
+		if err == nil {
+			if _, ok := raw.(map[string]interface{}); ok {
+				return "FLEXIBLE"
+			}
 		}
 		return "TEXT"
 	default:

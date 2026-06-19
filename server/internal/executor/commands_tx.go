@@ -160,6 +160,29 @@ func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) (int, error) {
 			if _, err := cmd.executeImmediate(ctx); err != nil {
 				return i, err
 			}
+		case "truncate":
+			stmt, ok := op.Payload.(*parser.TruncateStatement)
+			if !ok {
+				return i, fmt.Errorf("op %d: invalid truncate payload type", i)
+			}
+			rows, err := ctx.Storage.ReadCurrentRows(op.DB, op.Table)
+			if err != nil {
+				return i, err
+			}
+			if len(rows) > 0 {
+				indices := make([]int, len(rows))
+				for idx := range indices {
+					indices[idx] = idx
+				}
+				if _, err := ctx.Storage.DeleteRows(op.DB, op.Table, indices); err != nil {
+					return i, err
+				}
+			}
+			notifyMutation(ctx, op.DB, op.Table)
+			if ctx.Session.resultCache != nil {
+				ctx.Session.resultCache.Invalidate(op.Table)
+			}
+			_ = stmt
 		}
 	}
 	return len(ops), nil

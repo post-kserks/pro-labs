@@ -39,6 +39,10 @@ func (c *SelectCommand) applyOrderBy(rows []storage.Row, schema *storage.TableSc
 
 func (c *SelectCommand) resolveRows(ctx *ExecutionContext, dbName string) ([]storage.Row, string, error) {
 	if c.stmt.AsOf == nil {
+		if ctx.SnapshotTxID > 0 {
+			rows, err := ctx.Storage.ReadRowsAsOf(dbName, c.stmt.TableName, ctx.SnapshotTxID)
+			return rows, "", err
+		}
 		rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 		return rows, "", err
 	}

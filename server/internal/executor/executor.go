@@ -106,6 +106,10 @@ type ExecutionContext struct {
 	// column it was materialized into, so several window functions in one
 	// query project their own values.
 	WindowCols map[*parser.WindowFunctionExpr]string
+
+	// SnapshotTxID enables snapshot isolation: when set, reads use this txID
+	// to determine visibility of rows (0 = current).
+	SnapshotTxID uint64
 }
 
 type Executor struct {
@@ -164,14 +168,15 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	}
 
 	ctx := &ExecutionContext{
-		Storage:     e.storage,
-		Session:     sess,
-		Metrics:     e.metrics,
-		TxManager:   e.txm,
-		Broadcaster: e.broadcaster,
-		Embedder:    e.embedder,
-		WAL:         e.wal,
-		Ctx:         queryCtx,
+		Storage:      e.storage,
+		Session:      sess,
+		Metrics:      e.metrics,
+		TxManager:    e.txm,
+		Broadcaster:  e.broadcaster,
+		Embedder:     e.embedder,
+		WAL:          e.wal,
+		Ctx:          queryCtx,
+		SnapshotTxID: sess.SnapshotTxID(),
 	}
 	result, err := cmd.Execute(ctx)
 

@@ -27,6 +27,7 @@ type Session struct {
 	PreparedStatements map[string]*PreparedStatement
 	planCache          *PlanCache
 	resultCache        *ResultCache
+	snapshotTxID       uint64
 }
 
 type PreparedStatement struct {
@@ -93,6 +94,20 @@ func (s *Session) SetCurrentDatabase(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.currentDB = name
+}
+
+// SetSnapshotTxID задаёт ID транзакции для snapshot isolation при live queries.
+func (s *Session) SetSnapshotTxID(txID uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshotTxID = txID
+}
+
+// SnapshotTxID возвращает ID снимка транзакции (0 = нет снимка).
+func (s *Session) SnapshotTxID() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.snapshotTxID
 }
 
 func (s *Session) GetPreparedStatement(name string) (*PreparedStatement, bool) {

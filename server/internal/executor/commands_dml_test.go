@@ -1,7 +1,10 @@
 package executor
 
 import (
+	"fmt"
 	"testing"
+
+	"vaultdb/internal/parser"
 )
 
 func TestInsertReturningUsesPreMutationData(t *testing.T) {
@@ -163,5 +166,87 @@ func TestDeleteReturningMultipleRows(t *testing.T) {
 	}
 	if result.Rows[0][0] != "Boromir" {
 		t.Fatalf("expected 'Boromir', got %q", result.Rows[0][0])
+	}
+}
+
+func TestTruncateBasic(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	result := executeSQL(t, session, "TRUNCATE heroes;")
+	if result.Type != "message" {
+		t.Fatalf("expected message result, got %s", result.Type)
+	}
+
+	count := executeSQL(t, session, "SELECT COUNT(*) FROM heroes;")
+	if count.Rows[0][0] != "0" {
+		t.Fatalf("expected 0 rows after TRUNCATE, got %s", count.Rows[0][0])
+	}
+}
+
+func TestTruncateInsideTransaction(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	executeSQL(t, session, "BEGIN;")
+	executeSQL(t, session, "TRUNCATE heroes;")
+
+	count := executeSQL(t, session, "SELECT COUNT(*) FROM heroes;")
+	if count.Rows[0][0] != "4" {
+		t.Fatalf("expected 4 rows before COMMIT (buffered), got %s", count.Rows[0][0])
+	}
+
+	executeSQL(t, session, "COMMIT;")
+
+	count = executeSQL(t, session, "SELECT COUNT(*) FROM heroes;")
+	if count.Rows[0][0] != "0" {
+		t.Fatalf("expected 0 rows after COMMIT, got %s", count.Rows[0][0])
+	}
+}
+
+func TestTruncateConcurrentInsertAtomicity(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	txm := session.TxManager
+	exec := session.executor
+
+	// Run TRUNCATE and concurrent INSERT in parallel.
+	// The implicit transaction in TRUNCATE uses version-based conflict detection.
+	// One of two outcomes is valid:
+	//   1) TRUNCATE wins: table has 0 or 1 rows (the late insert arrived after TRUNCATE committed)
+	//   2) INSERT wins: TRUNCATE fails with conflict, table has >= 4 original rows
+	var truncateErr error
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		stmt, _ := parser.Parse("INSERT INTO heroes VALUES (10, 'Concurrent', 1, TRUE, 5.0, 'Race');")
+		sess2 := &Session{
+			currentDB: "mydb",
+			TxManager: txm,
+		}
+		exec.Run(stmt, sess2)
+	}()
+
+	stmt, _ := parser.Parse("TRUNCATE heroes;")
+	_, truncateErr = exec.Run(stmt, session)
+	<-done
+
+	count := executeSQL(t, session, "SELECT COUNT(*) FROM heroes;")
+	rowCount := 0
+	fmt.Sscanf(count.Rows[0][0], "%d", &rowCount)
+
+	if truncateErr == nil {
+		// TRUNCATE committed. The concurrent INSERT may or may not have landed
+		// after our commit. Either 0 rows (INSERT lost) or 1 row (INSERT landed after).
+		if rowCount > 1 {
+			t.Fatalf("TRUNCATE succeeded but table has %d rows (expected 0 or 1)", rowCount)
+		}
+	} else {
+		// TRUNCATE commit failed due to version conflict. Original rows should be intact.
+		if rowCount < 4 {
+			t.Fatalf("TRUNCATE failed but table has only %d rows (expected >= 4), err: %v", rowCount, truncateErr)
+		}
 	}
 }

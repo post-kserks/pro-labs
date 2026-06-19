@@ -2,7 +2,6 @@ package executor
 
 import (
 	crypto_rand "crypto/rand"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -231,8 +230,12 @@ func injectOuterColumns(expr parser.Expression, outerRow storage.Row, outerSchem
 
 // parseJSONArray парсит JSON массив.
 func parseJSONArray(s string) []interface{} {
-	var arr []interface{}
-	if err := json.Unmarshal([]byte(s), &arr); err != nil {
+	raw, err := storage.DecodeJSON([]byte(s))
+	if err != nil {
+		return nil
+	}
+	arr, ok := raw.([]interface{})
+	if !ok {
 		return nil
 	}
 	return arr

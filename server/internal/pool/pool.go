@@ -3,6 +3,8 @@ package pool
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"io"
+	"net"
 	"sync"
 	"time"
 )
@@ -14,21 +16,65 @@ type Pool struct {
 	minSize     int
 	maxSize     int
 	idleTimeout time.Duration
+	factory     func() (net.Conn, error)
 	stopCh      chan struct{}
 	closed      bool
 	wg          sync.WaitGroup
 }
 
-// Connection — соединение в пуле.
+// Connection — соединение в пуле, оборачивает реальное TCP-соединение.
 type Connection struct {
+	conn      net.Conn
 	ID        string
 	CreatedAt time.Time
 	LastUsed  time.Time
 	InUse     bool
+	mu        sync.Mutex
+}
+
+// Read читает данные из соединения, обновляя LastUsed.
+func (c *Connection) Read(b []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.LastUsed = time.Now()
+	return c.conn.Read(b)
+}
+
+// Write записывает данные в соединение, обновляя LastUsed.
+func (c *Connection) Write(b []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.LastUsed = time.Now()
+	return c.conn.Write(b)
+}
+
+// Close закрывает底层 TCP-соединение.
+func (c *Connection) Close() error {
+	return c.conn.Close()
+}
+
+// RemoteAddr возвращает адрес удалённой стороны.
+func (c *Connection) RemoteAddr() net.Addr {
+	return c.conn.RemoteAddr()
+}
+
+// SetDeadline устанавливает deadline на соединении.
+func (c *Connection) SetDeadline(t time.Time) error {
+	return c.conn.SetDeadline(t)
+}
+
+// SetReadDeadline устанавливает read deadline.
+func (c *Connection) SetReadDeadline(t time.Time) error {
+	return c.conn.SetReadDeadline(t)
+}
+
+// SetWriteDeadline устанавливает write deadline.
+func (c *Connection) SetWriteDeadline(t time.Time) error {
+	return c.conn.SetWriteDeadline(t)
 }
 
 // NewPool создаёт новый пул соединений.
-func NewPool(minSize, maxSize int, idleTimeout time.Duration) *Pool {
+func NewPool(minSize, maxSize int, idleTimeout time.Duration, factory func() (net.Conn, error)) *Pool {
 	if minSize <= 0 {
 		minSize = 1
 	}
@@ -44,10 +90,10 @@ func NewPool(minSize, maxSize int, idleTimeout time.Duration) *Pool {
 		minSize:     minSize,
 		maxSize:     maxSize,
 		idleTimeout: idleTimeout,
+		factory:     factory,
 		stopCh:      make(chan struct{}),
 	}
 
-	// Запускаем фоновую горутину для очистки неиспользуемых соединений
 	p.wg.Add(1)
 	go p.cleanupLoop()
 
@@ -55,35 +101,43 @@ func NewPool(minSize, maxSize int, idleTimeout time.Duration) *Pool {
 }
 
 // Acquire получает соединение из пула.
-// Если пул пуст и не достигнут maxSize — создаёт новое соединение.
-// Если пул полон — возвращает nil.
-func (p *Pool) Acquire() *Connection {
+func (p *Pool) Acquire() (*Connection, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Ищем свободное соединение
 	for _, conn := range p.connections {
 		if !conn.InUse {
-			conn.InUse = true
-			conn.LastUsed = time.Now()
-			return conn
+			if p.isHealthy(conn) {
+				conn.InUse = true
+				conn.LastUsed = time.Now()
+				return conn, nil
+			}
+			p.removeConnLocked(conn)
 		}
 	}
 
-	// Если пул не полон — создаём новое соединение
-	if len(p.connections) < p.maxSize {
-		conn := &Connection{
-			ID:        generateID(),
-			CreatedAt: time.Now(),
-			LastUsed:  time.Now(),
-			InUse:     true,
-		}
-		p.connections = append(p.connections, conn)
-		return conn
+	if len(p.connections) >= p.maxSize {
+		return nil, io.ErrShortBuffer
 	}
 
-	// Пул полон
-	return nil
+	if p.factory == nil {
+		return nil, io.ErrNoProgress
+	}
+
+	raw, err := p.factory()
+	if err != nil {
+		return nil, err
+	}
+
+	conn := &Connection{
+		conn:      raw,
+		ID:        generateID(),
+		CreatedAt: time.Now(),
+		LastUsed:  time.Now(),
+		InUse:     true,
+	}
+	p.connections = append(p.connections, conn)
+	return conn, nil
 }
 
 // Release возвращает соединение в пул.
@@ -107,8 +161,13 @@ func (p *Pool) Close() {
 
 	close(p.stopCh)
 	p.wg.Wait()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	for _, conn := range p.connections {
+		conn.conn.Close()
+	}
 	p.connections = nil
 }
 
@@ -134,8 +193,34 @@ func (p *Pool) Stats() PoolStats {
 	}
 }
 
-// cleanupLoop periodically cleans up idle connections.
-// It exits when the pool's stopCh is closed via Close().
+// isHealthy проверяет, живо ли соединение.
+func (p *Pool) isHealthy(conn *Connection) bool {
+	conn.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+	_, err := conn.conn.Read(make([]byte, 0))
+	conn.conn.SetReadDeadline(time.Time{})
+
+	if err == nil {
+		return true
+	}
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		return true
+	}
+	if err == io.EOF {
+		return true
+	}
+	return false
+}
+
+// removeConnLocked удаляет соединение из списка (должно вызываться с p.mu).
+func (p *Pool) removeConnLocked(conn *Connection) {
+	for i, c := range p.connections {
+		if c == conn {
+			p.connections = append(p.connections[:i], p.connections[i+1:]...)
+			return
+		}
+	}
+}
+
 func (p *Pool) cleanupLoop() {
 	defer p.wg.Done()
 	ticker := time.NewTicker(30 * time.Second)
@@ -151,7 +236,6 @@ func (p *Pool) cleanupLoop() {
 	}
 }
 
-// cleanup удаляет неиспользуемые соединения старше idleTimeout.
 func (p *Pool) cleanup() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -174,13 +258,14 @@ func (p *Pool) cleanup() {
 		} else if idleCount > len(p.connections)-p.minSize {
 			idleCount--
 			remaining = append(remaining, conn)
+		} else {
+			conn.conn.Close()
 		}
 	}
 
 	p.connections = remaining
 }
 
-// generateID генерирует уникальный ID для соединения.
 func generateID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)

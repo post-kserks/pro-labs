@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -87,9 +86,11 @@ func normalizeValue(value interface{}, col ColumnSchema) (Value, error) {
 		case map[string]interface{}:
 			return v, nil
 		case string:
-			var m map[string]interface{}
-			if err := json.Unmarshal([]byte(v), &m); err == nil {
-				return m, nil
+			raw, err := DecodeJSON([]byte(v))
+			if err == nil {
+				if m, ok := raw.(map[string]interface{}); ok {
+					return m, nil
+				}
 			}
 			return v, nil
 		default:
