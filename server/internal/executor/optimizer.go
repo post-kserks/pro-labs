@@ -74,7 +74,10 @@ func (o *Optimizer) OptimizePlan(dbName string, stmt *parser.SelectStatement) (*
 		JoinMethods:   joinMethods,
 	}
 
-	// 5. Оцениваем стоимость
+	// 5. Predicate pushdown
+	o.predicatePushdown(dbName, plan)
+
+	// 6. Оцениваем стоимость
 	plan.Cost = o.estimateCost(dbName, plan)
 
 	return plan, nil
@@ -134,6 +137,151 @@ func (o *Optimizer) findIndexableColumn(dbName, tableName string, expr parser.Ex
 		return ""
 	}
 	return ""
+}
+
+// predicatePushdown pushes WHERE predicates down to individual tables.
+// For single-table queries, predicates are stored under the table name.
+// For joins, predicates referencing only one table are pushed to that table.
+// When table ownership cannot be determined, predicates are pushed to all tables.
+func (o *Optimizer) predicatePushdown(dbName string, plan *OptimizedPlan) {
+	plan.TablePredicates = make(map[string]parser.Expression)
+
+	if plan.Stmt.Where == nil {
+		return
+	}
+
+	// Collect all referenced tables
+	tables := o.collectTables(plan.Stmt)
+
+	if len(tables) <= 1 {
+		// Single table: push entire WHERE to that table
+		for _, t := range tables {
+			plan.TablePredicates[t] = plan.Stmt.Where
+		}
+		return
+	}
+
+	// Multi-table (joins): split AND-connected predicates by referenced tables
+	predicates := splitAnd(plan.Stmt.Where)
+	for _, pred := range predicates {
+		refs := o.referencedTables(pred, tables)
+		if len(refs) == 1 {
+			// Predicate references exactly one table — push to it
+			plan.TablePredicates[refs[0]] = appendConjunction(plan.TablePredicates[refs[0]], pred)
+		} else if len(refs) == 0 {
+			// Cannot determine ownership — push to all tables (conservative)
+			for _, t := range tables {
+				plan.TablePredicates[t] = appendConjunction(plan.TablePredicates[t], pred)
+			}
+		}
+		// len(refs) > 1: cross-table predicate, cannot push down
+	}
+
+	// Also push join conditions down to the respective tables
+	for _, join := range plan.Stmt.Joins {
+		if join.Condition != nil {
+			joinPreds := splitAnd(join.Condition)
+			for _, pred := range joinPreds {
+				refs := o.referencedTables(pred, tables)
+				if len(refs) == 0 {
+					refs = tables
+				}
+				for _, t := range refs {
+					plan.TablePredicates[t] = appendConjunction(plan.TablePredicates[t], pred)
+				}
+			}
+		}
+	}
+}
+
+// collectTables returns all table names referenced in the statement.
+func (o *Optimizer) collectTables(stmt *parser.SelectStatement) []string {
+	tables := []string{stmt.TableName}
+	for _, join := range stmt.Joins {
+		tables = append(tables, join.TableName)
+	}
+	return tables
+}
+
+// referencedTables returns which of the known tables appear in the expression.
+func (o *Optimizer) referencedTables(expr parser.Expression, knownTables []string) []string {
+	if expr == nil {
+		return nil
+	}
+
+	tableSet := make(map[string]bool)
+	o.findTableRefs(expr, knownTables, tableSet)
+
+	result := make([]string, 0, len(tableSet))
+	for _, t := range knownTables {
+		if tableSet[t] {
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
+// findTableRefs recursively finds table references in an expression.
+func (o *Optimizer) findTableRefs(expr parser.Expression, knownTables []string, found map[string]bool) {
+	if expr == nil {
+		return
+	}
+
+	switch e := expr.(type) {
+	case *parser.ColumnRef:
+		// ColumnRef only has Name, not Table — cannot determine table reference
+		// without schema info, so skip
+	case *parser.BinaryExpr:
+		o.findTableRefs(e.Left, knownTables, found)
+		o.findTableRefs(e.Right, knownTables, found)
+	case *parser.AndExpr:
+		o.findTableRefs(e.Left, knownTables, found)
+		o.findTableRefs(e.Right, knownTables, found)
+	case *parser.OrExpr:
+		o.findTableRefs(e.Left, knownTables, found)
+		o.findTableRefs(e.Right, knownTables, found)
+	case *parser.NotExpr:
+		o.findTableRefs(e.Expr, knownTables, found)
+	case *parser.InExpr:
+		o.findTableRefs(e.Left, knownTables, found)
+		for _, r := range e.Right {
+			o.findTableRefs(r, knownTables, found)
+		}
+	case *parser.FunctionCall:
+		for _, arg := range e.Args {
+			o.findTableRefs(arg, knownTables, found)
+		}
+	case *parser.AggregateExpr:
+		for _, arg := range e.Args {
+			o.findTableRefs(arg, knownTables, found)
+		}
+	case *parser.SubqueryExpr:
+		// Subquery predicates are not pushable across tables
+	}
+}
+
+// splitAnd breaks an AND expression into its conjuncts.
+func splitAnd(expr parser.Expression) []parser.Expression {
+	if expr == nil {
+		return nil
+	}
+	if and, ok := expr.(*parser.AndExpr); ok {
+		result := splitAnd(and.Left)
+		result = append(result, splitAnd(and.Right)...)
+		return result
+	}
+	return []parser.Expression{expr}
+}
+
+// appendConjunction combines two expressions with AND.
+func appendConjunction(a, b parser.Expression) parser.Expression {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+	return &parser.AndExpr{Left: a, Right: b}
 }
 
 // chooseJoinMethods выбирает лучший метод соединения для JOIN.
@@ -217,11 +365,12 @@ func (o *Optimizer) estimateCost(dbName string, plan *OptimizedPlan) CostEstimat
 
 // OptimizedPlan оптимизированный план запроса.
 type OptimizedPlan struct {
-	Stmt          *parser.SelectStatement
-	TableStats    *TableStatistics
-	AccessMethods map[string]AccessMethod
-	JoinMethods   []JoinMethod
-	Cost          CostEstimate
+	Stmt            *parser.SelectStatement
+	TableStats      *TableStatistics
+	AccessMethods   map[string]AccessMethod
+	JoinMethods     []JoinMethod
+	Cost            CostEstimate
+	TablePredicates map[string]parser.Expression // table → pushed-down predicates
 }
 
 // FormatOptimizedPlan форматирует оптимизированный план для вывода.
@@ -257,6 +406,15 @@ func (p *OptimizedPlan) FormatOptimizedPlan() string {
 		b.WriteString("  Filter: ")
 		b.WriteString(formatExpression(p.Stmt.Where))
 		b.WriteString("\n")
+	}
+
+	// Pushed-down predicates
+	if len(p.TablePredicates) > 0 {
+		for table, pred := range p.TablePredicates {
+			if pred != nil {
+				b.WriteString(fmt.Sprintf("  Pushed to \"%s\": %s\n", table, formatExpression(pred)))
+			}
+		}
 	}
 
 	// JOINs
