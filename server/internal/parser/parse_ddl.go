@@ -343,224 +343,143 @@ func (p *sqlParser) parseCreate() (Statement, error) {
 	}
 	switch p.current().Type {
 	case lexer.TOKEN_DATABASE:
-		p.advance()
-		name, err := p.consumeIdent("database name")
-		if err != nil {
-			return nil, err
-		}
-		return &CreateDatabaseStatement{DatabaseName: name}, nil
+		return p.parseCreateDatabase()
 	case lexer.TOKEN_TABLE:
 		return p.parseCreateTable()
 	case lexer.TOKEN_VIEW:
-		p.advance() // VIEW
-		viewName, err := p.consumeIdent("view name")
-		if err != nil {
-			return nil, err
-		}
-		if err := p.consume(lexer.TOKEN_AS, "AS"); err != nil {
-			return nil, err
-		}
-		sub, err := p.parseSelect()
-		if err != nil {
-			return nil, fmt.Errorf("CREATE VIEW: %w", err)
-		}
-		sel, ok := sub.(*SelectStatement)
-		if !ok {
-			return nil, fmt.Errorf("CREATE VIEW: expected SELECT statement")
-		}
-		return &CreateViewStatement{Name: viewName, Query: sel, OrReplace: orReplace}, nil
+		return p.parseCreateView(orReplace)
 	case lexer.TOKEN_TRIGGER:
-		p.advance() // TRIGGER
-		triggerName, err := p.consumeIdent("trigger name")
-		if err != nil {
-			return nil, err
-		}
-		timing := "BEFORE"
-		if p.current().Type == lexer.TOKEN_BEFORE {
-			p.advance()
-			timing = "BEFORE"
-		} else if p.current().Type == lexer.TOKEN_AFTER {
-			p.advance()
-			timing = "AFTER"
-		}
-		event := strings.ToUpper(p.current().Literal)
-		if event != "INSERT" && event != "UPDATE" && event != "DELETE" {
-			return nil, p.expectedError("INSERT, UPDATE or DELETE", p.current())
-		}
-		p.advance()
-		if err := p.consume(lexer.TOKEN_ON, "ON"); err != nil {
-			return nil, err
-		}
-		tableName, err := p.consumeIdent("table name")
-		if err != nil {
-			return nil, err
-		}
-		body := ""
-		if p.current().Type == lexer.TOKEN_BEGIN {
-			p.advance()
-			for p.current().Type != lexer.TOKEN_END && p.current().Type != lexer.TOKEN_EOF {
-				body += p.current().Literal + " "
-				p.advance()
-			}
-			if p.current().Type == lexer.TOKEN_END {
-				p.advance()
-			}
-			body = strings.TrimSpace(body)
-		}
-		return &CreateTriggerStatement{Name: triggerName, TableName: tableName, Timing: timing, Event: event, Body: body}, nil
+		return p.parseCreateTrigger()
 	case lexer.TOKEN_FUNCTION:
-		p.advance() // FUNCTION
-		funcName, err := p.consumeIdent("function name")
-		if err != nil {
-			return nil, err
-		}
-		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
-			return nil, err
-		}
-		var params []string
-		if p.current().Type != lexer.TOKEN_RPAREN {
-			param, err := p.consumeIdent("parameter name")
-			if err != nil {
-				return nil, err
-			}
-			params = append(params, param)
-			for p.current().Type == lexer.TOKEN_COMMA {
-				p.advance()
-				param, err = p.consumeIdent("parameter name")
-				if err != nil {
-					return nil, err
-				}
-				params = append(params, param)
-			}
-		}
-		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
-			return nil, err
-		}
-		returnType := "TEXT"
-		if p.current().Type == lexer.TOKEN_RETURNS {
-			p.advance()
-			typeTok := p.current()
-			returnType = strings.ToUpper(typeTok.Literal)
-			p.advance()
-		}
-		if err := p.consume(lexer.TOKEN_AS, "AS"); err != nil {
-			return nil, err
-		}
-		body := ""
-		if p.current().Type == lexer.TOKEN_STRING_LIT {
-			body = p.current().Literal
-			p.advance()
-		} else {
-			if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
-				return nil, err
-			}
-			for p.current().Type != lexer.TOKEN_RPAREN && p.current().Type != lexer.TOKEN_EOF {
-				body += p.current().Literal + " "
-				p.advance()
-			}
-			if p.current().Type == lexer.TOKEN_RPAREN {
-				p.advance()
-			}
-			body = strings.TrimSpace(body)
-		}
-		lang := "SQL"
-		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "LANGUAGE" {
-			p.advance()
-			lang = strings.ToUpper(p.current().Literal)
-			p.advance()
-		}
-		return &CreateFunctionStatement{Name: funcName, Params: params, ReturnType: returnType, Body: body, Language: lang}, nil
+		return p.parseCreateFunction()
 	case lexer.TOKEN_PROCEDURE:
-		p.advance() // PROCEDURE
-		procName, err := p.consumeIdent("procedure name")
-		if err != nil {
-			return nil, err
-		}
-		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
-			return nil, err
-		}
-		var params []string
-		if p.current().Type != lexer.TOKEN_RPAREN {
-			param, err := p.consumeIdent("parameter name")
-			if err != nil {
-				return nil, err
-			}
-			params = append(params, param)
-			for p.current().Type == lexer.TOKEN_COMMA {
-				p.advance()
-				param, err = p.consumeIdent("parameter name")
-				if err != nil {
-					return nil, err
-				}
-				params = append(params, param)
-			}
-		}
-		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
-			return nil, err
-		}
-		if err := p.consume(lexer.TOKEN_AS, "AS"); err != nil {
-			return nil, err
-		}
-		body := ""
-		if p.current().Type == lexer.TOKEN_STRING_LIT {
-			body = p.current().Literal
-			p.advance()
-		} else {
-			if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
-				return nil, err
-			}
-			for p.current().Type != lexer.TOKEN_RPAREN && p.current().Type != lexer.TOKEN_EOF {
-				body += p.current().Literal + " "
-				p.advance()
-			}
-			if p.current().Type == lexer.TOKEN_RPAREN {
-				p.advance()
-			}
-			body = strings.TrimSpace(body)
-		}
-		lang := "SQL"
-		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "LANGUAGE" {
-			p.advance()
-			lang = strings.ToUpper(p.current().Literal)
-			p.advance()
-		}
-		return &CreateProcedureStatement{Name: procName, Params: params, Body: body, Language: lang}, nil
+		return p.parseCreateProcedure()
 	case lexer.TOKEN_INDEX:
-		p.advance()
-		indexName, err := p.consumeIdent("index name")
-		if err != nil {
-			return nil, err
-		}
-		if err := p.consume(lexer.TOKEN_ON, "ON"); err != nil {
-			return nil, err
-		}
-		tableName, err := p.consumeIdent("table name")
-		if err != nil {
-			return nil, err
-		}
-		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
-			return nil, err
-		}
-		columns, err := p.parseIdentifierListUntilRParen("column name")
-		if err != nil {
-			return nil, err
-		}
-		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
-			return nil, err
-		}
-		result := &CreateIndexStatement{
-			IndexName: indexName,
-			TableName: tableName,
-		}
-		if len(columns) == 1 {
-			result.Column = columns[0]
-		} else {
-			result.Columns = columns
-		}
-		return result, nil
+		return p.parseCreateIndex()
 	default:
 		return nil, p.expectedError("DATABASE, TABLE, VIEW or INDEX", p.current())
 	}
+}
+
+func (p *sqlParser) parseCreateFunction() (Statement, error) {
+	p.advance() // FUNCTION
+	funcName, err := p.consumeIdent("function name")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+		return nil, err
+	}
+	var params []string
+	if p.current().Type != lexer.TOKEN_RPAREN {
+		param, err := p.consumeIdent("parameter name")
+		if err != nil {
+			return nil, err
+		}
+		params = append(params, param)
+		for p.current().Type == lexer.TOKEN_COMMA {
+			p.advance()
+			param, err = p.consumeIdent("parameter name")
+			if err != nil {
+				return nil, err
+			}
+			params = append(params, param)
+		}
+	}
+	if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+		return nil, err
+	}
+	returnType := "TEXT"
+	if p.current().Type == lexer.TOKEN_RETURNS {
+		p.advance()
+		typeTok := p.current()
+		returnType = strings.ToUpper(typeTok.Literal)
+		p.advance()
+	}
+	if err := p.consume(lexer.TOKEN_AS, "AS"); err != nil {
+		return nil, err
+	}
+	body := ""
+	if p.current().Type == lexer.TOKEN_STRING_LIT {
+		body = p.current().Literal
+		p.advance()
+	} else {
+		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+			return nil, err
+		}
+		for p.current().Type != lexer.TOKEN_RPAREN && p.current().Type != lexer.TOKEN_EOF {
+			body += p.current().Literal + " "
+			p.advance()
+		}
+		if p.current().Type == lexer.TOKEN_RPAREN {
+			p.advance()
+		}
+		body = strings.TrimSpace(body)
+	}
+	lang := "SQL"
+	if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "LANGUAGE" {
+		p.advance()
+		lang = strings.ToUpper(p.current().Literal)
+		p.advance()
+	}
+	return &CreateFunctionStatement{Name: funcName, Params: params, ReturnType: returnType, Body: body, Language: lang}, nil
+}
+
+func (p *sqlParser) parseCreateProcedure() (Statement, error) {
+	p.advance() // PROCEDURE
+	procName, err := p.consumeIdent("procedure name")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+		return nil, err
+	}
+	var params []string
+	if p.current().Type != lexer.TOKEN_RPAREN {
+		param, err := p.consumeIdent("parameter name")
+		if err != nil {
+			return nil, err
+		}
+		params = append(params, param)
+		for p.current().Type == lexer.TOKEN_COMMA {
+			p.advance()
+			param, err = p.consumeIdent("parameter name")
+			if err != nil {
+				return nil, err
+			}
+			params = append(params, param)
+		}
+	}
+	if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_AS, "AS"); err != nil {
+		return nil, err
+	}
+	body := ""
+	if p.current().Type == lexer.TOKEN_STRING_LIT {
+		body = p.current().Literal
+		p.advance()
+	} else {
+		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+			return nil, err
+		}
+		for p.current().Type != lexer.TOKEN_RPAREN && p.current().Type != lexer.TOKEN_EOF {
+			body += p.current().Literal + " "
+			p.advance()
+		}
+		if p.current().Type == lexer.TOKEN_RPAREN {
+			p.advance()
+		}
+		body = strings.TrimSpace(body)
+	}
+	lang := "SQL"
+	if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "LANGUAGE" {
+		p.advance()
+		lang = strings.ToUpper(p.current().Literal)
+		p.advance()
+	}
+	return &CreateProcedureStatement{Name: procName, Params: params, Body: body, Language: lang}, nil
 }
 
 func (p *sqlParser) parseCreateTable() (Statement, error) {
@@ -784,12 +703,7 @@ func (p *sqlParser) parseDrop() (Statement, error) {
 	p.advance() // DROP
 	switch p.current().Type {
 	case lexer.TOKEN_DATABASE:
-		p.advance()
-		name, err := p.consumeIdent("database name")
-		if err != nil {
-			return nil, err
-		}
-		return &DropDatabaseStatement{DatabaseName: name}, nil
+		return p.parseDropDatabase()
 	case lexer.TOKEN_TABLE:
 		p.advance()
 		name, err := p.consumeIdent("table name")
@@ -798,19 +712,9 @@ func (p *sqlParser) parseDrop() (Statement, error) {
 		}
 		return &DropTableStatement{TableName: name}, nil
 	case lexer.TOKEN_VIEW:
-		p.advance()
-		name, err := p.consumeIdent("view name")
-		if err != nil {
-			return nil, err
-		}
-		return &DropViewStatement{Name: name}, nil
+		return p.parseDropView()
 	case lexer.TOKEN_TRIGGER:
-		p.advance()
-		name, err := p.consumeIdent("trigger name")
-		if err != nil {
-			return nil, err
-		}
-		return &DropTriggerStatement{Name: name}, nil
+		return p.parseDropTrigger()
 	case lexer.TOKEN_FUNCTION:
 		p.advance()
 		name, err := p.consumeIdent("function name")
@@ -826,12 +730,7 @@ func (p *sqlParser) parseDrop() (Statement, error) {
 		}
 		return &DropProcedureStatement{Name: name}, nil
 	case lexer.TOKEN_INDEX:
-		p.advance()
-		name, err := p.consumeIdent("index name")
-		if err != nil {
-			return nil, err
-		}
-		return &DropIndexStatement{IndexName: name}, nil
+		return p.parseDropIndex()
 	default:
 		return nil, p.expectedError("DATABASE, TABLE, VIEW or INDEX", p.current())
 	}
