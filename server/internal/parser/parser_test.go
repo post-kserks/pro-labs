@@ -921,6 +921,31 @@ func TestParseMultipleStatements(t *testing.T) {
 	}
 }
 
+func TestParserErrorSanitization(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"empty query", ""},
+		{"missing semicolon", "SELECT * FROM heroes"},
+		{"illegal token", "SELECT @@invalid FROM t;"},
+		{"bad syntax", "SELECT * FROM heroes WHERE;"},
+		{"unexpected token after semicolon", "SELECT 1; SELECT 2;"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse(tc.input)
+			if err == nil {
+				t.Fatalf("expected error for %q", tc.input)
+			}
+			if err.Error() != "invalid query syntax" {
+				t.Fatalf("expected generic error message, got: %q", err.Error())
+			}
+		})
+	}
+}
+
 func TestParseSetOperation(t *testing.T) {
 	t.Run("UNION ALL", func(t *testing.T) {
 		stmt, err := Parse("SELECT 1 UNION ALL SELECT 2;")

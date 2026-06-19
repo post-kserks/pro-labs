@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"vaultdb/internal/lexer"
@@ -9,6 +10,15 @@ import (
 
 // Parse parses one SQL statement terminated by ';'.
 func Parse(sql string) (Statement, error) {
+	stmt, err := parse(sql)
+	if err != nil {
+		slog.Debug("parse error", "input", sql, "error", err)
+		return nil, fmt.Errorf("invalid query syntax")
+	}
+	return stmt, nil
+}
+
+func parse(sql string) (Statement, error) {
 	const maxInputSize = 10 * 1024 * 1024 // 10MB
 	if len(sql) > maxInputSize {
 		return nil, fmt.Errorf("query too large (%d bytes, max 10MB)", len(sql))
