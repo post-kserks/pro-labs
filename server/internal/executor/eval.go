@@ -414,3 +414,95 @@ func evalComparisonSubquery(e *parser.ComparisonSubqueryExpr, row storage.Row, s
 	}
 	return false, fmt.Errorf("unknown quantifier: %s", e.Quantifier)
 }
+
+// evaluateCheckExpr evaluates a CHECK constraint expression against a row.
+func evaluateCheckExpr(exprStr string, row storage.Row, schema *storage.TableSchema) (bool, error) {
+	if exprStr == "" {
+		return true, nil
+	}
+	expr, err := parser.ParseExpression(exprStr)
+	if err != nil {
+		return false, fmt.Errorf("failed to parse CHECK expression: %w", err)
+	}
+	return evalCheckExprAST(expr, row, schema)
+}
+
+// evalCheckExprAST evaluates a parsed CHECK expression against a row.
+func evalCheckExprAST(expr parser.Expression, row storage.Row, schema *storage.TableSchema) (bool, error) {
+	switch e := expr.(type) {
+	case *parser.BinaryExpr:
+		left, err := evalOperand(e.Left, row, schema, nil)
+		if err != nil {
+			return false, err
+		}
+		right, err := evalOperand(e.Right, row, schema, nil)
+		if err != nil {
+			return false, err
+		}
+		return compareValues(left, right, e.Operator)
+	case *parser.AndExpr:
+		left, err := evalCheckExprAST(e.Left, row, schema)
+		if err != nil {
+			return false, err
+		}
+		right, err := evalCheckExprAST(e.Right, row, schema)
+		if err != nil {
+			return false, err
+		}
+		return left && right, nil
+	case *parser.OrExpr:
+		left, err := evalCheckExprAST(e.Left, row, schema)
+		if err != nil {
+			return false, err
+		}
+		right, err := evalCheckExprAST(e.Right, row, schema)
+		if err != nil {
+			return false, err
+		}
+		return left || right, nil
+	case *parser.NotExpr:
+		val, err := evalCheckExprAST(e.Expr, row, schema)
+		if err != nil {
+			return false, err
+		}
+		return !val, nil
+	case *parser.InExpr:
+		leftVal, err := evalOperand(e.Left, row, schema, nil)
+		if err != nil {
+			return false, err
+		}
+		for _, right := range e.Right {
+			rightVal, err := evalOperand(right, row, schema, nil)
+			if err != nil {
+				return false, err
+			}
+			cmp, err := compareValues(leftVal, rightVal, "=")
+			if err != nil {
+				continue
+			}
+			if cmp {
+				if e.Not {
+					return false, nil
+				}
+				return true, nil
+			}
+		}
+		if e.Not {
+			return true, nil
+		}
+		return false, nil
+	case *parser.BetweenExpr:
+		return evalBetweenExpr(e, row, schema, nil)
+	case *parser.FunctionCall:
+		val, err := evalFunctionCall(e, row, schema, nil)
+		if err != nil {
+			return false, err
+		}
+		if b, ok := val.(bool); ok {
+			return b, nil
+		}
+		return false, fmt.Errorf("CHECK function must return bool, got %T", val)
+	default:
+		return false, fmt.Errorf("unsupported CHECK expression type: %T", expr)
+	}
+}

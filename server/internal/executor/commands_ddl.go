@@ -162,13 +162,16 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			Expr:    action.CheckExpr,
 		}
 		schema.Constraints = append(schema.Constraints, constraint)
-		// Atomic: just update the schema file, no table drop/recreate
-		if err := ctx.Storage.AlterTableAddColumn(dbName, c.stmt.TableName, storage.ColumnSchema{}, nil); err != nil {
-			// Fallback: drop and recreate if schema-only update not supported
-			if err := ctx.Storage.DropTable(dbName, c.stmt.TableName); err != nil {
-				return nil, err
-			}
-			if err := ctx.Storage.CreateTable(dbName, *schema); err != nil {
+		// Persist constraint by rewriting the schema (drop and recreate)
+		rows, _ := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+		if err := ctx.Storage.DropTable(dbName, c.stmt.TableName); err != nil {
+			return nil, err
+		}
+		if err := ctx.Storage.CreateTable(dbName, *schema); err != nil {
+			return nil, err
+		}
+		if len(rows) > 0 {
+			if _, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, rows); err != nil {
 				return nil, err
 			}
 		}

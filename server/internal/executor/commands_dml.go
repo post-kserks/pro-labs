@@ -82,6 +82,21 @@ func notifyMutation(ctx *ExecutionContext, dbName, tableName string) {
 	}
 }
 
+func enforceCheckConstraints(schema *storage.TableSchema, row storage.Row) error {
+	for _, c := range schema.Constraints {
+		if c.Type == "CHECK" && c.Expr != "" {
+			ok, err := evaluateCheckExpr(c.Expr, row, schema)
+			if err != nil {
+				return fmt.Errorf("CHECK constraint '%s': %w", c.Name, err)
+			}
+			if !ok {
+				return fmt.Errorf("CHECK constraint '%s' violated", c.Name)
+			}
+		}
+	}
+	return nil
+}
+
 type InsertCommand struct {
 	stmt *parser.InsertStatement
 }
@@ -179,6 +194,13 @@ func (c *InsertCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 			}
 		}
 		_ = i
+	}
+
+	// Enforce CHECK constraints
+	for i, row := range rowsToInsert {
+		if err := enforceCheckConstraints(schema, row); err != nil {
+			return nil, fmt.Errorf("row %d: %w", i, err)
+		}
 	}
 
 	// Handle ON CONFLICT (UPSERT)
@@ -605,6 +627,25 @@ func (c *UpdateCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 			}
 			if match {
 				indices = append(indices, idx)
+			}
+		}
+	}
+
+	// Enforce CHECK constraints on updated rows
+	for _, idx := range indices {
+		if idx < len(rows) {
+			newRow := make(storage.Row, len(rows[idx]))
+			copy(newRow, rows[idx])
+			for col, val := range updates {
+				for ci, c := range schema.Columns {
+					if strings.EqualFold(c.Name, col) && ci < len(newRow) {
+						newRow[ci] = val
+						break
+					}
+				}
+			}
+			if err := enforceCheckConstraints(schema, newRow); err != nil {
+				return nil, fmt.Errorf("row %d: %w", idx, err)
 			}
 		}
 	}

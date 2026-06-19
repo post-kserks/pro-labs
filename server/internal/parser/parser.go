@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"vaultdb/internal/lexer"
@@ -16,6 +17,84 @@ func Parse(sql string) (Statement, error) {
 		return nil, fmt.Errorf("invalid query syntax")
 	}
 	return stmt, nil
+}
+
+// ParseExpression parses a standalone SQL expression (no statement wrapper).
+func ParseExpression(expr string) (Expression, error) {
+	if strings.TrimSpace(expr) == "" {
+		return nil, fmt.Errorf("empty expression")
+	}
+	l := lexer.New(expr)
+	tokens := make([]lexer.Token, 0, 64)
+	for {
+		tok := l.NextToken()
+		if tok.Type == lexer.TOKEN_ILLEGAL {
+			return nil, fmt.Errorf("syntax error at line %d, col %d: illegal token '%s'", tok.Line, tok.Col, tok.Literal)
+		}
+		tokens = append(tokens, tok)
+		if tok.Type == lexer.TOKEN_EOF {
+			break
+		}
+	}
+	p := &sqlParser{tokens: tokens}
+	return p.parseExpression()
+}
+
+// FormatExpression converts a parsed expression back to a SQL string.
+func FormatExpression(expr Expression) string {
+	if expr == nil {
+		return ""
+	}
+	switch e := expr.(type) {
+	case *BinaryExpr:
+		left := FormatExpression(e.Left)
+		right := FormatExpression(e.Right)
+		return fmt.Sprintf("%s %s %s", left, e.Operator, right)
+	case *AndExpr:
+		return fmt.Sprintf("(%s AND %s)", FormatExpression(e.Left), FormatExpression(e.Right))
+	case *OrExpr:
+		return fmt.Sprintf("(%s OR %s)", FormatExpression(e.Left), FormatExpression(e.Right))
+	case *NotExpr:
+		return fmt.Sprintf("NOT %s", FormatExpression(e.Expr))
+	case *ColumnRef:
+		return e.Name
+	case Value:
+		return formatValueSQL(e)
+	case *Value:
+		return formatValueSQL(*e)
+	case *InExpr:
+		ops := make([]string, len(e.Right))
+		for i, r := range e.Right {
+			ops[i] = FormatExpression(r)
+		}
+		not := ""
+		if e.Not {
+			not = "NOT "
+		}
+		return fmt.Sprintf("%s %sIN (%s)", FormatExpression(e.Left), not, strings.Join(ops, ", "))
+	default:
+		return "<expr>"
+	}
+}
+
+func formatValueSQL(v Value) string {
+	switch v.Type {
+	case "string":
+		return fmt.Sprintf("'%s'", v.StrVal)
+	case "int":
+		return strconv.FormatInt(v.IntVal, 10)
+	case "float":
+		return strconv.FormatFloat(v.FltVal, 'f', -1, 64)
+	case "bool":
+		if v.BoolVal {
+			return "TRUE"
+		}
+		return "FALSE"
+	case "null":
+		return "NULL"
+	default:
+		return v.StrVal
+	}
 }
 
 func parse(sql string) (Statement, error) {

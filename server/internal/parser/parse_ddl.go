@@ -787,7 +787,7 @@ func (p *sqlParser) parseAlterTable() (Statement, error) {
 					if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 						return nil, err
 					}
-					action = &AlterAddConstraint{Name: constraintName, Type: "CHECK", CheckExpr: fmt.Sprintf("%v", expr)}
+					action = &AlterAddConstraint{Name: constraintName, Type: "CHECK", CheckExpr: FormatExpression(expr)}
 				} else if keyword == "FOREIGN" {
 					p.advance() // FOREIGN
 					if err := p.consume(lexer.TOKEN_KEY, "KEY"); err != nil {
