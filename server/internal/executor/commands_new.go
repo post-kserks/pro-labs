@@ -197,6 +197,13 @@ func (c *MergeCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 		// WHEN NOT MATCHED THEN INSERT
 		if !matched && c.stmt.WhenNotMatched != nil && c.stmt.WhenNotMatched.Action == "INSERT" {
+			if len(c.stmt.WhenNotMatched.Values) > 0 && len(c.stmt.WhenNotMatched.Columns) > 0 {
+				if len(c.stmt.WhenNotMatched.Columns) != len(c.stmt.WhenNotMatched.Values[0]) {
+					return nil, fmt.Errorf("MERGE: WHEN NOT MATCHED columns count (%d) doesn't match values count (%d)",
+						len(c.stmt.WhenNotMatched.Columns), len(c.stmt.WhenNotMatched.Values[0]))
+				}
+			}
+
 			// Build combined row with NULLs for target columns and source row values
 			combinedRowForInsert := make(storage.Row, len(combinedSchema.Columns))
 			targetColCount := len(targetSchema.Columns)

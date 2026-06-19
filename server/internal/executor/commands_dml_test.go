@@ -112,6 +112,44 @@ func TestUpdateReturningMultipleRows(t *testing.T) {
 	}
 }
 
+func TestMergeWhenNotMatchedValidation(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE target (id INT, name VARCHAR(100));")
+	executeSQL(t, session, "CREATE TABLE source (id INT, val VARCHAR(100));")
+	executeSQL(t, session, "INSERT INTO source VALUES (1, 'hello');")
+
+	// More columns than values
+	executeSQLExpectError(t, session, `
+		MERGE INTO target
+		USING source AS s
+		ON target.id = s.id
+		WHEN MATCHED THEN UPDATE SET name = s.val
+		WHEN NOT MATCHED THEN
+			INSERT (id, name) VALUES (s.id);
+	`)
+
+	// More values than columns
+	executeSQLExpectError(t, session, `
+		MERGE INTO target
+		USING source AS s
+		ON target.id = s.id
+		WHEN MATCHED THEN UPDATE SET name = s.val
+		WHEN NOT MATCHED THEN
+			INSERT (id) VALUES (s.id, s.val);
+	`)
+
+	// Correct count should work
+	executeSQL(t, session, `
+		MERGE INTO target
+		USING source AS s
+		ON target.id = s.id
+		WHEN MATCHED THEN UPDATE SET name = s.val
+		WHEN NOT MATCHED THEN
+			INSERT (id, name) VALUES (s.id, s.val);
+	`)
+}
+
 func TestDeleteReturningMultipleRows(t *testing.T) {
 	session := setupSession(t)
 	seedHeroes(t, session)
