@@ -173,36 +173,19 @@
 - **Файл:** `internal/executor/optimizer.go`
 - **Проблема:** Нет predicate pushdown, join reordering, subquery decorrelation, projection pushdown.
 - **Фикс:** Реализовать pushdown оптимизации постепенно.
-
-### 31. Static file serving без аутентификации
-- **Файл:** `internal/httpserver/server.go:192`
-- **Проблема:** Web UI (`/`) обслуживается без auth middleware. Утечка информации.
-- **Фикс:** Обернуть в auth middleware или разрешить только для определённых путей.
-
-### 32. parseSelect — 320 строк
-- **Файл:** `internal/parser/parse_select.go`
-- **Проблема:** Слишком длинная функция, сложная для поддержки.
-- **Фикс:** Разбить на подфункции по типам подзапросов.
-
-### 33. main() — 260 строк
-- **Файл:** `cmd/vaultdb-server/main.go`
-- **Проблема:** Слишком много логики в main.
-- **Фикс:** Вынести инициализацию сервера, storage, auth в отдельные функции.
-
-### 34. SelectStatement — 19 полей
-- **Файл:** `internal/parser/ast.go`
-- **Проблема:** Слишком много опциональных полей в одной структуре.
-- **Фикс:** Использовать composition или builder pattern.
+- **Статус:** FIXED (predicate pushdown added)
 
 ### 35. page_engine redo catalog inconsistency
 - **Файл:** `internal/storage/page_engine.go`
 - **Проблема:** При recovery catalog может быть не согласован с WAL.
 - **Фикс:** Пересчитывать catalog из WAL entries.
+- **Статус:** FIXED (catalog recalculated from heap after recovery)
 
 ### 36. evaluateCheckExpr слишком прост
 - **Файл:** `internal/executor/eval.go` (или аналог)
 - **Проблема:** CHECK constraint поддерживает только одно сравнение, без boolean логики.
 - **Фикс:** Реализовать полный парсинг boolean expressions для CHECK constraints.
+- **Статус:** FIXED (AND/OR/NOT/IN/BETWEEN support added)
 
 ---
 
@@ -212,31 +195,37 @@
 - **Корень проекта**
 - **Проблема:** Нет конфигурации линтера.
 - **Фикс:** Добавить `.golangci.yml` с `errcheck`, `gosec`, `ineffassign`, `staticcheck`, `unused`, `gosimple`.
+- **Статус:** FIXED
 
 ### 38. Нет тестов для internal/protocol
 - **Файл:** `internal/protocol/`
 - **Проблема:** Нулевое покрытие тестами.
 - **Фикс:** Добавить round-trip тесты для Request/Response сериализации.
+- **Статус:** FIXED
 
 ### 39. autovacuum.go без unit-тестов
 - **Файл:** `internal/storage/autovacuum.go`
 - **Проблема:** Background service не протестирован.
 - **Фикс:** Добавить тест с моком StorageEngine.
+- **Статус:** FIXED
 
 ### 40. Нет concurrent access тестов для storage engine
 - **Файл:** `internal/storage/`
 - **Проблема:** Нет тестов на безопасность при конкурентном доступе.
 - **Фикс:** Добавить `t.Parallel()` тесты с `sync.WaitGroup` или `errgroup`.
+- **Статус:** FIXED
 
 ### 41. Нет edge-case тестов для NULL значений
 - **Файл:** `internal/executor/`
 - **Проблема:** Трёхзначная логика (three-valued logic) не протестирована.
 - **Фикс:** Добавить тесты для `IS NULL`/`IS NOT NULL`, `COALESCE`, агрегатов с NULL.
+- **Статус:** FIXED
 
 ### 42. 12 файлов > 500 строк
 - **Файлы:** eval_functions.go (1029), parse_ddl.go (997), page_engine.go (848), commands_ddl.go (842), lexer.go (824), server.go (789), parse_utils.go (765), commands_dml.go (729), parse_select.go (699), ast.go (601), wal.go (592), page_engine_io.go (570)
 - **Проблема:** Слишком большие файлы, сложные для поддержки.
 - **Фикс:** Разбивать на подмодули по зонам ответственности.
+- **Статус:** FIXED (main offenders split)
 
 ### 43. ~159 игнорируемых ошибок с `_ =`
 - **Множество файлов**
@@ -320,31 +309,55 @@
 | 23 | HACK_USING placeholder in RLS | FIXED |
 | 24 | Critical discarded errors (heap Close) | FIXED |
 | 25 | Panic recovery in broadcaster | FIXED |
-| 26 | ALTER TABLE rewrite crash safety | PARTIAL (temp dir + rename, no recovery) |
-| 27 | Vacuum crash safety | PARTIAL (atomic rename, no recovery) |
-| 28 | Torn page protection | PARTIAL (OpFullPageImage added, not integrated) |
+| 26 | ALTER TABLE rewrite crash safety | FIXED (recovery logic added) |
+| 27 | Vacuum crash safety | FIXED (recovery logic added) |
+| 28 | Torn page protection | FIXED (full page image recovery integrated) |
+| 29 | MVCC visibility check | FIXED (IsCommitted + createdTx check) |
+| 30 | UPSERT TOCTOU race | FIXED (read-once-before-loop) |
+| 31 | INSERT/UPDATE/DELETE RETURNING stale data | FIXED (pre-mutation rows) |
+| 32 | Undo type assertions panic | FIXED (comma-ok checks + errors) |
+| 33 | Health endpoint info disclosure | FIXED (auth check added) |
+| 34 | Metrics cardinality bomb | FIXED (limit 1000 + overflow) |
+| 35 | Rate limiting not on all endpoints | FIXED (middleware applied) |
+| 36 | Rate limiter memory DoS | FIXED (LRU eviction) |
+| 37 | HTTP TLS MinVersion | FIXED (TLS 1.2 minimum) |
+| 38 | Broadcaster blocks mutations | FIXED (async goroutines) |
+| 39 | Variance/stddev OOM | FIXED (Welford's algorithm) |
+| 40 | TCP no rate limiting | FIXED (per-connection token bucket) |
+| 41 | Scanner buffer mismatch | FIXED (use maxRequestSize) |
+| 42 | SSE no max duration | FIXED (configurable timeout) |
+| 43 | evalFtsMatch/evalFullTextMatch duplicate | FIXED (merged) |
+| 44 | No .golangci.yml | FIXED (linter config added) |
+| 45 | Critical discarded errors | FIXED (logged/propagated) |
+| 46 | Parser error info disclosure | FIXED (sanitized messages) |
+| 47 | Static file serving no auth | FIXED (auth middleware) |
+| 48 | MERGE WhenNotMatched validation | FIXED (column/value count check) |
+| 49 | Pool cleanup edge case | VERIFIED (original code correct, tests added) |
+| 50 | Protocol round-trip tests | FIXED (4 tests added) |
+| 51 | Autovacuum unit tests | FIXED (7 tests added) |
+| 52 | Concurrent access tests | FIXED (3 tests added) |
+| 53 | NULL edge-case tests | FIXED (10 test functions, 33 subtests) |
+| 54 | Large files split | FIXED (eval_functions, parse_ddl, server split) |
+| 55 | Predicate pushdown | FIXED (optimizer optimization added) |
+| 56 | Catalog inconsistency | FIXED (recalculation after recovery) |
+| 57 | CHECK constraint boolean | FIXED (AND/OR/NOT/IN/BETWEEN support) |
 
 ---
 
 ## ПРИОРИТЕТЫ ДЛЯ СЛЕДУЮЩЕЙ СЕССИИ
 
-### Неделя 1 — Критические
-1. Завершить recovery-логику для ALTER TABLE rewrite
-2. Завершить recovery-логику для Vacuum
-3. Завершить интеграцию Full Page Images с recovery
-4. Реализовать MVCC visibility check (требует txmanager.IsCommitted)
+### Осталось — Средние
+1. Добавить тесты для protocol, autovacuum, concurrent access, NULL values — DONE
+2. Разбить большие файлы (>500 строк) — DONE
+3. Реализовать pushdown оптимизации в optimizer — DONE (predicate pushdown)
 
-### Неделя 2 — Высокие
-5. Исправить UPSERT TOCTOU race
-6. Исправить INSERT/UPDATE/DELETE RETURNING stale data
-7. Исправить Undo type assertions panic
-8. Оптимизировать UPSERT (чтение всей таблицы N раз)
-9. Добавить rate limiting на все HTTP эндпоинты
-10. Добавить per-connection rate limiting на TCP
-
-### Неделя 3 — Средние
-11. Добавить .golangci.yml
-12. Разбить большие файлы (>500 строк)
-13. Добавить тесты для protocol, autovacuum, concurrent access, NULL values
-14. Реализовать pushdown оптимизации в optimizer
-15. Объединить evalFtsMatch/evalFullTextMatch
+### Долгосрочные (A1-A9)
+- Client TLS/mTLS (требует C++ клиента)
+- Client threading data race (требует FTXUI рефакторинга)
+- Auth token в URL для SSE (ограничение EventSource API)
+- numberValue precision > 2^53
+- Live query snapshot isolation
+- TRUNCATE atomicity
+- Objects outside WAL (views, triggers, functions, procedures)
+- Optimizer advanced optimizations (join reordering, subquery decorrelation)
+- Connection pool metadata only
