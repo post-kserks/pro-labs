@@ -104,15 +104,20 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		}
 	}
 
-	// Атомарная замена: переименовываем shadow в оригинальный путь
-	// На Linux os.Rename атомарно заменяет директорию
+	// Атомарная замена: удаляем старую директорию и переименовываем shadow.
+	// На Linux os.Rename для директорий требует, чтобы цель не существовала
+	// или была пустой. Поскольку originalPath — непустая директория с сегментами,
+	// сначала удаляем её, затем делаем rename.
 	originalPath := e.tablePath(dbName, tableName)
 	if err := t.heap.Close(); err != nil {
 		os.RemoveAll(shadowPath)
 		return nil, err
 	}
 
-	// Используем rename с заменой (атомарно на Linux)
+	if err := os.RemoveAll(originalPath); err != nil {
+		os.RemoveAll(shadowPath)
+		return nil, err
+	}
 	if err := os.Rename(shadowPath, originalPath); err != nil {
 		os.RemoveAll(shadowPath)
 		return nil, err
