@@ -213,9 +213,24 @@ func (s *Server) apiMux() *http.ServeMux {
 	distFS, err := fs.Sub(webUIFiles, "web/dist")
 	if err == nil {
 		fileServer := http.FileServer(http.FS(distFS))
-		mux.Handle("/", s.cfg.Auth.Middleware(func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" || r.URL.Path == "/ready" || r.URL.Path == "/metrics" {
+				return
+			}
+
+			if s.cfg.Auth != nil && s.cfg.Auth.Enabled() {
+				token := r.Header.Get("Authorization")
+				if token == "" {
+					token = r.URL.Query().Get("token")
+				}
+				if !s.cfg.Auth.ValidateToken(strings.TrimPrefix(token, "Bearer ")) {
+					writeError(w, http.StatusUnauthorized, errCodeInternal, "unauthorized")
+					return
+				}
+			}
+
 			fileServer.ServeHTTP(w, r)
-		}))
+		})
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "web UI is not embedded", http.StatusNotFound)

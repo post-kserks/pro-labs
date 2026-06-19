@@ -331,3 +331,54 @@ func TestSSEMaxDuration(t *testing.T) {
 		t.Fatalf("no SSE payload in response: %q", rec.Body.String())
 	}
 }
+
+func TestStaticFileAuth(t *testing.T) {
+	t.Run("unauthenticated gets 401 when auth enabled", func(t *testing.T) {
+		srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "user"}))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		srv.apiMux().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated /: status %d, want 401: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("authenticated gets 200", func(t *testing.T) {
+		srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "user"}))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Authorization", "Bearer sekret")
+		srv.apiMux().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("authenticated /: status %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("token query param works", func(t *testing.T) {
+		srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "user"}))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/?token=sekret", nil)
+		srv.apiMux().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("token query param /: status %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("no auth check when auth disabled", func(t *testing.T) {
+		srv := newTestServer(t, mustAuth(t, false, nil))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		srv.apiMux().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("unauthenticated / with auth disabled: status %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+	})
+}
