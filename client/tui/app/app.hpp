@@ -22,6 +22,7 @@
 #include <ftxui/dom/elements.hpp>
 
 #include <atomic>
+#include <mutex>
 #include <string>
 
 namespace vaultdb::tui {
@@ -43,6 +44,7 @@ private:
     History history_;
 
     std::atomic<Mode> mode_{Mode::Splash};
+    mutable std::mutex stateMu_;
     std::string activeDb_;
     std::string statusMessage_;
     std::string connectionError_;

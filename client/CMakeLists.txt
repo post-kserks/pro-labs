@@ -38,6 +38,7 @@ target_link_libraries(vaultdb-shell PRIVATE vaultdb)
 target_include_directories(vaultdb-shell PRIVATE lib/include)
 
 add_subdirectory(tui)
+add_subdirectory(tests)
 
 install(TARGETS vaultdb vaultdb-shell vaultdb-tui
     LIBRARY DESTINATION ${CMAKE_BINARY_DIR}/output

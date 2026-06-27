@@ -22,6 +22,13 @@ RUN addgroup -S vaultdb && adduser -S vaultdb -G vaultdb
 
 FROM scratch
 
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="VaultDB" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.description="SQL-compatible database server" \
+      org.opencontainers.image.source="https://github.com/post-kserks/vaultdb" \
+      org.opencontainers.image.licenses="MIT"
+
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /build/vaultdb-server /vaultdb-server

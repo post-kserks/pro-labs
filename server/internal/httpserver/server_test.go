@@ -55,7 +55,7 @@ func newTestServer(t *testing.T, authMgr *auth.Manager) *Server {
 
 func mustAuth(t *testing.T, enabled bool, tokens map[string]string) *auth.Manager {
 	t.Helper()
-	m, err := auth.New(enabled, tokens, nil)
+	m, err := auth.New(enabled, tokens, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("auth.New: %v", err)
 	}

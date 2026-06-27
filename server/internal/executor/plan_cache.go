@@ -31,6 +31,9 @@ func NewPlanCache(maxSize int) *PlanCache {
 }
 
 func (pc *PlanCache) Get(key string) *CachedPlan {
+	if key == "" {
+		return nil
+	}
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
 	return pc.plans[key]

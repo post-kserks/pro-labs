@@ -12,6 +12,7 @@ import (
 
 	"vaultdb/internal/executor"
 	"vaultdb/internal/parser"
+	"vaultdb/internal/storage"
 )
 
 var validPathName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -26,6 +27,12 @@ func (s *Server) newSession() *executor.Session {
 	}
 	if s.cfg.MaxRows > 0 {
 		sess.SetMaxRows(s.cfg.MaxRows)
+	}
+	if s.cfg.MaxPreparedStmts > 0 {
+		sess.SetMaxPreparedStatements(s.cfg.MaxPreparedStmts)
+	}
+	if s.cfg.ResultCacheSize > 0 {
+		sess.SetResultCacheConfig(s.cfg.ResultCacheSize, s.cfg.ResultCacheTTLSec)
 	}
 	return sess
 }
@@ -407,7 +414,11 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 	paths := spec["paths"].(map[string]interface{})
 
 	for _, db := range dbs {
-		tables, _ := s.cfg.Storage.ListTables(db)
+		tables, err := s.cfg.Storage.ListTables(db)
+		if err != nil {
+			s.cfg.Logger.Warn("failed to list tables for OpenAPI spec", "db", db, "error", err)
+			continue
+		}
 		for _, table := range tables {
 			path := fmt.Sprintf("/api/databases/%s/tables/%s/data", db, table.Name)
 			paths[path] = map[string]interface{}{
@@ -526,5 +537,61 @@ func (s *Server) handlePostTableData(w http.ResponseWriter, r *http.Request, dbN
 		return
 	}
 
-	writeError(w, http.StatusNotImplemented, errCodeNotImplemented, "POST table data not fully implemented yet")
+	rows, ok := body.([]interface{})
+	if !ok {
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "expected JSON array of row objects")
+		return
+	}
+
+	schema, err := s.cfg.Storage.GetTableSchema(dbName, tableName)
+	if err != nil {
+		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
+		return
+	}
+
+	storageRows := make([]storage.Row, 0, len(rows))
+	for _, row := range rows {
+		rowMap, ok := row.(map[string]interface{})
+		if !ok {
+			writeError(w, http.StatusBadRequest, errCodeBadRequest, "each row must be a JSON object")
+			return
+		}
+		values := make([]storage.Value, len(schema.Columns))
+		for i, col := range schema.Columns {
+			if v, exists := rowMap[col.Name]; exists {
+				values[i] = parseHTTPRowValue(v)
+			} else {
+				values[i] = nil
+			}
+		}
+		storageRows = append(storageRows, storage.Row(values))
+	}
+
+	n, err := s.cfg.Storage.InsertRows(dbName, tableName, storageRows)
+	if err != nil {
+		writeStorageError(w, http.StatusInternalServerError, errCodeStorageError, err, s.cfg.Logger)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"message": fmt.Sprintf("inserted %d rows", n),
+	})
+}
+
+func parseHTTPRowValue(v interface{}) storage.Value {
+	switch val := v.(type) {
+	case float64:
+		if val == float64(int64(val)) {
+			return int64(val)
+		}
+		return val
+	case string:
+		return val
+	case bool:
+		return val
+	case nil:
+		return nil
+	default:
+		return fmt.Sprintf("%v", val)
+	}
 }

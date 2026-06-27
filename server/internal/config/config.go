@@ -31,19 +31,27 @@ type ServerConfig struct {
 	QueryTimeoutSec     int               `yaml:"query_timeout_sec"`
 	MaxConnections      int               `yaml:"max_connections"`
 	ShutdownTimeoutSec  int               `yaml:"shutdown_timeout_sec"`
+	TCPKeepAliveSec     int               `yaml:"tcp_keepalive_sec"`
+	TCPIdleTimeoutSec   int               `yaml:"tcp_idle_timeout_sec"`
+	MaxPreparedStmts    int               `yaml:"max_prepared_statements"`
 }
 
 // StorageConfig — параметры хранилища.
 type StorageConfig struct {
-	Engine  string `yaml:"engine"`
-	DataDir string `yaml:"data_dir"`
+	Engine           string `yaml:"engine"`
+	DataDir          string `yaml:"data_dir"`
+	ResultCacheSize  int    `yaml:"result_cache_size"`
+	ResultCacheTTL_s int    `yaml:"result_cache_ttl_seconds"`
 }
 
 // AuthConfig — параметры аутентификации.
 type AuthConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	MTLSEnabled bool   `yaml:"mtls_enabled"`
-	MTLScaFile  string `yaml:"mtls_ca_file"`
+	Enabled        bool   `yaml:"enabled"`
+	MTLSEnabled    bool   `yaml:"mtls_enabled"`
+	MTLScaFile     string `yaml:"mtls_ca_file"`
+	RateWindowSec  int    `yaml:"rate_window_seconds"`
+	MaxFails       int    `yaml:"max_fails"`
+	BlockForSec    int    `yaml:"block_for_seconds"`
 }
 
 // AIConfig — параметры внешнего embedding-провайдера для SEMANTIC_MATCH/AI_EMBED.
@@ -71,6 +79,14 @@ const (
 	DefaultMaxConnections        = 1000
 	DefaultShutdownTimeoutSec    = 30
 	DefaultMaxRows               = 1000000
+	DefaultTCPKeepAliveSec       = 30
+	DefaultTCPIdleTimeoutSec     = 300
+	DefaultMaxPreparedStmts      = 1000
+	DefaultResultCacheSize       = 256
+	DefaultResultCacheTTL        = 30
+	DefaultAuthRateWindowSec     = 60
+	DefaultAuthMaxFails          = 10
+	DefaultAuthBlockForSec       = 300
 )
 
 // Default возвращает конфигурацию со значениями по умолчанию.
@@ -86,6 +102,9 @@ func Default() *Config {
 			QueryTimeoutSec:     DefaultQueryTimeoutSec,
 			MaxConnections:      DefaultMaxConnections,
 			ShutdownTimeoutSec:  DefaultShutdownTimeoutSec,
+			TCPKeepAliveSec:     DefaultTCPKeepAliveSec,
+			TCPIdleTimeoutSec:   DefaultTCPIdleTimeoutSec,
+			MaxPreparedStmts:    DefaultMaxPreparedStmts,
 			LiveQueries: LiveQueriesConfig{
 				BufferSize:    DefaultLiveQueryBuffer,
 				DropPolicy:    DefaultLiveQueryPolicy,
@@ -93,10 +112,17 @@ func Default() *Config {
 			},
 		},
 		Storage: StorageConfig{
-			Engine:  "page",
-			DataDir: "./data",
+			Engine:           "page",
+			DataDir:          "./data",
+			ResultCacheSize:  DefaultResultCacheSize,
+			ResultCacheTTL_s: DefaultResultCacheTTL,
 		},
-		Auth: AuthConfig{Enabled: true},
+		Auth: AuthConfig{
+			Enabled:       true,
+			RateWindowSec: DefaultAuthRateWindowSec,
+			MaxFails:      DefaultAuthMaxFails,
+			BlockForSec:   DefaultAuthBlockForSec,
+		},
 	}
 }
 
@@ -166,6 +192,30 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Storage.DataDir == "" {
 		return fmt.Errorf("storage.data_dir must not be empty")
+	}
+	if cfg.Storage.ResultCacheSize == 0 {
+		cfg.Storage.ResultCacheSize = DefaultResultCacheSize
+	}
+	if cfg.Storage.ResultCacheTTL_s == 0 {
+		cfg.Storage.ResultCacheTTL_s = DefaultResultCacheTTL
+	}
+	if cfg.Server.TCPKeepAliveSec == 0 {
+		cfg.Server.TCPKeepAliveSec = DefaultTCPKeepAliveSec
+	}
+	if cfg.Server.TCPIdleTimeoutSec == 0 {
+		cfg.Server.TCPIdleTimeoutSec = DefaultTCPIdleTimeoutSec
+	}
+	if cfg.Server.MaxPreparedStmts == 0 {
+		cfg.Server.MaxPreparedStmts = DefaultMaxPreparedStmts
+	}
+	if cfg.Auth.RateWindowSec == 0 {
+		cfg.Auth.RateWindowSec = DefaultAuthRateWindowSec
+	}
+	if cfg.Auth.MaxFails == 0 {
+		cfg.Auth.MaxFails = DefaultAuthMaxFails
+	}
+	if cfg.Auth.BlockForSec == 0 {
+		cfg.Auth.BlockForSec = DefaultAuthBlockForSec
 	}
 
 	// Validate port ranges

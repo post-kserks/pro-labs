@@ -32,6 +32,9 @@ type Config struct {
 	MaxRequestSizeBytes       int
 	MaxRows                   int
 	QueryTimeoutSec           int
+	MaxPreparedStmts          int
+	ResultCacheSize           int
+	ResultCacheTTLSec         int
 	AllowedOrigins            []string
 	Storage                   storage.StorageEngine
 	Auth                      *auth.Manager
@@ -63,7 +66,7 @@ func New(cfg Config) *Server {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Auth == nil {
-		mgr, err := auth.New(false, nil, cfg.Logger)
+		mgr, err := auth.New(false, nil, cfg.Logger, 60, 10, 300)
 		if err != nil {
 			cfg.Logger.Error("failed to create auth manager", "error", err)
 			cfg.Logger.Warn("continuing with auth disabled")

@@ -7,7 +7,7 @@ import (
 )
 
 func TestMiddlewareEnabledValidToken(t *testing.T) {
-	m, err := New(true, map[string]string{"mytoken": "user"}, nil)
+	m, err := New(true, map[string]string{"mytoken": "user"}, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestMiddlewareEnabledValidToken(t *testing.T) {
 }
 
 func TestMiddlewareEnabledInvalidToken(t *testing.T) {
-	m, err := New(true, map[string]string{"mytoken": "user"}, nil)
+	m, err := New(true, map[string]string{"mytoken": "user"}, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestMiddlewareEnabledInvalidToken(t *testing.T) {
 }
 
 func TestMiddlewareEnabledNoToken(t *testing.T) {
-	m, err := New(true, map[string]string{"mytoken": "user"}, nil)
+	m, err := New(true, map[string]string{"mytoken": "user"}, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestMiddlewareEnabledNoToken(t *testing.T) {
 }
 
 func TestGetLabel(t *testing.T) {
-	m, err := New(true, map[string]string{"token1": "admin", "token2": "readonly"}, nil)
+	m, err := New(true, map[string]string{"token1": "admin", "token2": "readonly"}, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestGetLabel(t *testing.T) {
 }
 
 func TestAddToken(t *testing.T) {
-	m, err := New(true, map[string]string{"existing": "old"}, nil)
+	m, err := New(true, map[string]string{"existing": "old"}, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestAddToken(t *testing.T) {
 }
 
 func TestMiddlewareDisabled(t *testing.T) {
-	m, err := New(false, nil, nil)
+	m, err := New(false, nil, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

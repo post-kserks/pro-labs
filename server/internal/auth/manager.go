@@ -43,13 +43,22 @@ type authRateLimiter struct {
 	blockFor time.Duration
 }
 
-func newAuthRateLimiter() *authRateLimiter {
+func newAuthRateLimiter(windowSec, maxFails, blockForSec int) *authRateLimiter {
+	if windowSec <= 0 {
+		windowSec = 60
+	}
+	if maxFails <= 0 {
+		maxFails = 10
+	}
+	if blockForSec <= 0 {
+		blockForSec = 300
+	}
 	return &authRateLimiter{
 		attempts: make(map[string][]time.Time),
 		blocked:  make(map[string]time.Time),
-		window:   1 * time.Minute,
-		maxFails: 10,
-		blockFor: 5 * time.Minute,
+		window:   time.Duration(windowSec) * time.Second,
+		maxFails: maxFails,
+		blockFor: time.Duration(blockForSec) * time.Second,
 	}
 }
 
@@ -105,7 +114,7 @@ func (m *Manager) hashToken(token string) string {
 // secretKey читается из VAULTDB_AUTH_SECRET.
 // Если переменная не задана — генерируем случайный (для тестов/разработки).
 // В production VAULTDB_AUTH_SECRET обязателен (проверяется в main.go).
-func New(enabled bool, tokens map[string]string, logger *slog.Logger) (*Manager, error) {
+func New(enabled bool, tokens map[string]string, logger *slog.Logger, rateWindowSec, maxFails, blockForSec int) (*Manager, error) {
 	secret := []byte(os.Getenv("VAULTDB_AUTH_SECRET"))
 
 	if len(secret) == 0 {
@@ -130,7 +139,7 @@ func New(enabled bool, tokens map[string]string, logger *slog.Logger) (*Manager,
 		tokens:  hashed,
 		secret:  secret,
 		logger:  logger,
-		rateLim: newAuthRateLimiter(),
+		rateLim: newAuthRateLimiter(rateWindowSec, maxFails, blockForSec),
 	}, nil
 }
 

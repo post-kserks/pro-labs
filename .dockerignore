@@ -43,3 +43,9 @@ build.sh
 Makefile
 VERSION
 vaultdb.yaml
+
+# Secrets and certificates
+.env
+*.pem
+*.key
+.golangci.yml

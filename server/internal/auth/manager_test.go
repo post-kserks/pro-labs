@@ -7,7 +7,7 @@ import (
 )
 
 func TestNoDefaultTokenInjected(t *testing.T) {
-	m, err := New(true, nil, nil)
+	m, err := New(true, nil, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestNoDefaultTokenInjected(t *testing.T) {
 }
 
 func TestValidateToken(t *testing.T) {
-	m, err := New(true, map[string]string{"sekret": "ci"}, nil)
+	m, err := New(true, map[string]string{"sekret": "ci"}, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestValidateToken(t *testing.T) {
 		t.Fatal("unknown token accepted")
 	}
 
-	disabled, err := New(false, nil, nil)
+	disabled, err := New(false, nil, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestValidateToken(t *testing.T) {
 }
 
 func TestMiddlewareAcceptsQueryParamToken(t *testing.T) {
-	m, err := New(true, map[string]string{"sekret": "ci"}, nil)
+	m, err := New(true, map[string]string{"sekret": "ci"}, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestMiddlewareAcceptsQueryParamToken(t *testing.T) {
 }
 
 func TestTokensStoredHashed(t *testing.T) {
-	m, err := New(true, map[string]string{"plain-secret": "ci"}, nil)
+	m, err := New(true, map[string]string{"plain-secret": "ci"}, nil, 60, 10, 300)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

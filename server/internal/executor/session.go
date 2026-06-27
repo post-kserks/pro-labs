@@ -13,7 +13,7 @@ import (
 	"vaultdb/internal/wal"
 )
 
-const maxPreparedStatements = 1000
+const defaultMaxPreparedStatements = 1000
 
 type Session struct {
 	executor  *Executor
@@ -28,6 +28,7 @@ type Session struct {
 	planCache          *PlanCache
 	resultCache        *ResultCache
 	snapshotTxID       uint64
+	maxPreparedStmts   int
 }
 
 type PreparedStatement struct {
@@ -43,6 +44,21 @@ func NewSession(store storage.StorageEngine, m *metrics.Collector, txm *txmanage
 		PreparedStatements: make(map[string]*PreparedStatement),
 		planCache:          NewPlanCache(defaultPlanCacheSize),
 		resultCache:        NewResultCache(defaultResultCacheSize, defaultResultCacheTTL),
+		maxPreparedStmts:   defaultMaxPreparedStatements,
+	}
+}
+
+// SetMaxPreparedStatements sets the maximum number of prepared statements per session.
+func (s *Session) SetMaxPreparedStatements(n int) {
+	if n > 0 {
+		s.maxPreparedStmts = n
+	}
+}
+
+// SetResultCacheConfig configures result cache size and TTL.
+func (s *Session) SetResultCacheConfig(size int, ttlSec int) {
+	if size > 0 {
+		s.resultCache = NewResultCache(size, time.Duration(ttlSec)*time.Second)
 	}
 }
 
@@ -120,8 +136,8 @@ func (s *Session) GetPreparedStatement(name string) (*PreparedStatement, bool) {
 func (s *Session) SetPreparedStatement(name string, ps *PreparedStatement) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.PreparedStatements[name]; !exists && len(s.PreparedStatements) >= maxPreparedStatements {
-		return fmt.Errorf("too many prepared statements (max %d)", maxPreparedStatements)
+	if _, exists := s.PreparedStatements[name]; !exists && len(s.PreparedStatements) >= s.maxPreparedStmts {
+		return fmt.Errorf("too many prepared statements (max %d)", s.maxPreparedStmts)
 	}
 	s.PreparedStatements[name] = ps
 	return nil

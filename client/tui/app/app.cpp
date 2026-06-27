@@ -126,6 +126,7 @@ void App::run() {
 
 ftxui::Element App::render() const {
     using namespace ftxui;
+    std::lock_guard<std::mutex> lock(stateMu_);
 
     Element base;
     if (mode_ == Mode::Splash) {
@@ -324,6 +325,7 @@ bool App::handleOverlayEvent(ftxui::Event event) {
 }
 
 void App::attemptConnect() {
+    std::lock_guard<std::mutex> lock(stateMu_);
     connectionError_.clear();
     connection_.disconnect();
     if (!connection_.connect()) {

@@ -22,3 +22,14 @@ node_modules/
 
 # macOS
 .DS_Store
+
+# Secrets and certificates
+.env
+*.pem
+*.key
+
+# Runtime config (may contain tokens)
+vaultdb.yaml
+
+# Windows
+*.exe

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -139,35 +140,15 @@ func (e *HTTPError) Error() string {
 // isRetryable определяет стоит ли делать retry.
 func isRetryable(err error) bool {
 	var httpErr *HTTPError
-	if ok := errorAs(err, &httpErr); ok {
+	if errors.As(err, &httpErr) {
 		// 429 (rate limit), 5xx (server errors) — retry
 		return httpErr.StatusCode == 429 ||
 			(httpErr.StatusCode >= 500 && httpErr.StatusCode < 600)
 	}
 	// Сетевые ошибки — retry
 	var netErr net.Error
-	if ok := errorAs(err, &netErr); ok {
+	if errors.As(err, &netErr) {
 		return netErr.Timeout()
-	}
-	return false
-}
-
-// errorAs is a helper to check if an error matches a target type.
-func errorAs(err error, target interface{}) bool {
-	if err == nil {
-		return false
-	}
-	switch t := target.(type) {
-	case **HTTPError:
-		if e, ok := err.(*HTTPError); ok {
-			*t = e
-			return true
-		}
-	case *net.Error:
-		if e, ok := err.(net.Error); ok {
-			*t = e
-			return true
-		}
 	}
 	return false
 }
