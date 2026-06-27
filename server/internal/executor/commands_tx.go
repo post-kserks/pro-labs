@@ -330,14 +330,17 @@ func undoUpdate(ctx *ExecutionContext, op txmanager.PendingOp) error {
 		}
 	}
 
-	if len(restoreIndices) > 0 {
-		mergedUpdates := make(map[string]storage.Value)
-		for _, u := range restoreUpdates {
-			for k, v := range u {
-				mergedUpdates[k] = v
-			}
-		}
-		if _, err := ctx.Storage.UpdateRows(op.DB, op.Table, restoreIndices, mergedUpdates); err != nil {
+	// Восстанавливаем каждую строку ЕЁ СОБСТВЕННЫМИ старыми значениями.
+	// Нельзя сливать per-row карты в одну и применять ко всем индексам разом:
+	// у строк разные старые значения, и слияние оставило бы одно (последнее)
+	// и затёрло остальные — порча данных при откате.
+	//
+	// Идём по убыванию индекса: UpdateRows тумбстоунит старую версию и
+	// дописывает новую в конец, из-за чего позиции строк ПОСЛЕ изменённой
+	// сдвигаются. Обрабатывая от большего индекса к меньшему, мы не трогаем
+	// ещё не восстановленные (меньшие) индексы — они остаются валидными.
+	for i := len(restoreIndices) - 1; i >= 0; i-- {
+		if _, err := ctx.Storage.UpdateRows(op.DB, op.Table, []int{restoreIndices[i]}, restoreUpdates[i]); err != nil {
 			return err
 		}
 	}

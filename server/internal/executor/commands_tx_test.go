@@ -267,3 +267,32 @@ func TestWALAbortOnRollback(t *testing.T) {
 		t.Fatalf("expected 0 rows after rollback with WAL, got %d", len(result.Rows))
 	}
 }
+
+// TestUndoUpdatePartialCommitPerRowRestore: при откате частично применённого
+// коммита один UPDATE, затронувший несколько строк с РАЗНЫМИ старыми
+// значениями, должен восстановить каждой строке ЕЁ значение, а не одно общее.
+// Регресс на слияние per-row карт в mergedUpdates (порча данных).
+func TestUndoUpdatePartialCommitPerRowRestore(t *testing.T) {
+	session := setupTxSession(t)
+	executeSQL(t, session, "CREATE TABLE accounts (id INT, balance INT);")
+	executeSQL(t, session, "ALTER TABLE accounts ADD CONSTRAINT chk_bal CHECK (balance >= 0);")
+	executeSQL(t, session, "INSERT INTO accounts VALUES (1, 10);")
+	executeSQL(t, session, "INSERT INTO accounts VALUES (2, 20);")
+
+	executeSQL(t, session, "BEGIN;")
+	// Один UPDATE на две строки с разными старыми значениями (10 и 20).
+	executeSQL(t, session, "UPDATE accounts SET balance = 500 WHERE id <= 2;")
+	// Второй UPDATE падает на apply (CHECK balance>=0) → частичный коммит,
+	// первый UPDATE откатывается, и обе строки должны вернуть СВОИ 10 и 20.
+	executeSQL(t, session, "UPDATE accounts SET balance = -5 WHERE id = 2;")
+	executeSQLExpectError(t, session, "COMMIT;")
+
+	res := executeSQL(t, session, "SELECT balance FROM accounts ORDER BY id;")
+	if len(res.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d: %v", len(res.Rows), res.Rows)
+	}
+	if res.Rows[0][0] != "10" || res.Rows[1][0] != "20" {
+		t.Fatalf("per-row restore corrupted: want [10 20], got [%s %s]",
+			res.Rows[0][0], res.Rows[1][0])
+	}
+}
