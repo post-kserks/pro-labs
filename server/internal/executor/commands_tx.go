@@ -57,6 +57,11 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	var applied int
 	var applyErr error
 	commitErr := ctx.Session.TxManager.Commit(tx, func(pendingOps []txmanager.PendingOp) error {
+		// Commit уже держит commit-локи затронутых таблиц. Помечаем контекст,
+		// чтобы autocommit-обёртка (mutateUnderTableLock) НЕ брала те же
+		// нереентрантные локи повторно — иначе self-deadlock (Bug #2 guard).
+		ctx.InCommitApply = true
+		defer func() { ctx.InCommitApply = false }()
 		applied, applyErr = applyOps(ctx, pendingOps)
 		return applyErr
 	})

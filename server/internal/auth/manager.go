@@ -35,12 +35,13 @@ type Manager struct {
 
 // authRateLimiter отслеживает неудачные попытки аутентификации по IP.
 type authRateLimiter struct {
-	mu       sync.Mutex
-	attempts map[string][]time.Time
-	blocked  map[string]time.Time
-	window   time.Duration
-	maxFails int
-	blockFor time.Duration
+	mu        sync.Mutex
+	attempts  map[string][]time.Time
+	blocked   map[string]time.Time
+	window    time.Duration
+	maxFails  int
+	blockFor  time.Duration
+	lastSweep time.Time
 }
 
 func newAuthRateLimiter(windowSec, maxFails, blockForSec int) *authRateLimiter {
@@ -54,11 +55,37 @@ func newAuthRateLimiter(windowSec, maxFails, blockForSec int) *authRateLimiter {
 		blockForSec = 300
 	}
 	return &authRateLimiter{
-		attempts: make(map[string][]time.Time),
-		blocked:  make(map[string]time.Time),
-		window:   time.Duration(windowSec) * time.Second,
-		maxFails: maxFails,
-		blockFor: time.Duration(blockForSec) * time.Second,
+		attempts:  make(map[string][]time.Time),
+		blocked:   make(map[string]time.Time),
+		window:    time.Duration(windowSec) * time.Second,
+		maxFails:  maxFails,
+		blockFor:  time.Duration(blockForSec) * time.Second,
+		lastSweep: time.Now(),
+	}
+}
+
+// sweepLocked удаляет устаревшие записи, чтобы карты attempts/blocked не росли
+// неограниченно при потоке запросов с большого числа разных IP (защита от
+// исчерпания памяти). Вызывается под удержанием rl.mu не чаще раза в window.
+func (rl *authRateLimiter) sweepLocked(now time.Time) {
+	if now.Sub(rl.lastSweep) < rl.window {
+		return
+	}
+	rl.lastSweep = now
+	for ip, until := range rl.blocked {
+		if now.After(until) {
+			delete(rl.blocked, ip)
+		}
+	}
+	cutoff := now.Add(-rl.window)
+	for ip, ts := range rl.attempts {
+		if _, stillBlocked := rl.blocked[ip]; stillBlocked {
+			continue
+		}
+		// Если последняя попытка вне окна — запись бесполезна, удаляем.
+		if len(ts) == 0 || !ts[len(ts)-1].After(cutoff) {
+			delete(rl.attempts, ip)
+		}
 	}
 }
 
@@ -66,6 +93,7 @@ func (rl *authRateLimiter) recordFailure(ip string) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	now := time.Now()
+	rl.sweepLocked(now)
 	rl.attempts[ip] = append(rl.attempts[ip], now)
 	cutoff := now.Add(-rl.window)
 	filtered := rl.attempts[ip][:0]
@@ -83,6 +111,7 @@ func (rl *authRateLimiter) recordFailure(ip string) {
 func (rl *authRateLimiter) isBlocked(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
+	rl.sweepLocked(time.Now())
 	until, ok := rl.blocked[ip]
 	if !ok {
 		return false

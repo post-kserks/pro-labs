@@ -28,6 +28,11 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 		if err != nil {
 			return nil, nil, err
 		}
+		// read-your-own-writes для правой таблицы джойна (Bug #1).
+		rightRows, err = applyTxOverlay(ctx, dbName, join.TableName, rightRows)
+		if err != nil {
+			return nil, nil, err
+		}
 
 		// Create combined schema with qualified names
 		combinedSchema := &storage.TableSchema{

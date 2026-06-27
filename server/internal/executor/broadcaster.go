@@ -42,6 +42,11 @@ type Subscription struct {
 	DropPolicy   DropPolicy
 	BlockTimeout time.Duration
 
+	// notifyMu сериализует notify для одной подписки: NotifyTableChanged может
+	// запустить несколько горутин для одной подписки (на быстрых подряд
+	// изменениях таблицы), а политика PolicyEvict (drain + insert) корректна
+	// только при единственном писателе в канал. Мьютекс это гарантирует.
+	notifyMu     sync.Mutex
 	closed       atomic.Bool
 	snapshotTxID uint64
 }
@@ -56,6 +61,11 @@ func (s *Subscription) Close() {
 // notify доставляет обновление согласно политике подписки.
 // Возвращает false, если клиент должен быть отписан (block-таймаут).
 func (s *Subscription) notify(res *Result, logger *slog.Logger) bool {
+	// Только один notify на подписку одновременно — иначе drain+insert в
+	// PolicyEvict гоняется между параллельными писателями.
+	s.notifyMu.Lock()
+	defer s.notifyMu.Unlock()
+
 	if s.closed.Load() {
 		return false
 	}
@@ -175,6 +185,14 @@ func (b *Broadcaster) Unsubscribe(id string) {
 	delete(b.subscriptions, id)
 }
 
+// NotifyTableChanged переоценивает и рассылает live-query подписки, чья базовая
+// таблица совпала с изменившейся.
+//
+// ОГРАНИЧЕНИЕ: совпадение идёт только по основной таблице запроса
+// (s.Query.TableName) в той же БД. Live query с JOIN или подзапросом по другой
+// таблице НЕ будет переоценён при изменении этой другой таблицы — обновится
+// только при изменении своей основной таблицы. Полноценное отслеживание
+// зависимостей по всем читаемым таблицам пока не реализовано.
 func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *ExecutionContext) {
 	// Snapshot matching subscriptions first so subscriber queries do not run
 	// while holding the broadcaster lock.

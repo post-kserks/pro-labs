@@ -44,6 +44,12 @@ func (c *SelectCommand) resolveRows(ctx *ExecutionContext, dbName string) ([]sto
 			return rows, "", err
 		}
 		rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+		if err != nil {
+			return nil, "", err
+		}
+		// read-your-own-writes: накладываем буферизованные операции транзакции
+		// (Bug #1). Только для текущего чтения, не для AS OF.
+		rows, err = applyTxOverlay(ctx, dbName, c.stmt.TableName, rows)
 		return rows, "", err
 	}
 
@@ -81,8 +87,9 @@ func (c *SelectCommand) executeWithStats(ctx *ExecutionContext) (*PlanStats, *Re
 	var asOfNote string
 	usedIndex := false
 
-	// Try index lookup
-	if c.stmt.Where != nil && c.stmt.AsOf == nil {
+	// Try index lookup. Внутри транзакции пропускаем индекс: он читает только
+	// закоммиченные данные и обошёл бы tx-overlay (Bug #1).
+	if c.stmt.Where != nil && c.stmt.AsOf == nil && !ctx.Session.IsInTx() {
 		if cmp, ok := c.stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "=" {
 			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
 				var val parser.Value

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"vaultdb/internal/storage/heap"
 	"vaultdb/internal/storage/page"
@@ -16,6 +15,11 @@ const defaultBufferPoolCapacity = 1024
 
 // BufferPool — LRU кэш для страниц.
 // Сидит между page engine и HeapFile, кэширует прочитанные страницы в памяти.
+//
+// ВАЖНО: buffer pool НЕ выполняет отложенную запись (write-back). Все модификации
+// записываются на диск напрямую вызывающим кодом (heap.WritePage + Sync) до/во
+// время UnpinPage. Поэтому кэш всегда содержит только ЧИСТЫЕ страницы, а
+// вытеснение просто удаляет страницу из памяти и никогда не пишет на диск.
 type BufferPool struct {
 	mu       sync.RWMutex
 	capacity int                           // максимальное количество страниц в кэше
@@ -23,19 +27,14 @@ type BufferPool struct {
 	lru      *list.List                    // двусвязный список для LRU (front = recently used)
 	count    int                           // текущее количество страниц в кэше
 	wal      *wal.WAL                      // WAL для записи full page images
-	dirty    map[page.PageID]bool          // track dirty pages for batched flush
-	flushCh  chan page.PageID               // async flush channel
-	stopCh   chan struct{}                  // signal to stop flush loop
-	flushDone chan struct{}                 // closed when flushLoop exits
 }
 
 // bufferEntry — запись в кэше.
 type bufferEntry struct {
 	pid          page.PageID
 	page         *page.Page
-	dirty        bool   // страница была изменена и не сброшена на диск
-	pinCnt       int    // количество активных пользователей (нельзя вытеснить)
-	imageWritten bool   // full page image уже записан в WAL
+	pinCnt       int  // количество активных пользователей (нельзя вытеснить)
+	imageWritten bool // full page image уже записан в WAL
 }
 
 // NewBufferPool создаёт новый buffer pool с указанным capacity.
@@ -43,61 +42,10 @@ func NewBufferPool(capacity int) *BufferPool {
 	if capacity <= 0 {
 		capacity = defaultBufferPoolCapacity
 	}
-	bp := &BufferPool{
-		capacity:  capacity,
-		cache:     make(map[page.PageID]*list.Element, capacity),
-		lru:       list.New(),
-		dirty:     make(map[page.PageID]bool),
-		flushCh:   make(chan page.PageID, 1024),
-		stopCh:    make(chan struct{}),
-		flushDone: make(chan struct{}),
-	}
-	go bp.flushLoop()
-	return bp
-}
-
-// flushLoop batching dirty page writes to disk.
-func (bp *BufferPool) flushLoop() {
-	defer close(bp.flushDone)
-	batch := make([]page.PageID, 0, 64)
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-bp.stopCh:
-			bp.flushBatch(batch)
-			return
-		case pid := <-bp.flushCh:
-			batch = append(batch, pid)
-			if len(batch) >= 64 {
-				bp.flushBatch(batch)
-				batch = batch[:0]
-			}
-		case <-ticker.C:
-			if len(batch) > 0 {
-				bp.flushBatch(batch)
-				batch = batch[:0]
-			}
-		}
-	}
-}
-
-// flushBatch marks dirty pages as flushed. Actual disk writes happen during
-// eviction (evict) or explicit FlushAll calls. This method only clears dirty
-// flags so that eviction can proceed without unnecessary re-flushing.
-func (bp *BufferPool) flushBatch(pids []page.PageID) {
-	bp.mu.Lock()
-	defer bp.mu.Unlock()
-
-	for _, pid := range pids {
-		if elem, ok := bp.cache[pid]; ok {
-			entry := elem.Value.(*bufferEntry)
-			if entry.dirty {
-				entry.dirty = false
-				delete(bp.dirty, pid)
-			}
-		}
+	return &BufferPool{
+		capacity: capacity,
+		cache:    make(map[page.PageID]*list.Element, capacity),
+		lru:      list.New(),
 	}
 }
 
@@ -138,8 +86,8 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile) (*page.Page,
 
 	// Если кэш полон — вытесняем LRU
 	for bp.count >= bp.capacity {
-		if err := bp.evict(hf); err != nil {
-			// Не удалось вытестить (все страницы запинованы или ошибка записи)
+		if err := bp.evict(); err != nil {
+			// Не удалось вытеснить (все страницы запинованы)
 			break
 		}
 	}
@@ -148,7 +96,6 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile) (*page.Page,
 	entry := &bufferEntry{
 		pid:    pid,
 		page:   pg,
-		dirty:  false,
 		pinCnt: 1,
 	}
 	elem := bp.lru.PushFront(entry)
@@ -159,50 +106,39 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile) (*page.Page,
 }
 
 // UnpinPage уменьшает pinCnt конкретной страницы.
-// Dirty pages are queued for async batched flush.
+//
+// Buffer pool НЕ выполняет отложенную запись: вызывающий код уже записал
+// страницу на диск напрямую (heap.WritePage + Sync) до вызова UnpinPage,
+// поэтому кэш хранит только чистые страницы. Параметр dirty используется лишь
+// для записи full page image в WAL (защита от torn pages) при первой
+// модификации страницы.
 func (bp *BufferPool) UnpinPage(pid page.PageID, dirty bool) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	if elem, ok := bp.cache[pid]; ok {
-		entry := elem.Value.(*bufferEntry)
-		if entry.pinCnt > 0 {
-			entry.pinCnt--
-			if dirty && !entry.dirty {
-				// Страница впервые помечена как грязная — записываем full page image в WAL
-				entry.dirty = true
-				bp.dirty[pid] = true
-				if bp.wal != nil && !entry.imageWritten {
-					go bp.writeFullPageImage(entry)
-				}
-				// Queue for async flush
-				select {
-				case bp.flushCh <- pid:
-				default:
-					// Channel full — flush will happen on next eviction or explicit FlushAll
-				}
-			}
-		}
-	}
-}
-
-// writeFullPageImage записывает полный образ страницы в WAL для защиты от torn pages.
-func (bp *BufferPool) writeFullPageImage(entry *bufferEntry) {
-	bp.mu.RLock()
-	if bp.wal == nil {
-		bp.mu.RUnlock()
+	elem, ok := bp.cache[pid]
+	if !ok {
 		return
 	}
-	w := bp.wal
-	pid := entry.pid
-	pageData := make([]byte, len(entry.page))
-	copy(pageData, entry.page[:])
-	entry.imageWritten = true
-	bp.mu.RUnlock()
+	entry := elem.Value.(*bufferEntry)
+	if entry.pinCnt > 0 {
+		entry.pinCnt--
+	}
 
-	// Пишем full page image в WAL (не блокируя buffer pool)
-	if err := w.WriteFullPageImage(0, "", "", pid.SegmentNo, pid.PageNo, pageData); err != nil {
-		slog.Error("failed to write full page image to WAL", "segment", pid.SegmentNo, "page", pid.PageNo, "error", err)
+	if dirty && bp.wal != nil && !entry.imageWritten {
+		// Страница впервые помечена как грязная — записываем full page image в WAL.
+		// Копию делаем под локом, саму запись в WAL выполняем асинхронно, чтобы
+		// не блокировать buffer pool.
+		entry.imageWritten = true
+		w := bp.wal
+		p := pid
+		pageData := make([]byte, len(entry.page))
+		copy(pageData, entry.page[:])
+		go func() {
+			if err := w.WriteFullPageImage(0, "", "", p.SegmentNo, p.PageNo, pageData); err != nil {
+				slog.Error("failed to write full page image to WAL", "segment", p.SegmentNo, "page", p.PageNo, "error", err)
+			}
+		}()
 	}
 }
 
@@ -218,26 +154,21 @@ func (bp *BufferPool) InvalidatePage(pid page.PageID) {
 		}
 		bp.lru.Remove(elem)
 		delete(bp.cache, pid)
-		delete(bp.dirty, pid)
 		bp.count--
 	}
 }
 
 // evict вытесняет самую старую незапинованную страницу из кэша.
-// Грязные страницы сбрасываются на диск перед удалением.
-// Возвращает true если удалось, false если все страницы запинованы.
-func (bp *BufferPool) evict(hf *heap.HeapFile) error {
+//
+// Кэш хранит только чистые страницы (все модификации пишутся на диск напрямую),
+// поэтому вытеснение просто удаляет страницу из памяти и НИКОГДА не пишет на
+// диск. Это исключает риск записи страницы в чужой heap-файл.
+// Возвращает nil если удалось, ошибку если все страницы запинованы.
+func (bp *BufferPool) evict() error {
 	for elem := bp.lru.Back(); elem != nil; elem = elem.Prev() {
 		entry := elem.Value.(*bufferEntry)
 		if entry.pinCnt > 0 {
 			continue
-		}
-		if entry.dirty && hf != nil {
-			if err := hf.WritePage(entry.pid, entry.page); err != nil {
-				return fmt.Errorf("evict: write page %v: %w", entry.pid, err)
-			}
-			entry.dirty = false
-			delete(bp.dirty, entry.pid)
 		}
 		bp.lru.Remove(elem)
 		delete(bp.cache, entry.pid)
@@ -247,51 +178,16 @@ func (bp *BufferPool) evict(hf *heap.HeapFile) error {
 	return fmt.Errorf("evict: all pages pinned")
 }
 
-// evictDirty сбрасывает грязную страницу на диск перед вытеснением.
-// Вызывается когда known dirty page нужен для записи на диск.
-
-// FlushAll сбрасывает все dirty pages на диск.
+// FlushAll — no-op. Buffer pool хранит только чистые страницы (все записи идут
+// на диск напрямую через heap.WritePage), поэтому сбрасывать нечего. Метод
+// сохранён для совместимости и явности вызова на checkpoint/Close.
 func (bp *BufferPool) FlushAll(hf *heap.HeapFile) error {
-	type dirtyEntry struct {
-		pid  page.PageID
-		page *page.Page
-	}
-
-	bp.mu.Lock()
-	var dirty []dirtyEntry
-	for pid, elem := range bp.cache {
-		entry := elem.Value.(*bufferEntry)
-		if entry.dirty {
-			dirty = append(dirty, dirtyEntry{pid: pid, page: entry.page})
-			entry.dirty = false
-			delete(bp.dirty, pid)
-		}
-	}
-	bp.mu.Unlock()
-
-	for _, d := range dirty {
-		if err := hf.WritePage(d.pid, d.page); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
-// FlushDirtyPagesUpToLSN сбрасывает dirty pages с LSN <= maxLSN.
+// FlushDirtyPagesUpToLSN — no-op по той же причине, что и FlushAll: кэш не
+// содержит грязных страниц. Сохранён для совместимости с логикой checkpoint.
 func (bp *BufferPool) FlushDirtyPagesUpToLSN(maxLSN uint64, hf *heap.HeapFile) error {
-	bp.mu.Lock()
-	defer bp.mu.Unlock()
-
-	for pid, elem := range bp.cache {
-		entry := elem.Value.(*bufferEntry)
-		if entry.dirty && entry.page.LSN() <= maxLSN {
-			if err := hf.WritePage(pid, entry.page); err != nil {
-				return err
-			}
-			entry.dirty = false
-			delete(bp.dirty, pid)
-		}
-	}
 	return nil
 }
 
@@ -315,29 +211,25 @@ func (bp *BufferPool) InvalidateTable(tableID uint32) {
 			}
 			bp.lru.Remove(elem)
 			delete(bp.cache, pid)
-			delete(bp.dirty, pid)
 			bp.count--
 		}
 	}
 }
 
-// Close signals the flush loop to stop and waits for it to drain.
-func (bp *BufferPool) Close() {
-	close(bp.stopCh)
-	<-bp.flushDone
-}
+// Close освобождает ресурсы buffer pool. Фоновых горутин нет, поэтому это no-op;
+// метод сохранён для совместимости.
+func (bp *BufferPool) Close() {}
 
 // Stats возвращает статистику кэша.
 func (bp *BufferPool) Stats() BufferPoolStats {
 	bp.mu.RLock()
 	defer bp.mu.RUnlock()
 
-	dirtyCount := len(bp.dirty)
-
 	return BufferPoolStats{
-		Capacity:   bp.capacity,
-		Used:       bp.count,
-		DirtyCount: dirtyCount,
+		Capacity: bp.capacity,
+		Used:     bp.count,
+		// Кэш никогда не хранит грязные страницы.
+		DirtyCount: 0,
 	}
 }
 

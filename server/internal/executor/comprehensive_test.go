@@ -478,14 +478,17 @@ func TestSAVEPOINTComprehensive(t *testing.T) {
 	// BEGIN
 	executeSQL(t, session, "BEGIN;")
 
-	// SAVEPOINT — not yet implemented, should return error
-	executeSQLExpectError(t, session, "SAVEPOINT sp1;")
+	// SAVEPOINT теперь реализован: устанавливается без ошибки.
+	executeSQL(t, session, "SAVEPOINT sp1;")
 
-	// ROLLBACK TO SAVEPOINT — not yet implemented, should return error
+	// ROLLBACK TO SAVEPOINT известного маркера — без ошибки.
+	executeSQL(t, session, "ROLLBACK TO SAVEPOINT sp1;")
+
+	// RELEASE SAVEPOINT известного маркера — без ошибки.
+	executeSQL(t, session, "RELEASE SAVEPOINT sp1;")
+
+	// После RELEASE маркер неизвестен — ROLLBACK TO должен вернуть ошибку.
 	executeSQLExpectError(t, session, "ROLLBACK TO SAVEPOINT sp1;")
-
-	// RELEASE SAVEPOINT — not yet implemented, should return error
-	executeSQLExpectError(t, session, "RELEASE SAVEPOINT sp1;")
 
 	// COMMIT
 	executeSQL(t, session, "COMMIT;")

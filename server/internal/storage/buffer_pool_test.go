@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"runtime"
 	"testing"
+	"time"
 
 	"vaultdb/internal/storage/heap"
 	"vaultdb/internal/storage/page"
@@ -143,6 +145,94 @@ func TestBufferPoolInvalidateTable(t *testing.T) {
 	stats = bp.Stats()
 	if stats.Used != 0 {
 		t.Fatalf("expected 0 pages after invalidate, got %d", stats.Used)
+	}
+}
+
+// TestBufferPoolEvictionNoDataLoss проверяет, что вытеснение страниц из
+// переполненного кэша не теряет записанные данные. Это регрессионный тест на
+// баг #5: раньше async flush очищал dirty-флаг без записи на диск, и вытеснение
+// такой страницы молча теряло изменения. Теперь кэш read-through и хранит только
+// чистые страницы (запись на диск делает вызывающий код), поэтому вытеснение
+// безопасно.
+func TestBufferPoolEvictionNoDataLoss(t *testing.T) {
+	bp := NewBufferPool(2) // маленький кэш, чтобы форсировать вытеснение
+	defer bp.Close()
+	hf := setupHeapFile(t)
+
+	const nPages = 8
+	pids := make([]page.PageID, nPages)
+	want := make([]byte, nPages)
+
+	// Записываем на каждую страницу уникальный кортеж и пишем напрямую на диск
+	// (как это делает движок), затем UnpinPage(true).
+	for i := 0; i < nPages; i++ {
+		pid, _, err := hf.AllocatePage(page.PageTypeHeap)
+		if err != nil {
+			t.Fatalf("AllocatePage: %v", err)
+		}
+		pids[i] = pid
+
+		pg, _, err := bp.FetchPage(pid, hf)
+		if err != nil {
+			t.Fatalf("FetchPage: %v", err)
+		}
+		marker := byte('A' + i)
+		want[i] = marker
+		if _, err := pg.InsertTuple([]byte{marker, marker, marker}); err != nil {
+			t.Fatalf("InsertTuple: %v", err)
+		}
+		if err := hf.WritePage(pid, pg); err != nil {
+			t.Fatalf("WritePage: %v", err)
+		}
+		bp.UnpinPage(pid, true)
+	}
+
+	// Кэш переполнен — большинство страниц вытеснено. Перечитываем все страницы и
+	// проверяем, что данные на месте (никаких потерянных записей).
+	for i := 0; i < nPages; i++ {
+		pg, _, err := bp.FetchPage(pids[i], hf)
+		if err != nil {
+			t.Fatalf("re-FetchPage page %d: %v", i, err)
+		}
+		tuple := pg.GetTuple(0)
+		bp.UnpinPage(pids[i], false)
+		if tuple == nil {
+			t.Fatalf("page %d: expected tuple, got nil (data lost)", i)
+		}
+		if tuple[0] != want[i] {
+			t.Fatalf("page %d: expected marker %q, got %q (data lost)", i, want[i], tuple[0])
+		}
+	}
+
+	// Кэш не должен превышать capacity.
+	if stats := bp.Stats(); stats.Used > 2 {
+		t.Fatalf("expected at most 2 cached pages, got %d", stats.Used)
+	}
+}
+
+// TestBufferPoolNoGoroutineLeak проверяет, что создание и закрытие buffer pool
+// не оставляет фоновых горутин и не паникует (раньше flushLoop текла, т.к.
+// Close движком не вызывался).
+func TestBufferPoolNoGoroutineLeak(t *testing.T) {
+	before := runtime.NumGoroutine()
+
+	for i := 0; i < 50; i++ {
+		bp := NewBufferPool(4)
+		bp.Close()
+		bp.Close() // повторный Close не должен паниковать
+	}
+
+	// Даём планировщику шанс завершить любые горутины.
+	for i := 0; i < 10; i++ {
+		if runtime.NumGoroutine() <= before+2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	after := runtime.NumGoroutine()
+	if after > before+2 {
+		t.Fatalf("goroutine leak: before=%d after=%d", before, after)
 	}
 }
 

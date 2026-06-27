@@ -120,3 +120,77 @@ func TestSortedLockingAvoidsDeadlock(t *testing.T) {
 	}
 	wg.Wait() // тест зависнет при deadlock — go test упадёт по таймауту
 }
+
+// TestSpillReadOpsNoTruncationAndError — Bug #4: spill читается без ограничения
+// в 64KB (bufio.Scanner) и распространяет ошибки записи/чтения.
+func TestSpillReadOpsNoTruncationAndError(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager()
+	m.SpillDir = dir
+	m.SpillThreshold = 1 // спиллим сразу
+
+	tx := m.Begin()
+
+	// Операция с payload > 64KB (через дефолтный JSON-кодек: строка в Payload).
+	big := make([]byte, 100*1024)
+	for i := range big {
+		big[i] = 'x'
+	}
+	m.AddOp(tx, PendingOp{Type: "noop", DB: "db", Table: "t", Payload: string(big)})
+	m.AddOp(tx, PendingOp{Type: "noop", DB: "db", Table: "t", Payload: "small"})
+
+	if !tx.spilled {
+		t.Fatalf("expected tx to spill")
+	}
+	if tx.spillErr != nil {
+		t.Fatalf("unexpected spill error: %v", tx.spillErr)
+	}
+
+	ops, err := tx.ReadOps()
+	if err != nil {
+		t.Fatalf("ReadOps failed: %v", err)
+	}
+	if len(ops) != 2 {
+		t.Fatalf("expected 2 ops read back from spill, got %d", len(ops))
+	}
+	if s, _ := ops[0].Payload.(string); len(s) != 100*1024 {
+		t.Fatalf("large op truncated/lost on spill: got len %d", len(s))
+	}
+
+	// Симулируем ошибку записи: липкая spillErr должна вернуться из ReadOps.
+	tx2 := m.Begin()
+	tx2.spilled = true
+	tx2.spillPath = dir + "/does-not-exist.tmp"
+	tx2.spillErr = errors.New("boom")
+	if _, err := tx2.ReadOps(); err == nil {
+		t.Fatalf("expected ReadOps to propagate sticky spillErr")
+	}
+}
+
+// TestSavepointTruncation — RollbackToSavepoint усекает буфер и сбрасывает
+// маркеры, созданные позже.
+func TestSavepointTruncation(t *testing.T) {
+	m := NewManager()
+	tx := m.Begin()
+	m.AddOp(tx, PendingOp{Type: "insert", DB: "db", Table: "t"})
+	tx.Savepoint("s1")
+	m.AddOp(tx, PendingOp{Type: "insert", DB: "db", Table: "t"})
+	tx.Savepoint("s2")
+	m.AddOp(tx, PendingOp{Type: "insert", DB: "db", Table: "t"})
+
+	if err := tx.RollbackToSavepoint("s1"); err != nil {
+		t.Fatalf("rollback to savepoint: %v", err)
+	}
+	ops, _ := tx.ReadOps()
+	if len(ops) != 1 {
+		t.Fatalf("expected 1 op after rollback to s1, got %d", len(ops))
+	}
+	// s2 создан позже s1 — должен быть удалён.
+	if err := tx.RollbackToSavepoint("s2"); err == nil {
+		t.Fatalf("expected error rolling back to dropped savepoint s2")
+	}
+	// Неизвестный savepoint.
+	if err := tx.RollbackToSavepoint("nope"); err == nil {
+		t.Fatalf("expected error for unknown savepoint")
+	}
+}

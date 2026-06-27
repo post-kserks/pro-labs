@@ -139,11 +139,27 @@ func (c *MergeCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 
+	// Запись MERGE сериализуем с коммитами под commit-локом целевой таблицы
+	// (Bug #2b); при commit-apply lock уже взят — mutateUnderTableLock это учитывает.
+	var result *Result
+	err = mutateUnderTableLock(ctx, dbName, c.stmt.TargetTable, func() error {
+		var e error
+		result, e = c.executeMerge(ctx, dbName)
+		return e
+	})
+	return result, err
+}
+
+func (c *MergeCommand) executeMerge(ctx *ExecutionContext, dbName string) (*Result, error) {
 	// Read target table
 	if !ctx.Storage.TableExists(dbName, c.stmt.TargetTable) {
 		return nil, fmt.Errorf("target table '%s' does not exist", c.stmt.TargetTable)
 	}
 	targetRows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TargetTable)
+	if err != nil {
+		return nil, err
+	}
+	targetRows, err = applyTxOverlay(ctx, dbName, c.stmt.TargetTable, targetRows)
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +169,10 @@ func (c *MergeCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("source table '%s' does not exist", c.stmt.SourceTable)
 	}
 	sourceRows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.SourceTable)
+	if err != nil {
+		return nil, err
+	}
+	sourceRows, err = applyTxOverlay(ctx, dbName, c.stmt.SourceTable, sourceRows)
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +450,18 @@ type SavepointCommand struct {
 }
 
 func (c *SavepointCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	return nil, fmt.Errorf("SAVEPOINT not yet implemented; use BEGIN/COMMIT/ROLLBACK for transaction control")
+	if !ctx.Session.IsInTx() {
+		return nil, fmt.Errorf("SAVEPOINT can only be used inside a transaction")
+	}
+	tx := ctx.Session.GetActiveTx()
+	if tx == nil {
+		return nil, fmt.Errorf("no active transaction")
+	}
+	tx.Savepoint(c.stmt.Name)
+	return &Result{
+		Type:    "message",
+		Message: fmt.Sprintf("Savepoint '%s' established.", c.stmt.Name),
+	}, nil
 }
 
 // RollbackToSavepointCommand выполняет ROLLBACK TO SAVEPOINT.
@@ -439,7 +470,20 @@ type RollbackToSavepointCommand struct {
 }
 
 func (c *RollbackToSavepointCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	return nil, fmt.Errorf("ROLLBACK TO SAVEPOINT not yet implemented; use BEGIN/COMMIT/ROLLBACK for transaction control")
+	if !ctx.Session.IsInTx() {
+		return nil, fmt.Errorf("ROLLBACK TO SAVEPOINT can only be used inside a transaction")
+	}
+	tx := ctx.Session.GetActiveTx()
+	if tx == nil {
+		return nil, fmt.Errorf("no active transaction")
+	}
+	if err := tx.RollbackToSavepoint(c.stmt.Name); err != nil {
+		return nil, err
+	}
+	return &Result{
+		Type:    "message",
+		Message: fmt.Sprintf("Rolled back to savepoint '%s'.", c.stmt.Name),
+	}, nil
 }
 
 // ReleaseSavepointCommand выполняет RELEASE SAVEPOINT.
@@ -448,5 +492,18 @@ type ReleaseSavepointCommand struct {
 }
 
 func (c *ReleaseSavepointCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	return nil, fmt.Errorf("RELEASE SAVEPOINT not yet implemented; use BEGIN/COMMIT/ROLLBACK for transaction control")
+	if !ctx.Session.IsInTx() {
+		return nil, fmt.Errorf("RELEASE SAVEPOINT can only be used inside a transaction")
+	}
+	tx := ctx.Session.GetActiveTx()
+	if tx == nil {
+		return nil, fmt.Errorf("no active transaction")
+	}
+	if !tx.ReleaseSavepoint(c.stmt.Name) {
+		return nil, fmt.Errorf("savepoint %q does not exist", c.stmt.Name)
+	}
+	return &Result{
+		Type:    "message",
+		Message: fmt.Sprintf("Savepoint '%s' released.", c.stmt.Name),
+	}, nil
 }

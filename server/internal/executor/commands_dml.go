@@ -103,11 +103,18 @@ type InsertCommand struct {
 
 func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.IsInTx() {
+		// Замораживаем волатильные функции (NOW/UUID/...) в литералы, чтобы
+		// overlay-чтение и применение при COMMIT использовали одинаковые
+		// значения (Bug #3).
+		frozen, err := freezeInsert(c.stmt, ctx)
+		if err != nil {
+			return nil, err
+		}
 		ctx.Session.TxManager.AddOp(ctx.Session.ActiveTx, txmanager.PendingOp{
 			Type:    "insert",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
-			Payload: c.stmt,
+			Payload: frozen,
 		})
 		return &Result{
 			Type:    "message",
@@ -117,7 +124,24 @@ func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	return c.executeImmediate(ctx)
 }
 
+// executeImmediate сериализует autocommit-запись (мутация + bump версии) с
+// коммитами под per-table commit-локом (Bug #2b). При commit-apply
+// (ctx.InCommitApply) lock уже взят — mutateUnderTableLock его не берёт повторно.
 func (c *InsertCommand) executeImmediate(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return c.executeImmediateInner(ctx)
+	}
+	var result *Result
+	err = mutateUnderTableLock(ctx, dbName, c.stmt.TableName, func() error {
+		var e error
+		result, e = c.executeImmediateInner(ctx)
+		return e
+	})
+	return result, err
+}
+
+func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Ctx != nil {
 		select {
 		case <-ctx.Ctx.Done():
@@ -490,6 +514,12 @@ type UpdateCommand struct {
 
 func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.IsInTx() {
+		// Замораживаем волатильные функции в присваиваниях и WHERE (Bug #3),
+		// чтобы overlay и применение при COMMIT совпали.
+		frozen, err := freezeUpdate(c.stmt, ctx)
+		if err != nil {
+			return nil, err
+		}
 		dbName, _ := requireCurrentDB(ctx)
 		var oldRows []storage.Row
 		var oldIndices []int
@@ -499,7 +529,7 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 				rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 				if err == nil {
 					for idx, row := range rows {
-						match, err := evalExpr(c.stmt.Where, row, schema, ctx)
+						match, err := evalExpr(frozen.Where, row, schema, ctx)
 						if err == nil && match {
 							oldRows = append(oldRows, row)
 							oldIndices = append(oldIndices, idx)
@@ -513,7 +543,7 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			Type:    "update",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
-			Payload: c.stmt,
+			Payload: frozen,
 			OldRow:  oldRows,
 			Row:     oldIndices,
 		})
@@ -525,7 +555,22 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	return c.executeImmediate(ctx)
 }
 
+// executeImmediate — см. комментарий к InsertCommand.executeImmediate (Bug #2b).
 func (c *UpdateCommand) executeImmediate(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return c.executeImmediateInner(ctx)
+	}
+	var result *Result
+	err = mutateUnderTableLock(ctx, dbName, c.stmt.TableName, func() error {
+		var e error
+		result, e = c.executeImmediateInner(ctx)
+		return e
+	})
+	return result, err
+}
+
+func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Ctx != nil {
 		select {
 		case <-ctx.Ctx.Done():
@@ -700,6 +745,11 @@ type DeleteCommand struct {
 
 func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.IsInTx() {
+		// Замораживаем волатильные функции в WHERE (Bug #3).
+		frozen, err := freezeDelete(c.stmt, ctx)
+		if err != nil {
+			return nil, err
+		}
 		dbName, _ := requireCurrentDB(ctx)
 		var deletedRows []storage.Row
 		if dbName != "" && ctx.Storage.TableExists(dbName, c.stmt.TableName) {
@@ -708,7 +758,7 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 				rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 				if err == nil {
 					for _, row := range rows {
-						match, err := evalExpr(c.stmt.Where, row, schema, ctx)
+						match, err := evalExpr(frozen.Where, row, schema, ctx)
 						if err == nil && match {
 							deletedRows = append(deletedRows, row)
 						}
@@ -721,7 +771,7 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			Type:    "delete",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
-			Payload: c.stmt,
+			Payload: frozen,
 			Row:     deletedRows,
 		})
 		return &Result{
@@ -732,7 +782,22 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	return c.executeImmediate(ctx)
 }
 
+// executeImmediate — см. комментарий к InsertCommand.executeImmediate (Bug #2b).
 func (c *DeleteCommand) executeImmediate(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return c.executeImmediateInner(ctx)
+	}
+	var result *Result
+	err = mutateUnderTableLock(ctx, dbName, c.stmt.TableName, func() error {
+		var e error
+		result, e = c.executeImmediateInner(ctx)
+		return e
+	})
+	return result, err
+}
+
+func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Ctx != nil {
 		select {
 		case <-ctx.Ctx.Done():

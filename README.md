@@ -13,9 +13,9 @@ SQL-compatible database server with Go backend and C++ clients.
 - **Buffer Pool**: LRU page cache with per-table locking
 - **Concurrent Writes**: Per-table locking (no global mutex contention)
 - **Transactions**: BEGIN/COMMIT/ROLLBACK with conflict detection and spill to disk
-- **Result Cache**: LRU cache with TTL and auto-invalidation (394x speedup)
+- **Result Cache**: LRU cache with TTL and auto-invalidation (with measured speedups on cache hits)
 - **Binary Encoding**: Fast tuple serialization (no JSON overhead)
-- **Authentication**: HMAC-SHA256 tokens with timing-safe comparison
+- **Authentication**: HMAC-SHA256 hashed tokens (server-secret keyed), with login rate-limiting
 - **TLS Support**: mTLS, self-signed certificate generation
 - **Rate Limiting**: Token bucket with trusted proxy support
 - **Monitoring**: Prometheus metrics (p50/p95/p99), health checks, dashboard
@@ -43,15 +43,18 @@ go build -o vaultdb-server ./cmd/vaultdb-server
 
 ### Connect
 
-```bash
-# TCP connection
-psql -h localhost -p 5432
+The easiest way to run a query is the HTTP API:
 
-# HTTP API
+```bash
 curl -X POST http://localhost:8080/api/query \
   -H "Content-Type: application/json" \
   -d '{"query": "SELECT 1 + 1;"}'
 ```
+
+> Note: TCP port 5432 does **not** speak the PostgreSQL wire protocol — `psql` cannot connect.
+> It uses a custom newline-delimited JSON protocol (each request is a JSON line
+> `{"id":..., "token":..., "query":...}`, each response is a JSON line) consumed by the
+> bundled C++ client in `client/`.
 
 ## Configuration
 

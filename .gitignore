@@ -10,6 +10,7 @@ data/**/*
 CLAUDE.md
 # Данные и временные файлы
 data_test/
+server/data/
 tmp_data/
 **/tmp_data/
 **/tmp_*.txt

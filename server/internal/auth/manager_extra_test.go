@@ -1,9 +1,11 @@
 package auth
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestMiddlewareEnabledValidToken(t *testing.T) {
@@ -132,5 +134,29 @@ func TestMiddlewareDisabled(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+// TestRateLimiterSweepBoundsMemory проверяет, что карты attempts/blocked не
+// растут неограниченно: устаревшие записи с большого числа разных IP вычищаются
+// фоновым sweep'ом по истечении окна.
+func TestRateLimiterSweepBoundsMemory(t *testing.T) {
+	rl := newAuthRateLimiter(1, 100, 1) // окно 1с, блок 1с
+
+	// Заполняем тысячей разных IP с одной (недостаточной для блокировки) ошибкой.
+	for i := 0; i < 1000; i++ {
+		rl.recordFailure(fmt.Sprintf("10.0.%d.%d", i/256, i%256))
+	}
+	if got := len(rl.attempts); got < 900 {
+		t.Fatalf("expected ~1000 attempt entries before sweep, got %d", got)
+	}
+
+	// Ждём, пока окно истечёт, и провоцируем sweep ещё одним вызовом.
+	time.Sleep(1100 * time.Millisecond)
+	rl.recordFailure("172.16.0.1")
+
+	// Все старые записи (последняя попытка вне окна, не заблокированы) должны уйти.
+	if got := len(rl.attempts); got > 5 {
+		t.Fatalf("expected stale attempt entries to be swept, got %d", got)
 	}
 }

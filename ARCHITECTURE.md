@@ -264,7 +264,7 @@ WebUI -- "REST API (8080)" --> HTTPSrv
 
 - **Transaction Manager**: MVCC-inspired concurrency with conflict detection and isolation.
 
-- **Security**: Mandatory mTLS for TCP, HMAC-SHA256 token authentication with constant-time comparison.
+- **Security**: Mandatory mTLS for TCP, HMAC-SHA256 hashed token authentication (server-secret keyed) with login rate-limiting.
 
   
 

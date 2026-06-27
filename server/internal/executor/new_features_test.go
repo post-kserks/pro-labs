@@ -51,11 +51,11 @@ func TestTransactions(t *testing.T) {
 	executeSQL(t, session, "BEGIN;")
 	executeSQL(t, session, "INSERT INTO heroes VALUES (5, 'Gandalf', 20, TRUE, 10.0, 'Wizard');")
 
-	// Should not be visible to other sessions or even this session before commit?
-	// Actually in our implementation it's buffered, so it shouldn't be visible in SelectRows.
+	// Read-your-own-writes (Bug #1): буферизованная вставка видна СВОЕЙ же
+	// транзакции через tx-overlay ещё до COMMIT.
 	res := executeSQL(t, session, "SELECT * FROM heroes WHERE id = 5;")
-	if len(res.Rows) != 0 {
-		t.Fatalf("expected 0 rows before commit, got %d", len(res.Rows))
+	if len(res.Rows) != 1 {
+		t.Fatalf("expected 1 row visible within tx (read-your-writes), got %d", len(res.Rows))
 	}
 
 	executeSQL(t, session, "COMMIT;")

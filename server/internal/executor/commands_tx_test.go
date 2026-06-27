@@ -110,23 +110,48 @@ func TestCommitInsert(t *testing.T) {
 	}
 }
 
-func TestBufferedOpsNotVisibleBeforeCommit(t *testing.T) {
-	session := setupTxSession(t)
+func TestBufferedOpsVisibleToOwnTxButNotOthers(t *testing.T) {
+	// Read-your-own-writes (Bug #1): своя транзакция видит буферизованную
+	// вставку через tx-overlay, но ДРУГАЯ сессия — нет, пока нет COMMIT (Bug #1
+	// isolation). Сессии делят один storage/txmanager.
+	dir := t.TempDir()
+	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 
-	executeSQL(t, session, "BEGIN;")
-	executeSQL(t, session, "INSERT INTO items VALUES (1, 'apple', 10);")
+	sessA := NewSession(store, nil, txm, nil)
+	sessB := NewSession(store, nil, txm, nil)
+	executeSQL(t, sessA, "CREATE DATABASE txdb;")
+	executeSQL(t, sessA, "USE txdb;")
+	executeSQL(t, sessA, "CREATE TABLE items (id INT, name TEXT, qty INT);")
+	executeSQL(t, sessB, "USE txdb;")
 
-	// Check that buffered inserts aren't visible outside tx
-	result := executeSQL(t, session, "SELECT * FROM items;")
-	if len(result.Rows) != 0 {
-		t.Fatalf("expected 0 rows before commit, got %d", len(result.Rows))
+	executeSQL(t, sessA, "BEGIN;")
+	executeSQL(t, sessA, "INSERT INTO items VALUES (1, 'apple', 10);")
+
+	// Своя транзакция видит вставку.
+	resA := executeSQL(t, sessA, "SELECT * FROM items;")
+	if len(resA.Rows) != 1 {
+		t.Fatalf("own tx: expected 1 row (read-your-writes), got %d", len(resA.Rows))
 	}
 
-	executeSQL(t, session, "COMMIT;")
+	// Другая сессия (вне транзакции) НЕ видит незакоммиченную вставку.
+	resB := executeSQL(t, sessB, "SELECT * FROM items;")
+	if len(resB.Rows) != 0 {
+		t.Fatalf("other session: expected 0 rows before commit, got %d", len(resB.Rows))
+	}
 
-	result = executeSQL(t, session, "SELECT * FROM items;")
-	if len(result.Rows) != 1 {
-		t.Fatalf("expected 1 row after commit, got %d", len(result.Rows))
+	executeSQL(t, sessA, "COMMIT;")
+
+	// Свежая сессия видит закоммиченную строку (без влияния per-session кэша).
+	sessC := NewSession(store, nil, txm, nil)
+	executeSQL(t, sessC, "USE txdb;")
+	resC := executeSQL(t, sessC, "SELECT * FROM items;")
+	if len(resC.Rows) != 1 {
+		t.Fatalf("fresh session: expected 1 row after commit, got %d", len(resC.Rows))
 	}
 }
 

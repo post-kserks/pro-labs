@@ -24,8 +24,9 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 	}
 
-	// Check result cache (only for simple SELECT, not CTEs or subqueries)
-	if ctx.Session.resultCache != nil && c.stmt.TableName != "" && c.stmt.FromSubquery == nil && len(c.stmt.CTEs) == 0 {
+	// Check result cache (only for simple SELECT, not CTEs or subqueries).
+	// В транзакции кэш пропускаем: он не учитывает tx-overlay (Bug #1).
+	if ctx.Session.resultCache != nil && !ctx.Session.IsInTx() && c.stmt.TableName != "" && c.stmt.FromSubquery == nil && len(c.stmt.CTEs) == 0 {
 		dbName, err := requireCurrentDB(ctx)
 		if err == nil {
 			cacheKey := ResultCacheKey(c.stmt, dbName)
@@ -54,8 +55,9 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	result, err := c.executeSimpleSelect(ctx, dbName)
 
-	// Cache the result (only successful SELECT without mutations)
-	if err == nil && ctx.Session.resultCache != nil && result != nil {
+	// Cache the result (only successful SELECT without mutations). Не кэшируем
+	// результаты, посчитанные поверх tx-overlay (Bug #1).
+	if err == nil && ctx.Session.resultCache != nil && !ctx.Session.IsInTx() && result != nil {
 		cacheKey := ResultCacheKey(c.stmt, dbName)
 		tables := map[string]bool{c.stmt.TableName: true}
 		ctx.Session.resultCache.Put(cacheKey, result, tables)
@@ -122,8 +124,9 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	var asOfNote string
 
 	// Try index lookup (only for single table for now)
+	// Внутри транзакции индекс пропускаем — он обошёл бы tx-overlay (Bug #1).
 	usedIndex := false
-	if len(c.stmt.Joins) == 0 && c.stmt.Where != nil && c.stmt.AsOf == nil {
+	if len(c.stmt.Joins) == 0 && c.stmt.Where != nil && c.stmt.AsOf == nil && !ctx.Session.IsInTx() {
 		if positions, ok := tryIndexLookup(ctx, dbName, c.stmt.TableName, c.stmt.Where); ok {
 			rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
 			if err == nil {
@@ -420,8 +423,6 @@ func distinctRows(rows [][]string) [][]string {
 	}
 	return result
 }
-
-
 
 func loadViewQueryWithCtx(ctx *ExecutionContext, dbName, viewName string) (string, error) {
 	def, err := loadObject(ctx, dbName, objTypeView, viewName)

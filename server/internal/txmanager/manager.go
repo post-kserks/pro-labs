@@ -2,9 +2,11 @@ package txmanager
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -46,10 +48,26 @@ type Transaction struct {
 
 	TableSnapshots map[string]uint64
 
+	// opCounter — сквозной счётчик добавленных операций. Растёт в AddOp вне
+	// зависимости от того, лежат ли операции в памяти или в spill-файле.
+	// Используется savepoint'ами как стабильный маркер позиции.
+	opCounter int
+
+	// savepoints: имя → opCounter на момент создания; savepointOrder хранит
+	// порядок создания, чтобы при ROLLBACK TO удалять savepoint'ы, созданные
+	// позже указанного.
+	savepoints     map[string]int
+	savepointOrder []string
+
 	// Spill to disk
 	spilled   bool
 	spillPath string
 	spillDir  string
+
+	// spillErr — «липкая» ошибка spill'а. Если запись на диск не удалась,
+	// ReadOps (а значит и Commit) вернёт эту ошибку, чтобы коммит упал, а не
+	// потерял часть операций молча (Bug #4).
+	spillErr error
 }
 
 // Manager управляет транзакциями всех сессий.
@@ -109,9 +127,37 @@ func (m *Manager) Begin() *Transaction {
 		StartedAt:      time.Now(),
 		State:          TxActive,
 		TableSnapshots: make(map[string]uint64),
+		savepoints:     make(map[string]int),
 		spillDir:       m.SpillDir,
 	}
 	return tx
+}
+
+// RecordAccess фиксирует версию таблицы при ПЕРВОМ обращении (чтении или
+// записи). Снимок берётся только если его ещё нет. Благодаря этому любая
+// таблица, которую транзакция читала ИЛИ писала, проверяется на конкурентную
+// модификацию во время Commit (Bug #2a).
+func (m *Manager) RecordAccess(tx *Transaction, db, table string) {
+	if tx == nil {
+		return
+	}
+	key := tableKey(db, table)
+	if _, exists := tx.TableSnapshots[key]; !exists {
+		tx.TableSnapshots[key] = m.TableVersion(db, table)
+	}
+}
+
+// TableKey возвращает ключ таблицы в том же формате, что использует Commit для
+// commit-локов. Нужен внешним пакетам, чтобы брать тот же per-table lock.
+func TableKey(db, table string) string {
+	return tableKey(db, table)
+}
+
+// LockTables берёт commit-локи на указанные ключи таблиц и возвращает функцию
+// разблокировки. Публичная обёртка над lockTables: позволяет autocommit-записям
+// сериализоваться с коммитами транзакций (Bug #2b).
+func (m *Manager) LockTables(keys []string) func() {
+	return m.lockTables(keys)
 }
 
 // AddOp добавляет операцию в буфер транзакции.
@@ -121,6 +167,8 @@ func (m *Manager) AddOp(tx *Transaction, op PendingOp) {
 	if _, exists := tx.TableSnapshots[key]; !exists {
 		tx.TableSnapshots[key] = m.TableVersion(op.DB, op.Table)
 	}
+
+	tx.opCounter++
 
 	if tx.spilled {
 		// Дописываем в существующий файл
@@ -134,25 +182,71 @@ func (m *Manager) AddOp(tx *Transaction, op PendingOp) {
 	}
 }
 
+// EncodePendingOp/DecodePendingOp — точки расширения для сериализации операций
+// при spill'е. Пакет txmanager не знает о типах parser/storage, поэтому executor
+// регистрирует здесь кодек, умеющий восстанавливать типизированный Payload
+// (parser.*Statement). Если кодек не задан — используется обычный JSON.
+var (
+	EncodePendingOp func(op PendingOp) ([]byte, error)
+	DecodePendingOp func(data []byte) (PendingOp, error)
+)
+
+func encodeOp(op PendingOp) ([]byte, error) {
+	if EncodePendingOp != nil {
+		return EncodePendingOp(op)
+	}
+	return json.Marshal(op)
+}
+
+func decodeOp(data []byte) (PendingOp, error) {
+	if DecodePendingOp != nil {
+		return DecodePendingOp(data)
+	}
+	var op PendingOp
+	err := json.Unmarshal(data, &op)
+	return op, err
+}
+
+// writeOpsToFile сериализует операции построчно (по одному JSON-объекту в
+// строке). Возвращает ошибку, чтобы вызывающий мог зафиксировать spillErr и не
+// потерять операции молча (Bug #4).
+func writeOpsToFile(path string, ops []PendingOp) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	w := bufio.NewWriter(f)
+	for _, op := range ops {
+		b, err := encodeOp(op)
+		if err != nil {
+			f.Close()
+			os.Remove(path)
+			return err
+		}
+		if _, err := w.Write(append(b, '\n')); err != nil {
+			f.Close()
+			os.Remove(path)
+			return err
+		}
+	}
+	if err := w.Flush(); err != nil {
+		f.Close()
+		os.Remove(path)
+		return err
+	}
+	return f.Close()
+}
+
 func (tx *Transaction) spillToDisk() {
 	if tx.spillDir == "" {
 		return
 	}
 
 	path := filepath.Join(tx.spillDir, fmt.Sprintf("tx_%d.tmp", tx.ID))
-	f, err := os.Create(path)
-	if err != nil {
-		return // silently ignore — continue in-memory
+	if err := writeOpsToFile(path, tx.Ops); err != nil {
+		tx.spillErr = fmt.Errorf("spill to disk: %w", err)
+		return
 	}
-	enc := json.NewEncoder(f)
-	for _, op := range tx.Ops {
-		if err := enc.Encode(op); err != nil {
-			f.Close()
-			os.Remove(path)
-			return // write error — continue in-memory
-		}
-	}
-	f.Close()
 
 	tx.spilled = true
 	tx.spillPath = path
@@ -160,17 +254,32 @@ func (tx *Transaction) spillToDisk() {
 }
 
 func (tx *Transaction) appendOpToFile(op PendingOp) {
-	f, err := os.OpenFile(tx.spillPath, os.O_APPEND|os.O_WRONLY, 0600)
+	b, err := encodeOp(op)
 	if err != nil {
+		tx.spillErr = fmt.Errorf("spill append encode: %w", err)
 		return
 	}
-	enc := json.NewEncoder(f)
-	_ = enc.Encode(op)
-	f.Close()
+	f, err := os.OpenFile(tx.spillPath, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		tx.spillErr = fmt.Errorf("spill append open: %w", err)
+		return
+	}
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		f.Close()
+		tx.spillErr = fmt.Errorf("spill append write: %w", err)
+		return
+	}
+	if err := f.Close(); err != nil {
+		tx.spillErr = fmt.Errorf("spill append close: %w", err)
+	}
 }
 
-// ReadOps возвращает операции: из памяти или из файла.
+// ReadOps возвращает операции: из памяти или из файла. Если spill завершился
+// ошибкой — возвращает её (а не усечённый/пустой набор), чтобы Commit упал.
 func (tx *Transaction) ReadOps() ([]PendingOp, error) {
+	if tx.spillErr != nil {
+		return nil, tx.spillErr
+	}
 	if !tx.spilled {
 		return tx.Ops, nil
 	}
@@ -182,15 +291,105 @@ func (tx *Transaction) ReadOps() ([]PendingOp, error) {
 	defer f.Close()
 
 	var ops []PendingOp
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var op PendingOp
-		if err := json.Unmarshal(scanner.Bytes(), &op); err != nil {
-			continue
+	// bufio.Reader.ReadBytes растёт под произвольный размер строки — нет
+	// ограничения в 64KB, как у bufio.Scanner по умолчанию (Bug #4).
+	r := bufio.NewReader(f)
+	for {
+		line, rerr := r.ReadBytes('\n')
+		if trimmed := bytes.TrimRight(line, "\n"); len(trimmed) > 0 {
+			op, derr := decodeOp(trimmed)
+			if derr != nil {
+				return nil, fmt.Errorf("decode spill op: %w", derr)
+			}
+			ops = append(ops, op)
 		}
-		ops = append(ops, op)
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("read spill file: %w", rerr)
+		}
 	}
 	return ops, nil
+}
+
+// Savepoint фиксирует текущую позицию буфера под именем name. Повторное имя
+// перезаписывает прежний маркер (семантика SQL).
+func (tx *Transaction) Savepoint(name string) {
+	if tx.savepoints == nil {
+		tx.savepoints = make(map[string]int)
+	}
+	if _, exists := tx.savepoints[name]; !exists {
+		tx.savepointOrder = append(tx.savepointOrder, name)
+	}
+	tx.savepoints[name] = tx.opCounter
+}
+
+// ReleaseSavepoint удаляет маркер savepoint'а. Возвращает false, если имя
+// неизвестно. Буферизованные операции сохраняются.
+func (tx *Transaction) ReleaseSavepoint(name string) bool {
+	if _, ok := tx.savepoints[name]; !ok {
+		return false
+	}
+	delete(tx.savepoints, name)
+	for i, n := range tx.savepointOrder {
+		if n == name {
+			tx.savepointOrder = append(tx.savepointOrder[:i], tx.savepointOrder[i+1:]...)
+			break
+		}
+	}
+	return true
+}
+
+// RollbackToSavepoint усекает буфер до позиции savepoint'а и удаляет
+// savepoint'ы, созданные позже. Транзакция остаётся активной.
+func (tx *Transaction) RollbackToSavepoint(name string) error {
+	n, ok := tx.savepoints[name]
+	if !ok {
+		return fmt.Errorf("savepoint %q does not exist", name)
+	}
+
+	ops, err := tx.ReadOps()
+	if err != nil {
+		return err
+	}
+	if n > len(ops) {
+		n = len(ops)
+	}
+	kept := append([]PendingOp(nil), ops[:n]...)
+
+	if tx.spilled {
+		if len(kept) == 0 {
+			if tx.spillPath != "" {
+				os.Remove(tx.spillPath)
+			}
+			tx.spilled = false
+			tx.spillPath = ""
+			tx.Ops = nil
+		} else if err := writeOpsToFile(tx.spillPath, kept); err != nil {
+			tx.spillErr = fmt.Errorf("rollback to savepoint rewrite: %w", err)
+			return tx.spillErr
+		}
+	} else {
+		tx.Ops = kept
+	}
+	tx.opCounter = n
+
+	// Удаляем savepoint'ы, созданные позже указанного (по порядку создания).
+	idx := -1
+	for i, sn := range tx.savepointOrder {
+		if sn == name {
+			idx = i
+			break
+		}
+	}
+	if idx >= 0 {
+		for _, sn := range tx.savepointOrder[idx+1:] {
+			delete(tx.savepoints, sn)
+		}
+		tx.savepointOrder = tx.savepointOrder[:idx+1]
+	}
+	return nil
 }
 
 func (m *Manager) lockTables(keys []string) func() {
@@ -260,6 +459,10 @@ func (m *Manager) Commit(tx *Transaction, applyFn func([]PendingOp) error) error
 func (tx *Transaction) Rollback() {
 	tx.Ops = nil
 	tx.State = TxIdle
+	tx.opCounter = 0
+	tx.savepoints = make(map[string]int)
+	tx.savepointOrder = nil
+	tx.spillErr = nil
 	if tx.spilled && tx.spillPath != "" {
 		os.Remove(tx.spillPath)
 		tx.spilled = false
