@@ -173,6 +173,13 @@ bool Connection::connect() {
         }
 
         ssl_ = SSL_new(ctx_);
+        if (!ssl_) {
+            SSL_CTX_free(ctx_);
+            ctx_ = nullptr;
+            CLOSE_SOCKET(sockfd_);
+            sockfd_ = INVALID_SOCKET;
+            return false;
+        }
         SSL_set_fd(ssl_, static_cast<int>(sockfd_));
         SSL_set_tlsext_host_name(ssl_, opts_.host.c_str());
 
@@ -238,6 +245,9 @@ void Connection::sendPacket(const std::string& data) {
             if (SOCK_ERR == EINTR_ERR) continue;
             throw NetworkError(
                 std::string("send failed: ") + std::to_string(SOCK_ERR));
+        }
+        if (n == 0) {
+            throw NetworkError("send returned 0 (connection closed)");
         }
 
         total_sent += static_cast<size_t>(n);

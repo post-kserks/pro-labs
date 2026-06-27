@@ -28,26 +28,20 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 
 		origin := r.Header.Get("Origin")
 		allowed := false
-		if len(s.cfg.AllowedOrigins) == 0 {
-			allowed = false
-		} else {
+		if origin != "" && len(s.cfg.AllowedOrigins) > 0 {
 			for _, o := range s.cfg.AllowedOrigins {
-				if o == "*" || o == origin {
+				if o == origin {
 					allowed = true
 					break
 				}
 			}
 		}
 		if allowed {
-			if origin != "" {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Vary", "Origin")
-			} else {
-				w.Header().Set("Access-Control-Allow-Origin", "*")
-			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

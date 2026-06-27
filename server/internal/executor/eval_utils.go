@@ -136,7 +136,7 @@ func initcap(s string) string {
 		}
 		runes := []rune(strings.ToLower(w))
 		if r := runes[0]; r >= 'a' && r <= 'z' {
-			runes[0] = r - 32
+			runes[0] = r - ('a' - 'A')
 		}
 		words[i] = string(runes)
 	}

@@ -300,6 +300,7 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 }
 
 // executeUpsert выполняет INSERT ... ON CONFLICT DO NOTHING/UPDATE.
+// Использует хеш-таблицу для O(1) поиска конфликтов вместо O(n) скана.
 func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, rowsToInsert []storage.Row) (*Result, error) {
 	affected := 0
 
@@ -320,32 +321,16 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 		return nil, err
 	}
 
-	for _, row := range rowsToInsert {
-		conflict := false
-		conflictIdx := -1
+	// Build hash index: conflict key → index in existingRows
+	conflictMap := make(map[string]int, len(existingRows))
+	for idx, row := range existingRows {
+		key := buildUpsertConflictKey(row, conflictCols, colIdxMap)
+		conflictMap[key] = idx
+	}
 
-		for idx, existingRow := range existingRows {
-			if len(existingRow) != len(row) {
-				continue
-			}
-			allMatch := true
-			for _, colName := range conflictCols {
-				ci, ok := colIdxMap[strings.ToLower(colName)]
-				if !ok {
-					allMatch = false
-					break
-				}
-				if !valuesEqual(existingRow[ci], row[ci]) {
-					allMatch = false
-					break
-				}
-			}
-			if allMatch {
-				conflict = true
-				conflictIdx = idx
-				break
-			}
-		}
+	for _, row := range rowsToInsert {
+		key := buildUpsertConflictKey(row, conflictCols, colIdxMap)
+		conflictIdx, conflict := conflictMap[key]
 
 		if conflict {
 			if c.stmt.OnConflict.Action == "NOTHING" {
@@ -365,7 +350,9 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 					return nil, err
 				}
 				affected++
-				existingRows, _ = ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+				// Update cached row for subsequent conflict checks
+				existingRows[conflictIdx] = row
+				conflictMap[key] = conflictIdx
 			}
 		} else {
 			_, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, []storage.Row{row})
@@ -373,7 +360,10 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 				return nil, err
 			}
 			affected++
-			existingRows, _ = ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+			// Add new row to conflict map
+			newIdx := len(existingRows)
+			existingRows = append(existingRows, row)
+			conflictMap[key] = newIdx
 		}
 	}
 
@@ -388,6 +378,24 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 	}
 
 	return &Result{Type: "affected", Affected: affected}, nil
+}
+
+// buildUpsertConflictKey создаёт хеш-ключ из значений столбцов конфликта.
+func buildUpsertConflictKey(row storage.Row, conflictCols []string, colIdxMap map[string]int) string {
+	var b strings.Builder
+	for i, colName := range conflictCols {
+		if i > 0 {
+			b.WriteByte(0)
+		}
+		ci, ok := colIdxMap[strings.ToLower(colName)]
+		if !ok {
+			continue
+		}
+		if ci < len(row) {
+			b.WriteString(valueToString(row[ci]))
+		}
+	}
+	return b.String()
 }
 
 // executeInsertSelect выполняет INSERT ... SELECT.

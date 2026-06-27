@@ -72,10 +72,17 @@ private:
         skipWhitespace();
         if (peek() == '}') {
             consume('}');
+            --depth_;
             return object;
         }
 
         while (true) {
+            skipWhitespace();
+            std::string key = parseString();
+            skipWhitespace();
+            consume(':');
+            skipWhitespace();
+            object.objectValue[key] = parseValue();
             skipWhitespace();
             if (peek() == '}') {
                 consume('}');
@@ -83,7 +90,6 @@ private:
                 break;
             }
             consume(',');
-            skipWhitespace();
         }
 
         return object;

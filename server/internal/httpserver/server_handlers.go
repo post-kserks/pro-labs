@@ -315,6 +315,7 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.activeSubscriptions.Add(1)
 	}
+	defer s.activeSubscriptions.Add(-1)
 
 	db := r.URL.Query().Get("database")
 	query := r.URL.Query().Get("query")
@@ -349,8 +350,6 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	send := sub.Send
 
 	s.br.Subscribe(sub)
-	s.activeSubscriptions.Add(1)
-	defer s.activeSubscriptions.Add(-1)
 	defer s.br.Unsubscribe(sub.ID)
 
 	maxDuration := time.Duration(s.cfg.MaxLiveQueryDurationSec) * time.Second

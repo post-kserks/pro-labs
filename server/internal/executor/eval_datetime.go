@@ -372,9 +372,17 @@ func fnDateDiff(args []interface{}, ctx *ExecutionContext) (interface{}, error) 
 	case "SECOND":
 		return int64(diff.Seconds()), nil
 	case "MONTH":
-		return int64(diff.Hours() / 24 / 30), nil
+		months := int64((t2.Year()-t1.Year())*12 + int(t2.Month()) - int(t1.Month()))
+		if t2.Day() < t1.Day() {
+			months--
+		}
+		return months, nil
 	case "YEAR":
-		return int64(diff.Hours() / 24 / 365), nil
+		years := int64(t2.Year() - t1.Year())
+		if t2.Month() < t1.Month() || (t2.Month() == t1.Month() && t2.Day() < t1.Day()) {
+			years--
+		}
+		return years, nil
 	default:
 		return nil, fmt.Errorf("DATE_DIFF: unknown unit %q", unit)
 	}

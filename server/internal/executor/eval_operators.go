@@ -98,7 +98,9 @@ func CompareValues(a, b interface{}) int {
 		}
 	}
 
-	return -1
+	// Types are incompatible — treat as not equal.
+	// This avoids incorrect sort order from returning -1 on mismatch.
+	return 0
 }
 
 func compareOrdered[T ~float64 | ~string](left, right T, op string) (bool, error) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"vaultdb/internal/ai"
@@ -121,6 +122,7 @@ type Executor struct {
 	wal          *wal.WAL
 	queryTimeout time.Duration
 	maxRows      int
+	mu           sync.RWMutex
 }
 
 func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Executor {
@@ -131,24 +133,32 @@ func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manag
 
 // SetWAL подключает WAL для записи операций транзакций.
 func (e *Executor) SetWAL(w *wal.WAL) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.wal = w
 }
 
 // SetEmbedder подключает реальный embedding-провайдер.
 func (e *Executor) SetEmbedder(emb ai.Embedder) {
 	if emb != nil {
+		e.mu.Lock()
+		defer e.mu.Unlock()
 		e.embedder = emb
 	}
 }
 
 // SetQueryTimeout задаёт таймаут на выполнение запроса.
 func (e *Executor) SetQueryTimeout(d time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.queryTimeout = d
 }
 
 // SetMaxRows задаёт максимальное количество строк в результате SELECT.
 func (e *Executor) SetMaxRows(n int) {
 	if n > 0 {
+		e.mu.Lock()
+		defer e.mu.Unlock()
 		e.maxRows = n
 	}
 }
@@ -160,10 +170,16 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 		return nil, err
 	}
 
+	e.mu.RLock()
+	queryTimeout := e.queryTimeout
+	embedder := e.embedder
+	wal := e.wal
+	e.mu.RUnlock()
+
 	queryCtx := context.Background()
-	if e.queryTimeout > 0 {
+	if queryTimeout > 0 {
 		var cancel context.CancelFunc
-		queryCtx, cancel = context.WithTimeout(context.Background(), e.queryTimeout)
+		queryCtx, cancel = context.WithTimeout(context.Background(), queryTimeout)
 		defer cancel()
 	}
 
@@ -173,8 +189,8 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 		Metrics:      e.metrics,
 		TxManager:    e.txm,
 		Broadcaster:  e.broadcaster,
-		Embedder:     e.embedder,
-		WAL:          e.wal,
+		Embedder:     embedder,
+		WAL:          wal,
 		Ctx:          queryCtx,
 		SnapshotTxID: sess.SnapshotTxID(),
 	}

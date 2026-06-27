@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 type contextKey string
@@ -28,6 +30,68 @@ type Manager struct {
 	secret     []byte
 	warnedOnce sync.Once
 	logger     *slog.Logger
+	rateLim    *authRateLimiter
+}
+
+// authRateLimiter отслеживает неудачные попытки аутентификации по IP.
+type authRateLimiter struct {
+	mu       sync.Mutex
+	attempts map[string][]time.Time
+	blocked  map[string]time.Time
+	window   time.Duration
+	maxFails int
+	blockFor time.Duration
+}
+
+func newAuthRateLimiter() *authRateLimiter {
+	return &authRateLimiter{
+		attempts: make(map[string][]time.Time),
+		blocked:  make(map[string]time.Time),
+		window:   1 * time.Minute,
+		maxFails: 10,
+		blockFor: 5 * time.Minute,
+	}
+}
+
+func (rl *authRateLimiter) recordFailure(ip string) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := time.Now()
+	rl.attempts[ip] = append(rl.attempts[ip], now)
+	cutoff := now.Add(-rl.window)
+	filtered := rl.attempts[ip][:0]
+	for _, t := range rl.attempts[ip] {
+		if t.After(cutoff) {
+			filtered = append(filtered, t)
+		}
+	}
+	rl.attempts[ip] = filtered
+	if len(filtered) >= rl.maxFails {
+		rl.blocked[ip] = now.Add(rl.blockFor)
+	}
+}
+
+func (rl *authRateLimiter) isBlocked(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	until, ok := rl.blocked[ip]
+	if !ok {
+		return false
+	}
+	if time.Now().After(until) {
+		delete(rl.blocked, ip)
+		delete(rl.attempts, ip)
+		return false
+	}
+	return true
+}
+
+func extractClientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return host
 }
 
 // hashToken вычисляет HMAC-SHA256 токена с серверным секретом.
@@ -66,6 +130,7 @@ func New(enabled bool, tokens map[string]string, logger *slog.Logger) (*Manager,
 		tokens:  hashed,
 		secret:  secret,
 		logger:  logger,
+		rateLim: newAuthRateLimiter(),
 	}, nil
 }
 
@@ -121,8 +186,20 @@ func (m *Manager) Middleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		ip := extractClientIP(r)
+		if m.rateLim.isBlocked(ip) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":  "error",
+				"message": "rate limit exceeded, try again later",
+			})
+			return
+		}
+
 		token := tokenFromRequest(r)
 		if token == "" || !m.ValidateToken(token) {
+			m.rateLim.recordFailure(ip)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{

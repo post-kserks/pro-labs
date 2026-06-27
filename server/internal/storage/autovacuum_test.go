@@ -53,6 +53,9 @@ func (m *mockStorageEngine) SelectRows(dbName, tableName string) ([]Row, error) 
 func (m *mockStorageEngine) ReadCurrentRows(dbName, tableName string) ([]Row, error) {
 	return nil, nil
 }
+func (m *mockStorageEngine) ReadSampleRows(dbName, tableName string, limit int) ([]Row, error) {
+	return nil, nil
+}
 func (m *mockStorageEngine) ReadRowsAsOf(dbName, tableName string, txID uint64) ([]Row, error) {
 	return nil, nil
 }

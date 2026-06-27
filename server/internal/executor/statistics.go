@@ -97,17 +97,10 @@ func (sc *StatisticsCollector) collectStats(dbName, tableName string) *TableStat
 		return stats
 	}
 
-	// Для сбора полной статистики нужно прочитать все строки
-	// Это дорого, поэтому делаем выборочно (первые 1000 строк)
-	rows, err := sc.storage.ReadCurrentRows(dbName, tableName)
+	// Для сбора статистики читаем ограниченную выборку — без полного скана.
+	rows, err := sc.storage.ReadSampleRows(dbName, tableName, defaultSampleSize)
 	if err != nil {
 		return stats
-	}
-
-	// Ограничиваем выборку для производительности
-	sampleSize := defaultSampleSize
-	if len(rows) > sampleSize {
-		rows = rows[:sampleSize]
 	}
 
 	// Собираем статистику по каждому столбцу

@@ -97,6 +97,42 @@ type MergeCommand struct {
 	stmt *parser.MergeStatement
 }
 
+// extractMergeEqualityColumns извлекает пары столбцов из простого ON-условия
+// вида "target.col = source.col" для hash join.
+// Возвращает: (target col name, source col name).
+func extractMergeEqualityColumns(cond parser.Expression, targetTable, sourceTable string) [][2]string {
+	be, ok := cond.(*parser.BinaryExpr)
+	if !ok || be.Operator != "=" {
+		return nil
+	}
+	leftCol, lok := be.Left.(*parser.ColumnRef)
+	rightCol, rok := be.Right.(*parser.ColumnRef)
+	if !lok || !rok {
+		return nil
+	}
+	// Определяем какой столбец к какой таблице относится
+	leftName := leftCol.Name
+	rightName := rightCol.Name
+	leftIsTarget := strings.HasPrefix(leftName, targetTable+".")
+	rightIsTarget := strings.HasPrefix(rightName, targetTable+".")
+	if leftIsTarget && !rightIsTarget {
+		return [][2]string{{leftName, rightName}}
+	}
+	if rightIsTarget && !leftIsTarget {
+		return [][2]string{{rightName, leftName}}
+	}
+	return nil
+}
+
+// buildMergeKey создаёт хеш-ключ из значений столбцов для hash join.
+func buildMergeKey(row storage.Row, colName string, colIdxMap map[string]int) string {
+	ci, ok := colIdxMap[strings.ToLower(colName)]
+	if !ok || ci >= len(row) {
+		return ""
+	}
+	return valueToString(row[ci])
+}
+
 func (c *MergeCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	dbName, err := requireCurrentDB(ctx)
 	if err != nil {
@@ -161,31 +197,136 @@ func (c *MergeCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	affected := 0
 
-	// Process each source row
+	// Try hash join for simple equality ON conditions
+	eqCols := extractMergeEqualityColumns(c.stmt.OnCondition, c.stmt.TargetTable, sourceName)
+	if len(eqCols) > 0 && c.stmt.WhenMatched != nil {
+		return c.executeMergeHashJoin(ctx, dbName, targetRows, sourceRows, targetSchema, sourceSchema, eqCols, combinedSchema)
+	}
+
+	// Fall back to nested loop for complex ON conditions
+	affected, err = c.executeMergeNestedLoop(ctx, dbName, targetRows, sourceRows, targetSchema, sourceSchema, combinedSchema, sourceName)
+	if err != nil {
+		return nil, err
+	}
+
+	notifyMutation(ctx, dbName, c.stmt.TargetTable)
+
+	return &Result{
+		Type:    "message",
+		Message: fmt.Sprintf("MERGE: %d rows affected.", affected),
+	}, nil
+}
+
+// executeMergeHashJoin использует hash join для простых ON-условий (col = col).
+func (c *MergeCommand) executeMergeHashJoin(ctx *ExecutionContext, dbName string, targetRows, sourceRows []storage.Row, targetSchema, sourceSchema *storage.TableSchema, eqCols [][2]string, combinedSchema *storage.TableSchema) (*Result, error) {
+	affected := 0
+
+	// combinedColIdx maps combined-schema column names to their index.
+	// eqCols[0][0] = "heroes.id" (target side), eqCols[0][1] = "u.id" (source side).
+	// Both are qualified names from the combined schema.
+	combinedColIdx := make(map[string]int, len(combinedSchema.Columns))
+	for i, col := range combinedSchema.Columns {
+		combinedColIdx[strings.ToLower(col.Name)] = i
+	}
+
+	targetColOffset := len(targetSchema.Columns)
+
+	// Build index on target rows using the target-side qualified name.
+	targetIndex := make(map[string][]int)
+	for idx, row := range targetRows {
+		// Build a temporary combined row (just the target portion) for key extraction.
+		key := buildMergeKeyFromCombined(row, eqCols[0][0], combinedColIdx, 0)
+		targetIndex[key] = append(targetIndex[key], idx)
+	}
+
+	for _, sourceRow := range sourceRows {
+		// Build combined row for this source to look up the key.
+		tmpCombined := make(storage.Row, len(combinedSchema.Columns))
+		for i := range tmpCombined {
+			tmpCombined[i] = nil
+		}
+		copy(tmpCombined[targetColOffset:], sourceRow)
+
+		key := buildMergeKeyFromCombined(tmpCombined, eqCols[0][1], combinedColIdx, 0)
+		targetIndices := targetIndex[key]
+
+		if len(targetIndices) == 0 {
+			if c.stmt.WhenNotMatched != nil && c.stmt.WhenNotMatched.Action == "INSERT" {
+				if err := c.executeMergeInsert(ctx, dbName, sourceRow, targetSchema, sourceSchema, combinedSchema); err != nil {
+					return nil, err
+				}
+				affected++
+			}
+			continue
+		}
+
+		for _, targetIdx := range targetIndices {
+			targetRow := targetRows[targetIdx]
+			combinedRow := append(append(storage.Row{}, targetRow...), sourceRow...)
+
+			ok, err := evalExpr(c.stmt.OnCondition, combinedRow, combinedSchema, ctx)
+			if err != nil || !ok {
+				continue
+			}
+
+			if c.stmt.WhenMatched != nil && c.stmt.WhenMatched.Action == "UPDATE" {
+				updates := make(map[string]storage.Value)
+				for _, assign := range c.stmt.WhenMatched.Assignments {
+					val, err := evalOperand(assign.Value, combinedRow, combinedSchema, ctx)
+					if err != nil {
+						return nil, err
+					}
+					updates[assign.Column] = val
+				}
+
+				_, err = ctx.Storage.UpdateRows(dbName, c.stmt.TargetTable, []int{targetIdx}, updates)
+				if err != nil {
+					return nil, err
+				}
+				affected++
+			}
+		}
+	}
+
+	return &Result{
+		Type:    "message",
+		Message: fmt.Sprintf("MERGE: %d rows affected.", affected),
+	}, nil
+}
+
+// buildMergeKeyFromCombined extracts a key from a combined row using the combined schema column name.
+func buildMergeKeyFromCombined(row storage.Row, colName string, combinedColIdx map[string]int, _ int) string {
+	ci, ok := combinedColIdx[strings.ToLower(colName)]
+	if !ok || ci >= len(row) {
+		return ""
+	}
+	return valueToString(row[ci])
+}
+
+// executeMergeNestedLoop используется для сложных ON-условий.
+func (c *MergeCommand) executeMergeNestedLoop(ctx *ExecutionContext, dbName string, targetRows, sourceRows []storage.Row, targetSchema, sourceSchema *storage.TableSchema, combinedSchema *storage.TableSchema, sourceName string) (int, error) {
+	affected := 0
+
 	for _, sourceRow := range sourceRows {
 		matched := false
 
-		// Check if any target row matches
 		for _, targetRow := range targetRows {
 			combinedRow := append(append(storage.Row{}, targetRow...), sourceRow...)
 
-			// Evaluate ON condition
 			ok, err := evalExpr(c.stmt.OnCondition, combinedRow, combinedSchema, ctx)
 			if err == nil && ok {
 				matched = true
 
-				// WHEN MATCHED THEN UPDATE
 				if c.stmt.WhenMatched != nil && c.stmt.WhenMatched.Action == "UPDATE" {
 					updates := make(map[string]storage.Value)
 					for _, assign := range c.stmt.WhenMatched.Assignments {
 						val, err := evalOperand(assign.Value, combinedRow, combinedSchema, ctx)
 						if err != nil {
-							return nil, err
+							return 0, err
 						}
 						updates[assign.Column] = val
 					}
 
-					// Find target row index
 					targetIdx := -1
 					for i, tr := range targetRows {
 						if rowsEqual(tr, targetRow) {
@@ -197,7 +338,7 @@ func (c *MergeCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 					if targetIdx >= 0 {
 						_, err = ctx.Storage.UpdateRows(dbName, c.stmt.TargetTable, []int{targetIdx}, updates)
 						if err != nil {
-							return nil, err
+							return 0, err
 						}
 						affected++
 					}
@@ -206,86 +347,81 @@ func (c *MergeCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			}
 		}
 
-		// WHEN NOT MATCHED THEN INSERT
 		if !matched && c.stmt.WhenNotMatched != nil && c.stmt.WhenNotMatched.Action == "INSERT" {
-			if len(c.stmt.WhenNotMatched.Values) > 0 && len(c.stmt.WhenNotMatched.Columns) > 0 {
-				if len(c.stmt.WhenNotMatched.Columns) != len(c.stmt.WhenNotMatched.Values[0]) {
-					return nil, fmt.Errorf("MERGE: WHEN NOT MATCHED columns count (%d) doesn't match values count (%d)",
-						len(c.stmt.WhenNotMatched.Columns), len(c.stmt.WhenNotMatched.Values[0]))
-				}
-			}
-
-			// Build combined row with NULLs for target columns and source row values
-			combinedRowForInsert := make(storage.Row, len(combinedSchema.Columns))
-			targetColCount := len(targetSchema.Columns)
-			for i, val := range sourceRow {
-				if targetColCount+i < len(combinedRowForInsert) {
-					combinedRowForInsert[targetColCount+i] = val
-				}
-			}
-
-			// Build insert values using the combined schema/row
-			insertValues := make(storage.Row, len(c.stmt.WhenNotMatched.Values[0]))
-			for i, val := range c.stmt.WhenNotMatched.Values[0] {
-				v, err := evalOperand(val, combinedRowForInsert, combinedSchema, ctx)
-				if err != nil {
-					return nil, err
-				}
-				insertValues[i] = v
-			}
-
-			// Map insert values to target table columns
-			fullInsertRow := make(storage.Row, len(targetSchema.Columns))
-			for i := range fullInsertRow {
-				fullInsertRow[i] = nil
-			}
-
-			if len(c.stmt.WhenNotMatched.Columns) == 0 {
-				if len(insertValues) != len(targetSchema.Columns) {
-					return nil, fmt.Errorf("MERGE INSERT: expected %d values, got %d", len(targetSchema.Columns), len(insertValues))
-				}
-				for i, v := range insertValues {
-					converted, err := normalizeForColumn(v, targetSchema.Columns[i])
-					if err != nil {
-						return nil, fmt.Errorf("MERGE INSERT column '%s': %w", targetSchema.Columns[i].Name, err)
-					}
-					fullInsertRow[i] = converted
-				}
-			} else {
-				// Column list provided
-				targetColIndex := make(map[string]int)
-				for idx, col := range targetSchema.Columns {
-					targetColIndex[strings.ToLower(col.Name)] = idx
-				}
-				for i, colName := range c.stmt.WhenNotMatched.Columns {
-					idx, ok := targetColIndex[strings.ToLower(colName)]
-					if !ok {
-						return nil, fmt.Errorf("MERGE INSERT: unknown target column '%s'", colName)
-					}
-					if i < len(insertValues) {
-						converted, err := normalizeForColumn(insertValues[i], targetSchema.Columns[idx])
-						if err != nil {
-							return nil, fmt.Errorf("MERGE INSERT column '%s': %w", colName, err)
-						}
-						fullInsertRow[idx] = converted
-					}
-				}
-			}
-
-			_, err = ctx.Storage.InsertRows(dbName, c.stmt.TargetTable, []storage.Row{fullInsertRow})
-			if err != nil {
-				return nil, err
+			if err := c.executeMergeInsert(ctx, dbName, sourceRow, targetSchema, sourceSchema, combinedSchema); err != nil {
+				return 0, err
 			}
 			affected++
 		}
 	}
 
-	notifyMutation(ctx, dbName, c.stmt.TargetTable)
+	return affected, nil
+}
 
-	return &Result{
-		Type:    "message",
-		Message: fmt.Sprintf("MERGE: %d rows affected.", affected),
-	}, nil
+// executeMergeInsert выполняет INSERT для WHEN NOT MATCHED.
+func (c *MergeCommand) executeMergeInsert(ctx *ExecutionContext, dbName string, sourceRow storage.Row, targetSchema, sourceSchema *storage.TableSchema, combinedSchema *storage.TableSchema) error {
+	if len(c.stmt.WhenNotMatched.Values) > 0 && len(c.stmt.WhenNotMatched.Columns) > 0 {
+		if len(c.stmt.WhenNotMatched.Columns) != len(c.stmt.WhenNotMatched.Values[0]) {
+			return fmt.Errorf("MERGE: WHEN NOT MATCHED columns count (%d) doesn't match values count (%d)",
+				len(c.stmt.WhenNotMatched.Columns), len(c.stmt.WhenNotMatched.Values[0]))
+		}
+	}
+
+	combinedRowForInsert := make(storage.Row, len(combinedSchema.Columns))
+	targetColCount := len(targetSchema.Columns)
+	for i, val := range sourceRow {
+		if targetColCount+i < len(combinedRowForInsert) {
+			combinedRowForInsert[targetColCount+i] = val
+		}
+	}
+
+	insertValues := make(storage.Row, len(c.stmt.WhenNotMatched.Values[0]))
+	for i, val := range c.stmt.WhenNotMatched.Values[0] {
+		v, err := evalOperand(val, combinedRowForInsert, combinedSchema, ctx)
+		if err != nil {
+			return err
+		}
+		insertValues[i] = v
+	}
+
+	fullInsertRow := make(storage.Row, len(targetSchema.Columns))
+	for i := range fullInsertRow {
+		fullInsertRow[i] = nil
+	}
+
+	if len(c.stmt.WhenNotMatched.Columns) == 0 {
+		if len(insertValues) != len(targetSchema.Columns) {
+			return fmt.Errorf("MERGE INSERT: expected %d values, got %d", len(targetSchema.Columns), len(insertValues))
+		}
+		for i, v := range insertValues {
+			converted, err := normalizeForColumn(v, targetSchema.Columns[i])
+			if err != nil {
+				return fmt.Errorf("MERGE INSERT column '%s': %w", targetSchema.Columns[i].Name, err)
+			}
+			fullInsertRow[i] = converted
+		}
+	} else {
+		targetColIndex := make(map[string]int)
+		for idx, col := range targetSchema.Columns {
+			targetColIndex[strings.ToLower(col.Name)] = idx
+		}
+		for i, colName := range c.stmt.WhenNotMatched.Columns {
+			idx, ok := targetColIndex[strings.ToLower(colName)]
+			if !ok {
+				return fmt.Errorf("MERGE INSERT: unknown target column '%s'", colName)
+			}
+			if i < len(insertValues) {
+				converted, err := normalizeForColumn(insertValues[i], targetSchema.Columns[idx])
+				if err != nil {
+					return fmt.Errorf("MERGE INSERT column '%s': %w", colName, err)
+				}
+				fullInsertRow[idx] = converted
+			}
+		}
+	}
+
+	_, err := ctx.Storage.InsertRows(dbName, c.stmt.TargetTable, []storage.Row{fullInsertRow})
+	return err
 }
 
 // SavepointCommand выполняет SAVEPOINT.

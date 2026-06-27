@@ -50,6 +50,7 @@ func (db *VaultDB) Query(dbName, sql string) (*executor.Result, error) {
 	}
 
 	session := executor.NewSession(db.Storage, db.Metrics, db.TxManager, db.Broadcaster)
+	defer session.Close()
 	if db.Embedder != nil {
 		session.SetEmbedder(db.Embedder)
 	}

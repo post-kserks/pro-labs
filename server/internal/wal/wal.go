@@ -135,7 +135,7 @@ func Open(path string) (*WAL, error) {
 	w := &WAL{
 		file:          file,
 		path:          path,
-		SyncBatchSize: 1,
+		SyncBatchSize: 64,
 	}
 
 	maxTx, err := w.scanAndTruncate()

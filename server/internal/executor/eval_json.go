@@ -201,10 +201,16 @@ func operandVector(val interface{}, ctx *ExecutionContext) ([]float64, error) {
 // embedText вызывает настроенный embedding-провайдер с таймаутом.
 func embedText(ctx *ExecutionContext, text string) ([]float64, error) {
 	var embedder ai.Embedder = ai.NoopEmbedder{}
-	if ctx != nil && ctx.Embedder != nil {
-		embedder = ctx.Embedder
+	var baseCtx context.Context = context.Background()
+	if ctx != nil {
+		if ctx.Embedder != nil {
+			embedder = ctx.Embedder
+		}
+		if ctx.Ctx != nil {
+			baseCtx = ctx.Ctx
+		}
 	}
-	embedCtx, cancel := context.WithTimeout(context.Background(), embeddingTimeout)
+	embedCtx, cancel := context.WithTimeout(baseCtx, embeddingTimeout)
 	defer cancel()
 	return embedder.Embed(embedCtx, text)
 }

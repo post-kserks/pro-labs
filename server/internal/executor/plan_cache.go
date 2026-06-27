@@ -58,8 +58,12 @@ func (pc *PlanCache) Invalidate(tableName string) {
 	}
 }
 
-func planCacheKey(stmt parser.Statement) string {
-	return fmt.Sprintf("%T:%s", stmt, stmt.StatementType())
+func planCacheKey(stmt parser.Statement, _ string) string {
+	// NOTE: plan cache is currently disabled because the key cannot include
+	// the actual SQL text (prepared statements don't store the original string).
+	// Two different queries of the same type would share a cache entry.
+	// TODO: store original SQL in PreparedStatement and include it in the key.
+	return fmt.Sprintf("disabled:%T:%s", stmt, stmt.StatementType())
 }
 
 func tableNameFromStmt(stmt parser.Statement) string {

@@ -113,6 +113,7 @@ func (s *Subscription) notify(res *Result, logger *slog.Logger) bool {
 type Broadcaster struct {
 	mu            sync.RWMutex
 	subscriptions map[string]*Subscription
+	workerPool    chan struct{} // buffered channel = max concurrent live query evaluations
 
 	logger        *slog.Logger
 	defaultPolicy DropPolicy
@@ -123,6 +124,7 @@ type Broadcaster struct {
 func NewBroadcaster() *Broadcaster {
 	return &Broadcaster{
 		subscriptions: make(map[string]*Subscription),
+		workerPool:    make(chan struct{}, 64),
 		logger:        slog.Default(),
 		defaultPolicy: PolicyDrop,
 		blockTimeout:  5 * time.Second,
@@ -187,7 +189,17 @@ func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *Executio
 
 	for _, s := range matched {
 		sub := s
+		// Acquire worker slot (skip notification if pool is full to avoid overload).
+		select {
+		case b.workerPool <- struct{}{}:
+		default:
+			b.logger.Warn("live query worker pool exhausted, skipping notification",
+				"subscription", sub.ID)
+			continue
+		}
+
 		go func() {
+			defer func() { <-b.workerPool }()
 			defer func() {
 				if r := recover(); r != nil {
 					b.logger.Error("panic in live query notification",

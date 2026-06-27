@@ -397,25 +397,10 @@ func (c *ExecutePreparedCommand) Execute(ctx *ExecutionContext) (*Result, error)
 		return nil, err
 	}
 
-	if ctx.Session.planCache != nil {
-		key := planCacheKey(boundStmt)
-		if cached := ctx.Session.planCache.Get(key); cached != nil {
-			return cached.cmd.Execute(ctx)
-		}
-
-		cmd, err := CommandFactory(boundStmt)
-		if err != nil {
-			return nil, err
-		}
-
-		ctx.Session.planCache.Put(key, &CachedPlan{
-			stmt:      boundStmt,
-			cmd:       cmd,
-			tableName: tableNameFromStmt(boundStmt),
-		})
-		return cmd.Execute(ctx)
-	}
-
+	// Plan cache is disabled: the cache key cannot include the actual SQL text
+	// (prepared statements store the parsed statement, not the original string),
+	// so different queries of the same type would share a stale cache entry.
+	// TODO: store original SQL in PreparedStatement and re-enable caching.
 	cmd, err := CommandFactory(boundStmt)
 	if err != nil {
 		return nil, err

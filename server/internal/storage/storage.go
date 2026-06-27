@@ -96,6 +96,7 @@ type ReadOnlyEngine interface {
 	IndexLookup(dbName, tableName, column, value string) ([]int, bool)
 	IndexRangeLookup(dbName, tableName, column, low, high string) ([]int, bool)
 	IndexFTSLookup(dbName, tableName, column, query string) ([]int, bool)
+	ReadSampleRows(dbName, tableName string, limit int) ([]Row, error)
 }
 
 // WriteEngine defines mutating database operations.

@@ -15,16 +15,21 @@ import (
 )
 
 func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, error) {
+	// Кратковременный global lock для получения ссылки на таблицу.
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	start := time.Now()
 	t, err := e.getTableLocked(dbName, tableName, true)
 	if err != nil {
+		e.mu.Unlock()
 		return nil, err
 	}
-
 	sizeBefore := e.tableSizeLocked(dbName, tableName)
+	e.mu.Unlock()
+
+	// Per-table lock на время vacuum — не блокирует другие таблицы.
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	start := time.Now()
 
 	// Записываем начало vacuum в WAL
 	if e.wal != nil {
@@ -130,12 +135,15 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 	}
 	t.heap = newHF
 
-	// Обновляем каталог
+	// Обновляем каталог (кратковременный global lock).
+	e.mu.Lock()
 	key := dbName + "/" + tableName
 	e.catalog.RowCounts[key] = rowsAfter
 	if err := e.saveCatalogLocked(); err != nil {
+		e.mu.Unlock()
 		return nil, err
 	}
+	e.mu.Unlock()
 
 	return &VacuumStats{
 		TableName:      tableName,

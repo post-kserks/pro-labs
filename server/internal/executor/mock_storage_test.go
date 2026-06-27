@@ -135,6 +135,17 @@ func (m *MockStorage) ReadCurrentRows(dbName, tableName string) ([]storage.Row, 
 	return m.rows[dbName][tableName], nil
 }
 
+func (m *MockStorage) ReadSampleRows(dbName, tableName string, limit int) ([]storage.Row, error) {
+	if m.selectErr != nil {
+		return nil, m.selectErr
+	}
+	rows := m.rows[dbName][tableName]
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
+}
+
 func (m *MockStorage) ReadRowsAsOf(dbName, tableName string, txID uint64) ([]storage.Row, error) {
 	if m.selectErr != nil {
 		return nil, m.selectErr

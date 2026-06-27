@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -60,11 +61,26 @@ func formatValue(v interface{}) string {
 	case string:
 		return val
 	case int:
-		return strings.TrimSpace(strings.Repeat(" ", 20-len(strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(intToString(val)), "-")))) + intToString(val))
+		s := strconv.Itoa(val)
+		pad := 20 - len(strings.TrimLeft(s, "-"))
+		if pad > 0 {
+			return strings.Repeat(" ", pad) + s
+		}
+		return s
 	case int64:
-		return strings.TrimSpace(strings.Repeat(" ", 20-len(strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(int64ToString(val)), "-")))) + int64ToString(val))
+		s := strconv.FormatInt(val, 10)
+		pad := 20 - len(strings.TrimLeft(s, "-"))
+		if pad > 0 {
+			return strings.Repeat(" ", pad) + s
+		}
+		return s
 	case float64:
-		return strings.TrimSpace(strings.Repeat(" ", 20-len(strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(float64ToString(val)), "-")))) + float64ToString(val))
+		s := strconv.FormatFloat(val, 'f', -1, 64)
+		pad := 20 - len(strings.TrimLeft(s, "-"))
+		if pad > 0 {
+			return strings.Repeat(" ", pad) + s
+		}
+		return s
 	case bool:
 		if val {
 			return "1"
@@ -75,32 +91,6 @@ func formatValue(v interface{}) string {
 	}
 }
 
-func intToString(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	if v < 0 {
-		return "-" + intToString(-v)
-	}
-	return intToString(v/10) + string(rune('0'+v%10))
-}
-
-func int64ToString(v int64) string {
-	if v == 0 {
-		return "0"
-	}
-	if v < 0 {
-		return "-" + int64ToString(-v)
-	}
-	return int64ToString(v/10) + string(rune('0'+v%10))
-}
-
-func float64ToString(v float64) string {
-	if v == 0 {
-		return "0"
-	}
-	return strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(formatAny(v)), "-"))
-}
 
 func formatAny(v interface{}) string {
 	s := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(formatAnyRaw(v)), "-"))

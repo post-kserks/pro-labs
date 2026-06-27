@@ -136,7 +136,7 @@ func encodeColumnValue(val interface{}) ([]byte, error) {
 		// Format: type tag + 2B length + UTF-8 bytes
 		strBytes := []byte(v)
 		if len(strBytes) > 65535 {
-			strBytes = strBytes[:65535]
+			return nil, fmt.Errorf("string too long for binary encoding: %d bytes (max 65535)", len(strBytes))
 		}
 		buf := make([]byte, 3+len(strBytes))
 		buf[0] = 's'
@@ -151,7 +151,7 @@ func encodeColumnValue(val interface{}) ([]byte, error) {
 			return nil, err
 		}
 		if len(jsonBytes) > 65535 {
-			jsonBytes = jsonBytes[:65535]
+			return nil, fmt.Errorf("JSONB too long for binary encoding: %d bytes (max 65535)", len(jsonBytes))
 		}
 		buf := make([]byte, 3+len(jsonBytes))
 		buf[0] = 'j'

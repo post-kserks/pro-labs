@@ -170,18 +170,19 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		slot uint16
 	}, 0, len(tuples))
 
-	for _, tuple := range tuples {
-		total, err := t.heap.PageCount()
-		if err != nil {
-			return 0, err
-		}
+	// Cache page count — avoid syscall per tuple in batch inserts.
+	cachedPageCount, err := t.heap.PageCount()
+	if err != nil {
+		return 0, err
+	}
 
+	for _, tuple := range tuples {
 		var pid page.PageID
 		var pg *page.Page
 		havePage := false
 
-		if total > 0 {
-			pid = pageIDAt(t.tableID, total-1)
+		if cachedPageCount > 0 {
+			pid = pageIDAt(t.tableID, cachedPageCount-1)
 			e.pageLock.RLockPage(pid)
 			pg, err = e.getPage(pid, t.heap)
 			e.pageLock.UnlockPage(pid)
@@ -198,6 +199,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 					return 0, err
 				}
 				pid, pg, havePage = newPid, newPg, true
+				cachedPageCount++
 			}
 
 			e.pageLock.LockPage(pid)
@@ -483,6 +485,37 @@ func (e *PageStorageEngine) SelectRows(dbName, tableName string) ([]Row, error) 
 
 func (e *PageStorageEngine) ReadCurrentRows(dbName, tableName string) ([]Row, error) {
 	return e.readRows(dbName, tableName, 0)
+}
+
+// ReadSampleRows читает не более limit строк из таблицы.
+// Использует покаместный проход по страницам с остановкой при достижении лимита.
+func (e *PageStorageEngine) ReadSampleRows(dbName, tableName string, limit int) ([]Row, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	t, err := e.getTableForRead(dbName, tableName)
+	if err != nil {
+		return nil, err
+	}
+	defer t.mu.RUnlock()
+
+	rows := make([]Row, 0, limit)
+	err = e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+		if deletedTx == 0 {
+			if e.txMgr != nil && !e.txMgr.IsCommitted(createdTx) {
+				return false, nil
+			}
+			rows = append(rows, row)
+			if len(rows) >= limit {
+				return true, nil // stop early
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func (e *PageStorageEngine) ReadRowsAsOf(dbName, tableName string, txID uint64) ([]Row, error) {
