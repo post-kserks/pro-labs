@@ -419,20 +419,26 @@ SELECT title FROM articles WHERE body LIKE '%parallel%';`,
     let db = '';
     for (const stmt of stmts) {
       let trimmed = stmt.trim();
-      if (!trimmed) continue;
+      if (!trimmed || trimmed.startsWith('--')) continue;
       const upper = trimmed.toUpperCase();
       if (upper.startsWith('USE ')) {
         db = trimmed.split(/\s+/)[1];
         lastResult = { status: 'ok', message: `Using database '${db}'` };
       } else {
         if (!trimmed.endsWith(';')) trimmed += ';';
-        lastResult = await runQuery(trimmed, db);
-        if (lastResult.status === 'error') {
-          renderResult('featureResult', lastResult);
+        const result = await runQuery(trimmed, db);
+        // Skip "already exists" and "does not exist" errors for idempotent setup
+        if (result.status === 'error') {
+          const msg = (result.message || '').toLowerCase();
+          if (msg.includes('already exists') || msg.includes('does not exist') || msg.includes('index already')) {
+            continue;
+          }
+          renderResult('featureResult', result);
           return;
         }
-        if (lastResult.columns && lastResult.rows) {
-          renderResult('featureResult', lastResult);
+        lastResult = result;
+        if (result.columns && result.rows) {
+          renderResult('featureResult', result);
         }
       }
     }
