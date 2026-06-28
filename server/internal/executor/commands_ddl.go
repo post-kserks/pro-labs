@@ -5,7 +5,6 @@ package executor
 import (
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strings"
 	"time"
 
@@ -13,17 +12,9 @@ import (
 	"vaultdb/internal/storage"
 )
 
-var validObjectName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
-
 func sanitizeObjectName(name string) (string, error) {
-	if len(name) == 0 {
-		return "", fmt.Errorf("object name is empty")
-	}
-	if len(name) > 128 {
-		return "", fmt.Errorf("object name too long (max 128): %s", name)
-	}
-	if !validObjectName.MatchString(name) {
-		return "", fmt.Errorf("invalid object name (only letters, digits, underscores): %s", name)
+	if err := storage.ValidateObjectName(name); err != nil {
+		return "", err
 	}
 	return name, nil
 }

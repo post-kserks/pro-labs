@@ -36,16 +36,60 @@ type PreparedStatement struct {
 	Query parser.Statement
 }
 
+// SessionConfig содержит все параметры для создания сессии.
+type SessionConfig struct {
+	Store               storage.StorageEngine
+	Metrics             *metrics.Collector
+	TxManager           *txmanager.Manager
+	Broadcaster         *Broadcaster
+	Embedder            ai.Embedder
+	WAL                 *wal.WAL
+	QueryTimeout        time.Duration
+	MaxRows             int
+	MaxPreparedStmts    int
+	ResultCacheSize     int
+	ResultCacheTTL      time.Duration
+}
+
 func NewSession(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Session {
-	return &Session{
-		executor:           New(store, m, txm, b),
-		TxManager:          txm,
-		Broadcaster:        b,
+	return NewSessionWithConfig(SessionConfig{
+		Store:     store,
+		Metrics:   m,
+		TxManager: txm,
+		Broadcaster: b,
+	})
+}
+
+// NewSessionWithConfig создаёт сессию с полной конфигурацией.
+func NewSessionWithConfig(cfg SessionConfig) *Session {
+	s := &Session{
+		executor:           New(cfg.Store, cfg.Metrics, cfg.TxManager, cfg.Broadcaster),
+		TxManager:          cfg.TxManager,
+		Broadcaster:        cfg.Broadcaster,
 		PreparedStatements: make(map[string]*PreparedStatement),
 		planCache:          NewPlanCache(defaultPlanCacheSize),
 		resultCache:        NewResultCache(defaultResultCacheSize, defaultResultCacheTTL),
 		maxPreparedStmts:   defaultMaxPreparedStatements,
 	}
+	if cfg.Embedder != nil {
+		s.SetEmbedder(cfg.Embedder)
+	}
+	if cfg.WAL != nil {
+		s.SetWAL(cfg.WAL)
+	}
+	if cfg.QueryTimeout > 0 {
+		s.SetQueryTimeout(cfg.QueryTimeout)
+	}
+	if cfg.MaxRows > 0 {
+		s.SetMaxRows(cfg.MaxRows)
+	}
+	if cfg.MaxPreparedStmts > 0 {
+		s.SetMaxPreparedStatements(cfg.MaxPreparedStmts)
+	}
+	if cfg.ResultCacheSize > 0 {
+		s.SetResultCacheConfig(cfg.ResultCacheSize, int(cfg.ResultCacheTTL.Seconds()))
+	}
+	return s
 }
 
 // SetMaxPreparedStatements sets the maximum number of prepared statements per session.

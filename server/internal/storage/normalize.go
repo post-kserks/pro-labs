@@ -3,13 +3,24 @@ package storage
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 )
 
-func validateObjectName(name string) error {
+var validIdentRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// ValidateObjectName проверяет имя объекта БД на безопасность и корректность.
+// Объединяет проверки path traversal (storage) и синтаксиса (executor).
+func ValidateObjectName(name string) error {
 	if len(name) == 0 {
 		return fmt.Errorf("object name cannot be empty")
+	}
+	if len(name) > 128 {
+		return fmt.Errorf("object name too long (max 128): %s", name)
+	}
+	if !validIdentRe.MatchString(name) {
+		return fmt.Errorf("invalid object name (only letters, digits, underscores): %s", name)
 	}
 	if strings.ContainsAny(name, "/\\") {
 		return fmt.Errorf("object name contains invalid path separator: %s", name)
@@ -21,6 +32,10 @@ func validateObjectName(name string) error {
 		return fmt.Errorf("object name contains null byte: %s", name)
 	}
 	return nil
+}
+
+func validateObjectName(name string) error {
+	return ValidateObjectName(name)
 }
 
 func normalizeValue(value interface{}, col ColumnSchema) (Value, error) {

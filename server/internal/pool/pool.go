@@ -3,6 +3,7 @@ package pool
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -147,6 +148,36 @@ func (p *Pool) Release(conn *Connection) {
 
 	conn.InUse = false
 	conn.LastUsed = time.Now()
+}
+
+// AcquireConn оборачивает существующее соединение в пул.
+// Используется когда соединение уже принято (listener.Accept),
+// а не создаётся через factory.
+func (p *Pool) AcquireConn(raw net.Conn) (*Connection, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.connections) >= p.maxSize {
+		return nil, io.ErrShortBuffer
+	}
+
+	conn := &Connection{
+		conn:      raw,
+		ID:        randomID(),
+		CreatedAt: time.Now(),
+		LastUsed:  time.Now(),
+		InUse:     true,
+	}
+	p.connections = append(p.connections, conn)
+	return conn, nil
+}
+
+func randomID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // Close закрывает пул и все соединения.
