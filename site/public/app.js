@@ -34,6 +34,7 @@
     const meta = $(`#${containerId}Meta`) || $(`#${containerId.replace('Result','')}Meta`);
     const table = $(`#${containerId.replace('Result','')}Table`) || $(`#${containerId}Table`);
     const msg = $(`#${containerId}Message`) || $(`#${containerId.replace('Result','')}Message`);
+    const dur = $(`#${containerId}Duration`) || $(`#${containerId.replace('Result','')}Duration`);
 
     if (!area) return;
     area.style.display = 'block';
@@ -49,10 +50,19 @@
 
     if (data.duration_ms !== undefined) {
       if (meta) meta.textContent = `${data.type || 'ok'} — ${data.affected || 0} affected`;
-      const dur = $(`#${containerId.replace('Result','')}Duration`);
+      if (data.message && msg) {
+        msg.textContent = data.message;
+        msg.style.display = 'block';
+        msg.style.color = 'var(--accent)';
+      }
       if (dur) dur.textContent = `${data.duration_ms.toFixed(1)} ms`;
     } else {
       if (meta) meta.textContent = data.type || 'ok';
+      if (data.message && msg) {
+        msg.textContent = data.message;
+        msg.style.display = 'block';
+        msg.style.color = 'var(--accent)';
+      }
     }
 
     if (data.columns && data.rows) {
