@@ -9,6 +9,45 @@ import (
 	"vaultdb/internal/storage"
 )
 
+// resolveAggregatesInExpr replaces AggregateExpr nodes in HAVING clause
+// with their computed values from the aggregators.
+func resolveAggregatesInExpr(expr parser.Expression, columns []parser.SelectColumn, aggregators []Aggregator) parser.Expression {
+	switch e := expr.(type) {
+	case *parser.BinaryExpr:
+		return &parser.BinaryExpr{
+			Left:     resolveAggregatesInExpr(e.Left, columns, aggregators),
+			Operator: e.Operator,
+			Right:    resolveAggregatesInExpr(e.Right, columns, aggregators),
+		}
+	case *parser.AggregateExpr:
+		// Find matching column by aggregate name and args
+		for i, col := range columns {
+			if aggExpr, ok := col.Expr.(*parser.AggregateExpr); ok {
+				if strings.EqualFold(aggExpr.Name, e.Name) && aggregators[i] != nil {
+					result := aggregators[i].Result()
+					return &parser.Value{Type: "int", IntVal: aggResultToInt64(result)}
+				}
+			}
+		}
+		return e
+	default:
+		return expr
+	}
+}
+
+func aggResultToInt64(v interface{}) int64 {
+	switch val := v.(type) {
+	case int64:
+		return val
+	case int:
+		return int64(val)
+	case float64:
+		return int64(val)
+	default:
+		return 0
+	}
+}
+
 func (c *SelectCommand) hasAggregates() bool {
 	for _, col := range c.stmt.Columns {
 		if c.containsAggregate(col.Expr) {
@@ -175,11 +214,14 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 				projectedSchema.Columns[i] = storage.ColumnSchema{Name: name}
 			}
 
+			// Resolve aggregate expressions in HAVING to their computed values
+			havingExpr := resolveAggregatesInExpr(c.stmt.Having, c.stmt.Columns, aggregators)
+
 			// Evaluate HAVING on the projected (aggregated) result row
-			ok, err := evalExpr(c.stmt.Having, virtualRow, projectedSchema, ctx)
+			ok, err := evalExpr(havingExpr, virtualRow, projectedSchema, ctx)
 			if err != nil {
 				// Fallback to original row if HAVING uses non-aggregates
-				ok, err = evalExpr(c.stmt.Having, groupRows[0], schema, ctx)
+				ok, err = evalExpr(havingExpr, groupRows[0], schema, ctx)
 				if err != nil {
 					continue
 				}

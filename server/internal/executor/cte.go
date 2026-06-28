@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"vaultdb/internal/parser"
+	"vaultdb/internal/storage"
 )
 
 const maxCTEIterations = 100
@@ -103,12 +104,64 @@ func ExecuteCTEStatement(stmt *parser.CTEStatement, ctx *ExecutionContext) (*Res
 
 	if selectStmt, ok := stmt.Body.(*parser.SelectStatement); ok {
 		if selectStmt.TableName != "" {
-			if cte, found := scope.ResolveCTE(selectStmt.TableName); found {
-				res, err := scope.ExecuteCTE(cte, ctx)
+			if _, found := scope.ResolveCTE(selectStmt.TableName); found {
+				// Check if outer SELECT has aggregation/GROUP BY/HAVING
+				hasAggregation := false
+				for _, col := range selectStmt.Columns {
+					if _, ok := col.Expr.(*parser.AggregateExpr); ok {
+						hasAggregation = true
+						break
+					}
+				}
+				if !hasAggregation && selectStmt.Having == nil &&
+					len(selectStmt.GroupBy) == 0 && len(selectStmt.OrderBy) == 0 &&
+					!selectStmt.HasLimit && !selectStmt.HasOffset && selectStmt.Where == nil {
+					// Simple CTE reference — return result directly
+					cte, _ := scope.ResolveCTE(selectStmt.TableName)
+					res, err := scope.ExecuteCTE(cte, ctx)
+					if err != nil {
+						return nil, err
+					}
+					return res, nil
+				}
+
+				// Has aggregation/clauses — use temp table approach
+				cte, _ := scope.ResolveCTE(selectStmt.TableName)
+				cteRes, err := scope.ExecuteCTE(cte, ctx)
 				if err != nil {
 					return nil, err
 				}
-				return res, nil
+
+				tempTable := "_cte_" + selectStmt.TableName
+				dbName, _ := requireCurrentDB(ctx)
+				schema := storage.TableSchema{
+					Name:    tempTable,
+					Database: dbName,
+					Columns: make([]storage.ColumnSchema, len(cteRes.Columns)),
+				}
+				for i, col := range cteRes.Columns {
+					schema.Columns[i] = storage.ColumnSchema{Name: col, Type: "TEXT"}
+				}
+				if err := ctx.Storage.CreateTable(dbName, schema); err != nil {
+					return nil, fmt.Errorf("CTE temp table: %w", err)
+				}
+				defer ctx.Storage.DropTable(dbName, tempTable)
+
+				rows := make([]storage.Row, len(cteRes.Rows))
+				for i, r := range cteRes.Rows {
+					row := make(storage.Row, len(r))
+					for j, v := range r {
+						row[j] = v
+					}
+					rows[i] = row
+				}
+				if _, err := ctx.Storage.InsertRows(dbName, tempTable, rows); err != nil {
+					return nil, fmt.Errorf("CTE temp insert: %w", err)
+				}
+
+				selectStmt.TableName = tempTable
+				cmd := &SelectCommand{stmt: selectStmt}
+				return cmd.Execute(ctx)
 			}
 		}
 		cmd := &SelectCommand{stmt: selectStmt}
@@ -218,10 +271,16 @@ func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (
 	// Проверяем, ссылается ли SELECT на CTE
 	if stmt.TableName != "" {
 		if _, found := scope.ResolveCTE(stmt.TableName); found {
-			// If SELECT has additional clauses (WHERE, GROUP BY, HAVING, aggregates),
-			// we need to execute the full SELECT with CTE as a temp table.
-			// For simple CTE references (no additional clauses), return CTE result directly.
-			hasAdditionalClauses := stmt.Having != nil || len(stmt.Columns) > 1 ||
+			// Check if outer SELECT has aggregation, GROUP BY, HAVING, or other clauses
+			// that need to be applied to the CTE result
+			hasAggregation := false
+			for _, col := range stmt.Columns {
+				if _, ok := col.Expr.(*parser.AggregateExpr); ok {
+					hasAggregation = true
+					break
+				}
+			}
+			hasAdditionalClauses := hasAggregation || stmt.Having != nil ||
 				len(stmt.GroupBy) > 0 || len(stmt.OrderBy) > 0 || stmt.HasLimit || stmt.HasOffset ||
 				stmt.Where != nil
 
@@ -234,14 +293,50 @@ func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (
 				return res, nil
 			}
 
-			// Execute CTE, then run outer SELECT on the result
+			// Execute CTE, create temp table, run outer SELECT on it
 			cte, _ := scope.ResolveCTE(stmt.TableName)
 			cteRes, err := scope.ExecuteCTE(cte, ctx)
 			if err != nil {
 				return nil, err
 			}
-			// For now, return CTE result — full subquery execution is a larger refactor
-			return cteRes, nil
+
+			// Create temporary table from CTE result
+			tempTable := "_cte_" + stmt.TableName
+			dbName, _ := requireCurrentDB(ctx)
+
+			// Build schema from CTE result columns
+			schema := storage.TableSchema{
+				Name:    tempTable,
+				Database: dbName,
+				Columns: make([]storage.ColumnSchema, len(cteRes.Columns)),
+			}
+			for i, col := range cteRes.Columns {
+				schema.Columns[i] = storage.ColumnSchema{Name: col, Type: "TEXT"}
+			}
+
+			// Create temp table
+			if err := ctx.Storage.CreateTable(dbName, schema); err != nil {
+				return nil, fmt.Errorf("CTE temp table: %w", err)
+			}
+			defer ctx.Storage.DropTable(dbName, tempTable)
+
+			// Insert CTE rows into temp table
+			rows := make([]storage.Row, len(cteRes.Rows))
+			for i, r := range cteRes.Rows {
+				row := make(storage.Row, len(r))
+				for j, v := range r {
+					row[j] = v
+				}
+				rows[i] = row
+			}
+			if _, err := ctx.Storage.InsertRows(dbName, tempTable, rows); err != nil {
+				return nil, fmt.Errorf("CTE temp insert: %w", err)
+			}
+
+			// Modify outer SELECT to use temp table
+			stmt.TableName = tempTable
+			cmd := &SelectCommand{stmt: stmt}
+			return cmd.Execute(ctx)
 		}
 	}
 

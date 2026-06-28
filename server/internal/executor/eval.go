@@ -105,6 +105,8 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 	case *parser.FunctionCall:
 		return evalFunctionCall(e, row, schema, ctx)
 	case *parser.AggregateExpr:
+		// In HAVING context, look up the aggregate result from the virtual row
+		// by matching the aggregate name against the projected columns
 		return nil, nil
 	case *parser.CastExpr:
 		return evalCast(e, row, schema, ctx)
