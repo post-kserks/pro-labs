@@ -32,24 +32,50 @@ func sendError(conn net.Conn, id, message string, logger *slog.Logger) bool {
 }
 
 // sanitizeErrorMessage удаляет внутренние детали из сообщений об ошибках
-// перед отправкой клиенту. Сохраняет общее описание, но скрывает пути файлов
-// и технические детали реализации.
+// перед отправкой клиенту. Whitelist подход: безопасные сообщения проходят,
+// всё остальное заменяется на generic "internal error".
 func sanitizeErrorMessage(msg string) string {
-	// Detect filesystem paths: starts with / or contains common path patterns
 	lower := strings.ToLower(msg)
-	if strings.HasPrefix(msg, "/") ||
-		strings.Contains(lower, "/go/src/") ||
-		strings.Contains(lower, "\\go\\src\\") ||
-		strings.Contains(lower, "/tmp/") ||
-		strings.Contains(lower, "heapfile") ||
-		strings.Contains(lower, ".go:") {
-		return "internal storage error"
+
+	// Безопасные паттерны — можно показать клиенту
+	safePatterns := []string{
+		"no active database",
+		"does not exist",
+		"already exists",
+		"column",
+		"unknown column",
+		"unknown statement",
+		"unauthorized",
+		"rate limit",
+		"too many",
+		"overflow",
+		"query timeout",
+		"mismatch",
+		"invalid",
+		"expected",
+		"unsupported",
+		"empty",
+		"savepoint",
+		"transaction",
+		"not supported",
+		"missing",
+		"must not",
+		"out of range",
+		"cannot",
+		"permission",
 	}
-	// Если сообщение слишком длинное — обрезаем
-	if len(msg) > 200 {
-		return msg[:200] + "..."
+
+	for _, pattern := range safePatterns {
+		if strings.Contains(lower, pattern) {
+			if len(msg) > 200 {
+				return msg[:200] + "..."
+			}
+			return msg
+		}
 	}
-	return msg
+
+	// Всё остальное — generic ошибка без деталей
+	return "internal error"
 }
 
 func sendResult(conn net.Conn, id string, result *executor.Result) error {

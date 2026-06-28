@@ -105,9 +105,9 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 	case *parser.FunctionCall:
 		return evalFunctionCall(e, row, schema, ctx)
 	case *parser.AggregateExpr:
-		// In HAVING context, look up the aggregate result from the virtual row
-		// by matching the aggregate name against the projected columns
-		return nil, nil
+		// AggregateExpr should have been resolved by resolveAggregatesInExpr
+		// before evaluation. If we reach here, the aggregate was not resolved.
+		return nil, fmt.Errorf("aggregate '%s' not resolved in HAVING clause", e.Name)
 	case *parser.CastExpr:
 		return evalCast(e, row, schema, ctx)
 	case *parser.CaseExpr:

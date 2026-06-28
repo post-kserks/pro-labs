@@ -1,7 +1,9 @@
 package vaultdb
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 
 	"vaultdb/internal/ai"
 	"vaultdb/internal/executor"
@@ -9,6 +11,7 @@ import (
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
+	"vaultdb/internal/wal"
 )
 
 // VaultDB is the high-level embedded database engine.
@@ -21,14 +24,29 @@ type VaultDB struct {
 	Embedder ai.Embedder
 }
 
-// Open creates a new embedded database instance.
+// Open creates a new embedded database instance with WAL for durability.
 func Open(dataDir string) (*VaultDB, error) {
 	m := metrics.New()
 	txm := txmanager.NewManager()
-	s, err := storage.NewPageStorageEngine(dataDir, nil, txm)
+
+	walPath := filepath.Join(dataDir, "wal", "vaultdb.wal")
+	w, err := wal.Open(walPath)
 	if err != nil {
+		return nil, fmt.Errorf("open vaultdb WAL: %w", err)
+	}
+
+	s, err := storage.NewPageStorageEngine(dataDir, w, txm)
+	if err != nil {
+		w.Close()
 		return nil, fmt.Errorf("open vaultdb: %w", err)
 	}
+
+	if err := s.RecoverFromWAL(); err != nil {
+		s.Close()
+		w.Close()
+		return nil, fmt.Errorf("vaultdb WAL recovery: %w", err)
+	}
+
 	return &VaultDB{
 		Storage:     s,
 		Metrics:     m,
@@ -44,12 +62,18 @@ func (db *VaultDB) Close() error {
 
 // Query executes a single SQL query.
 func (db *VaultDB) Query(dbName, sql string) (*executor.Result, error) {
+	return db.QueryContext(context.Background(), dbName, sql)
+}
+
+// QueryContext executes a single SQL query with a context for cancellation.
+func (db *VaultDB) QueryContext(ctx context.Context, dbName, sql string) (*executor.Result, error) {
 	stmt, err := parser.Parse(sql)
 	if err != nil {
 		return nil, err
 	}
 
 	session := executor.NewSession(db.Storage, db.Metrics, db.TxManager, db.Broadcaster)
+	session.SetServerContext(ctx)
 	defer session.Close()
 	if db.Embedder != nil {
 		session.SetEmbedder(db.Embedder)

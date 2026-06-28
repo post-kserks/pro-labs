@@ -795,13 +795,34 @@ func (e *PageStorageEngine) writeSchemaLocked(db, table string, schema *TableSch
 // getTableForRead возвращает таблицу для чтения. Кэширует если ещё не в map.
 // Caller должен вызвать t.mu.RUnlock() когда закончит.
 func (e *PageStorageEngine) getTableForRead(db, table string) (*pageTable, error) {
+	t, err := e.getOrCreateTable(db, table)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.RLock()
+	return t, nil
+}
+
+// getTableForWrite возвращает таблицу для записи. Кэширует если ещё не в map.
+// Caller должен вызвать t.mu.Unlock() когда закончит.
+func (e *PageStorageEngine) getTableForWrite(db, table string) (*pageTable, error) {
+	t, err := e.getOrCreateTable(db, table)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	return t, nil
+}
+
+// getOrCreateTable возвращает таблицу из кэша или открывает с диска.
+// Не берёт per-table lock — это ответственность вызывающего.
+func (e *PageStorageEngine) getOrCreateTable(db, table string) (*pageTable, error) {
 	key := db + "/" + table
 
 	// Быстрый путь: таблица уже в кэше
 	e.mu.RLock()
 	t, ok := e.tables[key]
 	if ok {
-		t.mu.RLock()
 		e.mu.RUnlock()
 		return t, nil
 	}
@@ -838,57 +859,6 @@ func (e *PageStorageEngine) getTableForRead(db, table string) (*pageTable, error
 		e.tables[key] = t
 	}
 	e.mu.Unlock()
-	t.mu.RLock()
-	return t, nil
-}
-
-// getTableForWrite возвращает таблицу для записи. Кэширует если ещё не в map.
-// Caller должен вызвать t.mu.Unlock() когда закончит.
-func (e *PageStorageEngine) getTableForWrite(db, table string) (*pageTable, error) {
-	key := db + "/" + table
-
-	// Быстрый путь
-	e.mu.RLock()
-	t, ok := e.tables[key]
-	if ok {
-		t.mu.Lock()
-		e.mu.RUnlock()
-		return t, nil
-	}
-	e.mu.RUnlock()
-
-	// Медленный путь
-	e.mu.Lock()
-	t, ok = e.tables[key]
-	if !ok {
-		path := e.tablePath(db, table)
-		if _, err := os.Stat(path); err != nil {
-			e.mu.Unlock()
-			return nil, fmt.Errorf("table '%s' does not exist", table)
-		}
-		hf, err := heap.OpenHeapFile(path)
-		if err != nil {
-			e.mu.Unlock()
-			return nil, err
-		}
-		data, err := os.ReadFile(e.schemaPathFor(db, table))
-		if err != nil {
-			_ = hf.Close()
-			e.mu.Unlock()
-			return nil, err
-		}
-		var schema TableSchema
-		if err := json.Unmarshal(data, &schema); err != nil {
-			_ = hf.Close()
-			e.mu.Unlock()
-			return nil, err
-		}
-		tid := tableIDFromPath(path)
-		t = &pageTable{heap: hf, schema: &schema, tableID: tid}
-		e.tables[key] = t
-	}
-	e.mu.Unlock()
-	t.mu.Lock()
 	return t, nil
 }
 

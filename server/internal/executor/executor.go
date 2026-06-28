@@ -202,10 +202,10 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	wal := e.wal
 	e.mu.RUnlock()
 
-	queryCtx := context.Background()
+	queryCtx := sess.ServerContext()
 	if queryTimeout > 0 {
 		var cancel context.CancelFunc
-		queryCtx, cancel = context.WithTimeout(context.Background(), queryTimeout)
+		queryCtx, cancel = context.WithTimeout(queryCtx, queryTimeout)
 		defer cancel()
 	}
 

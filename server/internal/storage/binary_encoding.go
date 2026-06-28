@@ -170,14 +170,7 @@ func encodeColumnValue(val interface{}) ([]byte, error) {
 		return buf, nil
 
 	default:
-		// Fallback: encode as string
-		s := fmt.Sprintf("%v", v)
-		strBytes := []byte(s)
-		buf := make([]byte, 3+len(strBytes))
-		buf[0] = 's'
-		binary.LittleEndian.PutUint16(buf[1:3], uint16(len(strBytes)))
-		copy(buf[3:], strBytes)
-		return buf, nil
+		return nil, fmt.Errorf("unsupported value type %T for binary encoding", v)
 	}
 }
 

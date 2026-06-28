@@ -34,6 +34,8 @@ type ServerConfig struct {
 	TCPKeepAliveSec     int               `yaml:"tcp_keepalive_sec"`
 	TCPIdleTimeoutSec   int               `yaml:"tcp_idle_timeout_sec"`
 	MaxPreparedStmts    int               `yaml:"max_prepared_statements"`
+	RateLimitRPS        int               `yaml:"rate_limit_rps"`
+	RateLimitBurst      int               `yaml:"rate_limit_burst"`
 }
 
 // StorageConfig — параметры хранилища.
@@ -84,6 +86,8 @@ const (
 	DefaultMaxPreparedStmts      = 1000
 	DefaultResultCacheSize       = 256
 	DefaultResultCacheTTL        = 30
+	DefaultRateLimitRPS          = 100
+	DefaultRateLimitBurst        = 200
 	DefaultAuthRateWindowSec     = 60
 	DefaultAuthMaxFails          = 10
 	DefaultAuthBlockForSec       = 300
@@ -105,6 +109,8 @@ func Default() *Config {
 			TCPKeepAliveSec:     DefaultTCPKeepAliveSec,
 			TCPIdleTimeoutSec:   DefaultTCPIdleTimeoutSec,
 			MaxPreparedStmts:    DefaultMaxPreparedStmts,
+			RateLimitRPS:        DefaultRateLimitRPS,
+			RateLimitBurst:      DefaultRateLimitBurst,
 			LiveQueries: LiveQueriesConfig{
 				BufferSize:    DefaultLiveQueryBuffer,
 				DropPolicy:    DefaultLiveQueryPolicy,
@@ -207,6 +213,12 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Server.MaxPreparedStmts == 0 {
 		cfg.Server.MaxPreparedStmts = DefaultMaxPreparedStmts
+	}
+	if cfg.Server.RateLimitRPS == 0 {
+		cfg.Server.RateLimitRPS = DefaultRateLimitRPS
+	}
+	if cfg.Server.RateLimitBurst == 0 {
+		cfg.Server.RateLimitBurst = DefaultRateLimitBurst
 	}
 	if cfg.Auth.RateWindowSec == 0 {
 		cfg.Auth.RateWindowSec = DefaultAuthRateWindowSec

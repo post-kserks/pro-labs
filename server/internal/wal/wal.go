@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -416,6 +417,9 @@ func (w *WAL) scanAndTruncate() (uint64, error) {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
+			// Логируем corrupt entry чтобы не терять данные молча
+			slog.Warn("wal: corrupt entry during scan, truncating tail",
+				"offset", validEnd, "error", err)
 			break
 		}
 		if entry.TxID > maxTxID {
@@ -495,61 +499,83 @@ func (w *WAL) AnalyzeTransactions() (committed map[uint64]bool, inProgress map[u
 	return committed, inProgress, nil
 }
 
-// Replay воспроизводит все записи WAL потоково, вызывая callback для каждой операции.
+// Replay воспроизводит все записи WAL, вызывая callback для каждой операции.
+// Записи сначала собираются под w.mu, затем callback вызывается без удержания
+// блокировки — это предотвращает deadlock WAL↔PageEngine (Bug lock ordering).
 func (w *WAL) Replay(callback func(Entry) error) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		w.mu.Unlock()
 		return fmt.Errorf("wal: seek start: %w", err)
 	}
 
+	var entries []Entry
 	for {
 		entry, _, err := w.readEntryFrom(w.file)
 		if err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
-			break
+			w.mu.Unlock()
+			return fmt.Errorf("wal: read entry: %w", err)
 		}
+		entries = append(entries, entry)
+	}
+
+	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
+		w.mu.Unlock()
+		return fmt.Errorf("wal: seek end: %w", err)
+	}
+
+	w.mu.Unlock()
+
+	for _, entry := range entries {
 		if err := callback(entry); err != nil {
 			return fmt.Errorf("wal replay: %w", err)
 		}
 	}
 
-	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
-		return fmt.Errorf("wal: seek end: %w", err)
-	}
-
 	return nil
 }
 
-// ReplayTransaction воспроизводит записи конкретной транзакции потоково.
+// ReplayTransaction воспроизводит записи конкретной транзакции.
+// Записи сначала собираются под w.mu, затем callback вызывается без удержания
+// блокировки — предотвращает deadlock WAL↔PageEngine.
 func (w *WAL) ReplayTransaction(txID uint64, callback func(Entry) error) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		w.mu.Unlock()
 		return fmt.Errorf("wal: seek start: %w", err)
 	}
 
+	var entries []Entry
 	for {
 		entry, _, err := w.readEntryFrom(w.file)
 		if err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
-			break
+			w.mu.Unlock()
+			return fmt.Errorf("wal: read entry: %w", err)
 		}
 		if entry.TxID == txID {
-			if err := callback(entry); err != nil {
-				return fmt.Errorf("wal replay tx %d: %w", txID, err)
-			}
+			entries = append(entries, entry)
 		}
 	}
 
 	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
+		w.mu.Unlock()
 		return fmt.Errorf("wal: seek end: %w", err)
+	}
+
+	w.mu.Unlock()
+
+	for _, entry := range entries {
+		if err := callback(entry); err != nil {
+			return fmt.Errorf("wal replay tx %d: %w", txID, err)
+		}
 	}
 
 	return nil

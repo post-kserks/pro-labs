@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -101,7 +102,7 @@ func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *
 }
 
 func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPort, monitorPort int, store storage.StorageEngine, authManager *auth.Manager, metricsCollector *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, embedder ai.Embedder, activeConnections func() int64, logger *slog.Logger, tlsCert, tlsKey string) <-chan error {
-	rateLimiter := httpserver.NewRateLimiter(100, 200) // 100 req/s, burst 200
+	rateLimiter := httpserver.NewRateLimiter(cfg.Server.RateLimitRPS, cfg.Server.RateLimitBurst)
 	httpSrv := httpserver.New(httpserver.Config{
 		Host:                      host,
 		Port:                      httpPort,
@@ -173,12 +174,13 @@ func (l *ConnectionRateLimiter) Allow() bool {
 	return false
 }
 
-func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, embedder ai.Embedder, serverWAL *wal.WAL, logger *slog.Logger, maxRequestSize int, queryTimeoutSec int, maxRows int, tcpKeepAliveSec int, tcpIdleTimeoutSec int, maxPreparedStmts int) {
+func handleConnection(ctx context.Context, conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, embedder ai.Embedder, serverWAL *wal.WAL, logger *slog.Logger, maxRequestSize int, queryTimeoutSec int, maxRows int, tcpKeepAliveSec int, tcpIdleTimeoutSec int, maxPreparedStmts int, rateLimitRPS int, rateLimitBurst int) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("panic in connection handler",
 				"remote", conn.RemoteAddr(),
-				"panic", r)
+				"panic", r,
+				"stack", string(debug.Stack()))
 			sendError(conn, "", "internal server error", logger)
 		}
 	}()
@@ -192,6 +194,7 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 	conn.SetDeadline(time.Now().Add(time.Duration(tcpIdleTimeoutSec) * time.Second))
 
 	session := executor.NewSession(store, m, txm, br)
+	session.SetServerContext(ctx)
 	if embedder != nil {
 		session.SetEmbedder(embedder)
 	}
@@ -215,8 +218,8 @@ func handleConnection(conn net.Conn, store storage.StorageEngine, m *metrics.Col
 		}
 	}()
 
-	// Per-connection rate limiter: 100 requests/second, burst 200
-	connLimiter := NewConnectionRateLimiter(100, 200)
+	// Per-connection rate limiter uses the same config as HTTP rate limiter
+	connLimiter := NewConnectionRateLimiter(rateLimitRPS, rateLimitBurst)
 
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxRequestSize)
@@ -529,7 +532,7 @@ func main() {
 				defer activeConnections.Add(-1)
 				defer metricsCollector.DecConnections()
 				defer connPool.Release(connInfo) // Release back to pool
-				handleConnection(c, store, metricsCollector, txm, br, authManager, embedder, serverWAL, logger, maxRequestSize, cfg.Server.QueryTimeoutSec, cfg.Server.MaxRows, cfg.Server.TCPKeepAliveSec, cfg.Server.TCPIdleTimeoutSec, cfg.Server.MaxPreparedStmts)
+				handleConnection(ctx, c, store, metricsCollector, txm, br, authManager, embedder, serverWAL, logger, maxRequestSize, cfg.Server.QueryTimeoutSec, cfg.Server.MaxRows, cfg.Server.TCPKeepAliveSec, cfg.Server.TCPIdleTimeoutSec, cfg.Server.MaxPreparedStmts, cfg.Server.RateLimitRPS, cfg.Server.RateLimitBurst)
 			}(conn, connObj)
 		}
 	}()

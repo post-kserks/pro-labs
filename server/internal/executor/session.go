@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ type Session struct {
 	resultCache        *ResultCache
 	snapshotTxID       uint64
 	maxPreparedStmts   int
+	serverCtx          context.Context
 }
 
 type PreparedStatement struct {
@@ -203,6 +205,23 @@ func (s *Session) ClearActiveTx() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ActiveTx = nil
+}
+
+// SetServerContext задаёт контекст сервера для отмены запросов при shutdown.
+func (s *Session) SetServerContext(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.serverCtx = ctx
+}
+
+// ServerContext возвращает контекст сервера (или context.Background если не задан).
+func (s *Session) ServerContext() context.Context {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.serverCtx != nil {
+		return s.serverCtx
+	}
+	return context.Background()
 }
 
 // Close очищает ресурсы сессии.

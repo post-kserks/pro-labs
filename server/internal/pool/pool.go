@@ -132,7 +132,7 @@ func (p *Pool) Acquire() (*Connection, error) {
 
 	conn := &Connection{
 		conn:      raw,
-		ID:        generateID(),
+		ID:        randomID(),
 		CreatedAt: time.Now(),
 		LastUsed:  time.Now(),
 		InUse:     true,
@@ -224,8 +224,18 @@ func (p *Pool) Stats() PoolStats {
 	}
 }
 
-// isHealthy проверяет, живо ли соединение.
+// PoolStats статистика пула соединений.
+type PoolStats struct {
+	Active int
+	Idle   int
+	Total  int
+}
+
+// isHealthy
 func (p *Pool) isHealthy(conn *Connection) bool {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
 	_ = conn.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 	_, err := conn.conn.Read(make([]byte, 0))
 	_ = conn.conn.SetReadDeadline(time.Time{})
@@ -236,9 +246,7 @@ func (p *Pool) isHealthy(conn *Connection) bool {
 	if ne, ok := err.(net.Error); ok && ne.Timeout() {
 		return true
 	}
-	if err == io.EOF {
-		return true
-	}
+	// io.EOF означает, что remote side закрыл соединение — оно мёртвое
 	return false
 }
 
@@ -297,15 +305,4 @@ func (p *Pool) cleanup() {
 	p.connections = remaining
 }
 
-func generateID() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
 
-// PoolStats статистика пула соединений.
-type PoolStats struct {
-	Active int
-	Idle   int
-	Total  int
-}
