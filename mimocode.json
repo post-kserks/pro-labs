@@ -40,6 +40,14 @@
         "-y",
         "@modelcontextprotocol/server-memory"
       ]
+    },
+    "playwright": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@latest"
+      ]
     }
   }
 }
