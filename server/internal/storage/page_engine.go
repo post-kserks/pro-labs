@@ -678,6 +678,7 @@ func (e *PageStorageEngine) DropDatabase(name string) error {
 	prefix := name + "/"
 	for key, t := range e.tables {
 		if strings.HasPrefix(key, prefix) {
+			e.bufPool.InvalidateTable(t.tableID)
 			if err := t.heap.Close(); err != nil {
 				slog.Warn("failed to close heap during drop database", "key", key, "error", err)
 			}
@@ -686,6 +687,13 @@ func (e *PageStorageEngine) DropDatabase(name string) error {
 			delete(e.catalog.RowCounts, key)
 		}
 	}
+	e.indexesMu.Lock()
+	for key := range e.indexes {
+		if strings.HasPrefix(key, prefix) {
+			delete(e.indexes, key)
+		}
+	}
+	e.indexesMu.Unlock()
 	if err := os.RemoveAll(e.dbPath(name)); err != nil {
 		return err
 	}
@@ -818,6 +826,7 @@ func (e *PageStorageEngine) getTableForWrite(db, table string) (*pageTable, erro
 // Не берёт per-table lock — это ответственность вызывающего.
 func (e *PageStorageEngine) getOrCreateTable(db, table string) (*pageTable, error) {
 	key := db + "/" + table
+	path := e.tablePath(db, table)
 
 	// Быстрый путь: таблица уже в кэше
 	e.mu.RLock()
@@ -832,7 +841,6 @@ func (e *PageStorageEngine) getOrCreateTable(db, table string) (*pageTable, erro
 	e.mu.Lock()
 	t, ok = e.tables[key]
 	if !ok {
-		path := e.tablePath(db, table)
 		if _, err := os.Stat(path); err != nil {
 			e.mu.Unlock()
 			return nil, fmt.Errorf("table '%s' does not exist", table)

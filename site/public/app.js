@@ -276,63 +276,68 @@
     {
       title: 'JOIN',
       desc: 'Combine rows from two tables based on a related column.',
-      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE f_join; CREATE DATABASE f_join; USE f_join;
 CREATE TABLE employees (id INT PRIMARY KEY, name TEXT, dept_id INT);
 CREATE TABLE departments (id INT PRIMARY KEY, dept_name TEXT);
-INSERT INTO employees VALUES (1, 'Alice', 1), (2, 'Bob', 1), (3, 'Charlie', 2);
-INSERT INTO departments VALUES (1, 'Engineering'), (2, 'Sales');
+INSERT INTO employees VALUES (1, 'Alice', 1);
+INSERT INTO employees VALUES (2, 'Bob', 1);
+INSERT INTO employees VALUES (3, 'Charlie', 2);
+INSERT INTO departments VALUES (1, 'Engineering');
+INSERT INTO departments VALUES (2, 'Sales');
 SELECT e.name, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.id;`,
-      db: 'demo',
     },
     {
       title: 'CTE (WITH)',
       desc: 'Common Table Expressions for readable, reusable subqueries.',
-      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE f_cte; CREATE DATABASE f_cte; USE f_cte;
 CREATE TABLE employees (id INT PRIMARY KEY, name TEXT, dept_id INT);
 CREATE TABLE departments (id INT PRIMARY KEY, dept_name TEXT);
-INSERT INTO employees VALUES (1, 'Alice', 1), (2, 'Bob', 1), (3, 'Charlie', 2);
-INSERT INTO departments VALUES (1, 'Engineering'), (2, 'Sales');
+INSERT INTO employees VALUES (1, 'Alice', 1);
+INSERT INTO employees VALUES (2, 'Bob', 1);
+INSERT INTO employees VALUES (3, 'Charlie', 2);
+INSERT INTO departments VALUES (1, 'Engineering');
+INSERT INTO departments VALUES (2, 'Sales');
 WITH senior_employees AS (SELECT name, dept_id FROM employees WHERE id IN (1, 3))
 SELECT e.name, d.dept_name FROM senior_employees e JOIN departments d ON e.dept_id = d.id;`,
-      db: 'demo',
     },
     {
       title: 'Window Functions',
       desc: 'Compute values across sets of rows without grouping.',
-      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE f_window; CREATE DATABASE f_window; USE f_window;
 CREATE TABLE sales (id INT PRIMARY KEY, rep TEXT, region TEXT, amount INT);
-INSERT INTO sales VALUES (1, 'Alice', 'East', 100), (2, 'Bob', 'East', 200), (3, 'Charlie', 'West', 150), (4, 'Diana', 'West', 300), (5, 'Eve', 'East', 250);
+INSERT INTO sales VALUES (1, 'Alice', 'East', 100);
+INSERT INTO sales VALUES (2, 'Bob', 'East', 200);
+INSERT INTO sales VALUES (3, 'Charlie', 'West', 150);
+INSERT INTO sales VALUES (4, 'Diana', 'West', 300);
+INSERT INTO sales VALUES (5, 'Eve', 'East', 250);
 SELECT rep, region, amount,
   ROW_NUMBER() OVER (PARTITION BY region ORDER BY amount DESC) AS rank,
   SUM(amount) OVER (PARTITION BY region) AS region_total,
   amount - LAG(amount) OVER (ORDER BY amount) AS diff
 FROM sales;`,
-      db: 'demo',
     },
     {
       title: 'JSONB',
       desc: 'Store and query semi-structured JSON data with operators.',
-      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE f_jsonb; CREATE DATABASE f_jsonb; USE f_jsonb;
 CREATE TABLE events (id INT PRIMARY KEY, data JSONB);
 INSERT INTO events VALUES (1, '{"type":"click","page":"/home","user":{"id":1,"name":"Alice"}}');
 INSERT INTO events VALUES (2, '{"type":"view","page":"/products","user":{"id":2,"name":"Bob"}}');
 SELECT data->>'type' AS event_type, data->>'page' AS page, data->'user'->>'name' AS user_name FROM events;`,
-      db: 'demo',
     },
     {
       title: 'UPSERT (ON CONFLICT)',
       desc: 'Insert or update in a single statement.',
-      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE f_upsert; CREATE DATABASE f_upsert; USE f_upsert;
 CREATE TABLE settings (name TEXT PRIMARY KEY, value TEXT);
-INSERT INTO settings (name, value) VALUES ('theme', 'dark'), ('lang', 'en');
-INSERT INTO settings (name, value) VALUES ('theme', 'light') ON CONFLICT DO UPDATE SET value = 'light';
+INSERT INTO settings (name, value) VALUES ('theme', 'dark');
+INSERT INTO settings (name, value) VALUES ('theme', 'light') ON CONFLICT DO UPDATE SET value = EXCLUDED.value;
 SELECT * FROM settings;`,
-      db: 'demo',
     },
     {
       title: 'MERGE',
       desc: 'Conditional insert/update/delete in one statement.',
-      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE f_merge; CREATE DATABASE f_merge; USE f_merge;
 CREATE TABLE target (id INT PRIMARY KEY, val INT);
 CREATE TABLE source (id INT PRIMARY KEY, val INT);
 INSERT INTO target VALUES (1, 10);
@@ -341,19 +346,18 @@ INSERT INTO source VALUES (2, 25);
 INSERT INTO source VALUES (3, 30);
 MERGE INTO target USING source ON target.id = source.id WHEN MATCHED THEN UPDATE SET val = source.val WHEN NOT MATCHED THEN INSERT (id, val) VALUES (source.id, source.val);
 SELECT * FROM target;`,
-      db: 'demo',
     },
     {
       title: 'Indexes (BTree, GIN)',
       desc: 'Speed up queries with B-tree, hash, GIN, and GiST indexes.',
-      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE f_index; CREATE DATABASE f_index; USE f_index;
 CREATE TABLE products (id INT PRIMARY KEY, name TEXT, tags JSONB);
-INSERT INTO products VALUES (1, 'Laptop', '["electronics","portable"]'), (2, 'Book', '["education"]');
+INSERT INTO products VALUES (1, 'Laptop', '["electronics","portable"]');
+INSERT INTO products VALUES (2, 'Book', '["education"]');
 CREATE INDEX idx_products_name ON products (name);
 CREATE INDEX gin_idx_tags ON products (tags);
 SELECT * FROM products WHERE name = 'Laptop';
 SELECT * FROM products WHERE tags @> '["electronics"]';`,
-      db: 'demo',
     },
     {
       title: 'Transactions & MVCC',
@@ -365,26 +369,27 @@ SELECT * FROM products WHERE tags @> '["electronics"]';`,
 -- > UPDATE accounts SET balance = balance + 100 WHERE id = 2;
 -- > COMMIT;
 -- Use the Transaction Lab panel to test this.`,
-      db: 'demo',
     },
     {
       title: 'Aggregate Functions',
       desc: 'COUNT, SUM, AVG, MIN, MAX, STDDEV, VARIANCE, BOOL_AND/OR.',
-      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE f_agg; CREATE DATABASE f_agg; USE f_agg;
 CREATE TABLE scores (id INT PRIMARY KEY, student TEXT, subject TEXT, score INT);
-INSERT INTO scores VALUES (1, 'Alice', 'Math', 95), (2, 'Bob', 'Math', 80), (3, 'Alice', 'Science', 90), (4, 'Bob', 'Science', 85);
+INSERT INTO scores VALUES (1, 'Alice', 'Math', 95);
+INSERT INTO scores VALUES (2, 'Bob', 'Math', 80);
+INSERT INTO scores VALUES (3, 'Alice', 'Science', 90);
+INSERT INTO scores VALUES (4, 'Bob', 'Science', 85);
 SELECT subject, COUNT(*) AS cnt, AVG(score) AS avg_score, MAX(score) AS max_score, MIN(score) AS min_score FROM scores GROUP BY subject;`,
-      db: 'demo',
     },
     {
       title: 'LIKE & Full-Text',
       desc: 'Pattern matching with LIKE and full-text search via GIN index.',
-      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE f_like; CREATE DATABASE f_like; USE f_like;
 CREATE TABLE articles (id INT PRIMARY KEY, title TEXT, body TEXT);
-INSERT INTO articles VALUES (1, 'Go concurrency', 'Goroutines and channels for parallel processing'), (2, 'SQL optimization', 'Query planners and index selection strategies');
+INSERT INTO articles VALUES (1, 'Go concurrency', 'Goroutines and channels for parallel processing');
+INSERT INTO articles VALUES (2, 'SQL optimization', 'Query planners and index selection strategies');
 CREATE INDEX gin_body ON articles (body);
 SELECT title FROM articles WHERE body LIKE '%parallel%';`,
-      db: 'demo',
     },
   ];
 
