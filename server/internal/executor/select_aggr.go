@@ -9,6 +9,91 @@ import (
 	"vaultdb/internal/storage"
 )
 
+// collectAggregates extracts all AggregateExpr nodes from column expressions.
+func collectAggregates(columns []parser.SelectColumn) []*parser.AggregateExpr {
+	var result []*parser.AggregateExpr
+	for _, col := range columns {
+		collectAggregatesFromExpr(col.Expr, &result)
+	}
+	return result
+}
+
+func collectAggregatesFromExpr(expr parser.Expression, result *[]*parser.AggregateExpr) {
+	switch e := expr.(type) {
+	case *parser.AggregateExpr:
+		*result = append(*result, e)
+	case *parser.BinaryExpr:
+		collectAggregatesFromExpr(e.Left, result)
+		collectAggregatesFromExpr(e.Right, result)
+	case *parser.AndExpr:
+		collectAggregatesFromExpr(e.Left, result)
+		collectAggregatesFromExpr(e.Right, result)
+	case *parser.OrExpr:
+		collectAggregatesFromExpr(e.Left, result)
+		collectAggregatesFromExpr(e.Right, result)
+	case *parser.FunctionCall:
+		for _, arg := range e.Args {
+			collectAggregatesFromExpr(arg, result)
+		}
+	}
+}
+
+// resolveNestedAggregates replaces AggregateExpr nodes in an expression with their
+// computed values from aggregators, enabling arithmetic like AVG(x) + 1.
+func resolveNestedAggregates(expr parser.Expression, aggMap map[*parser.AggregateExpr]Aggregator, columns []parser.SelectColumn) (parser.Expression, error) {
+	switch e := expr.(type) {
+	case *parser.AggregateExpr:
+		// Find matching aggregator by pointer identity
+		if agg, exists := aggMap[e]; exists {
+			res := agg.Result()
+			return &parser.Value{Type: "int", IntVal: aggResultToInt64(res)}, nil
+		}
+		return expr, nil
+	case *parser.BinaryExpr:
+		left, err := resolveNestedAggregates(e.Left, aggMap, columns)
+		if err != nil {
+			return nil, err
+		}
+		right, err := resolveNestedAggregates(e.Right, aggMap, columns)
+		if err != nil {
+			return nil, err
+		}
+		return &parser.BinaryExpr{Left: left, Operator: e.Operator, Right: right}, nil
+	case *parser.AndExpr:
+		left, err := resolveNestedAggregates(e.Left, aggMap, columns)
+		if err != nil {
+			return nil, err
+		}
+		right, err := resolveNestedAggregates(e.Right, aggMap, columns)
+		if err != nil {
+			return nil, err
+		}
+		return &parser.AndExpr{Left: left, Right: right}, nil
+	case *parser.OrExpr:
+		left, err := resolveNestedAggregates(e.Left, aggMap, columns)
+		if err != nil {
+			return nil, err
+		}
+		right, err := resolveNestedAggregates(e.Right, aggMap, columns)
+		if err != nil {
+			return nil, err
+		}
+		return &parser.OrExpr{Left: left, Right: right}, nil
+	case *parser.FunctionCall:
+		args := make([]parser.Expression, len(e.Args))
+		for i, a := range e.Args {
+			resolved, err := resolveNestedAggregates(a, aggMap, columns)
+			if err != nil {
+				return nil, err
+			}
+			args[i] = resolved
+		}
+		return &parser.FunctionCall{Name: e.Name, Args: args}, nil
+	default:
+		return expr, nil
+	}
+}
+
 // resolveAggregatesInExpr replaces AggregateExpr nodes in HAVING clause
 // with their computed values from the aggregators.
 func resolveAggregatesInExpr(expr parser.Expression, columns []parser.SelectColumn, aggregators []Aggregator) parser.Expression {
@@ -125,11 +210,13 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 	for _, key := range groupOrder {
 		groupRows := groups[key]
 
-		// Create aggregators for this group
-		aggregators := make([]Aggregator, len(c.stmt.Columns))
-		for i, col := range c.stmt.Columns {
-			if aggExpr, ok := col.Expr.(*parser.AggregateExpr); ok {
-				// Evaluate all args for the aggregator (e.g., STRING_AGG delimiter)
+		// Collect all AggregateExpr nodes from all columns (top-level and nested)
+		allAggExprs := collectAggregates(c.stmt.Columns)
+
+		// Create aggregators for each unique aggregate
+		aggMap := make(map[*parser.AggregateExpr]Aggregator)
+		for _, aggExpr := range allAggExprs {
+			if _, exists := aggMap[aggExpr]; !exists {
 				aggArgs := make([]interface{}, len(aggExpr.Args))
 				if len(groupRows) > 0 {
 					for j, argExpr := range aggExpr.Args {
@@ -140,41 +227,46 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 						aggArgs[j] = argVal
 					}
 				}
-				aggregators[i] = NewAggregator(aggExpr.Name, aggExpr.Distinct, aggArgs...)
+				aggMap[aggExpr] = NewAggregator(aggExpr.Name, aggExpr.Distinct, aggArgs...)
 			}
 		}
 
-		// Process all rows in group
+		// Map column index to aggregator (for top-level aggregates)
+		aggregators := make([]Aggregator, len(c.stmt.Columns))
+		for i, col := range c.stmt.Columns {
+			if aggExpr, ok := col.Expr.(*parser.AggregateExpr); ok {
+				aggregators[i] = aggMap[aggExpr]
+			}
+		}
+
+		// Process all rows in group — feed all aggregators
 		for _, row := range groupRows {
-			for i, col := range c.stmt.Columns {
-				if aggregators[i] != nil {
-					aggExpr := col.Expr.(*parser.AggregateExpr)
-					var key, val interface{}
-					if strings.EqualFold(aggExpr.Name, "JSON_OBJECT_AGG") && len(aggExpr.Args) >= 2 {
-						var err error
-						key, err = evalOperand(aggExpr.Args[0], row, schema, ctx)
-						if err != nil {
-							return nil, fmt.Errorf("eval JSON_OBJECT_AGG key: %w", err)
-						}
-						val, err = evalOperand(aggExpr.Args[1], row, schema, ctx)
-						if err != nil {
-							return nil, fmt.Errorf("eval JSON_OBJECT_AGG value: %w", err)
-						}
-					} else if len(aggExpr.Args) > 0 {
-						if colRef, ok := aggExpr.Args[0].(*parser.ColumnRef); ok && colRef.Name == "*" {
-							val = int64(1)
-						} else {
-							var err error
-							val, err = evalOperand(aggExpr.Args[0], row, schema, ctx)
-							if err != nil {
-								return nil, fmt.Errorf("eval aggregate argument: %w", err)
-							}
-						}
-					} else {
-						val = int64(1)
+			for aggExpr, agg := range aggMap {
+				var key, val interface{}
+				if strings.EqualFold(aggExpr.Name, "JSON_OBJECT_AGG") && len(aggExpr.Args) >= 2 {
+					var err error
+					key, err = evalOperand(aggExpr.Args[0], row, schema, ctx)
+					if err != nil {
+						return nil, fmt.Errorf("eval JSON_OBJECT_AGG key: %w", err)
 					}
-					aggregators[i].Add(key, val)
+					val, err = evalOperand(aggExpr.Args[1], row, schema, ctx)
+					if err != nil {
+						return nil, fmt.Errorf("eval JSON_OBJECT_AGG value: %w", err)
+					}
+				} else if len(aggExpr.Args) > 0 {
+					if colRef, ok := aggExpr.Args[0].(*parser.ColumnRef); ok && colRef.Name == "*" {
+						val = int64(1)
+					} else {
+						var err error
+						val, err = evalOperand(aggExpr.Args[0], row, schema, ctx)
+						if err != nil {
+							return nil, fmt.Errorf("eval aggregate argument: %w", err)
+						}
+					}
+				} else {
+					val = int64(1)
 				}
+				agg.Add(key, val)
 			}
 		}
 
@@ -188,6 +280,18 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 				res := aggregators[i].Result()
 				resultRow[i] = valueToString(res)
 				virtualRow[i] = res
+			} else if c.containsAggregate(col.Expr) {
+				// Expression contains aggregates nested in arithmetic (e.g., AVG(x) + 1)
+				resolved, err := resolveNestedAggregates(col.Expr, aggMap, c.stmt.Columns)
+				if err != nil {
+					return nil, fmt.Errorf("eval column expression: %w", err)
+				}
+				val, err := evalOperand(resolved, nil, schema, ctx)
+				if err != nil {
+					val = nil
+				}
+				resultRow[i] = valueToString(val)
+				virtualRow[i] = val
 			} else {
 				// Pick from first row of group for non-aggregates
 				if len(groupRows) > 0 {

@@ -310,6 +310,18 @@ func (m *MockStorage) UpdateRows(dbName, tableName string, indices []int, update
 	return len(indices), nil
 }
 
+func (m *MockStorage) UpdateRowsDirect(dbName, tableName string, indices []int, newValues []storage.Row) (int, error) {
+	if m.updateErr != nil {
+		return 0, m.updateErr
+	}
+	for i, idx := range indices {
+		if idx < len(m.rows[dbName][tableName]) && i < len(newValues) {
+			m.rows[dbName][tableName][idx] = newValues[i]
+		}
+	}
+	return len(indices), nil
+}
+
 func (m *MockStorage) DeleteRows(dbName, tableName string, indices []int) (int, error) {
 	if m.deleteErr != nil {
 		return 0, m.deleteErr

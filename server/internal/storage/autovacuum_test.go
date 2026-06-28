@@ -98,6 +98,9 @@ func (m *mockStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 func (m *mockStorageEngine) UpdateRows(dbName, tableName string, indices []int, updates map[string]Value) (int, error) {
 	return 0, nil
 }
+func (m *mockStorageEngine) UpdateRowsDirect(dbName, tableName string, indices []int, newValues []Row) (int, error) {
+	return 0, nil
+}
 func (m *mockStorageEngine) DeleteRows(dbName, tableName string, indices []int) (int, error) {
 	return 0, nil
 }

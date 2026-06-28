@@ -42,6 +42,7 @@ func sanitizeErrorMessage(msg string) string {
 		"no active database",
 		"does not exist",
 		"already exists",
+		"duplicate primary key",
 		"column",
 		"unknown column",
 		"unknown statement",
@@ -63,6 +64,7 @@ func sanitizeErrorMessage(msg string) string {
 		"out of range",
 		"cannot",
 		"permission",
+		"aggregate",
 	}
 
 	for _, pattern := range safePatterns {

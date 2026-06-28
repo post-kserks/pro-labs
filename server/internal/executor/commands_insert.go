@@ -231,9 +231,18 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 
 	conflictCols := c.stmt.OnConflict.Columns
 	if len(conflictCols) == 0 {
+		// Use PRIMARY KEY columns for conflict detection
 		conflictCols = nil
 		for _, col := range schema.Columns {
-			conflictCols = append(conflictCols, col.Name)
+			if col.PrimaryKey {
+				conflictCols = append(conflictCols, col.Name)
+			}
+		}
+		// Fallback to all columns if no PRIMARY KEY defined
+		if len(conflictCols) == 0 {
+			for _, col := range schema.Columns {
+				conflictCols = append(conflictCols, col.Name)
+			}
 		}
 	}
 	colIdxMap := make(map[string]int, len(schema.Columns))

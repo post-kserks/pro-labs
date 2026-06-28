@@ -116,15 +116,6 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		}
 	}
 
-	updates := make(map[string]storage.Value)
-	for _, assign := range c.stmt.Assignments {
-		val, err := evalOperand(assign.Value, nil, schema, ctx)
-		if err != nil {
-			return nil, fmt.Errorf("column '%s': %w", assign.Column, err)
-		}
-		updates[assign.Column] = val
-	}
-
 	rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 	if err != nil {
 		return nil, err
@@ -160,6 +151,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	}
 
 	indices := make([]int, 0)
+	var matchedRows []storage.Row
 	if fromRows != nil {
 		seenTarget := make(map[int]bool)
 		for idx, row := range evalRows {
@@ -172,6 +164,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 				if !seenTarget[targetIdx] {
 					seenTarget[targetIdx] = true
 					indices = append(indices, targetIdx)
+					matchedRows = append(matchedRows, rows[targetIdx])
 				}
 			}
 		}
@@ -183,29 +176,35 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 			}
 			if match {
 				indices = append(indices, idx)
+				matchedRows = append(matchedRows, row)
 			}
 		}
 	}
 
-	for _, idx := range indices {
-		if idx < len(rows) {
-			newRow := make(storage.Row, len(rows[idx]))
-			copy(newRow, rows[idx])
-			for col, val := range updates {
-				for ci, c := range schema.Columns {
-					if strings.EqualFold(c.Name, col) && ci < len(newRow) {
-						newRow[ci] = val
-						break
-					}
+	// Compute new rows per matched row
+	newValues := make([]storage.Row, len(matchedRows))
+	for i, row := range matchedRows {
+		newRow := make(storage.Row, len(row))
+		copy(newRow, row)
+		for _, assign := range c.stmt.Assignments {
+			val, err := evalOperand(assign.Value, row, evalSchema, ctx)
+			if err != nil {
+				return nil, fmt.Errorf("column '%s': %w", assign.Column, err)
+			}
+			for ci, col := range schema.Columns {
+				if strings.EqualFold(col.Name, assign.Column) && ci < len(newRow) {
+					newRow[ci] = val
+					break
 				}
 			}
-			if err := enforceCheckConstraints(schema, newRow); err != nil {
-				return nil, fmt.Errorf("row %d: %w", idx, err)
-			}
 		}
+		if err := enforceCheckConstraints(schema, newRow); err != nil {
+			return nil, fmt.Errorf("row %d: %w", indices[i], err)
+		}
+		newValues[i] = newRow
 	}
 
-	affected, err := ctx.Storage.UpdateRows(dbName, c.stmt.TableName, indices, updates)
+	affected, err := ctx.Storage.UpdateRowsDirect(dbName, c.stmt.TableName, indices, newValues)
 	if err != nil {
 		return nil, err
 	}

@@ -151,6 +151,26 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		}
 	}()
 
+	// Find PRIMARY KEY column index for constraint checking
+	pkIdx := -1
+	for i, col := range t.schema.Columns {
+		if col.PrimaryKey {
+			pkIdx = i
+			break
+		}
+	}
+
+	// Build set of existing PRIMARY KEY values for fast lookup
+	existingPKs := make(map[interface{}]bool)
+	if pkIdx >= 0 {
+		_ = e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+			if deletedTx == 0 && pkIdx < len(row) {
+				existingPKs[row[pkIdx]] = true
+			}
+			return false, nil
+		})
+	}
+
 	tuples := make([][]byte, 0, len(rows))
 	for _, row := range rows {
 		normalized := make(Row, len(t.schema.Columns))
@@ -165,6 +185,16 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 			}
 			normalized[i] = n
 		}
+
+		// Check PRIMARY KEY constraint
+		if pkIdx >= 0 && pkIdx < len(normalized) {
+			pkVal := normalized[pkIdx]
+			if existingPKs[pkVal] {
+				return 0, fmt.Errorf("duplicate primary key value: %v", pkVal)
+			}
+			existingPKs[pkVal] = true
+		}
+
 		tuple, err := encodePageTuple(txID, 0, normalized)
 		if err != nil {
 			return 0, err
@@ -453,6 +483,149 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 
 func (e *PageStorageEngine) UpdateRows(dbName, tableName string, indices []int, updates map[string]Value) (int, error) {
 	return e.mutateRows(dbName, tableName, indices, updates, false)
+}
+
+// UpdateRowsDirect replaces rows at given indices with pre-computed new values.
+// Used when assignment expressions reference columns (e.g., SET amount = amount - 100).
+func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices []int, newValues []Row) (int, error) {
+	e.mu.Lock()
+	txID := e.nextTxLocked()
+	e.mu.Unlock()
+
+	t, err := e.getTableForWrite(dbName, tableName)
+	if err != nil {
+		return 0, err
+	}
+	mutateLockReleased := false
+	defer func() {
+		if !mutateLockReleased {
+			mutateLockReleased = true
+			t.mu.Unlock()
+		}
+	}()
+
+	wanted := make(map[int]bool, len(indices))
+	for _, i := range indices {
+		wanted[i] = true
+	}
+
+	// Map logical index to pre-computed new value
+	newByIndex := make(map[int]Row, len(indices))
+	for i, idx := range indices {
+		if i < len(newValues) {
+			newByIndex[idx] = newValues[i]
+		}
+	}
+
+	var newVersions [][]byte
+	affected := 0
+	pos := 0
+
+	var dirtyPid page.PageID
+	var dirtyPg *page.Page
+	dirty := false
+	flushDirty := func() error {
+		if dirty {
+			if err := t.heap.WritePage(dirtyPid, dirtyPg); err != nil {
+				return err
+			}
+			e.bufPool.InvalidatePage(dirtyPid)
+			dirty = false
+		}
+		return nil
+	}
+
+	if e.wal != nil {
+		var physicalSlots []struct {
+			pid  page.PageID
+			slot uint16
+		}
+		e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+			if deletedTx != 0 {
+				return false, nil
+			}
+			matched := wanted[pos]
+			pos++
+			if matched {
+				physicalSlots = append(physicalSlots, struct {
+					pid  page.PageID
+					slot uint16
+				}{pid, slot})
+			}
+			return false, nil
+		})
+		for _, ps := range physicalSlots {
+			payload := wal.WALPageDeletePayload{
+				DB:        dbName,
+				Table:     tableName,
+				SegmentNo: ps.pid.SegmentNo,
+				PageNo:    ps.pid.PageNo,
+				SlotNo:    ps.slot,
+				XMax:      txID,
+			}
+			if _, err := e.wal.AppendWithTx(txID, wal.OpPageDelete, payload); err != nil {
+				return 0, fmt.Errorf("wal delete: %w", err)
+			}
+		}
+		pos = 0
+	}
+
+	err = e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+		if deletedTx != 0 {
+			return false, nil
+		}
+		matched := wanted[pos]
+		pos++
+		if !matched {
+			return false, nil
+		}
+		if dirty && dirtyPid != pid {
+			if err := flushDirty(); err != nil {
+				return true, err
+			}
+		}
+		tuple := pg.GetTuple(slot)
+		binary.LittleEndian.PutUint64(tuple[8:16], txID)
+		dirtyPid, dirtyPg, dirty = pid, pg, true
+
+		if nv, ok := newByIndex[pos-1]; ok {
+			encoded, err := encodePageTuple(txID, 0, nv)
+			if err != nil {
+				return true, err
+			}
+			newVersions = append(newVersions, encoded)
+		}
+		affected++
+		return false, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	if err := flushDirty(); err != nil {
+		return 0, err
+	}
+	if len(newVersions) > 0 {
+		if err := e.appendTuplesLocked(t, newVersions); err != nil {
+			return 0, err
+		}
+	}
+	if err := t.heap.Sync(); err != nil {
+		return 0, err
+	}
+
+	mutateLockReleased = true
+	t.mu.Unlock()
+
+	key := dbName + "/" + tableName
+	e.mu.Lock()
+	e.catalog.LastModified[key] = txID
+	if err := e.saveCatalogLocked(); err != nil {
+		e.mu.Unlock()
+		return 0, err
+	}
+	e.mu.Unlock()
+
+	return affected, nil
 }
 
 func (e *PageStorageEngine) DeleteRows(dbName, tableName string, indices []int) (int, error) {

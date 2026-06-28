@@ -114,6 +114,7 @@ type WriteEngine interface {
 	DropTable(dbName, tableName string) error
 	InsertRows(dbName, tableName string, rows []Row) (int, error)
 	UpdateRows(dbName, tableName string, indices []int, updates map[string]Value) (int, error)
+	UpdateRowsDirect(dbName, tableName string, indices []int, newValues []Row) (int, error)
 	DeleteRows(dbName, tableName string, indices []int) (int, error)
 	Vacuum(dbName, tableName string) (*VacuumStats, error)
 	AlterTableAddColumn(dbName, tableName string, col ColumnSchema, defaultVal Value) error

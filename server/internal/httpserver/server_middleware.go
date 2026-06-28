@@ -83,10 +83,14 @@ func writeError(w http.ResponseWriter, status, code int, message string) {
 
 func writeStorageError(w http.ResponseWriter, status, code int, err error, logger *slog.Logger) {
 	logger.Warn("storage error", "error", err)
+	msg := err.Error()
+	if len(msg) > 200 {
+		msg = msg[:200] + "..."
+	}
 	writeJSON(w, status, map[string]interface{}{
 		"status":     "error",
 		"error_code": code,
-		"message":    "internal storage error",
+		"message":    msg,
 	})
 }
 

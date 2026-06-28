@@ -53,14 +53,16 @@ func (p *sqlParser) parseCTE() (Statement, error) {
 			return nil, err
 		}
 
-		// Accept both SelectStatement and CTEStatement as CTE body
+		// Accept SelectStatement, SetOperationStatement, and CTEStatement as CTE body
 		switch s := stmt.(type) {
 		case *SelectStatement:
 			// OK
+		case *SetOperationStatement:
+			_ = s // UNION/INTERSECT/EXCEPT — valid
 		case *CTEStatement:
 			_ = s // nested CTE — valid
 		default:
-			return nil, fmt.Errorf("CTE body must be a SELECT or WITH statement")
+			return nil, fmt.Errorf("CTE body must be a SELECT, set operation, or WITH statement")
 		}
 
 		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {

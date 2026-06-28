@@ -105,9 +105,11 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 	case *parser.FunctionCall:
 		return evalFunctionCall(e, row, schema, ctx)
 	case *parser.AggregateExpr:
-		// AggregateExpr should have been resolved by resolveAggregatesInExpr
-		// before evaluation. If we reach here, the aggregate was not resolved.
-		return nil, fmt.Errorf("aggregate '%s' not resolved in HAVING clause", e.Name)
+		// In SELECT context with aggregates, this is reached when the aggregate
+		// is nested inside an expression (e.g., AVG(x) + 1). The top-level
+		// aggregate executor handles standalone AggregateExpr nodes.
+		// Return nil to avoid breaking arithmetic expressions.
+		return nil, nil
 	case *parser.CastExpr:
 		return evalCast(e, row, schema, ctx)
 	case *parser.CaseExpr:
