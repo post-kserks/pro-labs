@@ -186,7 +186,7 @@ func TestDecorrelateSubquery_SimpleIN(t *testing.T) {
 						TableName: "vip_customers",
 						Columns:   []parser.SelectColumn{{Expr: &parser.ColumnRef{Name: "id"}}},
 						Where: &parser.BinaryExpr{
-							Left: &parser.ColumnRef{Name: "tier"}, Operator: "=", Right: &parser.Value{Type: "string", StrVal: "gold"},
+							Left: &parser.ColumnRef{Name: "vip_customers.customer_id"}, Operator: "=", Right: &parser.ColumnRef{Name: "orders.customer_id"},
 						},
 					},
 				},
