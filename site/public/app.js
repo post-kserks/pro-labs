@@ -276,7 +276,7 @@
     {
       title: 'JOIN',
       desc: 'Combine rows from two tables based on a related column.',
-      sql: `CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
 CREATE TABLE employees (id INT PRIMARY KEY, name TEXT, dept_id INT);
 CREATE TABLE departments (id INT PRIMARY KEY, dept_name TEXT);
 INSERT INTO employees VALUES (1, 'Alice', 1), (2, 'Bob', 1), (3, 'Charlie', 2);
@@ -287,7 +287,7 @@ SELECT e.name, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.
     {
       title: 'CTE (WITH)',
       desc: 'Common Table Expressions for readable, reusable subqueries.',
-      sql: `CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
 CREATE TABLE employees (id INT PRIMARY KEY, name TEXT, dept_id INT);
 CREATE TABLE departments (id INT PRIMARY KEY, dept_name TEXT);
 INSERT INTO employees VALUES (1, 'Alice', 1), (2, 'Bob', 1), (3, 'Charlie', 2);
@@ -302,7 +302,7 @@ WHERE e.name IN (SELECT name FROM high_salary);`,
     {
       title: 'Window Functions',
       desc: 'Compute values across sets of rows without grouping.',
-      sql: `CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
 CREATE TABLE sales (id INT PRIMARY KEY, rep TEXT, region TEXT, amount INT);
 INSERT INTO sales VALUES (1, 'Alice', 'East', 100), (2, 'Bob', 'East', 200), (3, 'Charlie', 'West', 150), (4, 'Diana', 'West', 300), (5, 'Eve', 'East', 250);
 SELECT rep, region, amount,
@@ -315,7 +315,7 @@ FROM sales;`,
     {
       title: 'JSONB',
       desc: 'Store and query semi-structured JSON data with operators.',
-      sql: `CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
 CREATE TABLE events (id INT PRIMARY KEY, data JSONB);
 INSERT INTO events VALUES (1, '{"type":"click","page":"/home","user":{"id":1,"name":"Alice"}}');
 INSERT INTO events VALUES (2, '{"type":"view","page":"/products","user":{"id":2,"name":"Bob"}}');
@@ -325,7 +325,7 @@ SELECT data->>'type' AS event_type, data->>'page' AS page, data->'user'->>'name'
     {
       title: 'UPSERT (ON CONFLICT)',
       desc: 'Insert or update in a single statement.',
-      sql: `CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
 CREATE TABLE settings (name TEXT PRIMARY KEY, value TEXT);
 INSERT INTO settings (name, value) VALUES ('theme', 'dark'), ('lang', 'en');
 INSERT INTO settings (name, value) VALUES ('theme', 'light') ON CONFLICT DO UPDATE SET value = 'light';
@@ -335,7 +335,7 @@ SELECT * FROM settings;`,
     {
       title: 'MERGE',
       desc: 'Conditional insert/update/delete in one statement.',
-      sql: `CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
 CREATE TABLE target (id INT PRIMARY KEY, val INT);
 CREATE TABLE source (id INT PRIMARY KEY, val INT);
 INSERT INTO target VALUES (1, 10);
@@ -349,7 +349,7 @@ SELECT * FROM target;`,
     {
       title: 'Indexes (BTree, GIN)',
       desc: 'Speed up queries with B-tree, hash, GIN, and GiST indexes.',
-      sql: `CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
 CREATE TABLE products (id INT PRIMARY KEY, name TEXT, tags JSONB);
 INSERT INTO products VALUES (1, 'Laptop', '["electronics","portable"]'), (2, 'Book', '["education"]');
 CREATE INDEX idx_products_name ON products (name);
@@ -373,7 +373,7 @@ SELECT * FROM products WHERE tags @> '["electronics"]';`,
     {
       title: 'Aggregate Functions',
       desc: 'COUNT, SUM, AVG, MIN, MAX, STDDEV, VARIANCE, BOOL_AND/OR.',
-      sql: `CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
 CREATE TABLE scores (id INT PRIMARY KEY, student TEXT, subject TEXT, score INT);
 INSERT INTO scores VALUES (1, 'Alice', 'Math', 95), (2, 'Bob', 'Math', 80), (3, 'Alice', 'Science', 90), (4, 'Bob', 'Science', 85);
 SELECT subject, COUNT(*) AS cnt, AVG(score) AS avg_score, MAX(score) AS max_score, MIN(score) AS min_score FROM scores GROUP BY subject;`,
@@ -382,7 +382,7 @@ SELECT subject, COUNT(*) AS cnt, AVG(score) AS avg_score, MAX(score) AS max_scor
     {
       title: 'LIKE & Full-Text',
       desc: 'Pattern matching with LIKE and full-text search via GIN index.',
-      sql: `CREATE DATABASE demo; USE demo;
+      sql: `DROP DATABASE demo; CREATE DATABASE demo; USE demo;
 CREATE TABLE articles (id INT PRIMARY KEY, title TEXT, body TEXT);
 INSERT INTO articles VALUES (1, 'Go concurrency', 'Goroutines and channels for parallel processing'), (2, 'SQL optimization', 'Query planners and index selection strategies');
 CREATE INDEX gin_body ON articles (body);
