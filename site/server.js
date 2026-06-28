@@ -144,6 +144,27 @@ app.get('/api/databases/:db/tables', async (req, res) => {
   proxyReq.end();
 });
 
+app.get('/api/metrics', async (req, res) => {
+  const options = {
+    hostname: VAULTDB_HOST,
+    port: parseInt(process.env.VAULTDB_MONITOR_PORT || '5433'),
+    path: '/metrics',
+    method: 'GET',
+  };
+  const proxyReq = http.request(options, (proxyRes) => {
+    let body = '';
+    proxyRes.on('data', (chunk) => { body += chunk; });
+    proxyRes.on('end', () => {
+      res.set('Content-Type', 'text/plain');
+      res.send(body);
+    });
+  });
+  proxyReq.on('error', () => {
+    res.status(502).send('Metrics endpoint unreachable');
+  });
+  proxyReq.end();
+});
+
 app.listen(PORT, () => {
   console.log(`VaultDB Lab running at http://localhost:${PORT}`);
   console.log(`Proxying to VaultDB at ${VAULTDB_HOST}:${VAULTDB_HTTP_PORT}`);

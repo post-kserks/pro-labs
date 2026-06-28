@@ -242,10 +242,25 @@
   const ttSetupBtn = $('#ttSetupBtn');
   ttSetupBtn.addEventListener('click', async () => {
     const lines = $('#ttSetup').value.split('\n').filter(l => l.trim());
+    let db = '';
     for (const line of lines) {
-      const data = await runQuery(line.trim());
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('--')) continue;
+      const upper = trimmed.toUpperCase();
+      if (upper.startsWith('USE ')) {
+        db = trimmed.split(/\s+/)[1].replace(/;$/, '');
+        currentDb = db;
+        continue;
+      }
+      if (upper.startsWith('CREATE DATABASE') || upper.startsWith('DROP DATABASE')) {
+        await runQuery(trimmed);
+        continue;
+      }
+      const data = await runQuery(trimmed, db);
       if (data.status === 'error') {
-        renderResult('ttResult', { status: 'error', message: `${line.trim()}: ${data.message}` });
+        const msg = (data.message || '').toLowerCase();
+        if (msg.includes('does not exist') || msg.includes('already exists')) continue;
+        renderResult('ttResult', { status: 'error', message: `${trimmed}: ${data.message}` });
         return;
       }
     }
@@ -256,15 +271,17 @@
     chip.addEventListener('click', async () => {
       const stmts = chip.dataset.sql.split(';').filter(s => s.trim());
       let lastResult;
+      let db = currentDb;
       for (const stmt of stmts) {
         let trimmed = stmt.trim();
         const upper = trimmed.toUpperCase();
         if (upper.startsWith('USE ')) {
-          currentDb = trimmed.split(/\s+/)[1];
-          lastResult = { status: 'ok', message: `Using database '${currentDb}'` };
+          db = trimmed.split(/\s+/)[1].replace(/;$/, '');
+          currentDb = db;
+          lastResult = { status: 'ok', message: `Using database '${db}'` };
         } else {
           if (!trimmed.endsWith(';')) trimmed += ';';
-          lastResult = await runQuery(trimmed);
+          lastResult = await runQuery(trimmed, db);
         }
       }
       renderResult('ttResult', lastResult);
@@ -427,7 +444,7 @@ SELECT title FROM articles WHERE body LIKE '%parallel%';`,
       if (!trimmed || trimmed.startsWith('--')) continue;
       const upper = trimmed.toUpperCase();
       if (upper.startsWith('USE ')) {
-        db = trimmed.split(/\s+/)[1];
+        db = trimmed.split(/\s+/)[1].replace(/;$/, '');
         lastResult = { status: 'ok', message: `Using database '${db}'` };
       } else {
         if (!trimmed.endsWith(';')) trimmed += ';';
@@ -470,11 +487,11 @@ SELECT title FROM articles WHERE body LIKE '%parallel%';`,
     }
 
     try {
-      const resp = await fetch('http://localhost:5433/metrics');
+      const resp = await fetch('/api/metrics');
       const text = await resp.text();
       $('#metricsRaw').textContent = text;
     } catch {
-      $('#metricsRaw').textContent = 'Metrics endpoint unreachable (port 5433)';
+      $('#metricsRaw').textContent = 'Metrics endpoint unreachable';
     }
   }
 
