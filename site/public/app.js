@@ -419,15 +419,17 @@ SELECT title FROM articles WHERE body LIKE '%parallel%';`,
     const sql = $('#featureSql').textContent;
     const stmts = sql.split(';').filter(s => s.trim());
     let lastResult;
+    let db = '';
     for (const stmt of stmts) {
       let trimmed = stmt.trim();
       if (!trimmed) continue;
       const upper = trimmed.toUpperCase();
       if (upper.startsWith('USE ')) {
-        lastResult = { status: 'ok', message: `Using database '${trimmed.split(/\s+/)[1]}'` };
+        db = trimmed.split(/\s+/)[1];
+        lastResult = { status: 'ok', message: `Using database '${db}'` };
       } else {
         if (!trimmed.endsWith(';')) trimmed += ';';
-        lastResult = await runQuery(trimmed);
+        lastResult = await runQuery(trimmed, db);
         if (lastResult.status === 'error') {
           renderResult('featureResult', lastResult);
           return;
