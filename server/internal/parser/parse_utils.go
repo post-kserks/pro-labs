@@ -358,17 +358,6 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 		default:
 			return nil, p.syntaxError(tok, "expected DATE, TIME, or TIMESTAMP after CURRENT")
 		}
-	case lexer.TOKEN_STRING_AGG:
-		// STRING_AGG(col, delimiter)
-		p.advance()
-		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
-			return nil, err
-		}
-		args, err := p.parseValueListUntilRParen()
-		if err != nil {
-			return nil, err
-		}
-		return &AggregateExpr{Name: "STRING_AGG", Args: args}, nil
 	case lexer.TOKEN_SUBSTRING:
 		// SUBSTRING(expr FROM start [FOR length]) or SUBSTRING(expr, start, length)
 		p.advance()
@@ -493,7 +482,7 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 
 			var funcExpr Expression
 			nameUp := strings.ToUpper(ident)
-			if nameUp == "COUNT" || nameUp == "SUM" || nameUp == "AVG" || nameUp == "MIN" || nameUp == "MAX" {
+			if nameUp == "COUNT" || nameUp == "SUM" || nameUp == "AVG" || nameUp == "MIN" || nameUp == "MAX" || nameUp == "STRING_AGG" || nameUp == "BOOL_AND" || nameUp == "BOOL_OR" || nameUp == "STDDEV" || nameUp == "VARIANCE" || nameUp == "JSON_OBJECT_AGG" {
 				funcExpr = &AggregateExpr{Name: nameUp, Args: args, Distinct: distinct}
 			} else {
 				funcExpr = &FunctionCall{Name: nameUp, Args: args}
