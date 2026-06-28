@@ -205,7 +205,7 @@ func (s *Server) apiMux() *http.ServeMux {
 			if s.cfg.Auth != nil && s.cfg.Auth.Enabled() {
 				token := r.Header.Get("Authorization")
 				if token == "" {
-					token = r.URL.Query().Get("token")
+					token = r.Header.Get("X-VaultDB-Token")
 				}
 				if !s.cfg.Auth.ValidateToken(strings.TrimPrefix(token, "Bearer ")) {
 					writeError(w, http.StatusUnauthorized, errCodeInternal, "unauthorized")

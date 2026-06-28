@@ -120,6 +120,12 @@ func (m *mockStorageEngine) CreateIndexMulti(dbName, tableName, indexName string
 	return nil
 }
 func (m *mockStorageEngine) DropIndex(dbName, indexName string) error { return nil }
+func (m *mockStorageEngine) SetTableRLS(dbName, tableName string, enabled bool) error {
+	return nil
+}
+func (m *mockStorageEngine) AddPolicy(dbName, tableName string, policy RLSPolicy) error {
+	return nil
+}
 func (m *mockStorageEngine) CreateDatabase(name string) error         { return nil }
 func (m *mockStorageEngine) DropDatabase(name string) error           { return nil }
 func (m *mockStorageEngine) FinalCheckpoint() error                   { return nil }

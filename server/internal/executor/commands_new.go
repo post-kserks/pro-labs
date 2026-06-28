@@ -3,7 +3,6 @@ package executor
 import (
 	"fmt"
 	"strings"
-
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
@@ -36,8 +35,9 @@ func (c *TruncateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	// If inside an explicit user transaction, buffer the truncate for deferred execution.
-	if ctx.Session.IsInTx() {
-		ctx.Session.TxManager.AddOp(ctx.Session.ActiveTx, txmanager.PendingOp{
+	activeTx := ctx.Session.GetActiveTx()
+	if activeTx != nil && activeTx.State == txmanager.TxActive {
+		ctx.Session.TxManager.AddOp(activeTx, txmanager.PendingOp{
 			Type:    "truncate",
 			DB:      dbName,
 			Table:   c.stmt.TableName,
@@ -45,7 +45,7 @@ func (c *TruncateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		})
 		return &Result{
 			Type:    "message",
-			Message: fmt.Sprintf("Buffered TRUNCATE (tx %d). Not committed yet.", ctx.Session.ActiveTx.ID),
+			Message: fmt.Sprintf("Buffered TRUNCATE (tx %d). Not committed yet.", ctx.Session.GetActiveTx().ID),
 		}, nil
 	}
 

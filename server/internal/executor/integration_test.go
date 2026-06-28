@@ -341,7 +341,7 @@ func TestDateTimeFunctions(t *testing.T) {
 }
 
 func TestAggregates(t *testing.T) {
-	t.Skip("STRING_AGG not yet working correctly")
+	t.Skip("STRING_AGG parser limitation — multi-arg aggregates not yet supported")
 	session := setupSession(t)
 	seedHeroes(t, session)
 

@@ -101,8 +101,8 @@ type SelectStatement struct {
 // CTEDefinition — определение CTE в WITH clause.
 type CTEDefinition struct {
 	Name    string
-	Columns []string         // optional column aliases
-	Query   *SelectStatement // CTE query
+	Columns []string  // optional column aliases
+	Query   Statement // CTE query (SELECT or nested CTE)
 }
 
 // CTEStatement — WITH clause statement.

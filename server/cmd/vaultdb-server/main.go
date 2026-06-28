@@ -103,28 +103,32 @@ func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *
 }
 
 func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPort, monitorPort int, store storage.StorageEngine, authManager *auth.Manager, metricsCollector *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, embedder ai.Embedder, activeConnections func() int64, logger *slog.Logger, tlsCert, tlsKey string) <-chan error {
+	rateLimiter := httpserver.NewRateLimiter(100, 200) // 100 req/s, burst 200
 	httpSrv := httpserver.New(httpserver.Config{
-		Host:                host,
-		Port:                httpPort,
-		MonitorPort:         monitorPort,
-		Version:             version,
-		MaxRequestSizeBytes: cfg.Server.MaxRequestSizeBytes,
-		MaxRows:             cfg.Server.MaxRows,
-		QueryTimeoutSec:     cfg.Server.QueryTimeoutSec,
-		MaxPreparedStmts:    cfg.Server.MaxPreparedStmts,
-		ResultCacheSize:     cfg.Storage.ResultCacheSize,
-		ResultCacheTTLSec:   cfg.Storage.ResultCacheTTL_s,
-		AllowedOrigins:      cfg.Server.AllowedOrigins,
-		Storage:             store,
-		Auth:                authManager,
-		Logger:              logger,
-		Metrics:             metricsCollector,
-		TxManager:           txm,
-		ActiveConnections:   activeConnections,
-		Broadcaster:         br,
-		Embedder:            embedder,
-		TLSCertFile:         tlsCert,
-		TLSKeyFile:          tlsKey,
+		Host:                      host,
+		Port:                      httpPort,
+		MonitorPort:               monitorPort,
+		Version:                   version,
+		MaxRequestSizeBytes:       cfg.Server.MaxRequestSizeBytes,
+		MaxRows:                   cfg.Server.MaxRows,
+		QueryTimeoutSec:           cfg.Server.QueryTimeoutSec,
+		MaxPreparedStmts:          cfg.Server.MaxPreparedStmts,
+		ResultCacheSize:           cfg.Storage.ResultCacheSize,
+		ResultCacheTTLSec:         cfg.Storage.ResultCacheTTL_s,
+		AllowedOrigins:            cfg.Server.AllowedOrigins,
+		Storage:                   store,
+		Auth:                      authManager,
+		Logger:                    logger,
+		Metrics:                   metricsCollector,
+		TxManager:                 txm,
+		ActiveConnections:         activeConnections,
+		Broadcaster:               br,
+		Embedder:                  embedder,
+		RateLimiter:               rateLimiter,
+		TLSCertFile:               tlsCert,
+		TLSKeyFile:                tlsKey,
+		MaxLiveQuerySubscriptions: cfg.Server.LiveQueries.BufferSize,
+		MaxLiveQueryDurationSec:   cfg.Server.QueryTimeoutSec,
 	})
 	httpErrCh := make(chan error, 1)
 	go func() {
@@ -137,6 +141,7 @@ func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPor
 
 // ConnectionRateLimiter is a simple token bucket for per-connection rate limiting.
 type ConnectionRateLimiter struct {
+	mu        sync.Mutex
 	tokens    float64
 	lastTime  time.Time
 	rate      float64
@@ -153,6 +158,8 @@ func NewConnectionRateLimiter(rate, burst int) *ConnectionRateLimiter {
 }
 
 func (l *ConnectionRateLimiter) Allow() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	now := time.Now()
 	elapsed := now.Sub(l.lastTime).Seconds()
 	l.tokens += elapsed * l.rate

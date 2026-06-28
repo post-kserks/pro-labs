@@ -74,12 +74,31 @@ func notifyMutation(ctx *ExecutionContext, dbName, tableName string) {
 	if ctx.Stats != nil {
 		ctx.Stats.InvalidateStats(dbName, tableName)
 	}
+	if ctx.Session != nil && ctx.Session.resultCache != nil {
+		ctx.Session.resultCache.Invalidate(tableName)
+	}
 	if ctx.TxManager != nil {
 		ctx.TxManager.BumpTableVersion(dbName, tableName)
 	}
 	if ctx.Broadcaster != nil {
 		ctx.Broadcaster.NotifyTableChanged(dbName, tableName, ctx)
 	}
+}
+
+// enforceRLSPolicies checks if RLS is enabled and policies exist for the table.
+// Returns an error if the operation should be denied.
+func enforceRLSPolicies(ctx *ExecutionContext, dbName, tableName string) error {
+	schema, err := ctx.Storage.GetTableSchema(dbName, tableName)
+	if err != nil {
+		return err
+	}
+	if !schema.RLSEnabled {
+		return nil
+	}
+	if len(schema.Policies) == 0 {
+		return fmt.Errorf("RLS is enabled on table '%s' but no policies are defined", tableName)
+	}
+	return nil
 }
 
 func enforceCheckConstraints(schema *storage.TableSchema, row storage.Row) error {
@@ -102,7 +121,14 @@ type InsertCommand struct {
 }
 
 func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	if ctx.Session.IsInTx() {
+	dbName, _ := requireCurrentDB(ctx)
+	if dbName != "" {
+		if err := enforceRLSPolicies(ctx, dbName, c.stmt.TableName); err != nil {
+			return nil, err
+		}
+	}
+	activeTx := ctx.Session.GetActiveTx()
+	if activeTx != nil && activeTx.State == txmanager.TxActive {
 		// Замораживаем волатильные функции (NOW/UUID/...) в литералы, чтобы
 		// overlay-чтение и применение при COMMIT использовали одинаковые
 		// значения (Bug #3).
@@ -110,7 +136,7 @@ func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		ctx.Session.TxManager.AddOp(ctx.Session.ActiveTx, txmanager.PendingOp{
+		ctx.Session.TxManager.AddOp(activeTx, txmanager.PendingOp{
 			Type:    "insert",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
@@ -118,7 +144,7 @@ func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		})
 		return &Result{
 			Type:    "message",
-			Message: fmt.Sprintf("Buffered INSERT (tx %d). Not committed yet.", ctx.Session.ActiveTx.ID),
+			Message: fmt.Sprintf("Buffered INSERT (tx %d). Not committed yet.", ctx.Session.GetActiveTx().ID),
 		}, nil
 	}
 	return c.executeImmediate(ctx)
@@ -239,12 +265,7 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 	if ctx.Session.planCache != nil {
-		if ctx.Session.planCache != nil {
-			ctx.Session.planCache.Invalidate(c.stmt.TableName)
-		}
-		if ctx.Session.resultCache != nil {
-			ctx.Session.resultCache.Invalidate(c.stmt.TableName)
-		}
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
 	}
 	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
 
@@ -393,12 +414,7 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 	if ctx.Session.planCache != nil {
-		if ctx.Session.planCache != nil {
-			ctx.Session.planCache.Invalidate(c.stmt.TableName)
-		}
-		if ctx.Session.resultCache != nil {
-			ctx.Session.resultCache.Invalidate(c.stmt.TableName)
-		}
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
 	}
 
 	return &Result{Type: "affected", Affected: affected}, nil
@@ -459,12 +475,7 @@ func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 	if ctx.Session.planCache != nil {
-		if ctx.Session.planCache != nil {
-			ctx.Session.planCache.Invalidate(c.stmt.TableName)
-		}
-		if ctx.Session.resultCache != nil {
-			ctx.Session.resultCache.Invalidate(c.stmt.TableName)
-		}
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
 	}
 
 	// Handle RETURNING
@@ -513,7 +524,14 @@ type UpdateCommand struct {
 }
 
 func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	if ctx.Session.IsInTx() {
+	dbName, _ := requireCurrentDB(ctx)
+	if dbName != "" {
+		if err := enforceRLSPolicies(ctx, dbName, c.stmt.TableName); err != nil {
+			return nil, err
+		}
+	}
+	activeTx := ctx.Session.GetActiveTx()
+	if activeTx != nil && activeTx.State == txmanager.TxActive {
 		// Замораживаем волатильные функции в присваиваниях и WHERE (Bug #3),
 		// чтобы overlay и применение при COMMIT совпали.
 		frozen, err := freezeUpdate(c.stmt, ctx)
@@ -539,7 +557,7 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			}
 		}
 
-		ctx.Session.TxManager.AddOp(ctx.Session.ActiveTx, txmanager.PendingOp{
+		ctx.Session.TxManager.AddOp(activeTx, txmanager.PendingOp{
 			Type:    "update",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
@@ -549,7 +567,7 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		})
 		return &Result{
 			Type:    "message",
-			Message: fmt.Sprintf("Buffered UPDATE (tx %d). Not committed yet.", ctx.Session.ActiveTx.ID),
+			Message: fmt.Sprintf("Buffered UPDATE (tx %d). Not committed yet.", ctx.Session.GetActiveTx().ID),
 		}, nil
 	}
 	return c.executeImmediate(ctx)
@@ -710,12 +728,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 	if ctx.Session.planCache != nil {
-		if ctx.Session.planCache != nil {
-			ctx.Session.planCache.Invalidate(c.stmt.TableName)
-		}
-		if ctx.Session.resultCache != nil {
-			ctx.Session.resultCache.Invalidate(c.stmt.TableName)
-		}
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
 	}
 
 	fireTriggers(ctx, dbName, c.stmt.TableName, "UPDATE")
@@ -744,7 +757,14 @@ type DeleteCommand struct {
 }
 
 func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	if ctx.Session.IsInTx() {
+	dbName, _ := requireCurrentDB(ctx)
+	if dbName != "" {
+		if err := enforceRLSPolicies(ctx, dbName, c.stmt.TableName); err != nil {
+			return nil, err
+		}
+	}
+	activeTx := ctx.Session.GetActiveTx()
+	if activeTx != nil && activeTx.State == txmanager.TxActive {
 		// Замораживаем волатильные функции в WHERE (Bug #3).
 		frozen, err := freezeDelete(c.stmt, ctx)
 		if err != nil {
@@ -767,7 +787,7 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			}
 		}
 
-		ctx.Session.TxManager.AddOp(ctx.Session.ActiveTx, txmanager.PendingOp{
+		ctx.Session.TxManager.AddOp(activeTx, txmanager.PendingOp{
 			Type:    "delete",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
@@ -776,7 +796,7 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		})
 		return &Result{
 			Type:    "message",
-			Message: fmt.Sprintf("Buffered DELETE (tx %d). Not committed yet.", ctx.Session.ActiveTx.ID),
+			Message: fmt.Sprintf("Buffered DELETE (tx %d). Not committed yet.", ctx.Session.GetActiveTx().ID),
 		}, nil
 	}
 	return c.executeImmediate(ctx)
@@ -842,12 +862,7 @@ func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 	if ctx.Session.planCache != nil {
-		if ctx.Session.planCache != nil {
-			ctx.Session.planCache.Invalidate(c.stmt.TableName)
-		}
-		if ctx.Session.resultCache != nil {
-			ctx.Session.resultCache.Invalidate(c.stmt.TableName)
-		}
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
 	}
 
 	fireTriggers(ctx, dbName, c.stmt.TableName, "DELETE")

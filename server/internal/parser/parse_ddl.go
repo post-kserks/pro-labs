@@ -575,6 +575,12 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 		col.Computed = expr
 	}
 
+	if p.current().Type == lexer.TOKEN_PRIMARY && p.peek().Type == lexer.TOKEN_KEY {
+		p.advance() // PRIMARY
+		p.advance() // KEY
+		col.PrimaryKey = true
+	}
+
 	return col, nil
 }
 

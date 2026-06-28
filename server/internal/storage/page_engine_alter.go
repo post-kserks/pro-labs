@@ -341,3 +341,25 @@ func (e *PageStorageEngine) AlterTableRenameTable(dbName, oldName, newName strin
 	delete(e.catalog.RowCounts, oldKey)
 	return e.saveCatalogLocked()
 }
+
+func (e *PageStorageEngine) SetTableRLS(dbName, tableName string, enabled bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	t, err := e.getTableLocked(dbName, tableName, true)
+	if err != nil {
+		return err
+	}
+	t.schema.RLSEnabled = enabled
+	return e.writeSchemaLocked(dbName, tableName, t.schema)
+}
+
+func (e *PageStorageEngine) AddPolicy(dbName, tableName string, policy RLSPolicy) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	t, err := e.getTableLocked(dbName, tableName, true)
+	if err != nil {
+		return err
+	}
+	t.schema.Policies = append(t.schema.Policies, policy)
+	return e.writeSchemaLocked(dbName, tableName, t.schema)
+}

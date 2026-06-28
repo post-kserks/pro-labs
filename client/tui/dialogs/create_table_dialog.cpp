@@ -170,12 +170,12 @@ bool CreateTableDialog::consumeCanceled() {
 }
 
 std::string CreateTableDialog::createSql() const {
-    std::string sql = "CREATE TABLE " + tableName_ + " (";
+    std::string sql = "CREATE TABLE " + utils::sqlIdent(tableName_) + " (";
     for (std::size_t i = 0; i < columns_.size(); ++i) {
         if (i != 0) {
             sql += ", ";
         }
-        sql += columns_[i].name + " " + columnTypeSql(columns_[i]);
+        sql += utils::sqlIdent(columns_[i].name) + " " + columnTypeSql(columns_[i]);
     }
     sql += ");";
     return sql;

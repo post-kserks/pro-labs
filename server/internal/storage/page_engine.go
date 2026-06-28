@@ -599,8 +599,8 @@ func (e *PageStorageEngine) schemaPathFor(db, table string) string {
 }
 
 // getPage загружает страницу из buffer pool или с диска.
-func (e *PageStorageEngine) getPage(pid page.PageID, hf *heap.HeapFile) (*page.Page, error) {
-	pg, _, err := e.bufPool.FetchPage(pid, hf)
+func (e *PageStorageEngine) getPage(pid page.PageID, hf *heap.HeapFile, db, table string) (*page.Page, error) {
+	pg, _, err := e.bufPool.FetchPage(pid, hf, db, table)
 	if err != nil {
 		return nil, err
 	}

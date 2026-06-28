@@ -47,15 +47,20 @@ func (p *sqlParser) parseCTE() (Statement, error) {
 			return nil, err
 		}
 
-		// Parse the CTE query
-		stmt, err := p.parseSelect()
+		// Parse the CTE query — can be SELECT or nested CTE
+		stmt, err := p.parseStatement()
 		if err != nil {
 			return nil, err
 		}
 
-		selectStmt, ok := stmt.(*SelectStatement)
-		if !ok {
-			return nil, fmt.Errorf("CTE body must be a SELECT statement")
+		// Accept both SelectStatement and CTEStatement as CTE body
+		switch s := stmt.(type) {
+		case *SelectStatement:
+			// OK
+		case *CTEStatement:
+			_ = s // nested CTE — valid
+		default:
+			return nil, fmt.Errorf("CTE body must be a SELECT or WITH statement")
 		}
 
 		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
@@ -65,7 +70,7 @@ func (p *sqlParser) parseCTE() (Statement, error) {
 		ctes = append(ctes, CTEDefinition{
 			Name:    name,
 			Columns: columns,
-			Query:   selectStmt,
+			Query:   stmt,
 		})
 
 		// Check for more CTEs
@@ -301,10 +306,10 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 		if tokType != lexer.TOKEN_JOIN {
 			joinType = p.current().Literal
 			p.advance()
-			if strings.ToUpper(joinType) != "CROSS" {
-				if err := p.consume(lexer.TOKEN_JOIN, "JOIN"); err != nil {
-					return nil, err
-				}
+			// CROSS JOIN and regular JOINs need the JOIN keyword
+			// CROSS alone (without JOIN) is also valid in some dialects
+			if p.current().Type == lexer.TOKEN_JOIN {
+				p.advance() // consume optional JOIN keyword
 			}
 		} else {
 			p.advance() // JOIN

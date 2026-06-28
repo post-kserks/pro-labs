@@ -22,5 +22,6 @@ std::string homeDirectory();
 std::string vaultdbDirectory();
 std::string isoTimestampNow();
 std::string shellEscapeSingleQuoted(const std::string& value);
+std::string sqlIdent(const std::string& value);
 
 } // namespace vaultdb::tui::utils

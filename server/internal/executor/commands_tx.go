@@ -26,7 +26,7 @@ func (c *BeginCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	return &Result{
 		Type:    "message",
-		Message: fmt.Sprintf("Transaction %d started.", ctx.Session.ActiveTx.ID),
+		Message: fmt.Sprintf("Transaction %d started.", ctx.Session.GetActiveTx().ID),
 	}, nil
 }
 
@@ -84,9 +84,9 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("commit failed, no operations applied: %w", applyErr)
 	}
 
-	// Записать COMMIT в WAL
+	// Записать COMMIT в WAL с тем же txID, что и операции транзакции
 	if ctx.WAL != nil {
-		if _, err := ctx.WAL.Append(wal.OpCommit, nil); err != nil {
+		if _, err := ctx.WAL.AppendWithTx(tx.ID, wal.OpCommit, nil); err != nil {
 			// Не смогли записать COMMIT — транзакция считается незакоммиченной
 			undoAppliedOps(ctx, ops)
 			tx.Rollback()

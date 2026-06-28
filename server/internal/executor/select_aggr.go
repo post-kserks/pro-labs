@@ -90,7 +90,18 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 		aggregators := make([]Aggregator, len(c.stmt.Columns))
 		for i, col := range c.stmt.Columns {
 			if aggExpr, ok := col.Expr.(*parser.AggregateExpr); ok {
-				aggregators[i] = NewAggregator(aggExpr.Name, aggExpr.Distinct)
+				// Evaluate all args for the aggregator (e.g., STRING_AGG delimiter)
+				aggArgs := make([]interface{}, len(aggExpr.Args))
+				if len(groupRows) > 0 {
+					for j, argExpr := range aggExpr.Args {
+						argVal, err := evalOperand(argExpr, groupRows[0], schema, ctx)
+						if err != nil {
+							argVal = nil
+						}
+						aggArgs[j] = argVal
+					}
+				}
+				aggregators[i] = NewAggregator(aggExpr.Name, aggExpr.Distinct, aggArgs...)
 			}
 		}
 

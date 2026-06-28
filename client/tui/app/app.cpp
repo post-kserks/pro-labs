@@ -11,6 +11,7 @@
 namespace vaultdb::tui {
 
 using utils::isCtrl;
+using utils::sqlIdent;
 
 namespace {
 
@@ -80,7 +81,9 @@ std::string sqlLiteralFromCell(const std::string& value) {
     std::string escaped;
     escaped.reserve(value.size() + 4);
     for (char ch : value) {
-        if (ch == '\'') {
+        if (ch == '\\') {
+            escaped += "\\\\";
+        } else if (ch == '\'') {
             escaped += "\\'";
         } else {
             escaped.push_back(ch);
@@ -387,7 +390,7 @@ vaultdb::Result App::executeSql(const std::string& sql, std::string title, bool 
 }
 
 void App::selectDatabase(const std::string& db) {
-    const auto result = executeSql("USE " + db + ";", "Results", true);
+    const auto result = executeSql("USE " + sqlIdent(db) + ";", "Results", true);
     if (!result.isError()) {
         activeDb_ = db;
         statusMessage_ = "Using " + db;
@@ -396,14 +399,14 @@ void App::selectDatabase(const std::string& db) {
 
 void App::previewTable(const std::string& db, const std::string& table) {
     selectDatabase(db);
-    const std::string query = "SELECT * FROM " + table + " LIMIT 10;";
+    const std::string query = "SELECT * FROM " + sqlIdent(table) + " LIMIT 10;";
     editor_.setQuery(query);
     executeSql(query, "Preview: " + table, true);
     focus_ = FocusArea::Results;
 }
 
 void App::showSchema(const std::string& db, const std::string& table) {
-    const std::string query = "DESCRIBE " + table + " FROM " + db + ";";
+    const std::string query = "DESCRIBE " + sqlIdent(table) + " FROM " + sqlIdent(db) + ";";
     const auto result = executeSql(query, "Schema: " + table, false);
     if (!result.isError()) {
         navigator_.setTableColumns(db, table, columnsFromDescribe(result));
@@ -412,7 +415,7 @@ void App::showSchema(const std::string& db, const std::string& table) {
 }
 
 void App::createDatabase(const std::string& name) {
-    const auto result = executeSql("CREATE DATABASE " + name + ";", "Results", true);
+    const auto result = executeSql("CREATE DATABASE " + sqlIdent(name) + ";", "Results", true);
     if (!result.isError()) {
         selectDatabase(name);
         refreshNavigator();
@@ -428,13 +431,13 @@ void App::createTable(const std::string& db, const std::string& sql) {
 void App::dropConfirmed() {
     if (confirmDropDialog_.kind() == DropTargetKind::Database) {
         const std::string db = confirmDropDialog_.database();
-        const auto result = executeSql("DROP DATABASE " + db + ";", "Results", true);
+        const auto result = executeSql("DROP DATABASE " + sqlIdent(db) + ";", "Results", true);
         if (!result.isError() && utils::iequals(activeDb_, db)) {
             activeDb_.clear();
         }
     } else {
         selectDatabase(confirmDropDialog_.database());
-        executeSql("DROP TABLE " + confirmDropDialog_.table() + ";", "Results", true);
+        executeSql("DROP TABLE " + sqlIdent(confirmDropDialog_.table()) + ";", "Results", true);
     }
     refreshNavigator();
 }
@@ -474,7 +477,7 @@ void App::openRowHistory() {
     }
 
     const std::string keyLiteral = sqlLiteralFromCell(results_.selectedPrimaryKey());
-    const std::string query = "HISTORY " + lastResultTable_ + " KEY " + keyLiteral + ";";
+    const std::string query = "HISTORY " + sqlIdent(lastResultTable_) + " KEY " + keyLiteral + ";";
     executeSql(query, "History: " + lastResultTable_, false);
     focus_ = FocusArea::Results;
 }

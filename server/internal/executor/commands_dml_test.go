@@ -252,3 +252,4 @@ func TestTruncateConcurrentInsertAtomicity(t *testing.T) {
 		}
 	}
 }
+

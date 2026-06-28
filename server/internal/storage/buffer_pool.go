@@ -33,8 +33,10 @@ type BufferPool struct {
 type bufferEntry struct {
 	pid          page.PageID
 	page         *page.Page
-	pinCnt       int  // количество активных пользователей (нельзя вытеснить)
-	imageWritten bool // full page image уже записан в WAL
+	pinCnt       int    // количество активных пользователей (нельзя вытеснить)
+	imageWritten bool   // full page image уже записан в WAL
+	db           string // имя БД (для WAL full page image)
+	table        string // имя таблицы (для WAL full page image)
 }
 
 // NewBufferPool создаёт новый buffer pool с указанным capacity.
@@ -59,14 +61,8 @@ func (bp *BufferPool) SetWAL(w *wal.WAL) {
 // FetchPage загружает страницу из кэша или с диска.
 // Если страницы нет в кэше — читает из HeapFile и кэширует.
 // pinCnt увеличивается на 1; вызов UnpinRequired обязателен.
-//
-// IMPORTANT: FetchPage returns a pointer to the shared cached *page.Page.
-// Two concurrent callers will receive the SAME mutable object. This is by
-// design — identical to PostgreSQL's buffer pool. The pinCnt mechanism
-// prevents eviction while the page is in use. The caller MUST call
-// UnpinPage when done. Concurrent access to the same page is the caller's
-// responsibility, enforced by page-level locking in PageLockManager.
-func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile) (*page.Page, int, error) {
+// Опциональные db/table параметры используются для WAL full page image.
+func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile, dbTable ...string) (*page.Page, int, error) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
@@ -98,6 +94,10 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile) (*page.Page,
 		page:   pg,
 		pinCnt: 1,
 	}
+	if len(dbTable) >= 2 {
+		entry.db = dbTable[0]
+		entry.table = dbTable[1]
+	}
 	elem := bp.lru.PushFront(entry)
 	bp.cache[pid] = elem
 	bp.count++
@@ -107,11 +107,32 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile) (*page.Page,
 
 // UnpinPage уменьшает pinCnt конкретной страницы.
 //
+// WritePreImage записывает full page image в WAL ДО модификации страницы
+// (ARIES protocol: BEFORE image must be durable before page is modified).
+// Вызывается из InsertRows/mutateRows перед InsertTuple/MarkDeleted.
+func (bp *BufferPool) WritePreImage(pid page.PageID) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+
+	elem, ok := bp.cache[pid]
+	if !ok || bp.wal == nil {
+		return
+	}
+	entry := elem.Value.(*bufferEntry)
+	if entry.imageWritten {
+		return
+	}
+	entry.imageWritten = true
+	pageData := make([]byte, len(entry.page))
+	copy(pageData, entry.page[:])
+	if err := bp.wal.WriteFullPageImage(0, entry.db, entry.table, pid.SegmentNo, pid.PageNo, pageData); err != nil {
+		slog.Error("failed to write full page pre-image to WAL", "segment", pid.SegmentNo, "page", pid.PageNo, "error", err)
+	}
+}
+
 // Buffer pool НЕ выполняет отложенную запись: вызывающий код уже записал
 // страницу на диск напрямую (heap.WritePage + Sync) до вызова UnpinPage,
-// поэтому кэш хранит только чистые страницы. Параметр dirty используется лишь
-// для записи full page image в WAL (защита от torn pages) при первой
-// модификации страницы.
+// поэтому кэш хранит только чистые страницы.
 func (bp *BufferPool) UnpinPage(pid page.PageID, dirty bool) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
@@ -123,22 +144,6 @@ func (bp *BufferPool) UnpinPage(pid page.PageID, dirty bool) {
 	entry := elem.Value.(*bufferEntry)
 	if entry.pinCnt > 0 {
 		entry.pinCnt--
-	}
-
-	if dirty && bp.wal != nil && !entry.imageWritten {
-		// Страница впервые помечена как грязная — записываем full page image в WAL.
-		// Копию делаем под локом, саму запись в WAL выполняем асинхронно, чтобы
-		// не блокировать buffer pool.
-		entry.imageWritten = true
-		w := bp.wal
-		p := pid
-		pageData := make([]byte, len(entry.page))
-		copy(pageData, entry.page[:])
-		go func() {
-			if err := w.WriteFullPageImage(0, "", "", p.SegmentNo, p.PageNo, pageData); err != nil {
-				slog.Error("failed to write full page image to WAL", "segment", p.SegmentNo, "page", p.PageNo, "error", err)
-			}
-		}()
 	}
 }
 

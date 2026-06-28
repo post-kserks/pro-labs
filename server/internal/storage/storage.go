@@ -36,7 +36,16 @@ type TableSchema struct {
 	Database    string            `json:"database"`
 	Columns     []ColumnSchema    `json:"columns"`
 	Constraints []TableConstraint `json:"constraints,omitempty"`
+	RLSEnabled  bool              `json:"rls_enabled,omitempty"`
+	Policies    []RLSPolicy       `json:"policies,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`
+}
+
+// RLSPolicy stores a row-level security policy for a table.
+type RLSPolicy struct {
+	Name      string `json:"name"`
+	ToUser    string `json:"to_user"`
+	UsingExpr string `json:"using_expr"`
 }
 
 // TableInfo is lightweight metadata used by clients that browse a database.
@@ -110,6 +119,8 @@ type WriteEngine interface {
 	AlterTableAddColumn(dbName, tableName string, col ColumnSchema, defaultVal Value) error
 	AlterTableDropColumn(dbName, tableName string, colName string) error
 	AlterTableRenameColumn(dbName, tableName, oldName, newName string) error
+	SetTableRLS(dbName, tableName string, enabled bool) error
+	AddPolicy(dbName, tableName string, policy RLSPolicy) error
 	AlterTableRenameTable(dbName, oldName, newName string) error
 	CreateIndex(dbName, tableName, indexName, column string) error
 	CreateIndexMulti(dbName, tableName, indexName string, columns []string) error

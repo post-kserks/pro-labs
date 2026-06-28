@@ -166,4 +166,17 @@ std::string shellEscapeSingleQuoted(const std::string& value) {
     return escaped;
 }
 
+std::string sqlIdent(const std::string& value) {
+    std::string result = "`";
+    for (char c : value) {
+        if (c == '`') {
+            result += "``";
+        } else {
+            result += c;
+        }
+    }
+    result += '`';
+    return result;
+}
+
 } // namespace vaultdb::tui::utils

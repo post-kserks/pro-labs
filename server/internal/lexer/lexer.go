@@ -38,6 +38,7 @@ const (
 	TOKEN_VERSION
 	TOKEN_HISTORY
 	TOKEN_KEY
+	TOKEN_PRIMARY
 	TOKEN_AND
 	TOKEN_OR
 	TOKEN_NOT
@@ -109,6 +110,7 @@ const (
 	TOKEN_APPLY
 	TOKEN_PREVIEW
 	TOKEN_STRING_AGG
+	TOKEN_SUBSTRING
 	TOKEN_WITH
 	TOKEN_CONFLICT
 	TOKEN_DO
@@ -528,6 +530,7 @@ var keywords = map[string]TokenType{
 	"VERSION":        TOKEN_VERSION,
 	"HISTORY":        TOKEN_HISTORY,
 	"KEY":            TOKEN_KEY,
+	"PRIMARY":        TOKEN_PRIMARY,
 	"AND":            TOKEN_AND,
 	"OR":             TOKEN_OR,
 	"NOT":            TOKEN_NOT,
@@ -614,6 +617,7 @@ var keywords = map[string]TokenType{
 	"APPLY":      TOKEN_APPLY,
 	"PREVIEW":    TOKEN_PREVIEW,
 	"STRING_AGG": TOKEN_STRING_AGG,
+	"SUBSTRING":  TOKEN_SUBSTRING,
 	"WITH":       TOKEN_WITH,
 	"CONFLICT":   TOKEN_CONFLICT,
 	"DO":         TOKEN_DO,
@@ -756,6 +760,7 @@ var tokenNames = [...]string{
 	TOKEN_EXECUTE:           "EXECUTE",
 	TOKEN_DEALLOCATE:        "DEALLOCATE",
 	TOKEN_STRING_AGG:        "STRING_AGG",
+	TOKEN_SUBSTRING:         "SUBSTRING",
 	TOKEN_WITH:              "WITH",
 	TOKEN_CONFLICT:          "CONFLICT",
 	TOKEN_DO:                "DO",

@@ -306,8 +306,8 @@ func (a *jsonObjectAgg) Result() interface{} {
 	return string(data)
 }
 
-// NewAggregator is a factory for aggregators.
-func NewAggregator(name string, distinct bool) Aggregator {
+// NewAggregator is a factory for aggregators. Args are used by STRING_AGG for the delimiter.
+func NewAggregator(name string, distinct bool, args ...interface{}) Aggregator {
 	switch strings.ToUpper(name) {
 	case "COUNT":
 		return &countAgg{distinct: distinct, seen: make(map[string]bool)}
@@ -320,7 +320,13 @@ func NewAggregator(name string, distinct bool) Aggregator {
 	case "MAX":
 		return &maxAgg{}
 	case "STRING_AGG":
-		return &stringAgg{delimiter: ",", distinct: distinct}
+		delim := ","
+		if len(args) > 1 {
+			if s, ok := args[1].(string); ok {
+				delim = s
+			}
+		}
+		return &stringAgg{delimiter: delim, distinct: distinct}
 	case "BOOL_AND":
 		return &boolAndAgg{}
 	case "BOOL_OR":

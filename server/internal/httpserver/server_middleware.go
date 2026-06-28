@@ -111,7 +111,7 @@ func extractHealthToken(r *http.Request) string {
 	if token := r.Header.Get("X-VaultDB-Token"); token != "" {
 		return token
 	}
-	return r.URL.Query().Get("token")
+	return ""
 }
 
 const dashboardHTML = `<!DOCTYPE html>

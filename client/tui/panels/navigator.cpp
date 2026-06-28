@@ -6,20 +6,9 @@
 
 namespace vaultdb::tui {
 
-namespace {
+using utils::sqlIdent;
 
-std::string sqlIdent(const std::string& value) {
-    std::string result = "`";
-    for (char c : value) {
-        if (c == '`') {
-            result += "``";
-        } else {
-            result += c;
-        }
-    }
-    result += '`';
-    return result;
-}
+namespace {
 
 std::string tableLine(const NavigatorTable& table, bool last) {
     const std::string icon = last ? "  └ " : "  ├ ";

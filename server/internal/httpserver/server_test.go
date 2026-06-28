@@ -358,15 +358,16 @@ func TestStaticFileAuth(t *testing.T) {
 		}
 	})
 
-	t.Run("token query param works", func(t *testing.T) {
+	t.Run("X-VaultDB-Token header works", func(t *testing.T) {
 		srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "user"}))
 
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/?token=sekret", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-VaultDB-Token", "sekret")
 		srv.apiMux().ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("token query param /: status %d, want 200: %s", rec.Code, rec.Body.String())
+			t.Fatalf("X-VaultDB-Token /: status %d, want 200: %s", rec.Code, rec.Body.String())
 		}
 	})
 

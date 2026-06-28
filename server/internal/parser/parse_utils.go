@@ -274,6 +274,11 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 			if err != nil {
 				return nil, err
 			}
+			// Handle UNION/INTERSECT/EXCEPT in subqueries
+			stmt, err = p.parseSetOperation(stmt)
+			if err != nil {
+				return nil, err
+			}
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 				return nil, err
 			}
@@ -363,7 +368,55 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &FunctionCall{Name: "STRING_AGG", Args: args}, nil
+		return &AggregateExpr{Name: "STRING_AGG", Args: args}, nil
+	case lexer.TOKEN_SUBSTRING:
+		// SUBSTRING(expr FROM start [FOR length]) or SUBSTRING(expr, start, length)
+		p.advance()
+		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+			return nil, err
+		}
+		expr, err := p.parseExpression()
+		if err != nil {
+			return nil, err
+		}
+		args := []Expression{expr}
+		if p.current().Type == lexer.TOKEN_FROM {
+			// SUBSTRING(expr FROM start [FOR length])
+			p.advance()
+			start, err := p.parseExpression()
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, start)
+			if p.current().Type == lexer.TOKEN_FOR {
+				p.advance()
+				length, err := p.parseExpression()
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, length)
+			}
+		} else if p.current().Type == lexer.TOKEN_COMMA {
+			// SUBSTRING(expr, start, length) — comma-separated
+			p.advance()
+			start, err := p.parseExpression()
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, start)
+			if p.current().Type == lexer.TOKEN_COMMA {
+				p.advance()
+				length, err := p.parseExpression()
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, length)
+			}
+		}
+		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+			return nil, err
+		}
+		return &FunctionCall{Name: "SUBSTRING", Args: args}, nil
 	case lexer.TOKEN_IDENT, lexer.TOKEN_COALESCE:
 		ident := tok.Literal
 		upper := strings.ToUpper(ident)

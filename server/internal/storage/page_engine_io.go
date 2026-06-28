@@ -44,7 +44,7 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 	}
 	for g := uint32(0); g < total; g++ {
 		pid := pageIDAt(t.tableID, g)
-		pg, err := e.getPage(pid, t.heap)
+		pg, err := e.getPage(pid, t.heap, t.schema.Database, t.schema.Name)
 		if err != nil {
 			return err
 		}
@@ -90,7 +90,7 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 	havePage := false
 	if total > 0 {
 		pid = pageIDAt(t.tableID, total-1)
-		pg, err = e.getPage(pid, t.heap)
+		pg, err = e.getPage(pid, t.heap, t.schema.Database, t.schema.Name)
 		if err != nil {
 			return err
 		}
@@ -143,6 +143,13 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	if err != nil {
 		return 0, err
 	}
+	insertLockReleased := false
+	defer func() {
+		if !insertLockReleased {
+			insertLockReleased = true
+			t.mu.Unlock()
+		}
+	}()
 
 	tuples := make([][]byte, 0, len(rows))
 	for _, row := range rows {
@@ -184,7 +191,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		if cachedPageCount > 0 {
 			pid = pageIDAt(t.tableID, cachedPageCount-1)
 			e.pageLock.RLockPage(pid)
-			pg, err = e.getPage(pid, t.heap)
+		pg, err = e.getPage(pid, t.heap, t.schema.Database, t.schema.Name)
 			e.pageLock.UnlockPage(pid)
 			if err != nil {
 				return 0, err
@@ -246,6 +253,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		}
 	}
 
+	insertLockReleased = true
 	t.mu.Unlock()
 
 	if err := t.heap.Sync(); err != nil {
@@ -279,6 +287,13 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	if err != nil {
 		return 0, err
 	}
+	mutateLockReleased := false
+	defer func() {
+		if !mutateLockReleased {
+			mutateLockReleased = true
+			t.mu.Unlock()
+		}
+	}()
 
 	wanted := make(map[int]bool, len(indices))
 	for _, i := range indices {
@@ -393,22 +408,18 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		return false, nil
 	})
 	if err != nil {
-		t.mu.Unlock()
 		return 0, err
 	}
 	if err := flushDirty(); err != nil {
-		t.mu.Unlock()
 		return 0, err
 	}
 
 	if len(newVersions) > 0 {
 		if err := e.appendTuplesLocked(t, newVersions); err != nil {
-			t.mu.Unlock()
 			return 0, err
 		}
 	}
 	if err := t.heap.Sync(); err != nil {
-		t.mu.Unlock()
 		return 0, err
 	}
 
@@ -419,6 +430,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 
 	// Освобождаем t.mu ПЕРЕД e.mu, чтобы избежать deadlock:
 	// t.mu → e.mu vs e.mu.RLock → t.mu
+	mutateLockReleased = true
 	t.mu.Unlock()
 
 	key := dbName + "/" + tableName

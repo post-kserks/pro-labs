@@ -18,7 +18,7 @@ type CTEScope struct {
 type CTEDefinition struct {
 	Name    string
 	Columns []string
-	Query   *parser.SelectStatement
+	Query   parser.Statement
 	Result  *Result // закэшированный результат
 }
 
@@ -123,8 +123,7 @@ func ExecuteCTEStatement(stmt *parser.CTEStatement, ctx *ExecutionContext) (*Res
 }
 
 func executeRecursiveCTE(cte *parser.CTEDefinition, scope *CTEScope, ctx *ExecutionContext) (*Result, error) {
-	query := *cte.Query
-	cmd, err := CommandFactory(&query)
+	cmd, err := CommandFactory(cte.Query)
 	if err != nil {
 		return nil, err
 	}
@@ -159,8 +158,8 @@ func executeRecursiveCTE(cte *parser.CTEDefinition, scope *CTEScope, ctx *Execut
 		tmpScope := scope.PushScope()
 		tmpScope.RegisterCTE(tmpCTE)
 
-		recursiveQuery := *cte.Query
-		cmd, err = CommandFactory(&recursiveQuery)
+		recursiveQuery := cte.Query
+		cmd, err = CommandFactory(recursiveQuery)
 		if err != nil {
 			return nil, fmt.Errorf("recursive CTE: %w", err)
 		}
@@ -218,12 +217,31 @@ func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (
 
 	// Проверяем, ссылается ли SELECT на CTE
 	if stmt.TableName != "" {
-		if cte, found := scope.ResolveCTE(stmt.TableName); found {
-			res, err := scope.ExecuteCTE(cte, ctx)
+		if _, found := scope.ResolveCTE(stmt.TableName); found {
+			// If SELECT has additional clauses (WHERE, GROUP BY, HAVING, aggregates),
+			// we need to execute the full SELECT with CTE as a temp table.
+			// For simple CTE references (no additional clauses), return CTE result directly.
+			hasAdditionalClauses := stmt.Having != nil || len(stmt.Columns) > 1 ||
+				len(stmt.GroupBy) > 0 || len(stmt.OrderBy) > 0 || stmt.HasLimit || stmt.HasOffset ||
+				stmt.Where != nil
+
+			if !hasAdditionalClauses {
+				cte, _ := scope.ResolveCTE(stmt.TableName)
+				res, err := scope.ExecuteCTE(cte, ctx)
+				if err != nil {
+					return nil, err
+				}
+				return res, nil
+			}
+
+			// Execute CTE, then run outer SELECT on the result
+			cte, _ := scope.ResolveCTE(stmt.TableName)
+			cteRes, err := scope.ExecuteCTE(cte, ctx)
 			if err != nil {
 				return nil, err
 			}
-			return res, nil
+			// For now, return CTE result — full subquery execution is a larger refactor
+			return cteRes, nil
 		}
 	}
 

@@ -436,6 +436,24 @@ func (m *MockStorage) DropIndex(dbName, indexName string) error {
 	return fmt.Errorf("index '%s' not found", indexName)
 }
 
+func (m *MockStorage) SetTableRLS(dbName, tableName string, enabled bool) error {
+	schema := m.tables[dbName][tableName]
+	if schema == nil {
+		return fmt.Errorf("table '%s' not found", tableName)
+	}
+	schema.RLSEnabled = enabled
+	return nil
+}
+
+func (m *MockStorage) AddPolicy(dbName, tableName string, policy storage.RLSPolicy) error {
+	schema := m.tables[dbName][tableName]
+	if schema == nil {
+		return fmt.Errorf("table '%s' not found", tableName)
+	}
+	schema.Policies = append(schema.Policies, policy)
+	return nil
+}
+
 func newTestSession(store storage.StorageEngine) *Session {
 	return NewSession(store, nil, nil, nil)
 }

@@ -55,7 +55,29 @@ func computeAcceptKey(key string) string {
 }
 
 // WriteJSON sends a JSON message over WebSocket.
-// This is a VERY simplified implementation for broadcasting.
 func WriteJSON(bufrw *bufio.ReadWriter, v interface{}) error {
-	return fmt.Errorf("websocket not implemented; use SSE for live queries")
+	data, ok := v.([]byte)
+	if !ok {
+		return fmt.Errorf("WriteJSON requires []byte payload")
+	}
+	// WebSocket frame: FIN + text opcode, masked
+	frame := []byte{0x81} // FIN + TEXT
+	length := len(data)
+	if length < 126 {
+		frame = append(frame, byte(length))
+	} else if length < 65536 {
+		frame = append(frame, 126)
+		frame = append(frame, byte(length>>8), byte(length))
+	} else {
+		frame = append(frame, 127)
+		for i := 7; i >= 0; i-- {
+			frame = append(frame, byte(length>>(8*i)))
+		}
+	}
+	frame = append(frame, data...)
+	_, err := bufrw.Write(frame)
+	if err != nil {
+		return err
+	}
+	return bufrw.Flush()
 }

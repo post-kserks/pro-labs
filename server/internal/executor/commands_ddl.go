@@ -280,6 +280,7 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			Type:       column.DataType,
 			VarcharLen: column.VarcharLen,
 			IsComputed: column.Computed != nil,
+			PrimaryKey: column.PrimaryKey,
 			EnumValues: column.EnumValues,
 		})
 	}
@@ -522,9 +523,52 @@ func (c *MigrationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return &Result{Type: "message", Message: fmt.Sprintf("Migration '%s' applied.", c.stmt.Name)}, nil
 
 	case "PREVIEW":
-		return &Result{Type: "message", Message: "Preview functionality not fully implemented yet."}, nil
+		previewRows, err := ctx.Storage.ReadCurrentRows(dbName, migrationTable)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range previewRows {
+			if row[0] == c.stmt.Name {
+				sqlToApply := valueToString(row[1])
+				applied := row[2] != nil && row[2] != "NULL"
+				status := "not applied"
+				if applied {
+					status = "already applied"
+				}
+				return &Result{
+					Type:    "rows",
+					Columns: []string{"migration", "status", "sql"},
+					Rows:    [][]string{{c.stmt.Name, status, sqlToApply}},
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("migration '%s' not found", c.stmt.Name)
+
 	case "ROLLBACK":
-		return &Result{Type: "message", Message: "Rollback functionality not fully implemented yet."}, nil
+		rollbackRows, err := ctx.Storage.ReadCurrentRows(dbName, migrationTable)
+		if err != nil {
+			return nil, err
+		}
+		rowIdx := -1
+		for i, row := range rollbackRows {
+			if row[0] == c.stmt.Name {
+				if row[2] == nil || row[2] == "NULL" {
+					return nil, fmt.Errorf("migration '%s' is not applied", c.stmt.Name)
+				}
+				rowIdx = i
+				break
+			}
+		}
+		if rowIdx == -1 {
+			return nil, fmt.Errorf("migration '%s' not found", c.stmt.Name)
+		}
+		// Mark as not applied (rollback the marker)
+		if _, err := ctx.Storage.UpdateRows(dbName, migrationTable, []int{rowIdx}, map[string]storage.Value{
+			"applied_at": nil,
+		}); err != nil {
+			return nil, fmt.Errorf("migration rollback failed: %w", err)
+		}
+		return &Result{Type: "message", Message: fmt.Sprintf("Migration '%s' rolled back.", c.stmt.Name)}, nil
 	default:
 		return nil, fmt.Errorf("unknown migration operation: %s", c.stmt.Op)
 	}
@@ -535,38 +579,25 @@ type CreatePolicyCommand struct {
 }
 
 func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	// Store policy in a system table
 	dbName, err := requireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	policyTable := "_policies"
-	if !ctx.Storage.TableExists(dbName, policyTable) {
-		schema := storage.TableSchema{
-			Name: policyTable,
-			Columns: []storage.ColumnSchema{
-				{Name: "name", Type: "VARCHAR", VarcharLen: 200},
-				{Name: "table_name", Type: "VARCHAR", VarcharLen: 200},
-				{Name: "to_user", Type: "VARCHAR", VarcharLen: 200},
-				{Name: "using_sql", Type: "TEXT"},
-			},
-		}
-		if err := ctx.Storage.CreateTable(dbName, schema); err != nil {
-			return nil, fmt.Errorf("create policy table: %w", err)
-		}
+	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
 
-	// NOTE: The USING expression is not yet parsed or stored.
-	// The policy is created but NOT enforced. This is prototype-only.
-	// TODO: Implement USING expression parsing and enforcement
 	usingSQL := ""
 	if c.stmt.Using != nil {
 		usingSQL = fmt.Sprintf("%v", c.stmt.Using)
 	}
-	row := storage.Row{c.stmt.Name, c.stmt.TableName, c.stmt.ToUser, usingSQL}
-	if _, err := ctx.Storage.InsertRows(dbName, policyTable, []storage.Row{row}); err != nil {
-		return nil, fmt.Errorf("insert policy: %w", err)
+	policy := storage.RLSPolicy{
+		Name:      c.stmt.Name,
+		ToUser:    c.stmt.ToUser,
+		UsingExpr: usingSQL,
+	}
+	if err := ctx.Storage.AddPolicy(dbName, c.stmt.TableName, policy); err != nil {
+		return nil, fmt.Errorf("add policy: %w", err)
 	}
 
 	return &Result{Type: "message", Message: fmt.Sprintf("Policy '%s' created.", c.stmt.Name)}, nil
@@ -584,7 +615,10 @@ func (c *EnableRlsCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
-	return nil, fmt.Errorf("RLS not yet implemented; policies are stored but not enforced")
+	if err := ctx.Storage.SetTableRLS(dbName, c.stmt.TableName, true); err != nil {
+		return nil, err
+	}
+	return &Result{Type: "message", Message: fmt.Sprintf("RLS enabled on table '%s'.", c.stmt.TableName)}, nil
 }
 
 type CreateViewCommand struct {
