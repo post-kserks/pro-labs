@@ -678,7 +678,7 @@ func (e *PageStorageEngine) DropDatabase(name string) error {
 	prefix := name + "/"
 	for key, t := range e.tables {
 		if strings.HasPrefix(key, prefix) {
-			e.bufPool.InvalidateTable(t.tableID)
+			e.bufPool.InvalidateTableForce(t.tableID)
 			if err := t.heap.Close(); err != nil {
 				slog.Warn("failed to close heap during drop database", "key", key, "error", err)
 			}
@@ -761,6 +761,7 @@ func (e *PageStorageEngine) CreateTable(dbName string, schema TableSchema) error
 
 	key := dbName + "/" + schema.Name
 	tid := tableIDFromPath(path)
+	e.bufPool.InvalidateTable(tid)
 	e.tables[key] = &pageTable{heap: hf, schema: &schema, tableID: tid}
 	e.catalog.RowCounts[key] = 0
 
@@ -918,6 +919,7 @@ func (e *PageStorageEngine) DropTable(dbName, tableName string) error {
 	defer e.mu.Unlock()
 	key := dbName + "/" + tableName
 	if t, ok := e.tables[key]; ok {
+		e.bufPool.InvalidateTableForce(t.tableID)
 		if err := t.heap.Close(); err != nil {
 			slog.Warn("failed to close heap during drop table", "key", key, "error", err)
 		}

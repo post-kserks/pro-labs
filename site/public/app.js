@@ -331,7 +331,7 @@ SELECT data->>'type' AS event_type, data->>'page' AS page, data->'user'->>'name'
       sql: `DROP DATABASE f_upsert; CREATE DATABASE f_upsert; USE f_upsert;
 CREATE TABLE settings (name TEXT PRIMARY KEY, value TEXT);
 INSERT INTO settings (name, value) VALUES ('theme', 'dark');
-INSERT INTO settings (name, value) VALUES ('theme', 'light') ON CONFLICT DO UPDATE SET value = EXCLUDED.value;
+INSERT INTO settings (name, value) VALUES ('theme', 'light') ON CONFLICT DO UPDATE SET value = 'light';
 SELECT * FROM settings;`,
     },
     {

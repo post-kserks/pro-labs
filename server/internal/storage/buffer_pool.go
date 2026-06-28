@@ -196,7 +196,7 @@ func (bp *BufferPool) FlushDirtyPagesUpToLSN(maxLSN uint64, hf *heap.HeapFile) e
 	return nil
 }
 
-// InvalidateTable удаляет все незапинованные страницы указанной таблицы из кэша.
+// InvalidateTable удаляет незапинованные страницы таблицы из кэша.
 func (bp *BufferPool) InvalidateTable(tableID uint32) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
@@ -214,6 +214,28 @@ func (bp *BufferPool) InvalidateTable(tableID uint32) {
 			if entry.pinCnt > 0 {
 				continue
 			}
+			bp.lru.Remove(elem)
+			delete(bp.cache, pid)
+			bp.count--
+		}
+	}
+}
+
+// InvalidateTableForce удаляет ВСЕ страницы таблицы из кэша,
+// включая запинованные. Используется при DROP DATABASE/TABLE.
+func (bp *BufferPool) InvalidateTableForce(tableID uint32) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+
+	var toRemove []page.PageID
+	for pid := range bp.cache {
+		if pid.TableID == tableID {
+			toRemove = append(toRemove, pid)
+		}
+	}
+
+	for _, pid := range toRemove {
+		if elem, ok := bp.cache[pid]; ok {
 			bp.lru.Remove(elem)
 			delete(bp.cache, pid)
 			bp.count--
