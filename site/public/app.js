@@ -33,7 +33,7 @@
     const area = $(`#${containerId}`);
     const meta = $(`#${containerId}Meta`) || $(`#${containerId.replace('Result','')}Meta`);
     const table = $(`#${containerId.replace('Result','')}Table`) || $(`#${containerId}Table`);
-    const msg = $(`#${containerId.replace('Result','')}Message`);
+    const msg = $(`#${containerId}Message`) || $(`#${containerId.replace('Result','')}Message`);
 
     if (!area) return;
     area.style.display = 'block';
