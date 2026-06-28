@@ -36,7 +36,16 @@ func (idx *CompositeIndex) Name() string       { return idx.name }
 func (idx *CompositeIndex) Column() string     { return strings.Join(idx.columns, ",") }
 func (idx *CompositeIndex) ColIndex() int      { return idx.colIndex[0] }
 func (idx *CompositeIndex) Type() string       { return "composite" }
-func (idx *CompositeIndex) SetColumn(c string) {}
+func (idx *CompositeIndex) RenameColumn(old, new string) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	for i, col := range idx.columns {
+		if col == old {
+			idx.columns[i] = new
+			break
+		}
+	}
+}
 
 // compositeKey builds a key from row values at the indexed columns.
 func (idx *CompositeIndex) compositeKey(values []interface{}) string {

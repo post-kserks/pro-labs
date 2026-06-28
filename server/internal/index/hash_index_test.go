@@ -129,8 +129,8 @@ func TestHashMetadata(t *testing.T) {
 		t.Errorf("ColIndex() = %d, want %d", idx.ColIndex(), 3)
 	}
 
-	idx.SetColumn("col_b")
+	idx.RenameColumn("col_a", "col_b")
 	if idx.Column() != "col_b" {
-		t.Errorf("Column() after SetColumn = %q, want %q", idx.Column(), "col_b")
+		t.Errorf("Column() after RenameColumn = %q, want %q", idx.Column(), "col_b")
 	}
 }

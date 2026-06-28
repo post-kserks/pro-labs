@@ -11,7 +11,7 @@ type Index interface {
 	Column() string
 	ColIndex() int
 	Type() string
-	SetColumn(column string)
+	RenameColumn(old, new string)
 	Lookup(value string) ([]int, bool)
 	Insert(value string, rowPos int)
 	Delete(rowPos int)
@@ -104,8 +104,8 @@ func (m *IndexManager) removeFromColumn(idx Index) {
 }
 
 // RenameColumn переименовывает индексируемый столбец индекса и обновляет
-// byColumn-карту (использовать вместо прямого вызова HashIndex.SetColumn).
-func (m *IndexManager) RenameColumn(indexName, newColumn string) {
+// byColumn-карту.
+func (m *IndexManager) RenameColumn(indexName, oldColumn, newColumn string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	idx, ok := m.indexes[indexName]
@@ -113,7 +113,7 @@ func (m *IndexManager) RenameColumn(indexName, newColumn string) {
 		return
 	}
 	m.removeFromColumn(idx)
-	idx.SetColumn(newColumn)
+	idx.RenameColumn(oldColumn, newColumn)
 	key := columnKey(newColumn)
 	m.byColumn[key] = append(m.byColumn[key], idx)
 }

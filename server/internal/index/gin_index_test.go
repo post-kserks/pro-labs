@@ -122,7 +122,7 @@ func TestGINMetadata(t *testing.T) {
 		t.Errorf("Name() = %q, want %q", idx.Name(), "gin_idx")
 	}
 
-	idx.SetColumn("text")
+	idx.RenameColumn("content", "text")
 	if idx.Column() != "text" {
 		t.Errorf("Column() = %q, want %q", idx.Column(), "text")
 	}

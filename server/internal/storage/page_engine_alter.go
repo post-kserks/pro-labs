@@ -294,7 +294,7 @@ func (e *PageStorageEngine) AlterTableRenameColumn(dbName, tableName, oldName, n
 	if mgr, ok := e.indexes[key]; ok {
 		for _, idx := range mgr.All() {
 			if idx.ColIndex() == colIdx {
-				mgr.RenameColumn(idx.Name(), newName)
+				mgr.RenameColumn(idx.Name(), oldName, newName)
 				e.saveIndexesMetadata(dbName, tableName, mgr)
 				break
 			}

@@ -52,9 +52,9 @@ func (g *GINIndex) Type() string   { return "gin" }
 func (g *GINIndex) Name() string   { return g.name }
 func (g *GINIndex) Column() string { return g.column }
 func (g *GINIndex) ColIndex() int  { return g.colIndex }
-func (g *GINIndex) SetColumn(col string) {
+func (g *GINIndex) RenameColumn(old, new string) {
 	g.mu.Lock()
-	g.column = col
+	g.column = new
 	g.mu.Unlock()
 }
 

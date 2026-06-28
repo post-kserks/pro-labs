@@ -42,11 +42,11 @@ func (idx *BTreeIndex) Name() string   { return idx.name }
 func (idx *BTreeIndex) Column() string { return idx.column }
 func (idx *BTreeIndex) ColIndex() int  { return idx.colIndex }
 
-// SetColumn переименовывает столбец индекса.
-func (idx *BTreeIndex) SetColumn(column string) {
+// RenameColumn переименовывает столбец индекса.
+func (idx *BTreeIndex) RenameColumn(old, new string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	idx.column = column
+	idx.column = new
 }
 
 // Lookup ищет точное значение ключа.

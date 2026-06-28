@@ -120,7 +120,7 @@ func TestManagerRenameColumn(t *testing.T) {
 
 	m.Add(New("idx1", "old_col", 0))
 
-	m.RenameColumn("idx1", "new_col")
+	m.RenameColumn("idx1", "old_col", "new_col")
 
 	_, ok := m.FindForColumn("old_col")
 	if ok {

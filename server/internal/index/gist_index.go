@@ -87,9 +87,9 @@ func (g *GiSTIndex) Type() string   { return "gist" }
 func (g *GiSTIndex) Name() string   { return g.name }
 func (g *GiSTIndex) Column() string { return g.column }
 func (g *GiSTIndex) ColIndex() int  { return g.colIndex }
-func (g *GiSTIndex) SetColumn(col string) {
+func (g *GiSTIndex) RenameColumn(old, new string) {
 	g.mu.Lock()
-	g.column = col
+	g.column = new
 	g.mu.Unlock()
 }
 
