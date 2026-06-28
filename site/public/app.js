@@ -254,8 +254,20 @@
 
   $$('#panel-timetravel .chip').forEach(chip => {
     chip.addEventListener('click', async () => {
-      const data = await runQuery(chip.dataset.sql);
-      renderResult('ttResult', data);
+      const stmts = chip.dataset.sql.split(';').filter(s => s.trim());
+      let lastResult;
+      for (const stmt of stmts) {
+        let trimmed = stmt.trim();
+        const upper = trimmed.toUpperCase();
+        if (upper.startsWith('USE ')) {
+          currentDb = trimmed.split(/\s+/)[1];
+          lastResult = { status: 'ok', message: `Using database '${currentDb}'` };
+        } else {
+          if (!trimmed.endsWith(';')) trimmed += ';';
+          lastResult = await runQuery(trimmed);
+        }
+      }
+      renderResult('ttResult', lastResult);
     });
   });
 

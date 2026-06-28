@@ -134,7 +134,8 @@ DELETE FROM accounts WHERE id = 2;</textarea>
     <p class="subtitle">Query historical data using AS OF and versioning.</p>
     <div class="tt-setup">
       <h3>Setup</h3>
-      <textarea id="ttSetup" rows="6">CREATE DATABASE timetravel;
+      <textarea id="ttSetup" rows="7">DROP DATABASE timetravel;
+CREATE DATABASE timetravel;
 USE timetravel;
 CREATE TABLE documents (id INT PRIMARY KEY, title TEXT, content TEXT);
 INSERT INTO documents VALUES (1, 'Draft', 'Initial draft');
@@ -145,11 +146,9 @@ UPDATE documents SET content = 'Version 3 — final' WHERE id = 1;</textarea>
     <div class="tt-queries">
       <h3>Time Travel Queries</h3>
       <div class="query-chips">
-        <button class="chip" data-sql="SELECT * FROM timetravel.documents AS OF 3;">AS OF tx 3</button>
-        <button class="chip" data-sql="SELECT * FROM timetravel.documents AS OF 2;">AS OF tx 2</button>
-        <button class="chip" data-sql="SELECT * FROM timetravel.documents AS OF 1;">AS OF tx 1</button>
-        <button class="chip" data-sql="SELECT * FROM timetravel.documents;">Current</button>
-        <button class="chip" data-sql="HISTORY timetravel.documents 1;">Row History (id=1)</button>
+        <button class="chip" data-sql="USE timetravel; SELECT * FROM documents AS OF TIMESTAMP '2026-01-01 00:00:00';">AS OF (early)</button>
+        <button class="chip" data-sql="SELECT * FROM documents;">Current state</button>
+        <button class="chip" data-sql="HISTORY documents KEY 1;">Row History (id=1)</button>
       </div>
     </div>
     <div class="result-area" id="ttResult" style="display:none;">
