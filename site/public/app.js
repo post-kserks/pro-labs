@@ -338,11 +338,11 @@ SELECT * FROM settings;`,
       sql: `CREATE DATABASE demo; USE demo;
 CREATE TABLE target (id INT PRIMARY KEY, val INT);
 CREATE TABLE source (id INT PRIMARY KEY, val INT);
-INSERT INTO target VALUES (1, 10), (2, 20);
-INSERT INTO source VALUES (2, 25), (3, 30);
-MERGE INTO target t USING source s ON t.id = s.id
-  WHEN MATCHED THEN UPDATE SET val = s.val
-  WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.val);
+INSERT INTO target VALUES (1, 10);
+INSERT INTO target VALUES (2, 20);
+INSERT INTO source VALUES (2, 25);
+INSERT INTO source VALUES (3, 30);
+MERGE INTO target USING source ON target.id = source.id WHEN MATCHED THEN UPDATE SET val = source.val WHEN NOT MATCHED THEN INSERT (id, val) VALUES (source.id, source.val);
 SELECT * FROM target;`,
       db: 'demo',
     },
