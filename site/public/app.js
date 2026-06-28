@@ -292,11 +292,8 @@ CREATE TABLE employees (id INT PRIMARY KEY, name TEXT, dept_id INT);
 CREATE TABLE departments (id INT PRIMARY KEY, dept_name TEXT);
 INSERT INTO employees VALUES (1, 'Alice', 1), (2, 'Bob', 1), (3, 'Charlie', 2);
 INSERT INTO departments VALUES (1, 'Engineering'), (2, 'Sales');
-WITH high_salary AS (
-  SELECT name FROM employees WHERE id IN (1, 3)
-)
-SELECT e.name, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.id
-WHERE e.name IN (SELECT name FROM high_salary);`,
+WITH senior_employees AS (SELECT name, dept_id FROM employees WHERE id IN (1, 3))
+SELECT e.name, d.dept_name FROM senior_employees e JOIN departments d ON e.dept_id = d.id;`,
       db: 'demo',
     },
     {
