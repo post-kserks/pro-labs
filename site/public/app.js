@@ -417,16 +417,28 @@ SELECT title FROM articles WHERE body LIKE '%parallel%';`,
 
   $('#featureRunBtn').addEventListener('click', async () => {
     const sql = $('#featureSql').textContent;
-    const db = $('#featureResult')._db || '';
-    const lines = sql.split('\n').filter(l => l.trim());
-    for (const line of lines) {
-      const data = await runQuery(line.trim(), db);
-      if (data.columns && data.rows) {
-        renderResult('featureResult', data);
-      } else if (data.status === 'error') {
-        renderResult('featureResult', data);
-        return;
+    const stmts = sql.split(';').filter(s => s.trim());
+    let lastResult;
+    for (const stmt of stmts) {
+      let trimmed = stmt.trim();
+      if (!trimmed) continue;
+      const upper = trimmed.toUpperCase();
+      if (upper.startsWith('USE ')) {
+        lastResult = { status: 'ok', message: `Using database '${trimmed.split(/\s+/)[1]}'` };
+      } else {
+        if (!trimmed.endsWith(';')) trimmed += ';';
+        lastResult = await runQuery(trimmed);
+        if (lastResult.status === 'error') {
+          renderResult('featureResult', lastResult);
+          return;
+        }
+        if (lastResult.columns && lastResult.rows) {
+          renderResult('featureResult', lastResult);
+        }
       }
+    }
+    if (lastResult && !lastResult.columns) {
+      renderResult('featureResult', lastResult);
     }
   });
 
