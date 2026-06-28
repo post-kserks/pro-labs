@@ -102,9 +102,7 @@
 - Interactive SQL Lab (веб-интерфейс)
 
 ### Минусы
-- Нет Python/Node/Go клиентов
 - Нет ORM интеграций
-- Нет driver для popular frameworks
 
 ---
 
@@ -118,4 +116,4 @@
 | 4 | Parameterized queries | Безопасность |
 | 5 | Sequences/auto-increment | Удобство |
 | 6 | Streaming results | Производительность |
-| 7 | Python/Node клиенты | Экосистема |
+
