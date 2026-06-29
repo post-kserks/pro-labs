@@ -176,49 +176,82 @@ func ExecuteCTEStatement(stmt *parser.CTEStatement, ctx *ExecutionContext) (*Res
 }
 
 func executeRecursiveCTE(cte *parser.CTEDefinition, scope *CTEScope, ctx *ExecutionContext) (*Result, error) {
-	cmd, err := CommandFactory(cte.Query)
-	if err != nil {
-		return nil, err
+	setOp, ok := cte.Query.(*parser.SetOperationStatement)
+	if !ok {
+		return nil, fmt.Errorf("recursive CTE query must be a UNION ALL")
 	}
-	res, err := cmd.Execute(ctx)
-	if err != nil {
-		return nil, err
+	if setOp.Op != "UNION ALL" {
+		return nil, fmt.Errorf("recursive CTE only supports UNION ALL, got %s", setOp.Op)
 	}
 
-	allRows := make([][]string, len(res.Rows))
-	copy(allRows, res.Rows)
+	anchorCmd, err := CommandFactory(setOp.Left)
+	if err != nil {
+		return nil, fmt.Errorf("recursive CTE anchor: %w", err)
+	}
+	anchorRes, err := anchorCmd.Execute(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("recursive CTE anchor: %w", err)
+	}
+
+	columns := cte.Columns
+	if len(columns) == 0 && anchorRes != nil {
+		columns = anchorRes.Columns
+	}
+
+	allRows := make([][]string, len(anchorRes.Rows))
+	copy(allRows, anchorRes.Rows)
 
 	visited := make(map[string]bool)
 	for _, row := range allRows {
 		visited[rowKeyStr(row)] = true
 	}
 
-	maxIterations := maxCTEIterations
-	for iter := 0; iter < maxIterations; iter++ {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	tmpTable := cte.Name
+	for iter := 0; iter < maxCTEIterations; iter++ {
 		prevCount := len(allRows)
 
-		tmpCTE := &CTEDefinition{
-			Name:    cte.Name,
-			Columns: cte.Columns,
-			Query:   cte.Query,
-			Result: &Result{
-				Type:    "rows",
-				Columns: res.Columns,
-				Rows:    allRows,
-			},
+		schema := storage.TableSchema{
+			Name:     tmpTable,
+			Database: dbName,
+			Columns:  make([]storage.ColumnSchema, len(columns)),
+		}
+		for i, col := range columns {
+			schema.Columns[i] = storage.ColumnSchema{Name: col, Type: "TEXT"}
+		}
+		_ = ctx.Storage.DropTable(dbName, tmpTable)
+		if err := ctx.Storage.CreateTable(dbName, schema); err != nil {
+			return nil, fmt.Errorf("recursive CTE temp table: %w", err)
 		}
 
-		tmpScope := scope.PushScope()
-		tmpScope.RegisterCTE(tmpCTE)
-
-		recursiveQuery := cte.Query
-		cmd, err = CommandFactory(recursiveQuery)
-		if err != nil {
-			return nil, fmt.Errorf("recursive CTE: %w", err)
+		rows := make([]storage.Row, len(allRows))
+		for i, r := range allRows {
+			row := make(storage.Row, len(r))
+			for j, v := range r {
+				row[j] = v
+			}
+			rows[i] = row
 		}
-		iterRes, err := cmd.Execute(ctx)
+		if _, err := ctx.Storage.InsertRows(dbName, tmpTable, rows); err != nil {
+			return nil, fmt.Errorf("recursive CTE temp insert: %w", err)
+		}
+
+		// Invalidate result cache so the recursive member re-reads from storage.
+		if ctx.Session != nil && ctx.Session.resultCache != nil {
+			ctx.Session.resultCache.Invalidate(tmpTable)
+		}
+
+		recursiveCmd, err := CommandFactory(setOp.Right)
 		if err != nil {
-			return nil, fmt.Errorf("recursive CTE: %w", err)
+			return nil, fmt.Errorf("recursive CTE recursive member: %w", err)
+		}
+		iterRes, err := recursiveCmd.Execute(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("recursive CTE recursive member: %w", err)
 		}
 
 		newRows := 0
@@ -236,9 +269,11 @@ func executeRecursiveCTE(cte *parser.CTEDefinition, scope *CTEScope, ctx *Execut
 		}
 	}
 
+	_ = ctx.Storage.DropTable(dbName, tmpTable)
+
 	return &Result{
 		Type:    "rows",
-		Columns: res.Columns,
+		Columns: columns,
 		Rows:    allRows,
 	}, nil
 }
