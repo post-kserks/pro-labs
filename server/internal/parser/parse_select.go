@@ -53,7 +53,7 @@ func (p *sqlParser) parseCTE() (Statement, error) {
 			return nil, err
 		}
 
-		// Accept SelectStatement, SetOperationStatement, and CTEStatement as CTE body
+		// Accept SelectStatement, SetOperationStatement, CTEStatement, and DML with RETURNING as CTE body
 		switch s := stmt.(type) {
 		case *SelectStatement:
 			// OK
@@ -61,8 +61,14 @@ func (p *sqlParser) parseCTE() (Statement, error) {
 			_ = s // UNION/INTERSECT/EXCEPT — valid
 		case *CTEStatement:
 			_ = s // nested CTE — valid
+		case *DeleteStatement:
+			_ = s // DELETE ... RETURNING — valid
+		case *InsertStatement:
+			_ = s // INSERT ... RETURNING — valid
+		case *UpdateStatement:
+			_ = s // UPDATE ... RETURNING — valid
 		default:
-			return nil, fmt.Errorf("CTE body must be a SELECT, set operation, or WITH statement")
+			return nil, fmt.Errorf("CTE body must be a SELECT, DML with RETURNING, set operation, or WITH statement")
 		}
 
 		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
