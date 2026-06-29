@@ -132,6 +132,11 @@ type ExecutionContext struct {
 	// to determine visibility of rows (0 = current).
 	SnapshotTxID uint64
 
+	// OldRow/NewRow hold pre/post mutation rows for RETURNING clause
+	// with old.* / new.* syntax.
+	OldRow storage.Row
+	NewRow storage.Row
+
 	// InCommitApply true, пока выполняется applyOps внутри Commit. В этот момент
 	// commit-локи нужных таблиц уже захвачены (sync.Mutex не реентрантный),
 	// поэтому autocommit-обёртка mutateUnderTableLock НЕ должна брать их повторно

@@ -226,18 +226,12 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	fireTriggers(ctx, dbName, c.stmt.TableName, "UPDATE")
 
 	if c.stmt.Returning != nil {
-		return c.executeReturningUpdate(ctx, dbName, schema, indices, newValues)
+		return c.executeReturningUpdate(ctx, dbName, schema, indices, newValues, matchedRows)
 	}
 
 	return &Result{Type: "affected", Affected: affected}, nil
 }
 
-func (c *UpdateCommand) executeReturningUpdate(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, indices []int, preUpdateRows []storage.Row) (*Result, error) {
-	var updatedRows []storage.Row
-	for _, idx := range indices {
-		if idx < len(preUpdateRows) {
-			updatedRows = append(updatedRows, preUpdateRows[idx])
-		}
-	}
-	return executeReturningGeneric(updatedRows, c.stmt.Returning, schema, ctx)
+func (c *UpdateCommand) executeReturningUpdate(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, indices []int, newValues []storage.Row, oldValues []storage.Row) (*Result, error) {
+	return executeReturningGeneric(newValues, c.stmt.Returning, schema, ctx, oldValues...)
 }

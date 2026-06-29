@@ -73,6 +73,12 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 	case *parser.Value:
 		return parserValueToRaw(*e), nil
 	case *parser.ColumnRef:
+		if e.Table == "old" && ctx != nil && ctx.OldRow != nil {
+			return resolveColumn(ctx.OldRow, schema, e.Name)
+		}
+		if e.Table == "new" && ctx != nil && ctx.NewRow != nil {
+			return resolveColumn(ctx.NewRow, schema, e.Name)
+		}
 		return resolveColumn(row, schema, e.Name)
 	case *parser.BinaryExpr:
 		return evalBinary(e, row, schema, ctx)

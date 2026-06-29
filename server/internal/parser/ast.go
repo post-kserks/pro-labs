@@ -470,7 +470,8 @@ type Value struct {
 
 // ColumnRef references a table column.
 type ColumnRef struct {
-	Name string
+	Name  string
+	Table string // optional: "old" or "new" for RETURNING clause
 }
 
 // BinaryExpr represents comparison operators: =, !=, <, >, <=, >=.

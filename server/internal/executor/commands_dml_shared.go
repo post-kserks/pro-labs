@@ -12,12 +12,22 @@ import (
 	"vaultdb/internal/storage"
 )
 
-func executeReturningGeneric(rows []storage.Row, returningCols []parser.SelectColumn, schema *storage.TableSchema, ctx *ExecutionContext) (*Result, error) {
+func executeReturningGeneric(rows []storage.Row, returningCols []parser.SelectColumn, schema *storage.TableSchema, ctx *ExecutionContext, oldRows ...storage.Row) (*Result, error) {
 	resultRows := make([][]string, 0, len(rows))
 
 	starMode := len(returningCols) == 0
 
-	for _, row := range rows {
+	for i, row := range rows {
+		// Set old/new row context for old.* / new.* syntax
+		if ctx != nil {
+			ctx.NewRow = row
+			if i < len(oldRows) {
+				ctx.OldRow = oldRows[i]
+			} else {
+				ctx.OldRow = row
+			}
+		}
+
 		var projected []string
 		if starMode {
 			projected = make([]string, len(row))

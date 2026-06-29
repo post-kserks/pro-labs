@@ -457,6 +457,24 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 			ident = ident + "." + p.current().Literal
 			p.advance()
 		}
+		// Check for old/new prefix: old.col or new.col
+		if ident == "old" || ident == "new" {
+			nextTok := p.peek()
+			if nextTok.Type == lexer.TOKEN_DOT {
+				p.advance() // skip dot
+				colTok := p.current()
+				if colTok.Type == lexer.TOKEN_IDENT {
+					colName := colTok.Literal
+					p.advance()
+					return p.parsePrimaryPost(&ColumnRef{Name: colName, Table: ident}), nil
+				}
+			}
+		}
+		// Handle table.column format (e.g., old.level)
+		if strings.Contains(ident, ".") {
+			parts := strings.SplitN(ident, ".", 2)
+			return p.parsePrimaryPost(&ColumnRef{Name: parts[1], Table: parts[0]}), nil
+		}
 		if p.current().Type == lexer.TOKEN_LPAREN {
 			p.advance()
 			args := make([]Expression, 0)
@@ -507,6 +525,19 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 				}, nil
 			}
 			return p.parsePrimaryPost(funcExpr), nil
+		}
+		// Check for old/new prefix: old.col or new.col
+		if ident == "old" || ident == "new" {
+			nextTok := p.peek()
+			if nextTok.Type == lexer.TOKEN_DOT {
+				p.advance() // skip dot
+				colTok := p.current()
+				if colTok.Type == lexer.TOKEN_IDENT {
+					colName := colTok.Literal
+					p.advance()
+					return p.parsePrimaryPost(&ColumnRef{Name: colName, Table: ident}), nil
+				}
+			}
 		}
 		return p.parsePrimaryPost(&ColumnRef{Name: ident}), nil
 

@@ -109,6 +109,66 @@ func TestUpdateReturningMultipleRows(t *testing.T) {
 	}
 }
 
+func TestUpdateReturningOldNewSyntax(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	result := executeSQL(t, session, "UPDATE heroes SET level = 99 WHERE name = 'Aragorn' RETURNING name, old.level AS old_level, new.level AS new_level;")
+	if result.Type != "rows" {
+		t.Fatalf("expected rows result, got %s", result.Type)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 returned row, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "Aragorn" {
+		t.Fatalf("expected name 'Aragorn', got %q", result.Rows[0][0])
+	}
+	if result.Rows[0][1] != "10" {
+		t.Fatalf("expected old.level '10', got %q", result.Rows[0][1])
+	}
+	if result.Rows[0][2] != "99" {
+		t.Fatalf("expected new.level '99', got %q", result.Rows[0][2])
+	}
+}
+
+func TestDeleteReturningOldSyntax(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	result := executeSQL(t, session, "DELETE FROM heroes WHERE name = 'Boromir' RETURNING old.name, old.level;")
+	if result.Type != "rows" {
+		t.Fatalf("expected rows result, got %s", result.Type)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 returned row, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "Boromir" {
+		t.Fatalf("expected old.name 'Boromir', got %q", result.Rows[0][0])
+	}
+	if result.Rows[0][1] != "5" {
+		t.Fatalf("expected old.level '5', got %q", result.Rows[0][1])
+	}
+}
+
+func TestInsertReturningNewSyntax(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	result := executeSQL(t, session, "INSERT INTO heroes VALUES (10, 'Frodo', 15, TRUE, 9.0, 'Ring bearer') RETURNING new.id, new.name;")
+	if result.Type != "rows" {
+		t.Fatalf("expected rows result, got %s", result.Type)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 returned row, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "10" {
+		t.Fatalf("expected new.id '10', got %q", result.Rows[0][0])
+	}
+	if result.Rows[0][1] != "Frodo" {
+		t.Fatalf("expected new.name 'Frodo', got %q", result.Rows[0][1])
+	}
+}
+
 func TestMergeWhenNotMatchedValidation(t *testing.T) {
 	session := setupSession(t)
 
