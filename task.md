@@ -128,7 +128,7 @@
 | Приоритет | Задача | Влияние |
 |-----------|--------|---------|
 | ~~1~~ | ~~Row-level security~~ | ~~Безопасность~~ |
-| 2 | Stored procedures EXECUTE | Функциональность |
+| ~~2~~ | ~~Stored procedures EXECUTE~~ | ~~Функциональность~~ |
 | 3 | RETURNING clause расширение | Удобство |
 | 4 | Replication | Надёжность |
 | 5 | ORM интеграции | Удобство |
@@ -137,6 +137,6 @@
 
 | # | Задача | Статус |
 |---|--------|--------|
-| 12 | **Row-level security** | Закрыто — USING-фильтр для SELECT/UPDATE/DELETE, тесты |
+| 12 | Row-level security | Закрыто — USING-фильтр для SELECT/UPDATE/DELETE |
+| 13 | **Stored procedures EXECUTE** | Закрыто — CALL с multi-statement body, тесты |
 
-(приоритет 1 перемещён в закрытые)

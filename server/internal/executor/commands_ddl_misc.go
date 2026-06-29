@@ -540,15 +540,36 @@ func (c *CallProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("procedure '%s' has no body", c.stmt.Name)
 	}
 
-	stmt, err := parser.Parse(body)
-	if err != nil {
-		return nil, fmt.Errorf("procedure '%s' body parse: %w", c.stmt.Name, err)
+	// Parser requires trailing semicolon — append if missing
+	if !strings.HasSuffix(strings.TrimSpace(body), ";") {
+		body += ";"
 	}
 
-	cmd, err := CommandFactory(stmt)
-	if err != nil {
-		return nil, fmt.Errorf("procedure '%s': %w", c.stmt.Name, err)
+	// Support multi-statement bodies: split by ; and execute each
+	var lastResult *Result
+	parts := strings.Split(body, ";")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		stmt, err := parser.Parse(part + ";")
+		if err != nil {
+			return nil, fmt.Errorf("procedure '%s' body: %w", c.stmt.Name, err)
+		}
+		cmd, err := CommandFactory(stmt)
+		if err != nil {
+			return nil, fmt.Errorf("procedure '%s': %w", c.stmt.Name, err)
+		}
+		result, err := cmd.Execute(ctx)
+		if err != nil {
+			return nil, err
+		}
+		lastResult = result
 	}
 
-	return cmd.Execute(ctx)
+	if lastResult != nil {
+		return lastResult, nil
+	}
+	return &Result{Type: "message", Message: "procedure executed (no result)"}, nil
 }
