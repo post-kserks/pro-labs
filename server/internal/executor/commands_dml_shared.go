@@ -5,6 +5,8 @@ package executor
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -96,6 +98,109 @@ func enforceRLSPolicies(ctx *ExecutionContext, dbName, tableName string) error {
 		return fmt.Errorf("RLS is enabled on table '%s' but no policies are defined", tableName)
 	}
 	return nil
+}
+
+// filterRowsWithRLS applies RLS USING policies to filter rows.
+// Returns only rows that match at least one policy's USING expression.
+func filterRowsWithRLS(rows []storage.Row, schema *storage.TableSchema, ctx *ExecutionContext, dbName, tableName string) ([]storage.Row, error) {
+	if !schema.RLSEnabled {
+		return rows, nil
+	}
+	if len(schema.Policies) == 0 {
+		return nil, fmt.Errorf("RLS is enabled on table '%s' but no policies are defined", tableName)
+	}
+
+	filtered := make([]storage.Row, 0, len(rows))
+	for _, row := range rows {
+		visible := false
+		for _, policy := range schema.Policies {
+			if policy.UsingExpr == "" {
+				visible = true
+				break
+			}
+			expr, err := parser.ParseExpression(policy.UsingExpr)
+			if err != nil {
+				return nil, fmt.Errorf("RLS policy '%s': invalid expression: %w", policy.Name, err)
+			}
+			ok, err := evalOperand(expr, row, schema, ctx)
+			if err != nil {
+				continue
+			}
+			if b, ok := ok.(bool); ok && b {
+				visible = true
+				break
+			}
+		}
+		if visible {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered, nil
+}
+
+// exprToSQL converts a parser expression back to SQL text for storage.
+func exprToSQL(expr parser.Expression) string {
+	if expr == nil {
+		return ""
+	}
+	switch e := expr.(type) {
+	case *parser.ColumnRef:
+		return e.Name
+	case parser.Value:
+		return formatValue(e)
+	case *parser.Value:
+		return formatValue(*e)
+	case *parser.BinaryExpr:
+		return "(" + exprToSQL(e.Left) + " " + e.Operator + " " + exprToSQL(e.Right) + ")"
+	case *parser.AndExpr:
+		return "(" + exprToSQL(e.Left) + " AND " + exprToSQL(e.Right) + ")"
+	case *parser.OrExpr:
+		return "(" + exprToSQL(e.Left) + " OR " + exprToSQL(e.Right) + ")"
+	case *parser.NotExpr:
+		return "(NOT " + exprToSQL(e.Expr) + ")"
+	case *parser.InExpr:
+		args := make([]string, len(e.Right))
+		for i, a := range e.Right {
+			args[i] = exprToSQL(a)
+		}
+		op := " IN "
+		if e.Not {
+			op = " NOT IN "
+		}
+		return "(" + exprToSQL(e.Left) + op + "(" + strings.Join(args, ", ") + "))"
+	case *parser.BetweenExpr:
+		op := " BETWEEN "
+		if e.Not {
+			op = " NOT BETWEEN "
+		}
+		return "(" + exprToSQL(e.Expr) + op + exprToSQL(e.Lower) + " AND " + exprToSQL(e.Upper) + ")"
+	case *parser.CastExpr:
+		return "CAST(" + exprToSQL(e.Expr) + " AS " + e.TargetType + ")"
+	case *parser.JsonPathExpr:
+		return exprToSQL(e.Left) + "->>'" + e.Path + "'"
+	default:
+		return fmt.Sprintf("%v", expr)
+	}
+}
+
+func formatValue(v parser.Value) string {
+	switch v.Type {
+	case "int":
+		return strconv.FormatInt(v.IntVal, 10)
+	case "float":
+		return strconv.FormatFloat(v.FltVal, 'f', -1, 64)
+	case "string":
+		return "'" + strings.ReplaceAll(v.StrVal, "'", "''") + "'"
+	case "bool":
+		if v.BoolVal {
+			return "TRUE"
+		}
+		return "FALSE"
+	case "null":
+		return "NULL"
+	default:
+		return v.StrVal
+	}
 }
 
 func enforceCheckConstraints(schema *storage.TableSchema, row storage.Row) error {

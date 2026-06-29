@@ -142,6 +142,14 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 		}
 	}
 
+	// Apply RLS before JOINs and WHERE
+	if c.stmt.TableName != "" {
+		rows, err = filterRowsWithRLS(rows, mainSchema, ctx, dbName, c.stmt.TableName)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// Combined schema and rows for JOIN
 	combinedSchema := mainSchema
 	combinedRows := rows

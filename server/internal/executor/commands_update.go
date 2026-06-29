@@ -121,6 +121,11 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		return nil, err
 	}
 
+	rows, err = filterRowsWithRLS(rows, schema, ctx, dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, err
+	}
+
 	var evalRows []storage.Row
 	var evalSchema *storage.TableSchema
 	if fromRows != nil {

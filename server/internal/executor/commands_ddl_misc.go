@@ -204,7 +204,7 @@ func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	usingSQL := ""
 	if c.stmt.Using != nil {
-		usingSQL = fmt.Sprintf("%v", c.stmt.Using)
+		usingSQL = exprToSQL(c.stmt.Using)
 	}
 	policy := storage.RLSPolicy{
 		Name:      c.stmt.Name,
@@ -213,6 +213,10 @@ func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	if err := ctx.Storage.AddPolicy(dbName, c.stmt.TableName, policy); err != nil {
 		return nil, fmt.Errorf("add policy: %w", err)
+	}
+
+	if ctx.Session != nil && ctx.Session.resultCache != nil {
+		ctx.Session.resultCache.Invalidate(c.stmt.TableName)
 	}
 
 	if ctx.Session.AuditLog != nil {
@@ -235,6 +239,10 @@ func (c *EnableRlsCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	if err := ctx.Storage.SetTableRLS(dbName, c.stmt.TableName, true); err != nil {
 		return nil, err
+	}
+
+	if ctx.Session != nil && ctx.Session.resultCache != nil {
+		ctx.Session.resultCache.Invalidate(c.stmt.TableName)
 	}
 	if ctx.Session.AuditLog != nil {
 		ctx.Session.AuditLog.LogDDL("ENABLE RLS", dbName, c.stmt.TableName, "")

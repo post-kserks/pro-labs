@@ -100,6 +100,11 @@ func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		return nil, err
 	}
 
+	rows, err = filterRowsWithRLS(rows, schema, ctx, dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, err
+	}
+
 	indices := make([]int, 0, len(rows))
 	for idx, row := range rows {
 		match, err := evalExpr(c.stmt.Where, row, schema, ctx)
