@@ -25,7 +25,7 @@ func TestInsertReturningUsesPreMutationData(t *testing.T) {
 	}
 }
 
-func TestUpdateReturningUsesPreMutationData(t *testing.T) {
+func TestUpdateReturningUsesPostMutationData(t *testing.T) {
 	session := setupSession(t)
 	seedHeroes(t, session)
 
@@ -39,14 +39,8 @@ func TestUpdateReturningUsesPreMutationData(t *testing.T) {
 	if result.Rows[0][0] != "Aragorn" {
 		t.Fatalf("expected name 'Aragorn', got %q", result.Rows[0][0])
 	}
-	if result.Rows[0][1] != "10" {
-		t.Fatalf("expected pre-mutation level '10', got %q", result.Rows[0][1])
-	}
-
-	// Verify the mutation actually happened
-	verify := executeSQL(t, session, "SELECT level FROM heroes WHERE name = 'Aragorn';")
-	if len(verify.Rows) != 1 || verify.Rows[0][0] != "99" {
-		t.Fatalf("expected post-mutation level '99', got %q", verify.Rows[0][0])
+	if result.Rows[0][1] != "99" {
+		t.Fatalf("expected post-mutation level '99', got %q", result.Rows[0][1])
 	}
 }
 
@@ -109,8 +103,8 @@ func TestUpdateReturningMultipleRows(t *testing.T) {
 	}
 
 	for _, row := range result.Rows {
-		if row[1] != "9.8" && row[1] != "9.5" && row[1] != "8.2" {
-			t.Fatalf("expected pre-mutation score, got %q for %q", row[1], row[0])
+		if row[1] != "10" {
+			t.Fatalf("expected post-mutation score '10', got %q for %q", row[1], row[0])
 		}
 	}
 }

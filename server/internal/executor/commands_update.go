@@ -226,7 +226,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	fireTriggers(ctx, dbName, c.stmt.TableName, "UPDATE")
 
 	if c.stmt.Returning != nil {
-		return c.executeReturningUpdate(ctx, dbName, schema, indices, rows)
+		return c.executeReturningUpdate(ctx, dbName, schema, indices, newValues)
 	}
 
 	return &Result{Type: "affected", Affected: affected}, nil
