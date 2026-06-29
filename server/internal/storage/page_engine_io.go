@@ -4,10 +4,24 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
+	"time"
 
 	"vaultdb/internal/storage/page"
 	"vaultdb/internal/wal"
 )
+
+// retryOnError retries fn up to 3 times with exponential backoff (10ms, 20ms, 40ms).
+// Returns the last error if all retries fail.
+func retryOnError(fn func() error) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err = fn(); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(1<<uint(attempt)*10) * time.Millisecond)
+	}
+	return err
+}
 
 // ── Сканирование ──────────────────────────────────────────────────────────
 
@@ -100,7 +114,7 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 	dirty := false
 	flush := func() error {
 		if havePage && dirty {
-			if err := t.heap.WritePage(pid, pg); err != nil {
+			if err := retryOnError(func() error { return t.heap.WritePage(pid, pg) }); err != nil {
 				return err
 			}
 			e.bufPool.InvalidatePage(pid)
@@ -263,7 +277,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 					slot uint16
 				}{pid, slot})
 
-				if err := t.heap.WritePage(pid, pg); err != nil {
+				if err := retryOnError(func() error { return t.heap.WritePage(pid, pg) }); err != nil {
 					e.pageLock.UnlockPageWrite(pid)
 					return 0, err
 				}
@@ -344,7 +358,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	dirty := false
 	flushDirty := func() error {
 		if dirty {
-			if err := t.heap.WritePage(dirtyPid, dirtyPg); err != nil {
+			if err := retryOnError(func() error { return t.heap.WritePage(dirtyPid, dirtyPg) }); err != nil {
 				return err
 			}
 			e.bufPool.InvalidatePage(dirtyPid)
@@ -526,7 +540,7 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	dirty := false
 	flushDirty := func() error {
 		if dirty {
-			if err := t.heap.WritePage(dirtyPid, dirtyPg); err != nil {
+			if err := retryOnError(func() error { return t.heap.WritePage(dirtyPid, dirtyPg) }); err != nil {
 				return err
 			}
 			e.bufPool.InvalidatePage(dirtyPid)
