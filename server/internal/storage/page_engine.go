@@ -566,12 +566,14 @@ func (e *PageStorageEngine) doCheckpoint() error {
 		return fmt.Errorf("checkpoint: save catalog: %w", err)
 	}
 
-	// Шаг 4: записать checkpoint в WAL (inside lock to prevent races)
+	// Шаг 4: записать checkpoint в WAL
+	// ВАЖНО: mu уже снят, чтобы избежать deadlock при lock ordering WAL↔PageEngine:
+	// doCheckpoint: mu → wal.mu,  recovery: wal.mu → mu.
+	e.mu.Unlock()
+
 	if _, err := e.wal.Append(wal.OpCheckpoint, wal.CheckpointPayload{LSN: lsn}); err != nil {
-		e.mu.Unlock()
 		return fmt.Errorf("checkpoint: write record: %w", err)
 	}
-	e.mu.Unlock()
 
 	// Шаг 5: truncate WAL после успешного checkpoint
 	// Все dirty pages уже сброшены на диск, безопасно удалять старые записи

@@ -412,6 +412,7 @@ func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
 
 // scanAndTruncate streams through the WAL to find maxTxID and truncate
 // any corrupt tail. Called only during Open(). Does NOT load entries into memory.
+// Tries to resync after corrupt entries by searching for the next magic bytes.
 func (w *WAL) scanAndTruncate() (uint64, error) {
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return 0, fmt.Errorf("wal: seek start: %w", err)
@@ -426,10 +427,48 @@ func (w *WAL) scanAndTruncate() (uint64, error) {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
-			// Логируем corrupt entry чтобы не терять данные молча
-			slog.Warn("wal: corrupt entry during scan, truncating tail",
-				"offset", validEnd, "error", err)
-			break
+			// Corrupt entry — try to resync by scanning for next magic bytes
+			corruptOffset := validEnd
+			slog.Warn("wal: corrupt entry, attempting resync",
+				"offset", corruptOffset, "error", err)
+
+			resynced := false
+			for {
+				// Read one byte at a time looking for 'V' (start of "VDB1")
+				var b [1]byte
+				if _, readErr := w.file.Read(b[:]); readErr != nil {
+					break
+				}
+				if b[0] != recordMagic[0] {
+					continue
+				}
+				// Found 'V' — check if full magic matches
+				peek := make([]byte, 3)
+				if _, readErr := io.ReadFull(w.file, peek); readErr != nil {
+					break
+				}
+				if string(append(b[:], peek...)) == recordMagic {
+					// Found valid magic — seek back 4 bytes and try reading an entry
+					newPos, _ := w.file.Seek(-4, io.SeekCurrent)
+					if testEntry, testSize, testErr := w.readEntryFrom(w.file); testErr == nil {
+						// Valid entry found — resume from here
+						if testEntry.TxID > maxTxID {
+							maxTxID = testEntry.TxID
+						}
+						validEnd = newPos + testSize
+						resynced = true
+						slog.Info("wal: resynced after corrupt entry",
+							"corrupt_at", corruptOffset, "resynced_at", newPos)
+						break
+					}
+				}
+			}
+			if !resynced {
+				slog.Warn("wal: could not resync, truncating at last valid offset",
+					"offset", validEnd)
+				break
+			}
+			continue
 		}
 		if entry.TxID > maxTxID {
 			maxTxID = entry.TxID
