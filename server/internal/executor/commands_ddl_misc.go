@@ -215,6 +215,9 @@ func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("add policy: %w", err)
 	}
 
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("CREATE POLICY", dbName, c.stmt.Name, fmt.Sprintf("table=%s", c.stmt.TableName))
+	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Policy '%s' created.", c.stmt.Name)}, nil
 }
 
@@ -232,6 +235,9 @@ func (c *EnableRlsCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	if err := ctx.Storage.SetTableRLS(dbName, c.stmt.TableName, true); err != nil {
 		return nil, err
+	}
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("ENABLE RLS", dbName, c.stmt.TableName, "")
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("RLS enabled on table '%s'.", c.stmt.TableName)}, nil
 }
@@ -261,6 +267,9 @@ func (c *CreateViewCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("create view: %w", err)
 	}
 
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("CREATE VIEW", dbName, c.stmt.Name, "")
+	}
 	return &Result{Type: "message", Message: fmt.Sprintf("View '%s' created.", c.stmt.Name)}, nil
 }
 
@@ -282,6 +291,9 @@ func (c *DropViewCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("drop view: %w", err)
 	}
 
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("DROP VIEW", dbName, c.stmt.Name, "")
+	}
 	return &Result{Type: "message", Message: fmt.Sprintf("View '%s' dropped.", c.stmt.Name)}, nil
 }
 
@@ -311,6 +323,9 @@ func (c *CreateTriggerCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("create trigger: %w", err)
 	}
 
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("CREATE TRIGGER", dbName, c.stmt.Name, fmt.Sprintf("table=%s event=%s", c.stmt.TableName, c.stmt.Event))
+	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Trigger '%s' created on table '%s'.", c.stmt.Name, c.stmt.TableName)}, nil
 }
 
@@ -332,6 +347,9 @@ func (c *DropTriggerCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("drop trigger: %w", err)
 	}
 
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("DROP TRIGGER", dbName, c.stmt.Name, "")
+	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Trigger '%s' dropped.", c.stmt.Name)}, nil
 }
 
@@ -361,6 +379,9 @@ func (c *CreateFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) 
 		return nil, fmt.Errorf("create function: %w", err)
 	}
 
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("CREATE FUNCTION", dbName, c.stmt.Name, "")
+	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Function '%s' created.", c.stmt.Name)}, nil
 }
 
@@ -382,6 +403,9 @@ func (c *DropFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("drop function: %w", err)
 	}
 
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("DROP FUNCTION", dbName, c.stmt.Name, "")
+	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Function '%s' dropped.", c.stmt.Name)}, nil
 }
 
@@ -451,6 +475,9 @@ func (c *CreateProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error)
 		return nil, fmt.Errorf("create procedure: %w", err)
 	}
 
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("CREATE PROCEDURE", dbName, c.stmt.Name, "")
+	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Procedure '%s' created.", c.stmt.Name)}, nil
 }
 
@@ -472,6 +499,9 @@ func (c *DropProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("drop procedure: %w", err)
 	}
 
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("DROP PROCEDURE", dbName, c.stmt.Name, "")
+	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Procedure '%s' dropped.", c.stmt.Name)}, nil
 }
 

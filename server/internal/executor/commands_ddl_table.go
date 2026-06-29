@@ -27,12 +27,13 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	columns := make([]storage.ColumnSchema, 0, len(c.stmt.Columns))
 	for _, column := range c.stmt.Columns {
 		columns = append(columns, storage.ColumnSchema{
-			Name:       column.Name,
-			Type:       column.DataType,
-			VarcharLen: column.VarcharLen,
-			IsComputed: column.Computed != nil,
-			PrimaryKey: column.PrimaryKey,
-			EnumValues: column.EnumValues,
+			Name:          column.Name,
+			Type:          column.DataType,
+			VarcharLen:    column.VarcharLen,
+			IsComputed:    column.Computed != nil,
+			PrimaryKey:    column.PrimaryKey,
+			EnumValues:    column.EnumValues,
+			AutoIncrement: column.AutoIncrement,
 		})
 	}
 
@@ -44,6 +45,9 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	if err := ctx.Storage.CreateTable(dbName, schema); err != nil {
 		return nil, err
+	}
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("CREATE TABLE", dbName, c.stmt.TableName, fmt.Sprintf("columns=%d", len(columns)))
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' created successfully.", c.stmt.TableName)}, nil
 }
@@ -68,6 +72,9 @@ func (c *DropTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	if err := ctx.Storage.DropTable(dbName, c.stmt.TableName); err != nil {
 		return nil, err
+	}
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("DROP TABLE", dbName, c.stmt.TableName, "")
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' dropped successfully.", c.stmt.TableName)}, nil
 }
@@ -110,11 +117,17 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if err := ctx.Storage.AlterTableAddColumn(dbName, c.stmt.TableName, col, defaultVal); err != nil {
 			return nil, err
 		}
+		if ctx.Session.AuditLog != nil {
+			ctx.Session.AuditLog.LogDDL("ALTER TABLE ADD COLUMN", dbName, c.stmt.TableName, fmt.Sprintf("column=%s", col.Name))
+		}
 		return &Result{Type: "message", Message: fmt.Sprintf("Column '%s' added to table '%s'.", col.Name, c.stmt.TableName)}, nil
 
 	case *parser.AlterDropColumn:
 		if err := ctx.Storage.AlterTableDropColumn(dbName, c.stmt.TableName, action.ColumnName); err != nil {
 			return nil, err
+		}
+		if ctx.Session.AuditLog != nil {
+			ctx.Session.AuditLog.LogDDL("ALTER TABLE DROP COLUMN", dbName, c.stmt.TableName, fmt.Sprintf("column=%s", action.ColumnName))
 		}
 		return &Result{Type: "message", Message: fmt.Sprintf("Column '%s' dropped from table '%s'.", action.ColumnName, c.stmt.TableName)}, nil
 
@@ -122,11 +135,17 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if err := ctx.Storage.AlterTableRenameColumn(dbName, c.stmt.TableName, action.OldName, action.NewName); err != nil {
 			return nil, err
 		}
+		if ctx.Session.AuditLog != nil {
+			ctx.Session.AuditLog.LogDDL("ALTER TABLE RENAME COLUMN", dbName, c.stmt.TableName, fmt.Sprintf("from=%s to=%s", action.OldName, action.NewName))
+		}
 		return &Result{Type: "message", Message: fmt.Sprintf("Column '%s' renamed to '%s' in table '%s'.", action.OldName, action.NewName, c.stmt.TableName)}, nil
 
 	case *parser.AlterRenameTable:
 		if err := ctx.Storage.AlterTableRenameTable(dbName, c.stmt.TableName, action.NewName); err != nil {
 			return nil, err
+		}
+		if ctx.Session.AuditLog != nil {
+			ctx.Session.AuditLog.LogDDL("ALTER TABLE RENAME", dbName, c.stmt.TableName, fmt.Sprintf("to=%s", action.NewName))
 		}
 		return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' renamed to '%s'.", c.stmt.TableName, action.NewName)}, nil
 
@@ -156,6 +175,9 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			if _, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, rows); err != nil {
 				return nil, err
 			}
+		}
+		if ctx.Session.AuditLog != nil {
+			ctx.Session.AuditLog.LogDDL("ALTER TABLE ADD CONSTRAINT", dbName, c.stmt.TableName, fmt.Sprintf("constraint=%s", action.Name))
 		}
 		return &Result{Type: "message", Message: fmt.Sprintf("Constraint '%s' added to table '%s'.", action.Name, c.stmt.TableName)}, nil
 
@@ -261,6 +283,9 @@ func (c *CreateIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if err := ctx.Storage.CreateIndexMulti(dbName, c.stmt.TableName, c.stmt.IndexName, c.stmt.Columns); err != nil {
 			return nil, err
 		}
+		if ctx.Session.AuditLog != nil {
+			ctx.Session.AuditLog.LogDDL("CREATE INDEX", dbName, c.stmt.IndexName, fmt.Sprintf("table=%s columns=%v", c.stmt.TableName, c.stmt.Columns))
+		}
 		return &Result{Type: "message", Message: fmt.Sprintf("Multi-column index '%s' created successfully.", c.stmt.IndexName)}, nil
 	}
 
@@ -270,6 +295,9 @@ func (c *CreateIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	if err := ctx.Storage.CreateIndex(dbName, c.stmt.TableName, c.stmt.IndexName, column); err != nil {
 		return nil, err
+	}
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("CREATE INDEX", dbName, c.stmt.IndexName, fmt.Sprintf("table=%s column=%s", c.stmt.TableName, column))
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Index '%s' created successfully.", c.stmt.IndexName)}, nil
 }
@@ -285,6 +313,9 @@ func (c *DropIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	if err := ctx.Storage.DropIndex(dbName, c.stmt.IndexName); err != nil {
 		return nil, err
+	}
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("DROP INDEX", dbName, c.stmt.IndexName, "")
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Index '%s' dropped successfully.", c.stmt.IndexName)}, nil
 }

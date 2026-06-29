@@ -35,6 +35,9 @@ func (c *CreateDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) 
 		return nil, fmt.Errorf("create database: create _objects table: %w", err)
 	}
 
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("CREATE DATABASE", c.stmt.DatabaseName, "", "")
+	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Database '%s' created successfully.", c.stmt.DatabaseName)}, nil
 }
 
@@ -51,6 +54,9 @@ func (c *DropDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	if strings.EqualFold(ctx.Session.CurrentDatabase(), c.stmt.DatabaseName) {
 		ctx.Session.SetCurrentDatabase("")
+	}
+	if ctx.Session.AuditLog != nil {
+		ctx.Session.AuditLog.LogDDL("DROP DATABASE", c.stmt.DatabaseName, "", "")
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Database '%s' dropped successfully.", c.stmt.DatabaseName)}, nil
 }

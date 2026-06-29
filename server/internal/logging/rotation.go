@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -157,4 +158,44 @@ func (r *Rotator) Sync() error {
 // Writer возвращает io.Writer для использования с log/slog.
 func (r *Rotator) Writer() io.Writer {
 	return r
+}
+
+type AuditLogger struct {
+	mu      sync.Mutex
+	rotator *Rotator
+}
+
+func NewAuditLogger(rotator *Rotator) *AuditLogger {
+	return &AuditLogger{rotator: rotator}
+}
+
+type ddlLogEntry struct {
+	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"`
+	Operation string `json:"operation"`
+	Database  string `json:"database"`
+	Target    string `json:"target"`
+	Detail    string `json:"detail"`
+}
+
+func (a *AuditLogger) LogDDL(operation, database, target, detail string) {
+	if a == nil || a.rotator == nil {
+		return
+	}
+	entry := ddlLogEntry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Type:      "ddl",
+		Operation: operation,
+		Database:  database,
+		Target:    target,
+		Detail:    detail,
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	data = append(data, '\n')
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.rotator.Write(data)
 }

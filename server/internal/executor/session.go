@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/logging"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -24,6 +25,7 @@ type Session struct {
 	ActiveTx    *txmanager.Transaction
 	TxManager   *txmanager.Manager
 	Broadcaster *Broadcaster
+	AuditLog    *logging.AuditLogger
 
 	PreparedStatements map[string]*PreparedStatement
 	planCache          *PlanCache
