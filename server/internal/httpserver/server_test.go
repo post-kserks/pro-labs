@@ -332,6 +332,90 @@ func TestSSEMaxDuration(t *testing.T) {
 	}
 }
 
+func TestQueryWithParams(t *testing.T) {
+	srv := newTestServer(t, mustAuth(t, false, nil))
+
+	body := `{"database":"shop","query":"SELECT * FROM users WHERE name = $1;","params":["alice"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var res map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	rows, ok := res["rows"].([]interface{})
+	if !ok || len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %v", res["rows"])
+	}
+}
+
+func TestQueryWithMultipleParams(t *testing.T) {
+	srv := newTestServer(t, mustAuth(t, false, nil))
+
+	body := `{"database":"shop","query":"SELECT * FROM users WHERE age >= $1 AND name = $2;","params":["0","bob"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var res map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	rows, ok := res["rows"].([]interface{})
+	if !ok || len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %v", res["rows"])
+	}
+}
+
+func TestQueryParamEscapesQuotes(t *testing.T) {
+	srv := newTestServer(t, mustAuth(t, false, nil))
+
+	body := `{"database":"shop","query":"SELECT * FROM users WHERE name = $1;","params":["ali'ce"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var res map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	rows, ok := res["rows"].([]interface{})
+	if !ok || len(rows) != 0 {
+		t.Fatalf("expected 0 rows for non-existent name, got %v", res["rows"])
+	}
+}
+
+func TestQueryParamPlaceholderInsideString(t *testing.T) {
+	srv := newTestServer(t, mustAuth(t, false, nil))
+
+	body := `{"database":"shop","query":"SELECT * FROM users WHERE name = '$1';","params":["alice"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var res map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	rows, ok := res["rows"].([]interface{})
+	if !ok || len(rows) != 0 {
+		t.Fatalf("expected 0 rows when $1 is inside a string literal, got %v", res["rows"])
+	}
+}
+
 func TestStaticFileAuth(t *testing.T) {
 	t.Run("unauthenticated gets 401 when auth enabled", func(t *testing.T) {
 		srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "user"}))

@@ -64,6 +64,10 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(req.Params) > 0 {
+		query = applyParams(query, req.Params)
+	}
+
 	stmt, err := parser.Parse(query)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, errCodeParseError, err.Error())
@@ -755,4 +759,67 @@ func parseHTTPRowValue(v interface{}) storage.Value {
 	default:
 		return fmt.Sprintf("%v", val)
 	}
+}
+
+func applyParams(query string, params []string) string {
+	var buf strings.Builder
+	inString := false
+	quoteChar := byte(0)
+	escaped := false
+
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+
+		if escaped {
+			buf.WriteByte(c)
+			escaped = false
+			continue
+		}
+
+		if c == '\\' && inString {
+			buf.WriteByte(c)
+			escaped = true
+			continue
+		}
+
+		if inString {
+			buf.WriteByte(c)
+			if c == quoteChar {
+				inString = false
+			}
+			continue
+		}
+
+		if c == '\'' || c == '"' {
+			inString = true
+			quoteChar = c
+			buf.WriteByte(c)
+			continue
+		}
+
+		if c == '$' && i+1 < len(query) {
+			j := i + 1
+			for j < len(query) && query[j] >= '0' && query[j] <= '9' {
+				j++
+			}
+			if j > i+1 {
+				numStr := query[i+1 : j]
+				idx, err := strconv.Atoi(numStr)
+				if err == nil && idx >= 1 && idx <= len(params) {
+					val := params[idx-1]
+					val = strings.ReplaceAll(val, `\`, `\\`)
+					val = strings.ReplaceAll(val, "'", "\\'")
+					buf.WriteByte('\'')
+					buf.WriteString(val)
+					buf.WriteByte('\'')
+					i = j - 1
+					continue
+				}
+			}
+		}
+
+		buf.WriteByte(c)
+	}
+
+	return buf.String()
 }
