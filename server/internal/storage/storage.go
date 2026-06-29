@@ -11,13 +11,14 @@ type Row []Value
 
 // ColumnSchema describes one table column.
 type ColumnSchema struct {
-	Name       string   `json:"name"`
-	Type       string   `json:"type"`
-	VarcharLen int      `json:"varchar_len,omitempty"`
-	IsComputed bool     `json:"is_computed,omitempty"`
-	EnumValues []string `json:"enum_values,omitempty"`
-	NotNull    bool     `json:"not_null,omitempty"`
-	PrimaryKey bool     `json:"primary_key,omitempty"`
+	Name          string   `json:"name"`
+	Type          string   `json:"type"`
+	VarcharLen    int      `json:"varchar_len,omitempty"`
+	IsComputed    bool     `json:"is_computed,omitempty"`
+	EnumValues    []string `json:"enum_values,omitempty"`
+	NotNull       bool     `json:"not_null,omitempty"`
+	PrimaryKey    bool     `json:"primary_key,omitempty"`
+	AutoIncrement bool     `json:"auto_increment,omitempty"`
 }
 
 // TableSchema describes a table.

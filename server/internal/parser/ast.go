@@ -37,15 +37,16 @@ type DescribeTableStatement struct {
 }
 
 type ColumnDef struct {
-	Name       string
-	DataType   string // INT, FLOAT, BOOL, TEXT, VARCHAR, ENUM:val1,val2,...
-	VarcharLen int
-	EnumValues []string // for ENUM type
-	Default    Expression
-	Computed   Expression
-	NotNull    bool
-	PrimaryKey bool
-	Unique     bool
+	Name          string
+	DataType      string // INT, FLOAT, BOOL, TEXT, VARCHAR, ENUM:val1,val2,...
+	VarcharLen    int
+	EnumValues    []string // for ENUM type
+	Default       Expression
+	Computed      Expression
+	NotNull       bool
+	PrimaryKey    bool
+	Unique        bool
+	AutoIncrement bool
 }
 
 type CreateTableStatement struct {

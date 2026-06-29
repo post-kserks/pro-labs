@@ -581,6 +581,11 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 		col.PrimaryKey = true
 	}
 
+	if p.current().Type == lexer.TOKEN_AUTO_INCREMENT {
+		p.advance()
+		col.AutoIncrement = true
+	}
+
 	return col, nil
 }
 
