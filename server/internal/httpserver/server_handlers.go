@@ -17,6 +17,11 @@ import (
 
 var validPathName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
+type TransactionRequest struct {
+	Action   string `json:"action"`
+	Database string `json:"database"`
+}
+
 func (s *Server) newSession() *executor.Session {
 	sess := executor.NewSession(s.cfg.Storage, s.metrics, s.txm, s.br)
 	if s.cfg.Embedder != nil {
@@ -40,8 +45,9 @@ func (s *Server) newSession() *executor.Session {
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
 	var req struct {
-		Database string `json:"database"`
-		Query    string `json:"query"`
+		Database string   `json:"database"`
+		Query    string   `json:"query"`
+		Params   []string `json:"params"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		if err.Error() == "http: request body too large" {
@@ -98,6 +104,66 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	if result.AsOfNote != "" {
 		response["as_of_note"] = result.AsOfNote
+	}
+
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleTransaction(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
+	var req TransactionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err.Error() == "http: request body too large" {
+			writeError(w, http.StatusRequestEntityTooLarge, errCodeBadRequest, "request body too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "invalid JSON body")
+		return
+	}
+
+	var sql string
+	switch req.Action {
+	case "begin":
+		sql = "BEGIN"
+	case "commit":
+		sql = "COMMIT"
+	case "rollback":
+		sql = "ROLLBACK"
+	default:
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "action must be one of: begin, commit, rollback")
+		return
+	}
+
+	stmt, err := parser.Parse(sql)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errCodeParseError, err.Error())
+		return
+	}
+
+	session := s.newSession()
+	defer session.Close()
+	if req.Database != "" {
+		session.SetCurrentDatabase(req.Database)
+	}
+
+	start := time.Now()
+	result, err := session.Execute(stmt)
+	if err != nil {
+		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
+		return
+	}
+	duration := float64(time.Since(start).Microseconds()) / 1000.0
+
+	response := map[string]interface{}{
+		"status":      "ok",
+		"type":        result.Type,
+		"columns":     emptyIfNil(result.Columns),
+		"rows":        emptyRowsIfNil(result.Rows),
+		"affected":    result.Affected,
+		"duration_ms": duration,
+	}
+	if result.Message != "" {
+		response["message"] = result.Message
 	}
 
 	writeJSON(w, http.StatusOK, response)
@@ -576,6 +642,101 @@ func (s *Server) handlePostTableData(w http.ResponseWriter, r *http.Request, dbN
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"message": fmt.Sprintf("inserted %d rows", n),
 	})
+}
+
+func escapeJSON(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return `"` + s + `"`
+	}
+	return string(b)
+}
+
+func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
+	var req struct {
+		Database string `json:"database"`
+		Query    string `json:"query"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err.Error() == "http: request body too large" {
+			writeError(w, http.StatusRequestEntityTooLarge, errCodeBadRequest, "request body too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "invalid JSON body")
+		return
+	}
+
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "query cannot be empty")
+		return
+	}
+
+	stmt, err := parser.Parse(query)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errCodeParseError, err.Error())
+		return
+	}
+
+	switch stmt.(type) {
+	case *parser.BeginStatement, *parser.CommitStatement, *parser.RollbackStatement:
+		writeError(w, http.StatusBadRequest, errCodeTxUnsupported,
+			"transactions are not supported over the stateless HTTP API; use the TCP client on port 5432")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errCodeInternal, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	session := s.newSession()
+	defer session.Close()
+	if req.Database != "" {
+		session.SetCurrentDatabase(req.Database)
+	}
+
+	result, err := session.Execute(stmt)
+	if err != nil {
+		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
+		return
+	}
+
+	type sseMsg struct {
+		event string
+		data  interface{}
+	}
+
+	ch := make(chan sseMsg, 16)
+
+	go func() {
+		defer close(ch)
+		if len(result.Columns) > 0 {
+			ch <- sseMsg{event: "columns", data: result.Columns}
+		}
+		for _, row := range result.Rows {
+			ch <- sseMsg{event: "row", data: row}
+		}
+		ch <- sseMsg{event: "done", data: nil}
+	}()
+
+	for msg := range ch {
+		var payload string
+		if msg.data != nil {
+			b, _ := json.Marshal(msg.data)
+			payload = string(b)
+		} else {
+			payload = "{}"
+		}
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", msg.event, payload)
+		flusher.Flush()
+	}
 }
 
 func parseHTTPRowValue(v interface{}) storage.Value {
