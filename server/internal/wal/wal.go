@@ -121,6 +121,7 @@ type WAL struct {
 	path          string
 	syncCounter   int
 	SyncBatchSize int // number of writes between fsyncs (0 = sync every write)
+	OnAppend      func() // called after each successful WAL append (for metrics)
 }
 
 func Open(path string) (*WAL, error) {
@@ -302,6 +303,10 @@ func (w *WAL) appendBytesLockedWithTx(txID uint64, opType byte, payload []byte) 
 		w.nextTxID.Store(txID + 1)
 	}
 
+	if w.OnAppend != nil {
+		w.OnAppend()
+	}
+
 	return txID, nil
 }
 
@@ -332,6 +337,10 @@ func (w *WAL) appendBytesLocked(opType byte, payload []byte) (uint64, error) {
 		if err := w.file.Sync(); err != nil {
 			return 0, fmt.Errorf("wal: sync: %w", err)
 		}
+	}
+
+	if w.OnAppend != nil {
+		w.OnAppend()
 	}
 
 	return txID, nil

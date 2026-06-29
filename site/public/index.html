@@ -47,13 +47,13 @@
     </div>
     <div class="result-area" id="resultArea" style="display:none;">
       <div class="result-header">
-        <span id="resultMeta"></span>
-        <span id="resultDuration"></span>
+        <span id="resultAreaMeta"></span>
+        <span id="resultAreaDuration"></span>
       </div>
       <div class="result-table-wrap">
-        <table id="resultTable"></table>
+        <table id="resultAreaTable"></table>
       </div>
-      <div class="result-message" id="resultMessage"></div>
+      <div class="result-message" id="resultAreaMessage"></div>
     </div>
     <div class="quick-queries">
       <h3>Quick Queries</h3>
@@ -172,8 +172,9 @@ UPDATE documents SET content = 'Version 3 — final' WHERE id = 1;</textarea>
       <div class="result-area" id="featureResult" style="display:none;">
         <div class="result-header"><span id="featureResultMeta"></span></div>
         <div class="result-table-wrap"><table id="featureResultTable"></table></div>
-        <div class="result-message" id="featureResultMessage" style="display:none;"></div>
-      </div>
+      <div class="result-message" id="featureResultMessage" style="display:none;"></div>
+      <div class="wal-info" id="walInfo" style="display:none;padding:10px 16px;border-top:1px solid #1e2a3a;font-size:12px;line-height:1.6;"></div>
+    </div>
     </div>
   </section>
 

@@ -418,6 +418,17 @@ INSERT INTO articles VALUES (2, 'SQL optimization', 'Query planners and index se
 CREATE INDEX gin_body ON articles (body);
 SELECT title FROM articles WHERE body LIKE '%parallel%';`,
     },
+    {
+      title: 'WAL in Action',
+      desc: 'Write-Ahead Logging: every INSERT/UPDATE/DELETE writes to WAL before modifying storage. Enables crash recovery and MVCC.',
+      sql: `DROP DATABASE f_wal; CREATE DATABASE f_wal; USE f_wal;
+CREATE TABLE ledger (id INT PRIMARY KEY, description TEXT, amount INT);
+INSERT INTO ledger VALUES (1, 'deposit', 500);
+INSERT INTO ledger VALUES (2, 'withdrawal', 200);
+UPDATE ledger SET amount = 450 WHERE id = 1;
+DELETE FROM ledger WHERE id = 2;
+SELECT * FROM ledger;`,
+    },
   ];
 
   function renderFeatureGrid() {
@@ -445,10 +456,12 @@ SELECT title FROM articles WHERE body LIKE '%parallel%';`,
   });
 
   $('#featureRunBtn').addEventListener('click', async () => {
+    const title = $('#featureTitle').textContent;
     const sql = $('#featureSql').textContent;
     const stmts = sql.split(';').filter(s => s.trim());
     let lastResult;
     let db = '';
+    const walBefore = title === 'WAL in Action' ? await fetchWALMetrics() : null;
     for (const stmt of stmts) {
       let trimmed = stmt.trim();
       if (!trimmed || trimmed.startsWith('--')) continue;
@@ -459,7 +472,6 @@ SELECT title FROM articles WHERE body LIKE '%parallel%';`,
       } else {
         if (!trimmed.endsWith(';')) trimmed += ';';
         const result = await runQuery(trimmed, db);
-        // Skip "already exists" and "does not exist" errors for idempotent setup
         if (result.status === 'error') {
           const msg = (result.message || '').toLowerCase();
           if (msg.includes('already exists') || msg.includes('does not exist') || msg.includes('index already')) {
@@ -477,9 +489,28 @@ SELECT title FROM articles WHERE body LIKE '%parallel%';`,
     if (lastResult && !lastResult.columns) {
       renderResult('featureResult', lastResult);
     }
+    if (title === 'WAL in Action') {
+      const walAfter = await fetchWALMetrics();
+      if (walBefore !== null && walAfter !== null) {
+        const delta = walAfter.entries - walBefore.entries;
+        const info = $('#walInfo');
+        info.style.display = 'block';
+        info.innerHTML = `<span style="color:var(--accent2);font-weight:500">⬡ WAL</span> entries before: ${walBefore.entries} &nbsp;→&nbsp; after: <strong>${walAfter.entries}</strong> &nbsp; <span style="color:var(--accent)">+${delta}</span><br>
+          <span style="color:var(--fg3)">Each DDL/DML operation wrote a record to the WAL file before touching storage pages. On crash, VaultDB replays the WAL to recover.</span>`;
+      }
+    }
   });
 
   renderFeatureGrid();
+
+  async function fetchWALMetrics() {
+    try {
+      const resp = await fetch('/api/metrics');
+      const text = await resp.text();
+      const m = text.match(/vaultdb_wal_entries_total\s+(\d+)/);
+      return m ? { entries: parseInt(m[1], 10) } : null;
+    } catch { return null; }
+  }
 
   // --- Dashboard ---
   async function loadDashboard() {

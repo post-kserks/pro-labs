@@ -6,6 +6,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const VAULTDB_HOST = process.env.VAULTDB_HOST || '127.0.0.1';
 const VAULTDB_HTTP_PORT = process.env.VAULTDB_HTTP_PORT || 8080;
+const VAULTDB_API_TOKEN = process.env.VAULTDB_API_TOKEN || 'vdb_sk_demo_test';
+
+const authHeader = VAULTDB_API_TOKEN ? { 'Authorization': 'Bearer ' + VAULTDB_API_TOKEN } : {};
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -22,6 +25,7 @@ app.post('/api/query', async (req, res) => {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(data),
+        ...authHeader,
       },
     };
     const proxyReq = http.request(options, (proxyRes) => {
@@ -51,6 +55,7 @@ app.get('/api/health', async (req, res) => {
     port: VAULTDB_HTTP_PORT,
     path: '/health',
     method: 'GET',
+    headers: { ...authHeader },
   };
   const proxyReq = http.request(options, (proxyRes) => {
     let body = '';
@@ -75,6 +80,7 @@ app.get('/api/databases', async (req, res) => {
     port: VAULTDB_HTTP_PORT,
     path: '/api/databases',
     method: 'GET',
+    headers: { ...authHeader },
   };
   const proxyReq = http.request(options, (proxyRes) => {
     let body = '';
@@ -101,6 +107,7 @@ app.get('/api/databases/:db/tables/:table/schema', async (req, res) => {
     port: VAULTDB_HTTP_PORT,
     path: `/api/databases/${db}/tables/${table}/schema`,
     method: 'GET',
+    headers: { ...authHeader },
   };
   const proxyReq = http.request(options, (proxyRes) => {
     let body = '';
@@ -126,6 +133,7 @@ app.get('/api/databases/:db/tables', async (req, res) => {
     port: VAULTDB_HTTP_PORT,
     path: `/api/databases/${db}/tables`,
     method: 'GET',
+    headers: { ...authHeader },
   };
   const proxyReq = http.request(options, (proxyRes) => {
     let body = '';
@@ -150,6 +158,7 @@ app.get('/api/metrics', async (req, res) => {
     port: parseInt(process.env.VAULTDB_MONITOR_PORT || '5433'),
     path: '/metrics',
     method: 'GET',
+    headers: { ...authHeader },
   };
   const proxyReq = http.request(options, (proxyRes) => {
     let body = '';
