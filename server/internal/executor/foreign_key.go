@@ -103,6 +103,10 @@ func enforceForeignKeysOnDelete(ctx *ExecutionContext, dbName string, tableName 
 			if err != nil {
 				continue
 			}
+			parentSchema, err := ctx.Storage.GetTableSchema(dbName, tableName)
+			if err != nil {
+				continue
+			}
 			indexSet := make(map[int]bool, len(indices))
 			for _, idx := range indices {
 				indexSet[idx] = true
@@ -111,7 +115,7 @@ func enforceForeignKeysOnDelete(ctx *ExecutionContext, dbName string, tableName 
 				if idx >= len(parentRows) {
 					continue
 				}
-				parentKey := buildFKKey(parentRows[idx], childSchema, fk.RefCols)
+				parentKey := buildFKKey(parentRows[idx], parentSchema, fk.RefCols)
 				for ci, childRow := range childRows {
 					childKey := buildFKKey(childRow, childSchema, fk.Columns)
 					if childKey == parentKey {

@@ -149,11 +149,11 @@ func (s *Server) handleTransaction(w http.ResponseWriter, r *http.Request) {
 	var sql string
 	switch req.Action {
 	case "begin":
-		sql = "BEGIN"
+		sql = "BEGIN;"
 	case "commit":
-		sql = "COMMIT"
+		sql = "COMMIT;"
 	case "rollback":
-		sql = "ROLLBACK"
+		sql = "ROLLBACK;"
 	default:
 		writeError(w, http.StatusBadRequest, errCodeBadRequest, "action must be one of: begin, commit, rollback")
 		return
