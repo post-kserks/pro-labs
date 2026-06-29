@@ -21,10 +21,10 @@
 - Foreign keys с referential integrity и ON DELETE CASCADE
 - AUTO_INCREMENT для PRIMARY KEY колонок
 - CHECK constraints (AND/OR/NOT/IN/BETWEEN)
+- RETURNING clause для INSERT/UPDATE/DELETE (включая выражения и алиасы)
 
 ### Не работает
 - Stored procedures — только CREATE/DROP, нет EXECUTE
-- RETURNING clause — ограничена
 
 ---
 
@@ -129,7 +129,7 @@
 |-----------|--------|---------|
 | ~~1~~ | ~~Row-level security~~ | ~~Безопасность~~ |
 | ~~2~~ | ~~Stored procedures EXECUTE~~ | ~~Функциональность~~ |
-| 3 | RETURNING clause расширение | Удобство |
+| ~~3~~ | ~~RETURNING clause расширение~~ | ~~Удобство~~ |
 | 4 | Replication | Надёжность |
 | 5 | ORM интеграции | Удобство |
 
@@ -139,4 +139,5 @@
 |---|--------|--------|
 | 12 | Row-level security | Закрыто — USING-фильтр для SELECT/UPDATE/DELETE |
 | 13 | **Stored procedures EXECUTE** | Закрыто — CALL с multi-statement body, тесты |
+| 14 | **RETURNING clause** | Закрыто — INSERT/UPDATE/DELETE с выражениями и алиасами, 6 тестов |
 
