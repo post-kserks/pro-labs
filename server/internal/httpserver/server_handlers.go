@@ -22,6 +22,27 @@ type TransactionRequest struct {
 	Database string `json:"database"`
 }
 
+type BatchQueryItem struct {
+	Query string   `json:"query"`
+	Params []string `json:"params"`
+}
+
+type BatchRequest struct {
+	Queries  []BatchQueryItem `json:"queries"`
+	Database string           `json:"database"`
+}
+
+type BatchResponseResult struct {
+	Status     string     `json:"status"`
+	Type       string     `json:"type"`
+	Columns    []string   `json:"columns"`
+	Rows       [][]string `json:"rows"`
+	Affected   int        `json:"affected"`
+	DurationMs float64    `json:"duration_ms"`
+	Message    string     `json:"message,omitempty"`
+	Error      string     `json:"error,omitempty"`
+}
+
 func (s *Server) newSession() *executor.Session {
 	sess := executor.NewSession(s.cfg.Storage, s.metrics, s.txm, s.br)
 	if s.cfg.Embedder != nil {
@@ -171,6 +192,92 @@ func (s *Server) handleTransaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
+	var req BatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err.Error() == "http: request body too large" {
+			writeError(w, http.StatusRequestEntityTooLarge, errCodeBadRequest, "request body too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "invalid JSON body")
+		return
+	}
+
+	if len(req.Queries) == 0 {
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "queries array cannot be empty")
+		return
+	}
+
+	results := make([]BatchResponseResult, 0, len(req.Queries))
+
+	for _, q := range req.Queries {
+		query := strings.TrimSpace(q.Query)
+		if query == "" {
+			results = append(results, BatchResponseResult{
+				Status: "error",
+				Error:  "query cannot be empty",
+			})
+			continue
+		}
+
+		if len(q.Params) > 0 {
+			query = applyParams(query, q.Params)
+		}
+
+		stmt, err := parser.Parse(query)
+		if err != nil {
+			results = append(results, BatchResponseResult{
+				Status: "error",
+				Error:  err.Error(),
+			})
+			continue
+		}
+
+		switch stmt.(type) {
+		case *parser.BeginStatement, *parser.CommitStatement, *parser.RollbackStatement:
+			results = append(results, BatchResponseResult{
+				Status: "error",
+				Error:  "transactions are not supported over the stateless HTTP API; use the TCP client on port 5432",
+			})
+			continue
+		}
+
+		session := s.newSession()
+		if req.Database != "" {
+			session.SetCurrentDatabase(req.Database)
+		}
+
+		start := time.Now()
+		result, err := session.Execute(stmt)
+		duration := float64(time.Since(start).Microseconds()) / 1000.0
+		session.Close()
+
+		if err != nil {
+			results = append(results, BatchResponseResult{
+				Status:     "error",
+				Error:      err.Error(),
+				DurationMs: duration,
+			})
+			continue
+		}
+
+		results = append(results, BatchResponseResult{
+			Status:     "ok",
+			Type:       result.Type,
+			Columns:    emptyIfNil(result.Columns),
+			Rows:       emptyRowsIfNil(result.Rows),
+			Affected:   result.Affected,
+			DurationMs: duration,
+			Message:    result.Message,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"results": results,
+	})
 }
 
 func (s *Server) handleListDatabases(w http.ResponseWriter, _ *http.Request) {
