@@ -823,16 +823,28 @@ func (p *sqlParser) parseAlterTable() (Statement, error) {
 					if err != nil {
 						return nil, err
 					}
-					if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
-						return nil, err
+				if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+					return nil, err
+				}
+				var onDeleteCascade bool
+				if p.current().Type == lexer.TOKEN_ON {
+					p.advance() // ON
+					if p.current().Type == lexer.TOKEN_DELETE {
+						p.advance() // DELETE
+						if strings.EqualFold(p.current().Literal, "CASCADE") {
+							p.advance() // CASCADE
+							onDeleteCascade = true
+						}
 					}
-					action = &AlterAddConstraint{
-						Name:     constraintName,
-						Type:     "FOREIGN_KEY",
-						Columns:  cols,
-						RefTable: refTable,
-						RefCols:  refCols,
-					}
+				}
+				action = &AlterAddConstraint{
+					Name:            constraintName,
+					Type:            "FOREIGN_KEY",
+					Columns:         cols,
+					RefTable:        refTable,
+					RefCols:         refCols,
+					OnDeleteCascade: onDeleteCascade,
+				}
 				} else {
 					return nil, p.expectedError("UNIQUE, CHECK, or FOREIGN KEY", p.current())
 				}

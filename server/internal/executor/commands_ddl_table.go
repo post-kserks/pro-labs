@@ -136,10 +136,13 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			return nil, err
 		}
 		constraint := storage.TableConstraint{
-			Name:    action.Name,
-			Type:    action.Type,
-			Columns: action.Columns,
-			Expr:    action.CheckExpr,
+			Name:            action.Name,
+			Type:            action.Type,
+			Columns:         action.Columns,
+			Expr:            action.CheckExpr,
+			RefTable:        action.RefTable,
+			RefCols:         action.RefCols,
+			OnDeleteCascade: action.OnDeleteCascade,
 		}
 		schema.Constraints = append(schema.Constraints, constraint)
 		rows, _ := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)

@@ -188,12 +188,13 @@ type AlterRenameTable struct {
 }
 
 type AlterAddConstraint struct {
-	Name      string
-	Type      string   // "UNIQUE", "CHECK", "FOREIGN_KEY"
-	Columns   []string // for UNIQUE, FOREIGN_KEY
-	CheckExpr string   // for CHECK
-	RefTable  string   // for FOREIGN_KEY
-	RefCols   []string // for FOREIGN_KEY
+	Name            string
+	Type            string   // "UNIQUE", "CHECK", "FOREIGN_KEY"
+	Columns         []string // for UNIQUE, FOREIGN_KEY
+	CheckExpr       string   // for CHECK
+	RefTable        string   // for FOREIGN_KEY
+	RefCols         []string // for FOREIGN_KEY
+	OnDeleteCascade bool     // for FOREIGN_KEY
 }
 
 type AlterTableStatement struct {

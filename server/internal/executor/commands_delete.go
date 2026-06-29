@@ -111,6 +111,13 @@ func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		}
 	}
 
+	if err := enforceForeignKeysOnDelete(ctx, dbName, c.stmt.TableName, indices); err != nil {
+		return nil, err
+	}
+	if err := enforceCascadeDeletes(ctx, dbName, c.stmt.TableName, indices); err != nil {
+		return nil, err
+	}
+
 	affected, err := ctx.Storage.DeleteRows(dbName, c.stmt.TableName, indices)
 	if err != nil {
 		return nil, err

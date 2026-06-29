@@ -112,6 +112,10 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		return nil, err
 	}
 
+	if err := enforceForeignKeysOnInsert(ctx, dbName, c.stmt.TableName, rowsToInsert); err != nil {
+		return nil, err
+	}
+
 	for i, row := range rowsToInsert {
 		for j, col := range schema.Columns {
 			if col.Type == "ENUM" && len(col.EnumValues) > 0 && j < len(row) && row[j] != nil {
