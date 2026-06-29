@@ -184,6 +184,7 @@ func (s *Server) apiMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/query", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleQuery))))
+	mux.HandleFunc("/api/query/stream", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleQueryStream))))
 	mux.HandleFunc("/api/transaction", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleTransaction))))
 	mux.HandleFunc("/api/live", s.withRateLimit(s.cfg.Auth.Middleware(s.handleLiveQuery)))
 	mux.HandleFunc("/api/docs/openapi.json", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleOpenAPI))))
