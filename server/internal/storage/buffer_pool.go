@@ -37,6 +37,7 @@ type bufferEntry struct {
 	imageWritten bool   // full page image уже записан в WAL
 	db           string // имя БД (для WAL full page image)
 	table        string // имя таблицы (для WAL full page image)
+	dirty        bool   // страница была изменена и не записана на диск
 }
 
 // NewBufferPool создаёт новый buffer pool с указанным capacity.
@@ -82,7 +83,7 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile, dbTable ...s
 
 	// Если кэш полон — вытесняем LRU
 	for bp.count >= bp.capacity {
-		if err := bp.evict(); err != nil {
+		if err := bp.evict(nil); err != nil {
 			// Не удалось вытеснить (все страницы запинованы)
 			break
 		}
@@ -130,9 +131,7 @@ func (bp *BufferPool) WritePreImage(pid page.PageID) {
 	}
 }
 
-// Buffer pool НЕ выполняет отложенную запись: вызывающий код уже записал
-// страницу на диск напрямую (heap.WritePage + Sync) до вызова UnpinPage,
-// поэтому кэш хранит только чистые страницы.
+// UnpinPage уменьшает pinCnt страницы и отмечает её как dirty при необходимости.
 func (bp *BufferPool) UnpinPage(pid page.PageID, dirty bool) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
@@ -144,6 +143,9 @@ func (bp *BufferPool) UnpinPage(pid page.PageID, dirty bool) {
 	entry := elem.Value.(*bufferEntry)
 	if entry.pinCnt > 0 {
 		entry.pinCnt--
+	}
+	if dirty {
+		entry.dirty = true
 	}
 }
 
@@ -164,16 +166,19 @@ func (bp *BufferPool) InvalidatePage(pid page.PageID) {
 }
 
 // evict вытесняет самую старую незапинованную страницу из кэша.
-//
-// Кэш хранит только чистые страницы (все модификации пишутся на диск напрямую),
-// поэтому вытеснение просто удаляет страницу из памяти и НИКОГДА не пишет на
-// диск. Это исключает риск записи страницы в чужой heap-файл.
+// Если страница dirty — записывает её на диск перед удалением.
 // Возвращает nil если удалось, ошибку если все страницы запинованы.
-func (bp *BufferPool) evict() error {
+func (bp *BufferPool) evict(hf *heap.HeapFile) error {
 	for elem := bp.lru.Back(); elem != nil; elem = elem.Prev() {
 		entry := elem.Value.(*bufferEntry)
 		if entry.pinCnt > 0 {
 			continue
+		}
+		if entry.dirty && hf != nil {
+			if err := hf.WritePage(entry.pid, entry.page); err != nil {
+				return fmt.Errorf("evict: flush dirty page %v: %w", entry.pid, err)
+			}
+			entry.dirty = false
 		}
 		bp.lru.Remove(elem)
 		delete(bp.cache, entry.pid)
@@ -183,17 +188,27 @@ func (bp *BufferPool) evict() error {
 	return fmt.Errorf("evict: all pages pinned")
 }
 
-// FlushAll — no-op. Buffer pool хранит только чистые страницы (все записи идут
-// на диск напрямую через heap.WritePage), поэтому сбрасывать нечего. Метод
-// сохранён для совместимости и явности вызова на checkpoint/Close.
+// FlushAll записывает все грязные страницы из кэша на диск.
 func (bp *BufferPool) FlushAll(hf *heap.HeapFile) error {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+
+	for elem := bp.lru.Front(); elem != nil; elem = elem.Next() {
+		entry := elem.Value.(*bufferEntry)
+		if entry.dirty {
+			if err := hf.WritePage(entry.pid, entry.page); err != nil {
+				return fmt.Errorf("FlushAll: %w", err)
+			}
+			entry.dirty = false
+		}
+	}
 	return nil
 }
 
-// FlushDirtyPagesUpToLSN — no-op по той же причине, что и FlushAll: кэш не
-// содержит грязных страниц. Сохранён для совместимости с логикой checkpoint.
+// FlushDirtyPagesUpToLSN записывает все грязные страницы на диск.
+// Для простоты игнорирует maxLSN и сбрасывает все dirty страницы.
 func (bp *BufferPool) FlushDirtyPagesUpToLSN(maxLSN uint64, hf *heap.HeapFile) error {
-	return nil
+	return bp.FlushAll(hf)
 }
 
 // InvalidateTable удаляет незапинованные страницы таблицы из кэша.
@@ -252,11 +267,18 @@ func (bp *BufferPool) Stats() BufferPoolStats {
 	bp.mu.RLock()
 	defer bp.mu.RUnlock()
 
+	var dirtyCount int
+	for elem := bp.lru.Front(); elem != nil; elem = elem.Next() {
+		entry := elem.Value.(*bufferEntry)
+		if entry.dirty {
+			dirtyCount++
+		}
+	}
+
 	return BufferPoolStats{
-		Capacity: bp.capacity,
-		Used:     bp.count,
-		// Кэш никогда не хранит грязные страницы.
-		DirtyCount: 0,
+		Capacity:   bp.capacity,
+		Used:       bp.count,
+		DirtyCount: dirtyCount,
 	}
 }
 
