@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
 
@@ -28,13 +29,11 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 		if err != nil {
 			return nil, nil, err
 		}
-		// read-your-own-writes для правой таблицы джойна (Bug #1).
 		rightRows, err = applyTxOverlay(ctx, dbName, join.TableName, rightRows)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		// Create combined schema with qualified names
 		combinedSchema := &storage.TableSchema{
 			Name:    "JOIN_RESULT",
 			Columns: make([]storage.ColumnSchema, 0, len(currentSchema.Columns)+len(rightSchema.Columns)),
@@ -54,9 +53,9 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 
 		newRows := make([]storage.Row, 0)
 
+		// Try hash join for equi-joins; fall back to nested loop
 		switch join.Type {
 		case "CROSS":
-			// Cross join: all combinations
 			for _, lrow := range currentRows {
 				for _, rrow := range rightRows {
 					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
@@ -65,22 +64,23 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 			}
 
 		case "INNER", "":
-			// Inner join: only matching rows
+			if join.Condition != nil && tryHashJoin(&newRows, join.Condition, currentRows, rightRows, currentSchema, rightSchema) {
+				break
+			}
 			for _, lrow := range currentRows {
-				matched := false
 				for _, rrow := range rightRows {
 					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
 					ok, err := evalExpr(join.Condition, combinedRow, combinedSchema, ctx)
 					if err == nil && ok {
 						newRows = append(newRows, combinedRow)
-						matched = true
 					}
 				}
-				_ = matched
 			}
 
 		case "LEFT":
-			// Left join: all left rows, NULL-fill unmatched right
+			if join.Condition != nil && tryHashJoinLeft(&newRows, join.Condition, currentRows, rightRows, currentSchema, rightSchema) {
+				break
+			}
 			rightNulls := make(storage.Row, len(rightSchema.Columns))
 			for i := range rightNulls {
 				rightNulls[i] = nil
@@ -96,13 +96,14 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 					}
 				}
 				if !matched {
-					// No match — add left row with NULLs for right columns
 					newRows = append(newRows, append(append(storage.Row{}, lrow...), rightNulls...))
 				}
 			}
 
 		case "RIGHT":
-			// Right join: all right rows, NULL-fill unmatched left
+			if join.Condition != nil && tryHashJoinRight(&newRows, join.Condition, currentRows, rightRows, currentSchema, rightSchema) {
+				break
+			}
 			leftNulls := make(storage.Row, len(currentSchema.Columns))
 			for i := range leftNulls {
 				leftNulls[i] = nil
@@ -118,13 +119,11 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 					}
 				}
 				if !matched {
-					// No match — add right row with NULLs for left columns
 					newRows = append(newRows, append(append(storage.Row{}, leftNulls...), rrow...))
 				}
 			}
 
 		case "FULL":
-			// Full join: all rows from both sides, NULL-fill unmatched
 			leftNulls := make(storage.Row, len(currentSchema.Columns))
 			for i := range leftNulls {
 				leftNulls[i] = nil
@@ -133,8 +132,6 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 			for i := range rightNulls {
 				rightNulls[i] = nil
 			}
-
-			// Track which right rows matched
 			rightMatched := make(map[int]bool)
 
 			for _, lrow := range currentRows {
@@ -149,12 +146,10 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 					}
 				}
 				if !lmatched {
-					// Left row has no match — add with NULLs for right
 					newRows = append(newRows, append(append(storage.Row{}, lrow...), rightNulls...))
 				}
 			}
 
-			// Add unmatched right rows with NULLs for left
 			for ri, rrow := range rightRows {
 				if !rightMatched[ri] {
 					newRows = append(newRows, append(append(storage.Row{}, leftNulls...), rrow...))
@@ -169,7 +164,142 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 	return currentSchema, currentRows, nil
 }
 
-// hashJoin выполняет Hash Join для equi-join.
+// tryHashJoin attempts an equi-join hash join for INNER JOIN.
+func tryHashJoin(result *[]storage.Row, cond parser.Expression, leftRows, rightRows []storage.Row, leftSchema, rightSchema *storage.TableSchema) bool {
+	leftIdx, rightIdx, ok := extractEquiJoinCols(cond, leftSchema, rightSchema)
+	if !ok {
+		return false
+	}
+
+	hash := buildHashTable(rightRows, rightIdx)
+	for _, lrow := range leftRows {
+		key := valueToString(lrow[leftIdx])
+		if buckets, ok := hash[key]; ok {
+			for _, ri := range buckets {
+				*result = append(*result, append(append(storage.Row{}, lrow...), rightRows[ri]...))
+			}
+		}
+	}
+	return true
+}
+
+// tryHashJoinLeft does hash join for LEFT JOIN.
+func tryHashJoinLeft(result *[]storage.Row, cond parser.Expression, leftRows, rightRows []storage.Row, leftSchema, rightSchema *storage.TableSchema) bool {
+	leftIdx, rightIdx, ok := extractEquiJoinCols(cond, leftSchema, rightSchema)
+	if !ok {
+		return false
+	}
+
+	hash := buildHashTable(rightRows, rightIdx)
+	rightNulls := make(storage.Row, len(rightSchema.Columns))
+
+	for _, lrow := range leftRows {
+		key := valueToString(lrow[leftIdx])
+		if buckets, ok := hash[key]; ok {
+			for _, ri := range buckets {
+				*result = append(*result, append(append(storage.Row{}, lrow...), rightRows[ri]...))
+			}
+		} else {
+			*result = append(*result, append(append(storage.Row{}, lrow...), rightNulls...))
+		}
+	}
+	return true
+}
+
+// tryHashJoinRight does hash join for RIGHT JOIN.
+func tryHashJoinRight(result *[]storage.Row, cond parser.Expression, leftRows, rightRows []storage.Row, leftSchema, rightSchema *storage.TableSchema) bool {
+	leftIdx, rightIdx, ok := extractEquiJoinCols(cond, leftSchema, rightSchema)
+	if !ok {
+		return false
+	}
+
+	hash := buildHashTable(rightRows, rightIdx)
+	leftNulls := make(storage.Row, len(leftSchema.Columns))
+	matched := make(map[int]bool)
+
+	for _, lrow := range leftRows {
+		key := valueToString(lrow[leftIdx])
+		if buckets, ok := hash[key]; ok {
+			for _, ri := range buckets {
+				*result = append(*result, append(append(storage.Row{}, lrow...), rightRows[ri]...))
+				matched[ri] = true
+			}
+		}
+	}
+
+	for ri, rrow := range rightRows {
+		if !matched[ri] {
+			*result = append(*result, append(append(storage.Row{}, leftNulls...), rrow...))
+		}
+	}
+	return true
+}
+
+// extractEquiJoinCols extracts left and right column indices for an equi-join condition.
+func extractEquiJoinCols(cond parser.Expression, leftSchema, rightSchema *storage.TableSchema) (int, int, bool) {
+	bin, ok := cond.(*parser.BinaryExpr)
+	if !ok || bin.Operator != "=" {
+		return 0, 0, false
+	}
+	leftCol, ok := bin.Left.(*parser.ColumnRef)
+	if !ok {
+		return 0, 0, false
+	}
+	rightCol, ok := bin.Right.(*parser.ColumnRef)
+	if !ok {
+		return 0, 0, false
+	}
+
+	// Strip table prefix (e.g. "l.id" → "id")
+	leftName := stripTablePrefix(leftCol.Name)
+	rightName := stripTablePrefix(rightCol.Name)
+
+	leftIdx := findColumnIndex(leftSchema, leftName)
+	rightIdx := findColumnIndex(rightSchema, rightName)
+	if leftIdx >= 0 && rightIdx >= 0 {
+		return leftIdx, rightIdx, true
+	}
+
+	// Try swapped (expression might have columns reversed)
+	leftIdx = findColumnIndex(leftSchema, rightName)
+	rightIdx = findColumnIndex(rightSchema, leftName)
+	if leftIdx >= 0 && rightIdx >= 0 {
+		return leftIdx, rightIdx, true
+	}
+	return 0, 0, false
+}
+
+// stripTablePrefix removes the table name or alias prefix from a qualified column name.
+// "l.id" → "id", "left_table.name" → "name", "id" → "id"
+func stripTablePrefix(name string) string {
+	if idx := strings.IndexByte(name, '.'); idx >= 0 {
+		return name[idx+1:]
+	}
+	return name
+}
+
+// findColumnIndex finds a column by name in the schema (matches unqualified names).
+func findColumnIndex(schema *storage.TableSchema, name string) int {
+	for i, col := range schema.Columns {
+		if col.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// buildHashTable groups right-side rows by the value at a column index.
+func buildHashTable(rows []storage.Row, colIdx int) map[string][]int {
+	hash := make(map[string][]int, len(rows))
+	for i, row := range rows {
+		if colIdx < len(row) && row[colIdx] != nil {
+			key := valueToString(row[colIdx])
+			hash[key] = append(hash[key], i)
+		}
+	}
+	return hash
+}
+
 func compareResultCells(a, b string) int {
 	af, aerr := strconv.ParseFloat(a, 64)
 	bf, berr := strconv.ParseFloat(b, 64)
