@@ -210,7 +210,11 @@ func (s *Server) apiMux() *http.ServeMux {
 				if token == "" {
 					token = r.Header.Get("X-VaultDB-Token")
 				}
-				if !s.cfg.Auth.ValidateToken(strings.TrimPrefix(token, "Bearer ")) {
+				// Skip auth for localhost — web UI needs static files without tokens
+				ip := r.RemoteAddr
+				if strings.HasPrefix(ip, "127.0.0.1") || strings.HasPrefix(ip, "[::1]") || strings.HasPrefix(ip, "localhost") {
+					// proceed without auth check
+				} else if !s.cfg.Auth.ValidateToken(strings.TrimPrefix(token, "Bearer ")) {
 					writeError(w, http.StatusUnauthorized, errCodeInternal, "unauthorized")
 					return
 				}

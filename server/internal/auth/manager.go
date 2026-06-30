@@ -225,6 +225,11 @@ func (m *Manager) Middleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		ip := extractClientIP(r)
+		// Skip auth for localhost — web UI needs to make API calls without tokens
+		if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
+			next(w, r)
+			return
+		}
 		if m.rateLim.isBlocked(ip) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
