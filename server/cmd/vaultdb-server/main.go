@@ -431,11 +431,17 @@ func main() {
 		if envKey := strings.TrimSpace(os.Getenv("VAULTDB_AI_API_KEY")); envKey != "" {
 			apiKey = envKey
 		}
-		embedder = ai.NewHTTPEmbedder(cfg.AI.Endpoint, cfg.AI.Model, apiKey)
+		var e ai.Embedder = ai.NewHTTPEmbedder(cfg.AI.Endpoint, cfg.AI.Model, apiKey)
+		if cfg.AI.CacheEnabled {
+			cap := cfg.AI.CacheSize
+			e = ai.NewCachedEmbedder(e, cap, 0)
+		}
+		embedder = e
 		logger.Info("AI embedder configured",
 			"provider", cfg.AI.Provider,
 			"endpoint", cfg.AI.Endpoint,
-			"model", cfg.AI.Model)
+			"model", cfg.AI.Model,
+			"cache", cfg.AI.CacheEnabled)
 	} else {
 		logger.Info("AI embedder not configured; SEMANTIC_MATCH and AI_EMBED will return a configuration error")
 	}

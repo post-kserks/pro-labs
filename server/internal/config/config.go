@@ -58,10 +58,12 @@ type AuthConfig struct {
 
 // AIConfig — параметры внешнего embedding-провайдера для SEMANTIC_MATCH/AI_EMBED.
 type AIConfig struct {
-	Provider string `yaml:"provider"`
-	Endpoint string `yaml:"endpoint"`
-	Model    string `yaml:"model"`
-	APIKey   string `yaml:"api_key"`
+	Provider     string `yaml:"provider"`
+	Endpoint     string `yaml:"endpoint"`
+	Model        string `yaml:"model"`
+	APIKey       string `yaml:"api_key"`
+	CacheEnabled bool   `yaml:"cache_enabled"`
+	CacheSize    int    `yaml:"cache_size"`
 }
 
 // Config — корневая конфигурация vaultdb.yaml.
