@@ -800,26 +800,28 @@ func (e *PageStorageEngine) writeSchemaLocked(db, table string, schema *TableSch
 	return os.WriteFile(e.schemaPathFor(db, table), data, 0o644)
 }
 
-// getTableForRead возвращает таблицу для чтения. Кэширует если ещё не в map.
-// Caller должен вызвать t.mu.RUnlock() когда закончит.
-func (e *PageStorageEngine) getTableForRead(db, table string) (*pageTable, error) {
+// getTableForLock возвращает таблицу с захватом per-table мьютекса.
+// write=true — полный Lock (для записи), write=false — RLock (для чтения).
+// Caller должен вызвать t.mu.RUnlock() или t.mu.Unlock() когда закончит.
+func (e *PageStorageEngine) getTableForLock(db, table string, write bool) (*pageTable, error) {
 	t, err := e.getOrCreateTable(db, table)
 	if err != nil {
 		return nil, err
 	}
-	t.mu.RLock()
+	if write {
+		t.mu.Lock()
+	} else {
+		t.mu.RLock()
+	}
 	return t, nil
 }
 
-// getTableForWrite возвращает таблицу для записи. Кэширует если ещё не в map.
-// Caller должен вызвать t.mu.Unlock() когда закончит.
+func (e *PageStorageEngine) getTableForRead(db, table string) (*pageTable, error) {
+	return e.getTableForLock(db, table, false)
+}
+
 func (e *PageStorageEngine) getTableForWrite(db, table string) (*pageTable, error) {
-	t, err := e.getOrCreateTable(db, table)
-	if err != nil {
-		return nil, err
-	}
-	t.mu.Lock()
-	return t, nil
+	return e.getTableForLock(db, table, true)
 }
 
 // getOrCreateTable возвращает таблицу из кэша или открывает с диска.
