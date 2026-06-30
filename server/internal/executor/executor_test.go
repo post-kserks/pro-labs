@@ -520,6 +520,21 @@ func TestUpdateWithWhere(t *testing.T) {
 	}
 }
 
+func TestUpdateSetQualifiedLHS(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	result := executeSQL(t, session, "UPDATE heroes SET heroes.name = 'Strider' WHERE heroes.id = 1;")
+	if result.Affected != 1 {
+		t.Fatalf("expected 1 affected row, got %d", result.Affected)
+	}
+
+	selected := executeSQL(t, session, "SELECT name FROM heroes WHERE id = 1;")
+	if selected.Rows[0][0] != "Strider" {
+		t.Fatalf("expected name='Strider', got %#v", selected.Rows[0][0])
+	}
+}
+
 func TestDeleteWithWhere(t *testing.T) {
 	session := setupSession(t)
 	seedHeroes(t, session)

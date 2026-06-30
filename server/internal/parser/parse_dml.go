@@ -168,6 +168,14 @@ func (p *sqlParser) parseUpdate() (Statement, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Allow table-qualified LHS: SET t.col = expr
+		if p.current().Type == lexer.TOKEN_DOT && p.peek().Type == lexer.TOKEN_IDENT {
+			p.advance() // consume dot
+			column, err = p.consumeIdent("column name")
+			if err != nil {
+				return nil, err
+			}
+		}
 		if err := p.consume(lexer.TOKEN_EQ, "'='"); err != nil {
 			return nil, err
 		}
