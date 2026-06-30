@@ -216,6 +216,13 @@ func (s *Server) apiMux() *http.ServeMux {
 				}
 			}
 
+			// SPA fallback: if the file doesn't exist, serve index.html for client-side routing
+			f, err := distFS.Open(strings.TrimPrefix(r.URL.Path, "/"))
+			if err != nil {
+				r.URL.Path = "/"
+			} else {
+				f.Close()
+			}
 			fileServer.ServeHTTP(w, r)
 		})
 	} else {
