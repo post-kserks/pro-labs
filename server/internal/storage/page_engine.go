@@ -59,10 +59,11 @@ type pageTxStamp struct {
 }
 
 type pageCatalog struct {
-	CurrentTxID  uint64            `json:"current_tx_id"`
-	LastModified map[string]uint64 `json:"last_modified"`
-	RowCounts    map[string]int    `json:"row_counts"`
-	TxTimes      []pageTxStamp     `json:"tx_times"`
+	CurrentTxID   uint64            `json:"current_tx_id"`
+	LastModified  map[string]uint64 `json:"last_modified"`
+	RowCounts     map[string]int    `json:"row_counts"`
+	TxTimes       []pageTxStamp     `json:"tx_times"`
+	CheckpointLSN uint64            `json:"checkpoint_lsn"`
 }
 
 const (
@@ -159,9 +160,23 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 	// Recalculate catalog from actual table state to fix any inconsistencies
 	e.recalculateCatalog()
 
-	// Очищаем WAL после успешного recovery
-	if err := e.wal.Checkpoint(); err != nil {
-		return fmt.Errorf("wal checkpoint after recovery: %w", err)
+	// Записываем checkpoint record в WAL, потом сохраняем catalog с LSN,
+	// затем усекаем WAL — тот же порядок, что и в doCheckpoint.
+	checkpointLSN, err := e.wal.WriteCheckpointRecord()
+	if err != nil {
+		return fmt.Errorf("checkpoint: write checkpoint record after recovery: %w", err)
+	}
+
+	e.mu.Lock()
+	e.catalog.CheckpointLSN = checkpointLSN
+	if err := e.saveCatalogLocked(); err != nil {
+		e.mu.Unlock()
+		return fmt.Errorf("checkpoint: save catalog after recovery: %w", err)
+	}
+	e.mu.Unlock()
+
+	if err := e.wal.TruncateWAL(); err != nil {
+		return fmt.Errorf("checkpoint: truncate wal after recovery: %w", err)
 	}
 
 	slog.Info("WAL recovery: complete",
@@ -543,7 +558,7 @@ func (e *PageStorageEngine) doCheckpoint() error {
 		return nil
 	}
 
-	// Шаг 1: fsync WAL
+	// Шаг 1: fsync WAL — получаем текущий LSN
 	lsn, err := e.wal.Flush()
 	if err != nil {
 		return fmt.Errorf("checkpoint: wal flush: %w", err)
@@ -559,22 +574,30 @@ func (e *PageStorageEngine) doCheckpoint() error {
 			}
 		}
 	}
+	e.mu.Unlock()
 
-	// Шаг 3: сохраняем каталог (содержит актуальные RowCounts)
+	// Шаг 3: записываем checkpoint record в WAL (до сохранения каталога).
+	// Это гарантирует, что при crash между шагом 3 и 4 recovery
+	// сможет найти checkpoint record в WAL.
+	// ВАЖНО: mu не удерживается — нет deadlock WAL↔PageEngine:
+	// doCheckpoint: wal.mu (step 3) → mu (step 4), recovery: wal.mu → mu.
+	checkpointLSN, err := e.wal.WriteCheckpointRecord()
+	if err != nil {
+		return fmt.Errorf("checkpoint: write checkpoint record: %w", err)
+	}
+
+	// Шаг 4: сохраняем каталог с CheckpointLSN.
+	// Теперь recovery может определить checkpoint LSN из каталога.
+	e.mu.Lock()
+	e.catalog.CheckpointLSN = checkpointLSN
 	if err := e.saveCatalogLocked(); err != nil {
 		e.mu.Unlock()
 		return fmt.Errorf("checkpoint: save catalog: %w", err)
 	}
-
-	// Шаг 4: checkpoint + truncate WAL
-	// wal.Checkpoint() сам записывает OpCheckpoint перед truncate.
-	// ВАЖНО: mu уже снят, чтобы избежать deadlock при lock ordering WAL↔PageEngine:
-	// doCheckpoint: mu → wal.mu,  recovery: wal.mu → mu.
 	e.mu.Unlock()
 
-	// Truncate WAL после успешного checkpoint
-	// Все dirty pages уже сброшены на диск, безопасно удалять старые записи
-	if err := e.wal.Checkpoint(); err != nil {
+	// Шаг 5: усекаем WAL — все dirty pages сброшены, catalog сохранён
+	if err := e.wal.TruncateWAL(); err != nil {
 		return fmt.Errorf("checkpoint: truncate wal: %w", err)
 	}
 

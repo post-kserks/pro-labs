@@ -187,6 +187,48 @@ func (w *WAL) Checkpoint() error {
 	return nil
 }
 
+// WriteCheckpointRecord записывает checkpoint record в WAL и синхронизирует,
+// но НЕ усекает файл. Возвращает LSN (TxID) checkpoint записи.
+// Используется doCheckpoint для порядка: сначала checkpoint record,
+// потом сохранение каталога (чтобы recovery могла определить checkpoint LSN).
+func (w *WAL) WriteCheckpointRecord() (uint64, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	payload, err := json.Marshal(CheckpointPayload{LSN: w.nextTxID.Load()})
+	if err != nil {
+		return 0, fmt.Errorf("wal: marshal checkpoint payload: %w", err)
+	}
+	txID := w.nextTxID.Add(1)
+	record, err := buildRecord(txID, OpCheckpoint, payload)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := w.file.Write(record); err != nil {
+		return 0, fmt.Errorf("wal: write checkpoint: %w", err)
+	}
+	if err := w.file.Sync(); err != nil {
+		return 0, fmt.Errorf("wal: sync checkpoint: %w", err)
+	}
+	return txID, nil
+}
+
+// TruncateWAL усекает WAL файл после checkpoint.
+// Вызывается после сохранения каталога, чтобы recovery могла
+// определить checkpoint LSN из каталога перед чтением WAL.
+func (w *WAL) TruncateWAL() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if err := w.file.Truncate(0); err != nil {
+		return fmt.Errorf("wal: truncate after checkpoint: %w", err)
+	}
+	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("wal: seek after truncate: %w", err)
+	}
+	return nil
+}
+
 func (w *WAL) Recover() ([]Entry, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
