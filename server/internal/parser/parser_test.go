@@ -1227,3 +1227,45 @@ func TestParseInsertSelect(t *testing.T) {
 		}
 	})
 }
+
+func TestParseUpdateFromSubquery(t *testing.T) {
+	queries := []struct {
+		sql       string
+		hasSub    bool
+		hasTable  bool
+		alias     string
+	}{
+		{
+			sql:    "UPDATE t1 SET col = s.val FROM (SELECT id, val FROM t2) AS s WHERE t1.id = s.id;",
+			hasSub: true, alias: "s",
+		},
+		{
+			sql:    "UPDATE t1 SET col = s.val FROM (SELECT id, val FROM t2) s WHERE t1.id = s.id;",
+			hasSub: true,
+			alias:  "s",
+		},
+		{
+			sql:      "UPDATE t1 SET col = t2.val FROM t2 WHERE t1.id = t2.id;",
+			hasTable: true,
+		},
+	}
+	for _, q := range queries {
+		stmt, err := Parse(q.sql)
+		if err != nil {
+			t.Fatalf("failed to parse: %q: %v", q.sql, err)
+		}
+		u, ok := stmt.(*UpdateStatement)
+		if !ok {
+			t.Fatalf("expected *UpdateStatement for %q", q.sql)
+		}
+		if q.hasSub && u.FromSubquery == nil {
+			t.Fatalf("expected FromSubquery for %q", q.sql)
+		}
+		if q.hasTable && u.FromTable == "" {
+			t.Fatalf("expected FromTable for %q", q.sql)
+		}
+		if q.alias != "" && u.FromAlias != q.alias {
+			t.Fatalf("expected FromAlias %q, got %q for %s", q.alias, u.FromAlias, q.sql)
+		}
+	}
+}

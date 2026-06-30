@@ -117,6 +117,7 @@ type CTEStatement struct {
 type MergeStatement struct {
 	TargetTable    string
 	SourceTable    string
+	SourceQuery    Statement   // subquery source (alternative to SourceTable)
 	Alias          string
 	OnCondition    Expression
 	WhenMatched    *MergeWhenClause
@@ -130,6 +131,7 @@ type MergeWhenClause struct {
 	Assignments []Assignment   // для UPDATE
 	Columns     []string       // для INSERT
 	Values      [][]Expression // для INSERT
+	SelectQuery Statement      // INSERT ... SELECT (alternative to Values)
 }
 
 func (*MergeStatement) statementNode()        {}
@@ -242,12 +244,13 @@ type Assignment struct {
 }
 
 type UpdateStatement struct {
-	TableName   string
-	Assignments []Assignment
-	Where       Expression
-	Returning   []SelectColumn // RETURNING clause
-	FromTable   string         // UPDATE ... FROM table
-	FromAlias   string
+	TableName    string
+	Assignments  []Assignment
+	Where        Expression
+	Returning    []SelectColumn  // RETURNING clause
+	FromTable    string          // UPDATE ... FROM table
+	FromAlias    string          // alias for FROM table or subquery
+	FromSubquery *SelectStatement // UPDATE ... FROM (SELECT ...) AS alias
 }
 
 type DeleteStatement struct {

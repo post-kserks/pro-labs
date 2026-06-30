@@ -4,6 +4,7 @@ package executor
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"vaultdb/internal/parser"
@@ -102,7 +103,44 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 
 	var fromRows []storage.Row
 	var fromSchema *storage.TableSchema
-	if c.stmt.FromTable != "" {
+	if c.stmt.FromSubquery != nil {
+		// FROM (SELECT ...) AS alias — execute the subquery
+		subCmd, err := CommandFactory(c.stmt.FromSubquery)
+		if err != nil {
+			return nil, fmt.Errorf("FROM subquery: %w", err)
+		}
+		subResult, err := subCmd.Execute(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("FROM subquery: %w", err)
+		}
+		fromSchema = &storage.TableSchema{
+			Name:    "FROM_SUBQUERY",
+			Columns: make([]storage.ColumnSchema, len(subResult.Columns)),
+		}
+		for i, col := range subResult.Columns {
+			colType := "TEXT"
+			for _, row := range subResult.Rows {
+				if i < len(row) && row[i] != "" {
+					if _, err := strconv.ParseInt(row[i], 10, 64); err == nil {
+						colType = "INT"
+					} else if _, err := strconv.ParseFloat(row[i], 64); err == nil {
+						colType = "FLOAT"
+					} else if row[i] == "true" || row[i] == "false" {
+						colType = "BOOL"
+					}
+					break
+				}
+			}
+			fromSchema.Columns[i] = storage.ColumnSchema{Name: col, Type: colType}
+		}
+		fromRows = make([]storage.Row, len(subResult.Rows))
+		for i, row := range subResult.Rows {
+			fromRows[i] = make(storage.Row, len(row))
+			for j, val := range row {
+				fromRows[i][j] = val
+			}
+		}
+	} else if c.stmt.FromTable != "" {
 		if !ctx.Storage.TableExists(dbName, c.stmt.FromTable) {
 			return nil, fmt.Errorf("FROM table '%s' does not exist", c.stmt.FromTable)
 		}
@@ -157,6 +195,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 
 	indices := make([]int, 0)
 	var matchedRows []storage.Row
+	var matchedEvalRows []storage.Row
 	if fromRows != nil {
 		seenTarget := make(map[int]bool)
 		for idx, row := range evalRows {
@@ -170,6 +209,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 					seenTarget[targetIdx] = true
 					indices = append(indices, targetIdx)
 					matchedRows = append(matchedRows, rows[targetIdx])
+					matchedEvalRows = append(matchedEvalRows, row)
 				}
 			}
 		}
@@ -182,6 +222,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 			if match {
 				indices = append(indices, idx)
 				matchedRows = append(matchedRows, row)
+				matchedEvalRows = append(matchedEvalRows, row)
 			}
 		}
 	}
@@ -192,7 +233,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		newRow := make(storage.Row, len(row))
 		copy(newRow, row)
 		for _, assign := range c.stmt.Assignments {
-			val, err := evalOperand(assign.Value, row, evalSchema, ctx)
+			val, err := evalOperand(assign.Value, matchedEvalRows[i], evalSchema, ctx)
 			if err != nil {
 				return nil, fmt.Errorf("column '%s': %w", assign.Column, err)
 			}

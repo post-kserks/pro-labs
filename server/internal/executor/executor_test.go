@@ -733,3 +733,47 @@ func TestInsertSelectCTE(t *testing.T) {
 		t.Fatalf("expected 4 rows in dst, got %s", sel.Rows[0][0])
 	}
 }
+
+func TestUpdateFromSubquery(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// Create a source table with bonus levels
+	executeSQL(t, session, "CREATE TABLE bonuses (hero_id INT, bonus INT);")
+	executeSQL(t, session, "INSERT INTO bonuses VALUES (1, 5);")
+	executeSQL(t, session, "INSERT INTO bonuses VALUES (2, 3);")
+	executeSQL(t, session, "INSERT INTO bonuses VALUES (3, 2);")
+
+	// UPDATE using FROM subquery
+	result := executeSQL(t, session,
+		"UPDATE heroes SET level = level + b.bonus FROM (SELECT hero_id, bonus FROM bonuses) AS b WHERE heroes.id = b.hero_id RETURNING name, level;")
+	if result.Type != "rows" {
+		t.Fatalf("expected rows result, got %s", result.Type)
+	}
+	if len(result.Rows) != 3 {
+		t.Fatalf("expected 3 returned rows, got %d", len(result.Rows))
+	}
+
+	// Verify: Aragorn 10+5=15, Legolas 9+3=12, Gimli 8+2=10
+	expected := map[string]string{
+		"Aragorn": "15",
+		"Legolas": "12",
+		"Gimli":   "10",
+	}
+	for _, row := range result.Rows {
+		name, level := row[0], row[1]
+		if exp, ok := expected[name]; ok {
+			if level != exp {
+				t.Fatalf("expected level %s for %s, got %s", exp, name, level)
+			}
+		} else {
+			t.Fatalf("unexpected row: %v", row)
+		}
+	}
+
+	// Boromir should remain unchanged (no bonus row for id=4)
+	verify := executeSQL(t, session, "SELECT level FROM heroes WHERE name = 'Boromir';")
+	if len(verify.Rows) != 1 || verify.Rows[0][0] != "5" {
+		t.Fatalf("expected Boromir level 5, got %v", verify.Rows[0])
+	}
+}

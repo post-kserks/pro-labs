@@ -583,7 +583,7 @@ func encodePendingOp(op txmanager.PendingOp) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("spill: invalid update payload type %T", op.Payload)
 		}
-		if s.FromTable != "" || len(s.Returning) > 0 {
+		if s.FromTable != "" || s.FromSubquery != nil || len(s.Returning) > 0 {
 			return nil, fmt.Errorf("spill: UPDATE with FROM/RETURNING is not supported")
 		}
 		wu := &wireUpdate{TableName: s.TableName}
