@@ -57,6 +57,9 @@ func FormatExpression(expr Expression) string {
 	case *NotExpr:
 		return fmt.Sprintf("NOT %s", FormatExpression(e.Expr))
 	case *ColumnRef:
+		if e.Table != "" {
+			return fmt.Sprintf("%s.%s", e.Table, e.Name)
+		}
 		return e.Name
 	case Value:
 		return formatValueSQL(e)
@@ -72,6 +75,94 @@ func FormatExpression(expr Expression) string {
 			not = "NOT "
 		}
 		return fmt.Sprintf("%s %sIN (%s)", FormatExpression(e.Left), not, strings.Join(ops, ", "))
+	case *ParamRef:
+		return fmt.Sprintf("$%d", e.Index)
+	case *FunctionCall:
+		args := make([]string, len(e.Args))
+		for i, a := range e.Args {
+			args[i] = FormatExpression(a)
+		}
+		return fmt.Sprintf("%s(%s)", e.Name, strings.Join(args, ", "))
+	case *AggregateExpr:
+		args := make([]string, len(e.Args))
+		for i, a := range e.Args {
+			args[i] = FormatExpression(a)
+		}
+		distinct := ""
+		if e.Distinct {
+			distinct = "DISTINCT "
+		}
+		return fmt.Sprintf("%s(%s%s)", e.Name, distinct, strings.Join(args, ", "))
+	case *CastExpr:
+		return fmt.Sprintf("CAST(%s AS %s)", FormatExpression(e.Expr), e.TargetType)
+	case *CaseExpr:
+		var sb strings.Builder
+		sb.WriteString("CASE")
+		if e.Base != nil {
+			sb.WriteString(" ")
+			sb.WriteString(FormatExpression(e.Base))
+		}
+		for _, w := range e.Whens {
+			sb.WriteString(fmt.Sprintf(" WHEN %s THEN %s", FormatExpression(w.Condition), FormatExpression(w.Result)))
+		}
+		if e.Else != nil {
+			sb.WriteString(fmt.Sprintf(" ELSE %s", FormatExpression(e.Else)))
+		}
+		sb.WriteString(" END")
+		return sb.String()
+	case *SubqueryExpr:
+		if e.Query != nil {
+			return fmt.Sprintf("(%s)", e.Query.StatementType())
+		}
+		return "(SUBQUERY)"
+	case *ExistsExpr:
+		not := ""
+		if e.Not {
+			not = "NOT "
+		}
+		if e.Select != nil {
+			return fmt.Sprintf("%sEXISTS (%s)", not, e.Select.StatementType())
+		}
+		return fmt.Sprintf("%sEXISTS (SUBQUERY)", not)
+	case *BetweenExpr:
+		not := ""
+		if e.Not {
+			not = "NOT "
+		}
+		return fmt.Sprintf("%s %sBETWEEN %s AND %s", FormatExpression(e.Expr), not, FormatExpression(e.Lower), FormatExpression(e.Upper))
+	case *JsonPathExpr:
+		return fmt.Sprintf("%s%s'%s'", FormatExpression(e.Left), e.Op, e.Path)
+	case *WindowFunctionExpr:
+		args := make([]string, len(e.Args))
+		for i, a := range e.Args {
+			args[i] = FormatExpression(a)
+		}
+		var parts []string
+		if len(e.Over.PartitionBy) > 0 {
+			partCols := make([]string, len(e.Over.PartitionBy))
+			for i, p := range e.Over.PartitionBy {
+				partCols[i] = FormatExpression(p)
+			}
+			parts = append(parts, fmt.Sprintf("PARTITION BY %s", strings.Join(partCols, ", ")))
+		}
+		if len(e.Over.OrderBy) > 0 {
+			orderItems := make([]string, len(e.Over.OrderBy))
+			for i, o := range e.Over.OrderBy {
+				dir := ""
+				if o.Direction != "" {
+					dir = " " + o.Direction
+				}
+				orderItems[i] = fmt.Sprintf("%s%s", FormatExpression(o.Expr), dir)
+			}
+			parts = append(parts, fmt.Sprintf("ORDER BY %s", strings.Join(orderItems, ", ")))
+		}
+		overClause := ""
+		if len(parts) > 0 {
+			overClause = fmt.Sprintf(" OVER (%s)", strings.Join(parts, " "))
+		}
+		return fmt.Sprintf("%s(%s)%s", e.FuncName, strings.Join(args, ", "), overClause)
+	case *ComparisonSubqueryExpr:
+		return fmt.Sprintf("%s %s %s (SUBQUERY)", FormatExpression(e.Left), e.Operator, e.Quantifier)
 	default:
 		return "<expr>"
 	}
