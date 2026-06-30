@@ -566,16 +566,13 @@ func (e *PageStorageEngine) doCheckpoint() error {
 		return fmt.Errorf("checkpoint: save catalog: %w", err)
 	}
 
-	// Шаг 4: записать checkpoint в WAL
+	// Шаг 4: checkpoint + truncate WAL
+	// wal.Checkpoint() сам записывает OpCheckpoint перед truncate.
 	// ВАЖНО: mu уже снят, чтобы избежать deadlock при lock ordering WAL↔PageEngine:
 	// doCheckpoint: mu → wal.mu,  recovery: wal.mu → mu.
 	e.mu.Unlock()
 
-	if _, err := e.wal.Append(wal.OpCheckpoint, wal.CheckpointPayload{LSN: lsn}); err != nil {
-		return fmt.Errorf("checkpoint: write record: %w", err)
-	}
-
-	// Шаг 5: truncate WAL после успешного checkpoint
+	// Truncate WAL после успешного checkpoint
 	// Все dirty pages уже сброшены на диск, безопасно удалять старые записи
 	if err := e.wal.Checkpoint(); err != nil {
 		return fmt.Errorf("checkpoint: truncate wal: %w", err)
