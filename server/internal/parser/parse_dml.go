@@ -29,32 +29,46 @@ func (p *sqlParser) parseInsert() (Statement, error) {
 		}
 	}
 
-	if err := p.consume(lexer.TOKEN_VALUES, "VALUES"); err != nil {
-		return nil, err
-	}
+	var rows [][]Expression
+	var selectQuery Statement
 
-	rows := make([][]Expression, 0, 4)
-	for {
-		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
-			return nil, err
-		}
-		row, err := p.parseValueListUntilRParen()
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, row)
-		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
-			return nil, err
-		}
-
-		if p.current().Type != lexer.TOKEN_COMMA {
-			break
-		}
+	if p.current().Type == lexer.TOKEN_VALUES {
 		p.advance()
-	}
+		rows = make([][]Expression, 0, 4)
+		for {
+			if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+				return nil, err
+			}
+			row, err := p.parseValueListUntilRParen()
+			if err != nil {
+				return nil, err
+			}
+			rows = append(rows, row)
+			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				return nil, err
+			}
 
-	if len(rows) == 0 {
-		return nil, fmt.Errorf("syntax error: INSERT requires at least one VALUES row")
+			if p.current().Type != lexer.TOKEN_COMMA {
+				break
+			}
+			p.advance()
+		}
+
+		if len(rows) == 0 {
+			return nil, fmt.Errorf("syntax error: INSERT requires at least one VALUES row")
+		}
+	} else if p.current().Type == lexer.TOKEN_SELECT {
+		stmt, err := p.parseSelect()
+		if err != nil {
+			return nil, fmt.Errorf("INSERT ... SELECT: %w", err)
+		}
+		// Check for set operations (UNION, INTERSECT, EXCEPT)
+		selectQuery, err = p.parseSetOperation(stmt)
+		if err != nil {
+			return nil, fmt.Errorf("INSERT ... SELECT: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("syntax error: INSERT requires VALUES or SELECT after column list")
 	}
 
 	// Check for ON CONFLICT
@@ -117,7 +131,7 @@ func (p *sqlParser) parseInsert() (Statement, error) {
 		}
 	}
 
-	return &InsertStatement{TableName: tableName, Columns: columns, Rows: rows, OnConflict: onConflict, Returning: returning}, nil
+	return &InsertStatement{TableName: tableName, Columns: columns, Rows: rows, SelectQuery: selectQuery, OnConflict: onConflict, Returning: returning}, nil
 }
 
 func (p *sqlParser) parseUpdate() (Statement, error) {
@@ -295,6 +309,14 @@ func (p *sqlParser) parseMerge() (Statement, error) {
 			if err != nil {
 				return nil, err
 			}
+			// Allow table-qualified LHS: SET t.col = expr
+			if p.current().Type == lexer.TOKEN_DOT && p.peek().Type == lexer.TOKEN_IDENT {
+				p.advance() // consume dot
+				column, err = p.consumeIdent("column name")
+				if err != nil {
+					return nil, err
+				}
+			}
 			if err := p.consume(lexer.TOKEN_EQ, "'='"); err != nil {
 				return nil, err
 			}
@@ -357,6 +379,16 @@ func (p *sqlParser) parseMerge() (Statement, error) {
 		whenNotMatched = &MergeWhenClause{Action: "INSERT", Columns: columns, Values: [][]Expression{values}}
 	}
 
+	// Optional RETURNING clause
+	var returning []SelectColumn
+	if p.current().Type == lexer.TOKEN_RETURNING {
+		p.advance()
+		returning, err = p.parseSelectColumns()
+		if err != nil {
+			return nil, fmt.Errorf("MERGE RETURNING: %w", err)
+		}
+	}
+
 	return &MergeStatement{
 		TargetTable:    targetTable,
 		SourceTable:    sourceTable,
@@ -364,5 +396,6 @@ func (p *sqlParser) parseMerge() (Statement, error) {
 		OnCondition:    onCondition,
 		WhenMatched:    whenMatched,
 		WhenNotMatched: whenNotMatched,
+		Returning:      returning,
 	}, nil
 }

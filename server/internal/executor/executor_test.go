@@ -653,3 +653,68 @@ func TestExplainContainsPlannerNote(t *testing.T) {
 		t.Fatalf("EXPLAIN output must contain cost estimate, got:\n%s", result.Message)
 	}
 }
+
+func TestInsertSelectBasic(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	executeSQL(t, session, "CREATE TABLE heroes_copy (id INT, name VARCHAR(100), level INT, alive BOOL, score FLOAT, bio TEXT);")
+
+	result := executeSQL(t, session, "INSERT INTO heroes_copy SELECT * FROM heroes;")
+	if result.Affected != 4 {
+		t.Fatalf("expected 4 affected rows, got %d", result.Affected)
+	}
+
+	sel := executeSQL(t, session, "SELECT COUNT(*) FROM heroes_copy;")
+	if sel.Rows[0][0] != "4" {
+		t.Fatalf("expected 4 rows in heroes_copy, got %s", sel.Rows[0][0])
+	}
+
+	sel = executeSQL(t, session, "SELECT name FROM heroes_copy WHERE id = 1;")
+	if sel.Rows[0][0] != "Aragorn" {
+		t.Fatalf("expected 'Aragorn', got %s", sel.Rows[0][0])
+	}
+}
+
+func TestInsertSelectWithWhere(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	executeSQL(t, session, "CREATE TABLE alive_heroes (id INT, name VARCHAR(100), level INT);")
+
+	result := executeSQL(t, session, "INSERT INTO alive_heroes (id, name, level) SELECT id, name, level FROM heroes WHERE alive = TRUE;")
+	if result.Affected != 3 {
+		t.Fatalf("expected 3 affected rows, got %d", result.Affected)
+	}
+
+	sel := executeSQL(t, session, "SELECT name FROM alive_heroes ORDER BY id;")
+	expected := []string{"Aragorn", "Legolas", "Gimli"}
+	if len(sel.Rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(sel.Rows))
+	}
+	for i, row := range sel.Rows {
+		if row[0] != expected[i] {
+			t.Fatalf("row %d: expected %s, got %s", i, expected[i], row[0])
+		}
+	}
+}
+
+func TestInsertSelectCTE(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	executeSQL(t, session, "CREATE TABLE dst (id INT, name VARCHAR(100));")
+
+	result := executeSQL(t, session, "WITH cte AS (INSERT INTO dst SELECT id, name FROM heroes RETURNING id, name) SELECT * FROM cte;")
+	if result.Type != "rows" {
+		t.Fatalf("expected rows result type, got %s", result.Type)
+	}
+	if len(result.Rows) != 4 {
+		t.Fatalf("expected 4 rows from CTE SELECT, got %d", len(result.Rows))
+	}
+
+	sel := executeSQL(t, session, "SELECT COUNT(*) FROM dst;")
+	if sel.Rows[0][0] != "4" {
+		t.Fatalf("expected 4 rows in dst, got %s", sel.Rows[0][0])
+	}
+}

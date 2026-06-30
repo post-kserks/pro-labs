@@ -121,6 +121,7 @@ type MergeStatement struct {
 	OnCondition    Expression
 	WhenMatched    *MergeWhenClause
 	WhenNotMatched *MergeWhenClause
+	Returning      []SelectColumn
 }
 
 // MergeWhenClause — WHEN MATCHED THEN ... или WHEN NOT MATCHED THEN ...
@@ -223,7 +224,7 @@ type InsertStatement struct {
 	TableName   string
 	Columns     []string // empty means all columns in schema order
 	Rows        [][]Expression
-	SelectQuery *SelectStatement  // INSERT ... SELECT
+	SelectQuery Statement  // INSERT ... SELECT (SelectStatement or SetOperationStatement)
 	OnConflict  *OnConflictClause // INSERT ... ON CONFLICT DO ...
 	Returning   []SelectColumn    // RETURNING clause
 }
@@ -518,7 +519,7 @@ type AggregateExpr struct {
 }
 
 type SubqueryExpr struct {
-	Query *SelectStatement
+	Query Statement
 }
 
 type FrameSpec struct {
@@ -547,7 +548,7 @@ type CastExpr struct {
 }
 
 type ExistsExpr struct {
-	Select *SelectStatement
+	Select Statement
 	Not    bool // NOT EXISTS
 }
 
@@ -580,7 +581,7 @@ type ComparisonSubqueryExpr struct {
 	Left       Expression
 	Operator   string // =, !=, <, >, <=, >=
 	Quantifier string // ALL, ANY, SOME
-	Subquery   *SelectStatement
+	Subquery   Statement
 }
 
 func (*WindowFunctionExpr) expressionNode()     {}

@@ -777,8 +777,12 @@ func TestParseExpressionExists(t *testing.T) {
 	if exists.Select == nil {
 		t.Fatal("expected non-nil Select")
 	}
-	if exists.Select.TableName != "t2" {
-		t.Fatalf("expected subquery table 't2', got %q", exists.Select.TableName)
+	selStmt, ok := exists.Select.(*SelectStatement)
+	if !ok {
+		t.Fatalf("expected *SelectStatement, got %T", exists.Select)
+	}
+	if selStmt.TableName != "t2" {
+		t.Fatalf("expected subquery table 't2', got %q", selStmt.TableName)
 	}
 }
 
@@ -1006,6 +1010,220 @@ func TestParseSetOperation(t *testing.T) {
 		}
 		if setOp.Op != "EXCEPT" {
 			t.Fatalf("expected 'EXCEPT', got %q", setOp.Op)
+		}
+	})
+}
+
+func TestSubqueryWithUnion(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE col = (SELECT id FROM t1 UNION SELECT id FROM t2);")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	sel := stmt.(*SelectStatement)
+	bin, ok := sel.Where.(*BinaryExpr)
+	if !ok {
+		t.Fatalf("expected *BinaryExpr, got %T", sel.Where)
+	}
+	sub, ok := bin.Right.(*SubqueryExpr)
+	if !ok {
+		t.Fatalf("expected *SubqueryExpr on right, got %T", bin.Right)
+	}
+	setOp, ok := sub.Query.(*SetOperationStatement)
+	if !ok {
+		t.Fatalf("expected *SetOperationStatement, got %T", sub.Query)
+	}
+	if setOp.Op != "UNION" {
+		t.Fatalf("expected UNION, got %q", setOp.Op)
+	}
+}
+
+func TestExistsWithUnion(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE EXISTS (SELECT id FROM t1 UNION SELECT id FROM t2);")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	sel := stmt.(*SelectStatement)
+	exists, ok := sel.Where.(*ExistsExpr)
+	if !ok {
+		t.Fatalf("expected *ExistsExpr, got %T", sel.Where)
+	}
+	setOp, ok := exists.Select.(*SetOperationStatement)
+	if !ok {
+		t.Fatalf("expected *SetOperationStatement, got %T", exists.Select)
+	}
+	if setOp.Op != "UNION" {
+		t.Fatalf("expected UNION, got %q", setOp.Op)
+	}
+}
+
+func TestSubqueryWithIntersect(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE col IN (SELECT id FROM t1 INTERSECT SELECT id FROM t2);")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	sel := stmt.(*SelectStatement)
+	inExpr, ok := sel.Where.(*InExpr)
+	if !ok {
+		t.Fatalf("expected *InExpr, got %T", sel.Where)
+	}
+	sub, ok := inExpr.Right[0].(*SubqueryExpr)
+	if !ok {
+		t.Fatalf("expected *SubqueryExpr, got %T", inExpr.Right[0])
+	}
+	setOp, ok := sub.Query.(*SetOperationStatement)
+	if !ok {
+		t.Fatalf("expected *SetOperationStatement, got %T", sub.Query)
+	}
+	if setOp.Op != "INTERSECT" {
+		t.Fatalf("expected INTERSECT, got %q", setOp.Op)
+	}
+}
+
+func TestSubqueryWithExcept(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE col = (SELECT id FROM t1 EXCEPT SELECT id FROM t2);")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	sel := stmt.(*SelectStatement)
+	bin, ok := sel.Where.(*BinaryExpr)
+	if !ok {
+		t.Fatalf("expected *BinaryExpr, got %T", sel.Where)
+	}
+	sub, ok := bin.Right.(*SubqueryExpr)
+	if !ok {
+		t.Fatalf("expected *SubqueryExpr on right, got %T", bin.Right)
+	}
+	setOp, ok := sub.Query.(*SetOperationStatement)
+	if !ok {
+		t.Fatalf("expected *SetOperationStatement, got %T", sub.Query)
+	}
+	if setOp.Op != "EXCEPT" {
+		t.Fatalf("expected EXCEPT, got %q", setOp.Op)
+	}
+}
+
+func TestNotInSubquery(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE col NOT IN (SELECT id FROM t2);")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	sel := stmt.(*SelectStatement)
+	inExpr, ok := sel.Where.(*InExpr)
+	if !ok {
+		t.Fatalf("expected *InExpr, got %T", sel.Where)
+	}
+	if !inExpr.Not {
+		t.Fatal("expected Not=true")
+	}
+	sub, ok := inExpr.Right[0].(*SubqueryExpr)
+	if !ok {
+		t.Fatalf("expected *SubqueryExpr, got %T", inExpr.Right[0])
+	}
+	selStmt, ok := sub.Query.(*SelectStatement)
+	if !ok {
+		t.Fatalf("expected *SelectStatement, got %T", sub.Query)
+	}
+	if selStmt.TableName != "t2" {
+		t.Fatalf("expected table 't2', got %q", selStmt.TableName)
+	}
+}
+
+func TestNotInSubqueryWithUnion(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE col NOT IN (SELECT id FROM t1 UNION SELECT id FROM t2);")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	sel := stmt.(*SelectStatement)
+	inExpr, ok := sel.Where.(*InExpr)
+	if !ok {
+		t.Fatalf("expected *InExpr, got %T", sel.Where)
+	}
+	if !inExpr.Not {
+		t.Fatal("expected Not=true")
+	}
+	sub, ok := inExpr.Right[0].(*SubqueryExpr)
+	if !ok {
+		t.Fatalf("expected *SubqueryExpr, got %T", inExpr.Right[0])
+	}
+	setOp, ok := sub.Query.(*SetOperationStatement)
+	if !ok {
+		t.Fatalf("expected *SetOperationStatement, got %T", sub.Query)
+	}
+	if setOp.Op != "UNION" {
+		t.Fatalf("expected UNION, got %q", setOp.Op)
+	}
+}
+
+func TestParseInsertSelect(t *testing.T) {
+	t.Run("basic", func(t *testing.T) {
+		stmt, err := Parse("INSERT INTO t1 SELECT * FROM t2;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		ins, ok := stmt.(*InsertStatement)
+		if !ok {
+			t.Fatalf("expected *InsertStatement, got %T", stmt)
+		}
+		if ins.TableName != "t1" {
+			t.Fatalf("expected table 't1', got %q", ins.TableName)
+		}
+		if ins.SelectQuery == nil {
+			t.Fatal("expected SelectQuery to be set")
+		}
+		if len(ins.Rows) != 0 {
+			t.Fatalf("expected no VALUES rows, got %d", len(ins.Rows))
+		}
+	})
+
+	t.Run("with columns", func(t *testing.T) {
+		stmt, err := Parse("INSERT INTO t1 (a, b) SELECT x, y FROM t2;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		ins, ok := stmt.(*InsertStatement)
+		if !ok {
+			t.Fatalf("expected *InsertStatement, got %T", stmt)
+		}
+		if len(ins.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(ins.Columns))
+		}
+		if ins.Columns[0] != "a" || ins.Columns[1] != "b" {
+			t.Fatalf("expected columns [a, b], got %v", ins.Columns)
+		}
+		if ins.SelectQuery == nil {
+			t.Fatal("expected SelectQuery to be set")
+		}
+	})
+
+	t.Run("with WHERE", func(t *testing.T) {
+		stmt, err := Parse("INSERT INTO t1 SELECT * FROM t2 WHERE id > 5;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		ins := stmt.(*InsertStatement)
+		if ins.SelectQuery == nil {
+			t.Fatal("expected SelectQuery to be set")
+		}
+		sel, ok := ins.SelectQuery.(*SelectStatement)
+		if !ok {
+			t.Fatalf("expected *SelectStatement, got %T", ins.SelectQuery)
+		}
+		if sel.Where == nil {
+			t.Fatal("expected WHERE clause")
+		}
+	})
+
+	t.Run("with RETURNING", func(t *testing.T) {
+		stmt, err := Parse("INSERT INTO t1 SELECT * FROM t2 RETURNING *;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		ins := stmt.(*InsertStatement)
+		if ins.SelectQuery == nil {
+			t.Fatal("expected SelectQuery to be set")
+		}
+		if ins.Returning == nil {
+			t.Fatal("expected Returning to be non-nil (RETURNING clause present)")
 		}
 	})
 }
