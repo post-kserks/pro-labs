@@ -114,9 +114,9 @@ func extractMergeEqualityColumns(cond parser.Expression, targetTable, sourceTabl
 	return nil
 }
 
-// buildMergeKey создаёт хеш-ключ из значений столбцов для hash join.
-func buildMergeKey(row storage.Row, colName string, colIdxMap map[string]int) string {
-	ci, ok := colIdxMap[strings.ToLower(colName)]
+// buildMergeKeyFromCombined создаёт хеш-ключ из значений столбцов для hash join.
+func buildMergeKeyFromCombined(row storage.Row, colName string, combinedColIdx map[string]int, _ int) string {
+	ci, ok := combinedColIdx[strings.ToLower(colName)]
 	if !ok || ci >= len(row) {
 		return ""
 	}
@@ -376,13 +376,6 @@ func (c *MergeCommand) executeMergeHashJoin(ctx *ExecutionContext, dbName string
 	}
 
 	return affected, returningRows, oldRows, nil
-}
-func buildMergeKeyFromCombined(row storage.Row, colName string, combinedColIdx map[string]int, _ int) string {
-	ci, ok := combinedColIdx[strings.ToLower(colName)]
-	if !ok || ci >= len(row) {
-		return ""
-	}
-	return valueToString(row[ci])
 }
 
 // executeMergeNestedLoop выполняет MERGE через nested loop.

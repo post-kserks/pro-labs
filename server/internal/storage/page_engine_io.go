@@ -6,26 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"vaultdb/internal/index"
 	"vaultdb/internal/storage/heap"
 	"vaultdb/internal/storage/page"
 	"vaultdb/internal/wal"
 )
-
-// retryOnError retries fn up to 3 times with exponential backoff (10ms, 20ms, 40ms).
-// Returns the last error if all retries fail.
-func retryOnError(fn func() error) error {
-	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		if err = fn(); err == nil {
-			return nil
-		}
-		time.Sleep(time.Duration(1<<uint(attempt)*10) * time.Millisecond)
-	}
-	return err
-}
 
 // ── Сканирование ──────────────────────────────────────────────────────────
 
@@ -238,11 +224,6 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		tuples = append(tuples, tuple)
 	}
 
-	insertedTuples := make([]struct {
-		pid  page.PageID
-		slot uint16
-	}, 0, len(tuples))
-
 	// Cache page count — avoid syscall per tuple in batch inserts.
 	cachedPageCount, err := t.heap.PageCount()
 	if err != nil {
@@ -302,11 +283,6 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 						return 0, fmt.Errorf("wal insert: %w", err)
 					}
 				}
-
-				insertedTuples = append(insertedTuples, struct {
-					pid  page.PageID
-					slot uint16
-				}{pid, slot})
 
 				e.bufPool.UnpinPageDirty(pid, lsn)
 				e.pageLock.UnlockPageWrite(pid)

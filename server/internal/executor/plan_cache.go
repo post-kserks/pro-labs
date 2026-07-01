@@ -1,14 +1,10 @@
 package executor
 
 import (
-	"fmt"
 	"sync"
-	"vaultdb/internal/parser"
 )
 
 type CachedPlan struct {
-	stmt      parser.Statement
-	cmd       Command
 	tableName string
 }
 
@@ -59,26 +55,4 @@ func (pc *PlanCache) Invalidate(tableName string) {
 			delete(pc.plans, k)
 		}
 	}
-}
-
-func planCacheKey(stmt parser.Statement, _ string) string {
-	// NOTE: plan cache is currently disabled because the key cannot include
-	// the actual SQL text (prepared statements don't store the original string).
-	// Two different queries of the same type would share a cache entry.
-	// TODO: store original SQL in PreparedStatement and include it in the key.
-	return fmt.Sprintf("disabled:%T:%s", stmt, stmt.StatementType())
-}
-
-func tableNameFromStmt(stmt parser.Statement) string {
-	switch s := stmt.(type) {
-	case *parser.SelectStatement:
-		return s.TableName
-	case *parser.InsertStatement:
-		return s.TableName
-	case *parser.UpdateStatement:
-		return s.TableName
-	case *parser.DeleteStatement:
-		return s.TableName
-	}
-	return ""
 }

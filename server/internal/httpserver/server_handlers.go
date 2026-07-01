@@ -759,14 +759,6 @@ func (s *Server) handlePostTableData(w http.ResponseWriter, r *http.Request, dbN
 	})
 }
 
-func escapeJSON(s string) string {
-	b, err := json.Marshal(s)
-	if err != nil {
-		return `"` + s + `"`
-	}
-	return string(b)
-}
-
 func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
 	var req struct {

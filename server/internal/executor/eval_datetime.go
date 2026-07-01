@@ -75,10 +75,7 @@ func evalDateInterval(dateStr, intervalStr, op string) (interface{}, error) {
 			amount = n
 		}
 	}
-	unit := strings.ToUpper(parts[len(parts)-1])
-	if strings.HasSuffix(unit, "S") {
-		unit = unit[:len(unit)-1]
-	}
+	unit := strings.TrimSuffix(strings.ToUpper(parts[len(parts)-1]), "S")
 
 	switch op {
 	case "+":

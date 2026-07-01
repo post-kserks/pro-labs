@@ -3,7 +3,6 @@ package executor
 import (
 	"fmt"
 	"math/rand"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1576,6 +1575,3 @@ func TestStressSummary(t *testing.T) {
 }
 
 // sort.Ints helper for test assertions
-func sortInts(arr []int) {
-	sort.Ints(arr)
-}

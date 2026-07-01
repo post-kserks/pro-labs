@@ -430,7 +430,7 @@ func fireTriggers(ctx *ExecutionContext, dbName, tableName, event string) {
 		body, _ := td["body"].(string)
 		name, _ := td["name"].(string)
 
-		if triggerTable != tableName || strings.ToUpper(triggerEvent) != strings.ToUpper(event) {
+		if triggerTable != tableName || !strings.EqualFold(triggerEvent, event) {
 			continue
 		}
 		if timing != "AFTER" {

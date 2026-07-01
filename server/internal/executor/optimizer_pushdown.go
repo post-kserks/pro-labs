@@ -312,29 +312,3 @@ func (o *Optimizer) collectTables(stmt *parser.SelectStatement) []string {
 	}
 	return tables
 }
-
-func (o *Optimizer) findIndexableColumn(dbName, tableName string, expr parser.Expression) string {
-	if expr == nil {
-		return ""
-	}
-
-	switch e := expr.(type) {
-	case *parser.BinaryExpr:
-		if e.Operator == "=" {
-			if col, ok := e.Left.(*parser.ColumnRef); ok {
-				return col.Name
-			}
-			if col, ok := e.Right.(*parser.ColumnRef); ok {
-				return col.Name
-			}
-		}
-	case *parser.AndExpr:
-		if col := o.findIndexableColumn(dbName, tableName, e.Left); col != "" {
-			return col
-		}
-		return o.findIndexableColumn(dbName, tableName, e.Right)
-	case *parser.OrExpr:
-		return ""
-	}
-	return ""
-}

@@ -139,10 +139,7 @@ func (c *SelectCommand) hasAggregates() bool {
 			return true
 		}
 	}
-	if c.containsAggregate(c.stmt.Having) {
-		return true
-	}
-	return false
+	return c.containsAggregate(c.stmt.Having)
 }
 
 func (c *SelectCommand) containsAggregate(expr parser.Expression) bool {

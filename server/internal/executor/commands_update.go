@@ -179,16 +179,16 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 			Name:    "UPDATE_JOIN",
 			Columns: make([]storage.ColumnSchema, 0, len(schema.Columns)+len(fromSchema.Columns)),
 		}
-		for _, col := range schema.Columns {
-			evalSchema.Columns = append(evalSchema.Columns, col)
-		}
-		for _, col := range fromSchema.Columns {
-			newCol := col
-			if c.stmt.FromAlias != "" {
-				newCol.Name = c.stmt.FromAlias + "." + col.Name
+		evalSchema.Columns = append(evalSchema.Columns, schema.Columns...)
+		fromCols := fromSchema.Columns
+		if c.stmt.FromAlias != "" {
+			fromCols = make([]storage.ColumnSchema, len(fromSchema.Columns))
+			for i, col := range fromSchema.Columns {
+				fromCols[i] = col
+				fromCols[i].Name = c.stmt.FromAlias + "." + col.Name
 			}
-			evalSchema.Columns = append(evalSchema.Columns, newCol)
 		}
+		evalSchema.Columns = append(evalSchema.Columns, fromCols...)
 	} else {
 		evalRows = rows
 		evalSchema = schema

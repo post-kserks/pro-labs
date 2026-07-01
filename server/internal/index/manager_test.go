@@ -150,7 +150,7 @@ func TestManagerFindForColumnMultiple(t *testing.T) {
 		t.Fatalf("FindForColumnMultiple('name') = %v, %v; want 1 index", idxs, ok)
 	}
 
-	idxs, ok = m.FindForColumnMultiple("nonexistent")
+	_, ok = m.FindForColumnMultiple("nonexistent")
 	if ok {
 		t.Fatal("FindForColumnMultiple('nonexistent') should return false")
 	}

@@ -87,32 +87,6 @@ func (p *OptimizedPlan) FormatOptimizedPlan() string {
 	return b.String()
 }
 
-func accessMethodName(m AccessMethod) string {
-	switch m {
-	case SeqScan:
-		return "SeqScan"
-	case IndexScan:
-		return "IndexScan"
-	case IndexOnlyScan:
-		return "IndexOnlyScan"
-	default:
-		return "Unknown"
-	}
-}
-
-func joinMethodName(m JoinMethod) string {
-	switch m {
-	case NestedLoopJoin:
-		return "NestedLoop"
-	case HashJoin:
-		return "Hash"
-	case MergeJoin:
-		return "Merge"
-	default:
-		return "Unknown"
-	}
-}
-
 func formatColumnSet(cols map[string]bool) string {
 	var names []string
 	for col := range cols {

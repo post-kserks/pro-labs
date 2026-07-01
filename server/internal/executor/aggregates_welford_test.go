@@ -13,7 +13,7 @@ func TestWelfordVariance(t *testing.T) {
 	}{
 		{
 			name:   "empty",
-			values: nil,
+			values: []float64{},
 			want:   math.NaN(),
 		},
 		{
@@ -46,7 +46,7 @@ func TestWelfordVariance(t *testing.T) {
 			}
 			result := agg.Result()
 
-			if tt.values == nil || len(tt.values) == 0 {
+			if len(tt.values) == 0 {
 				if result != nil {
 					t.Errorf("expected nil, got %v", result)
 				}
@@ -72,7 +72,7 @@ func TestWelfordStddev(t *testing.T) {
 	}{
 		{
 			name:   "empty",
-			values: nil,
+			values: []float64{},
 			want:   math.NaN(),
 		},
 		{
@@ -105,7 +105,7 @@ func TestWelfordStddev(t *testing.T) {
 			}
 			result := agg.Result()
 
-			if tt.values == nil || len(tt.values) == 0 {
+			if len(tt.values) == 0 {
 				if result != nil {
 					t.Errorf("expected nil, got %v", result)
 				}

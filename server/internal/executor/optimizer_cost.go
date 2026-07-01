@@ -2,9 +2,7 @@ package executor
 
 // Cost estimation for query plans.
 
-import (
-	"math"
-)
+import ()
 
 // estimateCost оценивает стоимость плана.
 func (o *Optimizer) estimateCost(dbName string, plan *OptimizedPlan) CostEstimate {
@@ -42,22 +40,4 @@ func (o *Optimizer) estimateCost(dbName string, plan *OptimizedPlan) CostEstimat
 		Cost:          totalCost,
 		EstimatedRows: totalRows,
 	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func clamp(v, lo, hi float64) float64 {
-	return math.Max(lo, math.Min(hi, v))
 }

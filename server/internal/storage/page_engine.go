@@ -747,20 +747,6 @@ func (e *PageStorageEngine) markCatalogDirty() {
 	}
 }
 
-// saveCatalogIfDirty persists the catalog only when there are unsaved mutations.
-// Called under e.mu during checkpoints and explicit flushes.
-func (e *PageStorageEngine) saveCatalogIfDirty() error {
-	if !e.catalogDirty {
-		return nil
-	}
-	if err := e.saveCatalogLocked(); err != nil {
-		return err
-	}
-	e.catalogDirty = false
-	e.catalogMutationCount = 0
-	return nil
-}
-
 // nextTxLocked выделяет новый txID и фиксирует его время (для AS OF).
 func (e *PageStorageEngine) nextTxLocked() uint64 {
 	e.catalog.CurrentTxID++
