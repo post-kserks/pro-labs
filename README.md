@@ -185,6 +185,63 @@ Client (C++) → TCP/HTTP → Lexer → Parser → Optimizer → Executor → St
 
 Подробнее: [ARCHITECTURE.md](ARCHITECTURE.md)
 
+---
+
+## Документация
+
+Полная документация доступна в директории [`docs/`](docs/):
+
+### Начало работы
+
+| Документ | Описание |
+|----------|----------|
+| [Введение](docs/introduction.md) | Что такое VaultDB, возможности, сравнение |
+| [Установка](docs/installation.md) | Сборка, Docker, Docker Compose |
+| [Быстрый старт](docs/quickstart.md) | Первые запросы за 5 минут |
+
+### Пользовательское руководство
+
+| Документ | Описание |
+|----------|----------|
+| [Конфигурация](docs/configuration.md) | YAML, CLI флаги, переменные окружения |
+| [Справочник SQL](docs/sql-reference.md) | Полный синтаксис SQL |
+| [Типы данных](docs/data-types.md) | INT, FLOAT, TEXT, JSONB, VECTOR и др. |
+| [Функции и операторы](docs/functions.md) | 130+ встроенных функций |
+| [Индексы](docs/indexes.md) | B-tree, Hash, GIN, GiST, Composite |
+| [Транзакции](docs/transactions.md) | BEGIN/COMMIT/ROLLBACK, SAVEPOINT |
+| [Представления](docs/views.md) | Views |
+| [Триггеры](docs/triggers.md) | AFTER триггеры |
+| [Последовательности](docs/sequences.md) | AUTO_INCREMENT |
+| [UDF](docs/udf.md) | Пользовательские функции и процедуры |
+
+### Архитектура
+
+| Документ | Описание |
+|----------|----------|
+| [Архитектура](docs/architecture.md) | Системная архитектура, компоненты |
+| [Storage Engine](docs/storage.md) | Page-based storage, heap files, tuple format |
+| [WAL и восстановление](docs/wal.md) | Write-Ahead Log, ARIES recovery |
+| [MVCC](docs/mvcc.md) | Multi-Version Concurrency Control |
+| [Оптимизатор](docs/optimizer.md) | Cost-based optimization |
+
+### Администрирование
+
+| Документ | Описание |
+|----------|----------|
+| [Бэкап и восстановление](docs/backup.md) | Backup/restore, CLI tool |
+| [Мониторинг](docs/monitoring.md) | Prometheus metrics, health endpoints |
+| [Безопасность](docs/security.md) | Auth, TLS, mTLS, RLS |
+
+### Справочник API
+
+| Документ | Описание |
+|----------|----------|
+| [HTTP API](docs/api-reference.md) | REST endpoints, запросы/ответы |
+| [TCP Protocol](docs/tcp-protocol.md) | Wire protocol для нативных клиентов |
+| [C++ клиент](docs/client.md) | Библиотека, сборка, использование |
+| [AI и семантический поиск](docs/ai.md) | Embeddings, семантический поиск |
+| [Глоссарий](docs/glossary.md) | Терминология |
+
 ## Структура проекта
 
 ```

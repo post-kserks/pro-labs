@@ -1,206 +1,352 @@
-# VaultDB HTTP API Reference
+# HTTP API Reference
+
+VaultDB exposes a REST API on port 8080 (configurable). All endpoints accept and return JSON.
 
 ## Base URL
 
 ```
-http://<host>:<http_port>
+http://localhost:8080
 ```
-
-Default: `http://127.0.0.1:8080`
 
 ## Authentication
 
-All API endpoints require Bearer token authentication when `auth.enabled: true`:
+All API endpoints require authentication (unless `auth.enabled: false`):
 
 ```
-Authorization: Bearer <token>
+Authorization: Bearer vdb_sk_your_token_here
 ```
 
-Tokens are configured via `VAULTDB_API_TOKENS` environment variable or `vaultdb.yaml`.
+or
+
+```
+X-VaultDB-Token: vdb_sk_your_token_here
+```
+
+Localhost requests bypass authentication.
 
 ---
 
-## Endpoints
+## POST /api/query
 
-### POST /api/query
+Execute a single SQL statement.
 
-Execute a SQL query.
+### Request
 
-**Request:**
 ```json
 {
   "database": "mydb",
-  "query": "SELECT * FROM users LIMIT 10;"
+  "query": "SELECT * FROM users WHERE age > 25;",
+  "params": ["param1", "param2"]
 }
 ```
 
-**Response (success):**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `database` | string | Yes | Database name (use `""` for DDL like CREATE DATABASE) |
+| `query` | string | Yes | SQL statement |
+| `params` | array | No | Positional parameters for `$1`, `$2`, ... |
+
+### Response (SELECT)
+
 ```json
 {
-  "type": "rows",
-  "columns": ["id", "name", "email"],
+  "status": "ok",
+  "type": "select",
+  "columns": ["id", "name", "age"],
   "rows": [
-    ["1", "Alice", "alice@example.com"],
-    ["2", "Bob", "bob@example.com"]
+    ["1", "Alice", "30"],
+    ["2", "Bob", "25"]
   ],
-  "affected_rows": 0,
-  "duration_ms": 5
+  "affected": 0,
+  "duration_ms": 1.23
 }
 ```
 
-**Response (error):**
+### Response (INSERT/UPDATE/DELETE)
+
 ```json
 {
-  "type": "error",
-  "message": "table \"users\" does not exist"
+  "status": "ok",
+  "type": "insert",
+  "affected": 3,
+  "message": "inserted 3 rows",
+  "duration_ms": 0.5
 }
+```
+
+### Error Response
+
+```json
+{
+  "status": "error",
+  "error_code": 3002,
+  "message": "parse error: syntax error near 'FROM'"
+}
+```
+
+### Error Codes
+
+| Code | Description |
+|------|-------------|
+| 3001 | Bad request |
+| 3002 | Parse error |
+| 3003 | Unknown column |
+| 3004 | Storage error |
+| 3005 | Transaction unsupported over HTTP |
+| 3006 | Rate limited |
+| 5000 | Internal error |
+| 9999 | Not implemented |
+
+---
+
+## POST /api/query/stream
+
+Execute a query and stream results via Server-Sent Events (SSE).
+
+### Request
+
+Same as `/api/query`.
+
+### Response
+
+```
+Content-Type: text/event-stream
+
+event: columns
+data: ["id","name","age"]
+
+event: row
+data: ["1","Alice","30"]
+
+event: row
+data: ["2","Bob","25"]
+
+event: done
+data: {"affected":0,"duration_ms":1.5}
 ```
 
 ---
 
-### GET /api/databases
+## POST /api/transaction
 
-List all databases.
+Execute transaction control commands (stateless per call).
 
-**Response:**
+### Request
+
 ```json
 {
-  "databases": ["mydb", "test", "analytics"]
+  "database": "mydb",
+  "action": "begin"
 }
 ```
 
+**Actions**: `begin`, `commit`, `rollback`
+
 ---
 
-### GET /api/databases/:db/tables
+## POST /api/batch
 
-List tables in a database.
+Execute multiple queries sequentially.
 
-**Response:**
+### Request
+
 ```json
 {
-  "tables": [
-    {"name": "users", "row_count": 1500, "created_at": "2026-01-15T10:30:00Z"},
-    {"name": "orders", "row_count": 50000, "created_at": "2026-01-15T10:31:00Z"}
+  "database": "mydb",
+  "queries": [
+    {"query": "INSERT INTO users VALUES (1, 'Alice');"},
+    {"query": "INSERT INTO users VALUES (2, 'Bob');"},
+    {"query": "SELECT * FROM users;"}
+  ]
+}
+```
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "results": [
+    {"status": "ok", "type": "insert", "affected": 1},
+    {"status": "ok", "type": "insert", "affected": 1},
+    {"status": "ok", "type": "select", "columns": ["id","name"], "rows": [["1","Alice"],["2","Bob"]]}
   ]
 }
 ```
 
 ---
 
-### GET /api/databases/:db/tables/:table/data
+## GET /api/databases
 
-Get data from a table with optional filtering and pagination.
+List all databases.
 
-**Query Parameters:**
-- `where` — SQL WHERE clause (e.g., `age > 25`)
-- `limit` — Maximum rows returned (default: 100)
-- `offset` — Skip N rows (default: 0)
+### Response
 
-**Response:**
 ```json
 {
-  "columns": ["id", "name", "age"],
-  "rows": [
-    ["1", "Alice", 30],
-    ["2", "Bob", 25]
-  ],
-  "total": 1500
+  "status": "ok",
+  "databases": ["mydb", "analytics", "logs"]
 }
 ```
 
 ---
 
-### POST /api/databases/:db/tables/:table/data
+## GET /api/databases/{db}/tables
 
-Insert rows into a table.
+List tables in a database.
 
-**Request:**
+### Response
+
+```json
+{
+  "status": "ok",
+  "tables": [
+    {"name": "users", "row_count": 1000, "created_at": "2026-07-01T10:00:00Z"},
+    {"name": "orders", "row_count": 5000, "created_at": "2026-07-01T10:05:00Z"}
+  ]
+}
+```
+
+---
+
+## GET /api/databases/{db}/tables/{table}/schema
+
+Get table schema.
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "table": "users",
+  "columns": [
+    {"name": "id", "type": "INT", "primary_key": true},
+    {"name": "name", "type": "TEXT", "not_null": true},
+    {"name": "email", "type": "VARCHAR", "varchar_len": 255}
+  ],
+  "row_count": 1000
+}
+```
+
+---
+
+## GET /api/databases/{db}/tables/{table}/data
+
+Fetch rows with optional filtering.
+
+### Query Parameters
+
+Filter by column values using operators:
+
+| Parameter | Operator | Example |
+|-----------|----------|---------|
+| `col=value` | Equality | `?name=Alice` |
+| `col=gt.value` | Greater than | `?age=gt.25` |
+| `col=lt.value` | Less than | `?age=lt.50` |
+| `col=like.pattern` | LIKE match | `?name=like.Ali%` |
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "rows": [
+    {"id": 1, "name": "Alice", "email": "alice@example.com"},
+    {"id": 2, "name": "Bob", "email": "bob@example.com"}
+  ]
+}
+```
+
+---
+
+## POST /api/databases/{db}/tables/{table}/data
+
+Insert rows.
+
+### Request
+
 ```json
 [
-  {"id": 1, "name": "Alice", "age": 30},
-  {"id": 2, "name": "Bob", "age": 25}
+  {"name": "Alice", "email": "alice@example.com", "age": 30},
+  {"name": "Bob", "email": "bob@example.com", "age": 25}
 ]
 ```
 
-**Response:**
+### Response
+
 ```json
 {
+  "status": "ok",
   "message": "inserted 2 rows"
 }
 ```
 
-**Status Codes:**
-- `201 Created` — rows inserted successfully
-- `400 Bad Request` — invalid JSON or missing table
-- `500 Internal Server Error` — storage error
+---
+
+## GET /api/docs/openapi.json
+
+Auto-generated OpenAPI 3.0 specification covering all discovered database+table pairs.
 
 ---
 
-### GET /api/openapi.json
+## GET /api/live
 
-Returns auto-generated OpenAPI specification for all database tables.
+Subscribe to live query updates via SSE.
 
----
+### Query Parameters
 
-### GET /health
+| Parameter | Description |
+|-----------|-------------|
+| `database` | Database name |
+| `query` | SELECT query to subscribe to |
 
-Health check endpoint (no authentication required).
+### Response
 
-**Response:** `200 OK`
+SSE stream with initial snapshot followed by incremental updates:
 
----
-
-### WebSocket /ws/live
-
-Subscribe to live query results.
-
-**Protocol:** WebSocket with JSON messages
-
-**Subscribe:**
-```json
-{"action": "subscribe", "query": "SELECT * FROM orders WHERE status = 'pending'"}
 ```
+event: snapshot
+data: {"columns":["id","name"],"rows":[["1","Alice"]]}
 
-**Unsubscribe:**
-```json
-{"action": "unsubscribe", "id": "subscription-id"}
-```
+event: row
+data: {"op":"insert","row":["2","Bob"]}
 
-**Live update:**
-```json
-{"type": "update", "id": "subscription-id", "rows": [...], "columns": [...]}
+event: row
+data: {"op":"update","row":["1","Alice Jr."]}
 ```
 
 ---
 
-## Error Codes
+## GET /health
 
-| Code | Description |
-|------|-------------|
-| `bad_request` | Invalid request format or parameters |
-| `unauthorized` | Missing or invalid authentication token |
-| `rate_limit_exceeded` | Too many requests |
-| `storage_error` | Internal storage engine error |
-| `not_implemented` | Endpoint not yet implemented |
-| `query_error` | SQL parsing or execution error |
+Liveness probe.
 
----
+### Response
 
-## Rate Limiting
-
-- **TCP connections:** Token bucket per connection (100 req/s, burst 200)
-- **HTTP API:** Global token bucket (configurable via `rate_limit`)
-- **Auth failures:** IP-based (10 failures/min → 5 min block)
+```json
+{
+  "status": "ok",
+  "version": "1.1.0",
+  "uptime_seconds": 3600,
+  "active_connections": 5,
+  "storage": "ok"
+}
+```
 
 ---
 
-## Metrics (Prometheus)
+## GET /ready
 
-Endpoint: `GET /metrics` (monitor port, default 5433)
+Readiness probe. Returns 200 if storage is reachable, 503 otherwise.
 
-Available metrics:
-- `vaultdb_queries_total` — total queries executed
-- `vaultdb_query_duration_seconds` — query latency histogram (p50/p95/p99)
-- `vaultdb_connections_active` — active connections
-- `vaultdb_storage_pages_read_total` — pages read from disk
-- `vaultdb_storage_pages_written_total` — pages written to disk
+---
+
+## GET /metrics
+
+Prometheus metrics endpoint. See [Monitoring](monitoring.md) for details.
+
+---
+
+## GET /dashboard
+
+Inline HTML dashboard (single-file SPA). Requires authentication.
