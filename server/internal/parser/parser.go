@@ -9,6 +9,9 @@ import (
 	"vaultdb/internal/lexer"
 )
 
+// defaultGlobalCache is the package-level cache used by ParseCached.
+var defaultGlobalCache = NewStatementCache(defaultStatementCacheCapacity)
+
 // Parse parses one SQL statement terminated by ';'.
 func Parse(sql string) (Statement, error) {
 	stmt, err := parse(sql)
@@ -17,6 +20,28 @@ func Parse(sql string) (Statement, error) {
 		return nil, fmt.Errorf("invalid query syntax")
 	}
 	return stmt, nil
+}
+
+// ParseCached parses SQL with a cache lookup first. Uses the package-level cache.
+func ParseCached(sql string) (Statement, error) {
+	return ParseCachedWith(sql, defaultGlobalCache)
+}
+
+// ParseCachedWith parses SQL using the provided StatementCache.
+func ParseCachedWith(sql string, cache *StatementCache) (Statement, error) {
+	if stmt, ok := cache.Get(sql); ok {
+		return stmt, nil
+	}
+	stmt, err := Parse(sql)
+	if err != nil {
+		return nil, err
+	}
+	cache.Put(sql, stmt)
+	return stmt, nil
+}
+
+func trimAndLower(s string) string {
+	return strings.TrimSpace(strings.ToLower(s))
 }
 
 // ParseExpression parses a standalone SQL expression (no statement wrapper).
