@@ -376,6 +376,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	}
 
 	var newVersions [][]byte
+	var newRows []Row
 	affected := 0
 	pos := 0
 
@@ -469,6 +470,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 				return true, err
 			}
 			newVersions = append(newVersions, encoded)
+			newRows = append(newRows, newRow)
 		}
 		affected++
 		return false, nil
@@ -490,8 +492,11 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	}
 
 	// Обновляем индексы до освобождения t.mu (они не требуют e.mu)
-	if isDelete && affected > 0 {
+	if affected > 0 {
 		e.updateIndexesOnDelete(dbName, tableName, indices)
+		if !isDelete && len(newRows) > 0 {
+			e.updateIndexesOnInsert(dbName, tableName, newRows, pos-affected)
+		}
 	}
 
 	// Освобождаем t.mu ПЕРЕД e.mu, чтобы избежать deadlock:
@@ -558,6 +563,7 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	}
 
 	var newVersions [][]byte
+	var newRows []Row
 	affected := 0
 	pos := 0
 
@@ -630,6 +636,7 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 				return true, err
 			}
 			newVersions = append(newVersions, encoded)
+			newRows = append(newRows, nv)
 		}
 		affected++
 		return false, nil
@@ -647,6 +654,14 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	}
 	if err := t.heap.Sync(); err != nil {
 		return 0, err
+	}
+
+	// Обновляем индексы до освобождения t.mu (они не требуют e.mu)
+	if affected > 0 {
+		e.updateIndexesOnDelete(dbName, tableName, indices)
+		if len(newRows) > 0 {
+			e.updateIndexesOnInsert(dbName, tableName, newRows, pos-affected)
+		}
 	}
 
 	mutateLockReleased = true

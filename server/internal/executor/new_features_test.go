@@ -92,3 +92,43 @@ func TestPreparedStatements(t *testing.T) {
 
 	executeSQL(t, session, "DEALLOCATE get_hero;")
 }
+
+func TestIndexUpdateOnUpdate(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// Create index on name column
+	executeSQL(t, session, "CREATE INDEX idx_name ON heroes(name);")
+
+	// Verify index works: lookup by old name
+	result := executeSQL(t, session, "SELECT * FROM heroes WHERE name = 'Legolas';")
+	if len(result.Rows) != 1 || result.Rows[0][1] != "Legolas" {
+		t.Fatalf("expected Legolas before update, got %#v", result.Rows)
+	}
+
+	// Update the indexed column
+	executeSQL(t, session, "UPDATE heroes SET name = 'Legolas Greenleaf' WHERE id = 2;")
+
+	// Verify: old name should NOT be found via index
+	result = executeSQL(t, session, "SELECT * FROM heroes WHERE name = 'Legolas';")
+	if len(result.Rows) != 0 {
+		t.Fatalf("expected 0 rows for old name 'Legolas' after update, got %d", len(result.Rows))
+	}
+
+	// Verify: new name SHOULD be found via index
+	result = executeSQL(t, session, "SELECT * FROM heroes WHERE name = 'Legolas Greenleaf';")
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row for new name 'Legolas Greenleaf', got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "2" {
+		t.Fatalf("expected id=2, got %s", result.Rows[0][0])
+	}
+
+	// Verify other indexed rows still work
+	result = executeSQL(t, session, "SELECT * FROM heroes WHERE name = 'Aragorn';")
+	if len(result.Rows) != 1 || result.Rows[0][1] != "Aragorn" {
+		t.Fatalf("expected Aragorn still indexed, got %#v", result.Rows)
+	}
+
+	executeSQL(t, session, "DROP INDEX idx_name;")
+}
