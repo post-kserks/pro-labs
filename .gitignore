@@ -56,3 +56,4 @@ TEST_COVERAGE_PLAN.md
 task.md
 .mimocode/
 docs/compose/
+.playwright-mcp/
