@@ -296,3 +296,170 @@ func TestUndoUpdatePartialCommitPerRowRestore(t *testing.T) {
 			res.Rows[0][0], res.Rows[1][0])
 	}
 }
+
+// TestTruncateRollback: после TRUNCATE + ROLLBACK данные должны быть восстановлены.
+func TestTruncateRollback(t *testing.T) {
+	session := setupTxSession(t)
+
+	// Seed data
+	executeSQL(t, session, "INSERT INTO items VALUES (1, 'apple', 10);")
+	executeSQL(t, session, "INSERT INTO items VALUES (2, 'banana', 20);")
+	executeSQL(t, session, "INSERT INTO items VALUES (3, 'cherry', 30);")
+
+	// Verify initial state
+	result := executeSQL(t, session, "SELECT * FROM items;")
+	if len(result.Rows) != 3 {
+		t.Fatalf("expected 3 rows before truncate, got %d", len(result.Rows))
+	}
+
+	// Truncate inside transaction, then rollback
+	executeSQL(t, session, "BEGIN;")
+	executeSQL(t, session, "TRUNCATE TABLE items;")
+
+	// Table should appear empty inside the tx
+	result = executeSQL(t, session, "SELECT * FROM items;")
+	if len(result.Rows) != 0 {
+		t.Fatalf("expected 0 rows inside tx after truncate, got %d", len(result.Rows))
+	}
+
+	executeSQL(t, session, "ROLLBACK;")
+
+	// After rollback, all 3 rows must be restored
+	result = executeSQL(t, session, "SELECT * FROM items ORDER BY id;")
+	if len(result.Rows) != 3 {
+		t.Fatalf("expected 3 rows after truncate rollback, got %d: %v", len(result.Rows), result.Rows)
+	}
+	if result.Rows[0][0] != "1" || result.Rows[1][0] != "2" || result.Rows[2][0] != "3" {
+		t.Fatalf("rows corrupted after truncate rollback: %v", result.Rows)
+	}
+}
+
+// TestTruncateCommitRollback: truncate commits successfully, rollback is not triggered.
+func TestTruncateCommit(t *testing.T) {
+	session := setupTxSession(t)
+
+	executeSQL(t, session, "INSERT INTO items VALUES (1, 'apple', 10);")
+	executeSQL(t, session, "INSERT INTO items VALUES (2, 'banana', 20);")
+
+	executeSQL(t, session, "BEGIN;")
+	executeSQL(t, session, "TRUNCATE TABLE items;")
+	executeSQL(t, session, "COMMIT;")
+
+	result := executeSQL(t, session, "SELECT * FROM items;")
+	if len(result.Rows) != 0 {
+		t.Fatalf("expected 0 rows after truncate commit, got %d", len(result.Rows))
+	}
+}
+
+// TestTruncatePartialCommitFailure: truncate followed by a failing op triggers undo,
+// restoring the truncated rows.
+func TestTruncatePartialCommitFailure(t *testing.T) {
+	session := setupTxSession(t)
+	executeSQL(t, session, "CREATE TABLE bigtable (id INT, val TEXT);")
+	executeSQL(t, session, "ALTER TABLE bigtable ADD CONSTRAINT chk_val CHECK (val != '');")
+	executeSQL(t, session, "INSERT INTO bigtable VALUES (1, 'a');")
+	executeSQL(t, session, "INSERT INTO bigtable VALUES (2, 'b');")
+
+	executeSQL(t, session, "BEGIN;")
+	executeSQL(t, session, "TRUNCATE TABLE bigtable;")
+	// This insert violates CHECK (empty val) — should fail at commit time.
+	executeSQL(t, session, "INSERT INTO bigtable VALUES (3, '');")
+	executeSQLExpectError(t, session, "COMMIT;")
+
+	// Truncate should have been undone, original rows restored.
+	result := executeSQL(t, session, "SELECT * FROM bigtable ORDER BY id;")
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows after truncate undo on partial commit failure, got %d: %v",
+			len(result.Rows), result.Rows)
+	}
+}
+
+// TestSessionCloseWithActiveTx: Close() на сессии с активной транзакцией
+// должен вызвать Rollback(), а не молча обнулить ActiveTx.
+func TestSessionCloseWithActiveTx(t *testing.T) {
+	session := setupTxSession(t)
+	executeSQL(t, session, "INSERT INTO items VALUES (1, 'apple', 10);")
+
+	// Начинаем транзакцию и добавляем строку
+	executeSQL(t, session, "BEGIN;")
+	executeSQL(t, session, "INSERT INTO items VALUES (2, 'banana', 20);")
+
+	// Проверяем что транзакция активна
+	if !session.IsInTx() {
+		t.Fatal("expected active transaction before close")
+	}
+
+	// Close() должен откатить транзакцию
+	session.Close()
+
+	// После close транзакция не должна быть активна
+	session.mu.RLock()
+	tx := session.ActiveTx
+	session.mu.RUnlock()
+	if tx != nil {
+		t.Fatal("ActiveTx should be nil after Close()")
+	}
+
+	// Проверяем что данные откатались — новая сессия видит только ту строку,
+	// что была закоммичена до BEGIN
+	dir := t.TempDir()
+	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	fresh := NewSession(store, nil, txm, nil)
+	executeSQL(t, fresh, "CREATE DATABASE txdb;")
+	executeSQL(t, fresh, "USE txdb;")
+	executeSQL(t, fresh, "CREATE TABLE items (id INT, name TEXT, qty INT);")
+	executeSQL(t, fresh, "INSERT INTO items VALUES (1, 'apple', 10);")
+
+	result := executeSQL(t, fresh, "SELECT * FROM items;")
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row after session close rolled back tx, got %d: %v", len(result.Rows), result.Rows)
+	}
+}
+
+// TestRollbackClearsTxState: RollbackCommand должен корректно очищать
+// транзакцию и возвращать корректное количество отменённых операций.
+func TestRollbackClearsTxState(t *testing.T) {
+	session := setupTxSession(t)
+
+	executeSQL(t, session, "BEGIN;")
+	executeSQL(t, session, "INSERT INTO items VALUES (1, 'apple', 10);")
+	executeSQL(t, session, "INSERT INTO items VALUES (2, 'banana', 20);")
+
+	result := executeSQL(t, session, "ROLLBACK;")
+
+	// Rollback message should report 2 discarded operations
+	if result.Message != "Transaction rolled back (2 operations discarded)." {
+		t.Fatalf("unexpected rollback message: %s", result.Message)
+	}
+
+	// Transaction should be cleared
+	if session.IsInTx() {
+		t.Fatal("transaction should be cleared after rollback")
+	}
+
+	// Verify no data persisted
+	res := executeSQL(t, session, "SELECT * FROM items;")
+	if len(res.Rows) != 0 {
+		t.Fatalf("expected 0 rows after rollback, got %d: %v", len(res.Rows), res.Rows)
+	}
+}
+
+// TestRollbackEmptyTx: RollbackCommand на пустой транзакции (без ops).
+func TestRollbackEmptyTx(t *testing.T) {
+	session := setupTxSession(t)
+
+	executeSQL(t, session, "BEGIN;")
+	result := executeSQL(t, session, "ROLLBACK;")
+
+	if result.Message != "Transaction rolled back (0 operations discarded)." {
+		t.Fatalf("unexpected rollback message: %s", result.Message)
+	}
+	if session.IsInTx() {
+		t.Fatal("transaction should be cleared after rollback")
+	}
+}

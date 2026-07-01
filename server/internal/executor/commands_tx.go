@@ -116,7 +116,10 @@ func (c *RollbackCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if tx == nil {
 		return nil, fmt.Errorf("no active transaction")
 	}
-	ops, _ := tx.ReadOps()
+	ops, readErr := tx.ReadOps()
+	if readErr != nil {
+		slog.Error("failed to read transaction ops during rollback", "xid", tx.ID, "error", readErr)
+	}
 	opsCount := len(ops)
 
 	if ctx.WAL != nil && opsCount > 0 {
@@ -183,6 +186,8 @@ func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) (int, error) {
 					return i, err
 				}
 			}
+			// Save rows for undo on rollback.
+			ops[i].Row = rows
 			notifyMutation(ctx, op.DB, op.Table)
 			if ctx.Session.resultCache != nil {
 				ctx.Session.resultCache.Invalidate(op.Table)
@@ -208,6 +213,9 @@ func undoAppliedOps(ctx *ExecutionContext, ops []txmanager.PendingOp) error {
 		case "delete":
 			// Undo DELETE = вставить обратно
 			undoErr = undoDelete(ctx, op)
+		case "truncate":
+			// Undo TRUNCATE = вставить обратно сохранённые строки
+			undoErr = undoTruncate(ctx, op)
 		}
 		if undoErr != nil {
 			return fmt.Errorf("undo op %d (%s): %w", i, op.Type, undoErr)
@@ -361,6 +369,23 @@ func undoDelete(ctx *ExecutionContext, op txmanager.PendingOp) error {
 	}
 
 	_, err := ctx.Storage.InsertRows(op.DB, op.Table, deletedRows)
+	return err
+}
+
+func undoTruncate(ctx *ExecutionContext, op txmanager.PendingOp) error {
+	if op.DB == "" || op.Table == "" {
+		return nil
+	}
+
+	truncatedRows, ok := op.Row.([]storage.Row)
+	if !ok {
+		return fmt.Errorf("undo truncate: invalid truncated rows type")
+	}
+	if len(truncatedRows) == 0 {
+		return nil
+	}
+
+	_, err := ctx.Storage.InsertRows(op.DB, op.Table, truncatedRows)
 	return err
 }
 

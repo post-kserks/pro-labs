@@ -227,9 +227,14 @@ func (s *Session) ServerContext() context.Context {
 }
 
 // Close очищает ресурсы сессии.
+// Если есть активная транзакция — откатывает её, чтобы не терять данные
+// и не утекать ресурсы (spill-файлы и т.д.).
 func (s *Session) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.ActiveTx != nil && s.ActiveTx.State == txmanager.TxActive {
+		s.ActiveTx.Rollback()
+	}
 	s.PreparedStatements = make(map[string]*PreparedStatement)
 	s.ActiveTx = nil
 }
