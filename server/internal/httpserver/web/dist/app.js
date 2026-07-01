@@ -525,11 +525,11 @@ SELECT * FROM ledger;`,
   // --- Dashboard ---
   async function loadDashboard() {
     try {
-      const resp = await authFetch('/api/health');
+      const resp = await fetch('/health');
       const h = await resp.json();
       $('#dashStatus').textContent = h.status || 'unknown';
       $('#dashStatus').style.color = h.status === 'ok' ? 'var(--accent)' : 'var(--err)';
-      $('#dashVersion').textContent = h.version || '—';
+      $('#dashVersion').textContent = h.version || 'dev';
       $('#dashUptime').textContent = h.uptime_s ? `${Math.floor(h.uptime_s / 60)}m ${h.uptime_s % 60}s` : '—';
       $('#dashConns').textContent = h.connections ?? '—';
     } catch {
@@ -538,7 +538,7 @@ SELECT * FROM ledger;`,
     }
 
     try {
-      const resp = await authFetch('/api/metrics');
+      const resp = await authFetch('/metrics');
       const text = await resp.text();
       $('#metricsRaw').textContent = text;
     } catch {
