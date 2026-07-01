@@ -502,6 +502,10 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	defer s.activeSubscriptions.Add(-1)
 
 	db := r.URL.Query().Get("database")
+	if db != "" && !validPathName.MatchString(db) {
+		http.Error(w, "invalid database name", http.StatusBadRequest)
+		return
+	}
 	query := r.URL.Query().Get("query")
 	if query == "" {
 		http.Error(w, "missing query", http.StatusBadRequest)
@@ -828,13 +832,26 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer close(ch)
+		ctx := r.Context()
+		send := func(msg sseMsg) bool {
+			select {
+			case ch <- msg:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 		if len(result.Columns) > 0 {
-			ch <- sseMsg{event: "columns", data: result.Columns}
+			if !send(sseMsg{event: "columns", data: result.Columns}) {
+				return
+			}
 		}
 		for _, row := range result.Rows {
-			ch <- sseMsg{event: "row", data: row}
+			if !send(sseMsg{event: "row", data: row}) {
+				return
+			}
 		}
-		ch <- sseMsg{event: "done", data: nil}
+		send(sseMsg{event: "done", data: nil})
 	}()
 
 	for msg := range ch {

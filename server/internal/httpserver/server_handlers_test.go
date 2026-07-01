@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -1304,5 +1305,35 @@ func TestTransactionRollbackSequence(t *testing.T) {
 		if len(rows) != 0 {
 			t.Fatalf("expected 0 rows after rollback, got %v", rows)
 		}
+	}
+}
+
+type flushResponseWriter struct {
+	*httptest.ResponseRecorder
+}
+
+func (f *flushResponseWriter) Flush() {}
+
+func TestHandleQueryStreamClientDisconnect(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately to simulate client disconnect
+
+	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
+	w := &flushResponseWriter{httptest.NewRecorder()}
+	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req = req.WithContext(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		srv.apiMux().ServeHTTP(w, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not return after client disconnect — goroutine leak")
 	}
 }
