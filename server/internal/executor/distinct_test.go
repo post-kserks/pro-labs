@@ -81,7 +81,7 @@ func BenchmarkDistinctRows(b *testing.B) {
 				rows[i] = []string{fmt.Sprintf("col1_%d", i%100), fmt.Sprintf("col2_%d", i%50)}
 			}
 			b.ResetTimer()
-			for b.Loop() {
+			for i := 0; i < b.N; i++ {
 				_ = distinctRows(rows)
 			}
 		})

@@ -473,13 +473,13 @@ func BenchmarkResolveColumnCached(b *testing.B) {
 	idx := buildColumnIndex(schema)
 
 	b.Run("cached", func(b *testing.B) {
-		for b.Loop() {
+		for i := 0; i < b.N; i++ {
 			resolveColumn(row, schema, "val", idx)
 		}
 	})
 
 	b.Run("linear_scan", func(b *testing.B) {
-		for b.Loop() {
+		for i := 0; i < b.N; i++ {
 			resolveColumn(row, schema, "val", nil)
 		}
 	})
