@@ -1269,3 +1269,1251 @@ func TestParseUpdateFromSubquery(t *testing.T) {
 		}
 	}
 }
+
+// --- T43: Complex expression tests ---
+
+func TestParseMergeVariants(t *testing.T) {
+	cases := []struct {
+		name              string
+		query             string
+		targetTable       string
+		hasSourceTable    bool
+		sourceTable       string
+		hasSourceQuery    bool
+		alias             string
+		hasWhenMatched    bool
+		matchedAction     string
+		hasWhenNotMatched bool
+		notMatchedAction  string
+		insertCols        int
+		insertVals        int
+		hasReturning      bool
+	}{
+		{
+			name:              "basic MERGE with table source",
+			query:             "MERGE INTO target USING source ON target.id = source.id WHEN MATCHED THEN UPDATE SET name = source.name WHEN NOT MATCHED THEN INSERT (id, name) VALUES (source.id, source.name);",
+			targetTable:       "target",
+			hasSourceTable:    true,
+			sourceTable:       "source",
+			hasWhenMatched:    true,
+			matchedAction:     "UPDATE",
+			hasWhenNotMatched: true,
+			notMatchedAction:  "INSERT",
+			insertCols:        2,
+			insertVals:        1,
+		},
+		{
+			name:           "MERGE with subquery source",
+			query:          "MERGE INTO target USING (SELECT id, name FROM source WHERE active = TRUE) AS s ON target.id = s.id WHEN MATCHED THEN UPDATE SET name = s.name;",
+			targetTable:    "target",
+			hasSourceQuery: true,
+			alias:          "s",
+			hasWhenMatched: true,
+			matchedAction:  "UPDATE",
+		},
+		{
+			name:              "MERGE with SELECT in NOT MATCHED",
+			query:             "MERGE INTO target USING source ON target.id = source.id WHEN NOT MATCHED THEN INSERT (id, name) SELECT id, name FROM source WHERE id > 10;",
+			targetTable:       "target",
+			hasSourceTable:    true,
+			sourceTable:       "source",
+			hasWhenNotMatched: true,
+			notMatchedAction:  "INSERT",
+			insertCols:        2,
+		},
+		{
+			name:           "MERGE with alias on source table",
+			query:          "MERGE INTO t1 USING t2 AS s ON t1.id = s.id WHEN MATCHED THEN UPDATE SET val = s.val;",
+			targetTable:    "t1",
+			hasSourceTable: true,
+			sourceTable:    "t2",
+			alias:          "s",
+			hasWhenMatched: true,
+			matchedAction:  "UPDATE",
+		},
+		{
+			name:              "MERGE with multiple SET assignments",
+			query:             "MERGE INTO t1 USING t2 ON t1.id = t2.id WHEN MATCHED THEN UPDATE SET name = t2.name, val = t2.val WHEN NOT MATCHED THEN INSERT (id, name, val) VALUES (t2.id, t2.name, t2.val);",
+			targetTable:       "t1",
+			hasSourceTable:    true,
+			sourceTable:       "t2",
+			hasWhenMatched:    true,
+			matchedAction:     "UPDATE",
+			hasWhenNotMatched: true,
+			notMatchedAction:  "INSERT",
+			insertCols:        3,
+			insertVals:        1,
+		},
+		{
+			name:           "MERGE with RETURNING *",
+			query:          "MERGE INTO t1 USING t2 ON t1.id = t2.id WHEN MATCHED THEN UPDATE SET val = t2.val RETURNING *;",
+			targetTable:    "t1",
+			hasSourceTable: true,
+			sourceTable:    "t2",
+			hasWhenMatched: true,
+			matchedAction:  "UPDATE",
+			hasReturning:   true,
+		},
+		{
+			name:           "MERGE with RETURNING columns",
+			query:          "MERGE INTO t1 USING t2 ON t1.id = t2.id WHEN MATCHED THEN UPDATE SET val = t2.val RETURNING id, val;",
+			targetTable:    "t1",
+			hasSourceTable: true,
+			sourceTable:    "t2",
+			hasWhenMatched: true,
+			matchedAction:  "UPDATE",
+			hasReturning:   true,
+		},
+		{
+			name:              "MERGE only WHEN NOT MATCHED",
+			query:             "MERGE INTO t1 USING t2 ON t1.id = t2.id WHEN NOT MATCHED THEN INSERT (id, name) VALUES (t2.id, t2.name);",
+			targetTable:       "t1",
+			hasSourceTable:    true,
+			sourceTable:       "t2",
+			hasWhenNotMatched: true,
+			notMatchedAction:  "INSERT",
+			insertCols:        2,
+			insertVals:        1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := Parse(tc.query)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tc.name, err)
+			}
+			merge, ok := stmt.(*MergeStatement)
+			if !ok {
+				t.Fatalf("expected *MergeStatement, got %T", stmt)
+			}
+			if merge.TargetTable != tc.targetTable {
+				t.Fatalf("expected target table %q, got %q", tc.targetTable, merge.TargetTable)
+			}
+			if tc.hasSourceTable && merge.SourceTable != tc.sourceTable {
+				t.Fatalf("expected source table %q, got %q", tc.sourceTable, merge.SourceTable)
+			}
+			if tc.hasSourceQuery && merge.SourceQuery == nil {
+				t.Fatal("expected SourceQuery to be set")
+			}
+			if tc.alias != "" && merge.Alias != tc.alias {
+				t.Fatalf("expected alias %q, got %q", tc.alias, merge.Alias)
+			}
+			if tc.hasWhenMatched {
+				if merge.WhenMatched == nil {
+					t.Fatal("expected WhenMatched to be set")
+				}
+				if merge.WhenMatched.Action != tc.matchedAction {
+					t.Fatalf("expected matched action %q, got %q", tc.matchedAction, merge.WhenMatched.Action)
+				}
+			}
+			if tc.hasWhenNotMatched {
+				if merge.WhenNotMatched == nil {
+					t.Fatal("expected WhenNotMatched to be set")
+				}
+				if merge.WhenNotMatched.Action != tc.notMatchedAction {
+					t.Fatalf("expected not matched action %q, got %q", tc.notMatchedAction, merge.WhenNotMatched.Action)
+				}
+				if tc.insertCols > 0 && len(merge.WhenNotMatched.Columns) != tc.insertCols {
+					t.Fatalf("expected %d insert columns, got %d", tc.insertCols, len(merge.WhenNotMatched.Columns))
+				}
+				if tc.insertVals > 0 && len(merge.WhenNotMatched.Values) != tc.insertVals {
+					t.Fatalf("expected %d insert values rows, got %d", tc.insertVals, len(merge.WhenNotMatched.Values))
+				}
+			}
+			if tc.hasReturning && merge.Returning == nil {
+				t.Fatal("expected Returning to be set")
+			}
+		})
+	}
+}
+
+func TestParseMergeErrors(t *testing.T) {
+	cases := []string{
+		"MERGE INTO t USING s;",
+		"MERGE INTO t USING s ON;",
+		"MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN;",
+		"MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT;",
+	}
+	for _, q := range cases {
+		if _, err := Parse(q); err == nil {
+			t.Fatalf("expected error for %q", q)
+		}
+	}
+}
+
+func TestParseWindowFunctions(t *testing.T) {
+	cases := []struct {
+		name     string
+		query    string
+		funcName string
+		partCols int
+		orderCols int
+	}{
+		{
+			name:      "ROW_NUMBER OVER ORDER BY",
+			query:     "SELECT ROW_NUMBER() OVER (ORDER BY id) FROM t;",
+			funcName:  "ROW_NUMBER",
+			partCols:  0,
+			orderCols: 1,
+		},
+		{
+			name:      "ROW_NUMBER OVER PARTITION BY ORDER BY",
+			query:     "SELECT ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary) FROM t;",
+			funcName:  "ROW_NUMBER",
+			partCols:  1,
+			orderCols: 1,
+		},
+		{
+			name:      "RANK OVER ORDER BY",
+			query:     "SELECT RANK() OVER (ORDER BY score DESC) FROM t;",
+			funcName:  "RANK",
+			partCols:  0,
+			orderCols: 1,
+		},
+		{
+			name:      "SUM OVER PARTITION BY",
+			query:     "SELECT SUM(amount) OVER (PARTITION BY dept) FROM t;",
+			funcName:  "SUM",
+			partCols:  1,
+			orderCols: 0,
+		},
+		{
+			name:      "COUNT OVER PARTITION BY ORDER BY",
+			query:     "SELECT COUNT(*) OVER (PARTITION BY dept ORDER BY id) FROM t;",
+			funcName:  "COUNT",
+			partCols:  1,
+			orderCols: 1,
+		},
+		{
+			name:      "AVG OVER with multiple partition cols",
+			query:     "SELECT AVG(salary) OVER (PARTITION BY dept, region ORDER BY hire_date) FROM t;",
+			funcName:  "AVG",
+			partCols:  2,
+			orderCols: 1,
+		},
+		{
+			name:      "MAX OVER ORDER BY",
+			query:     "SELECT MAX(val) OVER (ORDER BY created_at) FROM t;",
+			funcName:  "MAX",
+			partCols:  0,
+			orderCols: 1,
+		},
+		{
+			name:      "MIN OVER PARTITION BY ORDER BY",
+			query:     "SELECT MIN(score) OVER (PARTITION BY group_id ORDER BY ts DESC) FROM t;",
+			funcName:  "MIN",
+			partCols:  1,
+			orderCols: 1,
+		},
+		{
+			name:      "window with ROWS BETWEEN",
+			query:     "SELECT SUM(amount) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM t;",
+			funcName:  "SUM",
+			partCols:  0,
+			orderCols: 1,
+		},
+		{
+			name:      "window with RANGE BETWEEN",
+			query:     "SELECT SUM(amount) OVER (ORDER BY id RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM t;",
+			funcName:  "SUM",
+			partCols:  0,
+			orderCols: 1,
+		},
+		{
+			name:      "window with ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING",
+			query:     "SELECT SUM(amount) OVER (PARTITION BY dept ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM t;",
+			funcName:  "SUM",
+			partCols:  1,
+			orderCols: 0,
+		},
+		{
+			name:      "window with ROWS BETWEEN N PRECEDING AND N FOLLOWING",
+			query:     "SELECT AVG(val) OVER (ORDER BY id ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING) FROM t;",
+			funcName:  "AVG",
+			partCols:  0,
+			orderCols: 1,
+		},
+		{
+			name:      "window with ROWS CURRENT ROW",
+			query:     "SELECT SUM(val) OVER (ORDER BY id ROWS CURRENT ROW) FROM t;",
+			funcName:  "SUM",
+			partCols:  0,
+			orderCols: 1,
+		},
+		{
+			name:      "window with ROWS UNBOUNDED PRECEDING (single bound)",
+			query:     "SELECT SUM(val) OVER (ORDER BY id ROWS UNBOUNDED PRECEDING) FROM t;",
+			funcName:  "SUM",
+			partCols:  0,
+			orderCols: 1,
+		},
+		{
+			name:      "multiple window functions",
+			query:     "SELECT ROW_NUMBER() OVER (ORDER BY id), RANK() OVER (ORDER BY score) FROM t;",
+			funcName:  "ROW_NUMBER",
+			partCols:  0,
+			orderCols: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := Parse(tc.query)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tc.name, err)
+			}
+			sel, ok := stmt.(*SelectStatement)
+			if !ok {
+				t.Fatalf("expected *SelectStatement, got %T", stmt)
+			}
+			if len(sel.Columns) == 0 {
+				t.Fatal("expected at least 1 column")
+			}
+			win, ok := sel.Columns[0].Expr.(*WindowFunctionExpr)
+			if !ok {
+				t.Fatalf("expected *WindowFunctionExpr, got %T", sel.Columns[0].Expr)
+			}
+			if win.FuncName != tc.funcName {
+				t.Fatalf("expected func name %q, got %q", tc.funcName, win.FuncName)
+			}
+			if len(win.Over.PartitionBy) != tc.partCols {
+				t.Fatalf("expected %d partition columns, got %d", tc.partCols, len(win.Over.PartitionBy))
+			}
+			if len(win.Over.OrderBy) != tc.orderCols {
+				t.Fatalf("expected %d order columns, got %d", tc.orderCols, len(win.Over.OrderBy))
+			}
+		})
+	}
+}
+
+func TestParseWindowFunctionsFrameBounds(t *testing.T) {
+	t.Run("RANGE BETWEEN", func(t *testing.T) {
+		stmt, err := Parse("SELECT SUM(val) OVER (ORDER BY id RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		win := sel.Columns[0].Expr.(*WindowFunctionExpr)
+		if win.Over.Frame == nil {
+			t.Fatal("expected Frame to be set")
+		}
+		if win.Over.Frame.Mode != "RANGE" {
+			t.Fatalf("expected mode RANGE, got %q", win.Over.Frame.Mode)
+		}
+		if win.Over.Frame.StartType != "PRECEDING" || win.Over.Frame.StartN != 5 {
+			t.Fatalf("expected start 5 PRECEDING, got %q N=%d", win.Over.Frame.StartType, win.Over.Frame.StartN)
+		}
+		if win.Over.Frame.EndType != "FOLLOWING" || win.Over.Frame.EndN != 5 {
+			t.Fatalf("expected end 5 FOLLOWING, got %q N=%d", win.Over.Frame.EndType, win.Over.Frame.EndN)
+		}
+	})
+
+	t.Run("ROWS BETWEEN UNBOUNDED AND UNBOUNDED", func(t *testing.T) {
+		stmt, err := Parse("SELECT COUNT(*) OVER (PARTITION BY grp ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		win := sel.Columns[0].Expr.(*WindowFunctionExpr)
+		if win.Over.Frame == nil {
+			t.Fatal("expected Frame to be set")
+		}
+		if win.Over.Frame.StartType != "UNBOUNDED PRECEDING" {
+			t.Fatalf("expected start UNBOUNDED PRECEDING, got %q", win.Over.Frame.StartType)
+		}
+		if win.Over.Frame.EndType != "UNBOUNDED FOLLOWING" {
+			t.Fatalf("expected end UNBOUNDED FOLLOWING, got %q", win.Over.Frame.EndType)
+		}
+	})
+
+	t.Run("ROWS BETWEEN N PRECEDING AND CURRENT ROW", func(t *testing.T) {
+		stmt, err := Parse("SELECT AVG(val) OVER (ORDER BY id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		win := sel.Columns[0].Expr.(*WindowFunctionExpr)
+		if win.Over.Frame == nil {
+			t.Fatal("expected Frame to be set")
+		}
+		if win.Over.Frame.StartType != "PRECEDING" || win.Over.Frame.StartN != 2 {
+			t.Fatalf("expected start 2 PRECEDING, got %q N=%d", win.Over.Frame.StartType, win.Over.Frame.StartN)
+		}
+		if win.Over.Frame.EndType != "CURRENT ROW" {
+			t.Fatalf("expected end CURRENT ROW, got %q", win.Over.Frame.EndType)
+		}
+	})
+
+	t.Run("ROWS single bound = BETWEEN bound AND CURRENT ROW", func(t *testing.T) {
+		stmt, err := Parse("SELECT SUM(val) OVER (ORDER BY id ROWS 3 PRECEDING) FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		win := sel.Columns[0].Expr.(*WindowFunctionExpr)
+		if win.Over.Frame == nil {
+			t.Fatal("expected Frame to be set")
+		}
+		if win.Over.Frame.StartType != "PRECEDING" || win.Over.Frame.StartN != 3 {
+			t.Fatalf("expected start 3 PRECEDING, got %q N=%d", win.Over.Frame.StartType, win.Over.Frame.StartN)
+		}
+		if win.Over.Frame.EndType != "CURRENT ROW" {
+			t.Fatalf("expected end CURRENT ROW (implicit), got %q", win.Over.Frame.EndType)
+		}
+	})
+}
+
+func TestParseWindowFunctionsWithAlias(t *testing.T) {
+	stmt, err := Parse("SELECT ROW_NUMBER() OVER (ORDER BY id) AS rn FROM t;")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	sel := stmt.(*SelectStatement)
+	if sel.Columns[0].Alias != "rn" {
+		t.Fatalf("expected alias 'rn', got %q", sel.Columns[0].Alias)
+	}
+}
+
+func TestParseJsonbOperators(t *testing.T) {
+	cases := []struct {
+		name     string
+		query    string
+		exprType string
+		op       string
+		path     string
+	}{
+		{
+			name:     "arrow operator ->",
+			query:    "SELECT data->'name' FROM t;",
+			exprType: "JsonPathExpr",
+			op:       "->",
+			path:     "name",
+		},
+		{
+			name:     "double arrow operator ->>",
+			query:    "SELECT data->>'name' FROM t;",
+			exprType: "JsonPathExpr",
+			op:       "->>",
+			path:     "name",
+		},
+		{
+			name:     "chained arrows",
+			query:    "SELECT data->'address'->'city' FROM t;",
+			exprType: "JsonPathExpr",
+			op:       "->",
+			path:     "city",
+		},
+		{
+			name:     "arrow in WHERE clause",
+			query:    "SELECT * FROM t WHERE data->'active' = TRUE;",
+			exprType: "JsonPathExpr",
+			op:       "->",
+			path:     "active",
+		},
+		{
+			name:     "double arrow in WHERE clause",
+			query:    "SELECT * FROM t WHERE data->>'name' = 'test';",
+			exprType: "JsonPathExpr",
+			op:       "->>",
+			path:     "name",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := Parse(tc.query)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tc.name, err)
+			}
+			sel, ok := stmt.(*SelectStatement)
+			if !ok {
+				t.Fatalf("expected *SelectStatement, got %T", stmt)
+			}
+			// For WHERE tests, check the WHERE expression
+			if sel.Where != nil {
+				bin, ok := sel.Where.(*BinaryExpr)
+				if !ok {
+					t.Fatalf("expected *BinaryExpr in WHERE, got %T", sel.Where)
+				}
+				jp, ok := bin.Left.(*JsonPathExpr)
+				if !ok {
+					t.Fatalf("expected *JsonPathExpr on left, got %T", bin.Left)
+				}
+				if jp.Op != tc.op {
+					t.Fatalf("expected op %q, got %q", tc.op, jp.Op)
+				}
+				if jp.Path != tc.path {
+					t.Fatalf("expected path %q, got %q", tc.path, jp.Path)
+				}
+				return
+			}
+			// For SELECT tests
+			col := sel.Columns[0].Expr
+			// For chained arrows, outer is JsonPathExpr wrapping another
+			jp, ok := col.(*JsonPathExpr)
+			if !ok {
+				t.Fatalf("expected *JsonPathExpr, got %T", col)
+			}
+			if jp.Op != tc.op {
+				t.Fatalf("expected op %q, got %q", tc.op, jp.Op)
+			}
+			if jp.Path != tc.path {
+				t.Fatalf("expected path %q, got %q", tc.path, jp.Path)
+			}
+		})
+	}
+}
+
+func TestParseJsonbComparisonOperators(t *testing.T) {
+	cases := []struct {
+		name     string
+		query    string
+		op       string
+		checkCol bool // check in column expression instead of WHERE
+	}{
+		{
+			name:  "jsonb contains @>",
+			query: "SELECT * FROM t WHERE data @> 'val';",
+			op:    "@>",
+		},
+		{
+			name:  "jsonb contained by <@",
+			query: "SELECT * FROM t WHERE data <@ 'val';",
+			op:    "<@",
+		},
+		{
+			name:  "jsonb has key ?",
+			query: "SELECT * FROM t WHERE data ? 'name';",
+			op:    "?",
+		},
+		{
+			name:     "jsonb merge ||",
+			query:    "SELECT data || other FROM t;",
+			op:       "||",
+			checkCol: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := Parse(tc.query)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tc.name, err)
+			}
+			sel, ok := stmt.(*SelectStatement)
+			if !ok {
+				t.Fatalf("expected *SelectStatement, got %T", stmt)
+			}
+			var expr Expression
+			if tc.checkCol {
+				expr = sel.Columns[0].Expr
+			} else {
+				if sel.Where == nil {
+					t.Fatal("expected WHERE clause")
+				}
+				expr = sel.Where
+			}
+			bin, ok := expr.(*BinaryExpr)
+			if !ok {
+				t.Fatalf("expected *BinaryExpr, got %T", expr)
+			}
+			if bin.Operator != tc.op {
+				t.Fatalf("expected operator %q, got %q", tc.op, bin.Operator)
+			}
+		})
+	}
+}
+
+func TestParseSubqueryScalar(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE col = (SELECT MAX(id) FROM t2);")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	sel := stmt.(*SelectStatement)
+	bin, ok := sel.Where.(*BinaryExpr)
+	if !ok {
+		t.Fatalf("expected *BinaryExpr, got %T", sel.Where)
+	}
+	if bin.Operator != "=" {
+		t.Fatalf("expected operator '=', got %q", bin.Operator)
+	}
+	sub, ok := bin.Right.(*SubqueryExpr)
+	if !ok {
+		t.Fatalf("expected *SubqueryExpr on right, got %T", bin.Right)
+	}
+	if sub.Query == nil {
+		t.Fatal("expected non-nil subquery")
+	}
+	if _, ok := sub.Query.(*SelectStatement); !ok {
+		t.Fatalf("expected *SelectStatement in subquery, got %T", sub.Query)
+	}
+}
+
+func TestParseSubqueryExists(t *testing.T) {
+	t.Run("EXISTS", func(t *testing.T) {
+		stmt, err := Parse("SELECT * FROM t WHERE EXISTS (SELECT 1 FROM t2 WHERE t2.id = t.id);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		exists, ok := sel.Where.(*ExistsExpr)
+		if !ok {
+			t.Fatalf("expected *ExistsExpr, got %T", sel.Where)
+		}
+		if exists.Not {
+			t.Fatal("expected Not=false")
+		}
+		if exists.Select == nil {
+			t.Fatal("expected non-nil Select")
+		}
+	})
+
+	t.Run("NOT EXISTS", func(t *testing.T) {
+		stmt, err := Parse("SELECT * FROM t WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t2.id = t.id);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		notExpr, ok := sel.Where.(*NotExpr)
+		if !ok {
+			t.Fatalf("expected *NotExpr, got %T", sel.Where)
+		}
+		exists, ok := notExpr.Expr.(*ExistsExpr)
+		if !ok {
+			t.Fatalf("expected *ExistsExpr inside NotExpr, got %T", notExpr.Expr)
+		}
+		if exists.Not {
+			t.Fatal("expected inner ExistsExpr.Not=false (negation is on outer NotExpr)")
+		}
+		if exists.Select == nil {
+			t.Fatal("expected non-nil Select")
+		}
+	})
+}
+
+func TestParseSubqueryIn(t *testing.T) {
+	t.Run("IN list", func(t *testing.T) {
+		stmt, err := Parse("SELECT * FROM t WHERE col IN (1, 2, 3);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		inExpr, ok := sel.Where.(*InExpr)
+		if !ok {
+			t.Fatalf("expected *InExpr, got %T", sel.Where)
+		}
+		if inExpr.Not {
+			t.Fatal("expected Not=false")
+		}
+		if len(inExpr.Right) != 3 {
+			t.Fatalf("expected 3 values, got %d", len(inExpr.Right))
+		}
+	})
+
+	t.Run("IN subquery", func(t *testing.T) {
+		stmt, err := Parse("SELECT * FROM t WHERE col IN (SELECT id FROM t2);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		inExpr, ok := sel.Where.(*InExpr)
+		if !ok {
+			t.Fatalf("expected *InExpr, got %T", sel.Where)
+		}
+		if len(inExpr.Right) != 1 {
+			t.Fatalf("expected 1 subquery, got %d", len(inExpr.Right))
+		}
+		sub, ok := inExpr.Right[0].(*SubqueryExpr)
+		if !ok {
+			t.Fatalf("expected *SubqueryExpr, got %T", inExpr.Right[0])
+		}
+		if sub.Query == nil {
+			t.Fatal("expected non-nil subquery")
+		}
+	})
+
+	t.Run("NOT IN list", func(t *testing.T) {
+		stmt, err := Parse("SELECT * FROM t WHERE col NOT IN (1, 2);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		inExpr, ok := sel.Where.(*InExpr)
+		if !ok {
+			t.Fatalf("expected *InExpr, got %T", sel.Where)
+		}
+		if !inExpr.Not {
+			t.Fatal("expected Not=true")
+		}
+	})
+
+	t.Run("NOT IN subquery", func(t *testing.T) {
+		stmt, err := Parse("SELECT * FROM t WHERE col NOT IN (SELECT id FROM t2);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		inExpr, ok := sel.Where.(*InExpr)
+		if !ok {
+			t.Fatalf("expected *InExpr, got %T", sel.Where)
+		}
+		if !inExpr.Not {
+			t.Fatal("expected Not=true")
+		}
+	})
+}
+
+func TestParseSubqueryAll(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+		op    string
+		quant string
+	}{
+		{
+			name:  "= ALL subquery",
+			query: "SELECT * FROM t WHERE col = ALL (SELECT id FROM t2);",
+			op:    "=",
+			quant: "ALL",
+		},
+		{
+			name:  "> ALL subquery",
+			query: "SELECT * FROM t WHERE col > ALL (SELECT val FROM t2);",
+			op:    ">",
+			quant: "ALL",
+		},
+		{
+			name:  ">= ALL subquery",
+			query: "SELECT * FROM t WHERE col >= ALL (SELECT val FROM t2);",
+			op:    ">=",
+			quant: "ALL",
+		},
+		{
+			name:  "< ALL subquery",
+			query: "SELECT * FROM t WHERE col < ALL (SELECT val FROM t2);",
+			op:    "<",
+			quant: "ALL",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := Parse(tc.query)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tc.name, err)
+			}
+			sel := stmt.(*SelectStatement)
+			csq, ok := sel.Where.(*ComparisonSubqueryExpr)
+			if !ok {
+				t.Fatalf("expected *ComparisonSubqueryExpr, got %T", sel.Where)
+			}
+			if csq.Operator != tc.op {
+				t.Fatalf("expected operator %q, got %q", tc.op, csq.Operator)
+			}
+			if csq.Quantifier != tc.quant {
+				t.Fatalf("expected quantifier %q, got %q", tc.quant, csq.Quantifier)
+			}
+			if csq.Subquery == nil {
+				t.Fatal("expected non-nil Subquery")
+			}
+		})
+	}
+}
+
+func TestParseSubqueryAny(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+		op    string
+		quant string
+	}{
+		{
+			name:  "= ANY subquery",
+			query: "SELECT * FROM t WHERE col = ANY (SELECT id FROM t2);",
+			op:    "=",
+			quant: "ANY",
+		},
+		{
+			name:  "> ANY subquery",
+			query: "SELECT * FROM t WHERE col > ANY (SELECT val FROM t2);",
+			op:    ">",
+			quant: "ANY",
+		},
+		{
+			name:  "!= ANY subquery",
+			query: "SELECT * FROM t WHERE col != ANY (SELECT val FROM t2);",
+			op:    "!=",
+			quant: "ANY",
+		},
+		{
+			name:  "<= ANY subquery",
+			query: "SELECT * FROM t WHERE col <= ANY (SELECT val FROM t2);",
+			op:    "<=",
+			quant: "ANY",
+		},
+		{
+			name:  "= SOME subquery",
+			query: "SELECT * FROM t WHERE col = SOME (SELECT id FROM t2);",
+			op:    "=",
+			quant: "SOME",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := Parse(tc.query)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tc.name, err)
+			}
+			sel := stmt.(*SelectStatement)
+			csq, ok := sel.Where.(*ComparisonSubqueryExpr)
+			if !ok {
+				t.Fatalf("expected *ComparisonSubqueryExpr, got %T", sel.Where)
+			}
+			if csq.Operator != tc.op {
+				t.Fatalf("expected operator %q, got %q", tc.op, csq.Operator)
+			}
+			if csq.Quantifier != tc.quant {
+				t.Fatalf("expected quantifier %q, got %q", tc.quant, csq.Quantifier)
+			}
+			if csq.Subquery == nil {
+				t.Fatal("expected non-nil Subquery")
+			}
+		})
+	}
+}
+
+func TestParseNestedCase(t *testing.T) {
+	t.Run("nested CASE in CASE", func(t *testing.T) {
+		query := `SELECT CASE WHEN status = 'active' THEN CASE WHEN level > 5 THEN 'senior' ELSE 'junior' END ELSE 'inactive' END FROM t;`
+		stmt, err := Parse(query)
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		outer, ok := sel.Columns[0].Expr.(*CaseExpr)
+		if !ok {
+			t.Fatalf("expected *CaseExpr, got %T", sel.Columns[0].Expr)
+		}
+		if len(outer.Whens) != 1 {
+			t.Fatalf("expected 1 outer WHEN, got %d", len(outer.Whens))
+		}
+		if outer.Else == nil {
+			t.Fatal("expected outer ELSE")
+		}
+		inner, ok := outer.Whens[0].Result.(*CaseExpr)
+		if !ok {
+			t.Fatalf("expected *CaseExpr in WHEN result, got %T", outer.Whens[0].Result)
+		}
+		if len(inner.Whens) != 1 {
+			t.Fatalf("expected 1 inner WHEN, got %d", len(inner.Whens))
+		}
+		if inner.Else == nil {
+			t.Fatal("expected inner ELSE")
+		}
+	})
+
+	t.Run("CASE with base expression", func(t *testing.T) {
+		stmt, err := Parse("SELECT CASE col WHEN 1 THEN 'one' WHEN 2 THEN 'two' ELSE 'other' END FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		caseExpr, ok := sel.Columns[0].Expr.(*CaseExpr)
+		if !ok {
+			t.Fatalf("expected *CaseExpr, got %T", sel.Columns[0].Expr)
+		}
+		if caseExpr.Base == nil {
+			t.Fatal("expected non-nil Base")
+		}
+		if len(caseExpr.Whens) != 2 {
+			t.Fatalf("expected 2 WHEN clauses, got %d", len(caseExpr.Whens))
+		}
+	})
+
+	t.Run("CASE without ELSE", func(t *testing.T) {
+		stmt, err := Parse("SELECT CASE WHEN col > 0 THEN 'pos' END FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		caseExpr, ok := sel.Columns[0].Expr.(*CaseExpr)
+		if !ok {
+			t.Fatalf("expected *CaseExpr, got %T", sel.Columns[0].Expr)
+		}
+		if caseExpr.Else != nil {
+			t.Fatal("expected nil ELSE")
+		}
+	})
+
+	t.Run("CASE with multiple WHEN", func(t *testing.T) {
+		stmt, err := Parse("SELECT CASE WHEN a = 1 THEN 'one' WHEN a = 2 THEN 'two' WHEN a = 3 THEN 'three' ELSE 'other' END FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		caseExpr, ok := sel.Columns[0].Expr.(*CaseExpr)
+		if !ok {
+			t.Fatalf("expected *CaseExpr, got %T", sel.Columns[0].Expr)
+		}
+		if len(caseExpr.Whens) != 3 {
+			t.Fatalf("expected 3 WHEN clauses, got %d", len(caseExpr.Whens))
+		}
+	})
+}
+
+func TestParseNestedCaseErrors(t *testing.T) {
+	cases := []string{
+		"SELECT CASE WHEN END FROM t;",
+		"SELECT CASE END FROM t;",
+	}
+	for _, q := range cases {
+		if _, err := Parse(q); err == nil {
+			t.Fatalf("expected error for %q", q)
+		}
+	}
+}
+
+func TestParseCastExpressions(t *testing.T) {
+	cases := []struct {
+		name       string
+		query      string
+		targetType string
+	}{
+		{
+			name:       "CAST as INT",
+			query:      "SELECT CAST(col AS INT) FROM t;",
+			targetType: "INT",
+		},
+		{
+			name:       "CAST as VARCHAR",
+			query:      "SELECT CAST(col AS VARCHAR) FROM t;",
+			targetType: "VARCHAR",
+		},
+		{
+			name:       "CAST as FLOAT",
+			query:      "SELECT CAST(col AS FLOAT) FROM t;",
+			targetType: "FLOAT",
+		},
+		{
+			name:       "CAST as BOOL",
+			query:      "SELECT CAST(col AS BOOL) FROM t;",
+			targetType: "BOOL",
+		},
+		{
+			name:       "CAST as TEXT",
+			query:      "SELECT CAST(col AS TEXT) FROM t;",
+			targetType: "TEXT",
+		},
+		{
+			name:       "CAST with expression",
+			query:      "SELECT CAST(a + b AS FLOAT) FROM t;",
+			targetType: "FLOAT",
+		},
+		{
+			name:       "CAST as expression with comparison",
+			query:      "SELECT CAST(col AS INT) > 5 FROM t;",
+			targetType: "INT",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := Parse(tc.query)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tc.name, err)
+			}
+			sel := stmt.(*SelectStatement)
+			var expr Expression
+			if sel.Where != nil {
+				expr = sel.Where
+			} else {
+				expr = sel.Columns[0].Expr
+			}
+			// Unwrap BinaryExpr if needed (e.g. "CAST(x AS INT) > 5")
+			if bin, ok := expr.(*BinaryExpr); ok {
+				expr = bin.Left
+			}
+			cast, ok := expr.(*CastExpr)
+			if !ok {
+				t.Fatalf("expected *CastExpr, got %T", expr)
+			}
+			if cast.TargetType != tc.targetType {
+				t.Fatalf("expected target type %q, got %q", tc.targetType, cast.TargetType)
+			}
+			if cast.Expr == nil {
+				t.Fatal("expected non-nil Expr")
+			}
+		})
+	}
+}
+
+func TestParseCastErrors(t *testing.T) {
+	cases := []string{
+		"SELECT CAST(col) FROM t;",
+		"SELECT CAST(col AS) FROM t;",
+	}
+	for _, q := range cases {
+		if _, err := Parse(q); err == nil {
+			t.Fatalf("expected error for %q", q)
+		}
+	}
+}
+
+func TestParseCoalesce(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+		args  int
+	}{
+		{
+			name:  "COALESCE two args",
+			query: "SELECT COALESCE(a, b) FROM t;",
+			args:  2,
+		},
+		{
+			name:  "COALESCE three args",
+			query: "SELECT COALESCE(a, b, c) FROM t;",
+			args:  3,
+		},
+		{
+			name:  "COALESCE with literal",
+			query: "SELECT COALESCE(name, 'unknown') FROM t;",
+			args:  2,
+		},
+		{
+			name:  "COALESCE with column ref in arg",
+			query: "SELECT COALESCE(a, b) FROM t;",
+			args:  2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := Parse(tc.query)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tc.name, err)
+			}
+			sel := stmt.(*SelectStatement)
+			var expr Expression
+			if sel.Where != nil {
+				expr = sel.Where
+			} else {
+				expr = sel.Columns[0].Expr
+			}
+			fn, ok := expr.(*FunctionCall)
+			if !ok {
+				t.Fatalf("expected *FunctionCall, got %T", expr)
+			}
+			if fn.Name != "COALESCE" {
+				t.Fatalf("expected name 'COALESCE', got %q", fn.Name)
+			}
+			if len(fn.Args) != tc.args {
+				t.Fatalf("expected %d args, got %d", tc.args, len(fn.Args))
+			}
+		})
+	}
+}
+
+func TestParseComplexExpressionsCombined(t *testing.T) {
+	t.Run("nested CAST in CASE", func(t *testing.T) {
+		stmt, err := Parse("SELECT CASE WHEN col > 0 THEN CAST(col AS FLOAT) ELSE CAST(0 AS FLOAT) END FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		caseExpr, ok := sel.Columns[0].Expr.(*CaseExpr)
+		if !ok {
+			t.Fatalf("expected *CaseExpr, got %T", sel.Columns[0].Expr)
+		}
+		if len(caseExpr.Whens) != 1 {
+			t.Fatalf("expected 1 WHEN, got %d", len(caseExpr.Whens))
+		}
+		// Check THEN is CAST
+		thenCast, ok := caseExpr.Whens[0].Result.(*CastExpr)
+		if !ok {
+			t.Fatalf("expected *CastExpr in THEN, got %T", caseExpr.Whens[0].Result)
+		}
+		if thenCast.TargetType != "FLOAT" {
+			t.Fatalf("expected FLOAT, got %q", thenCast.TargetType)
+		}
+		// Check ELSE is CAST
+		elseCast, ok := caseExpr.Else.(*CastExpr)
+		if !ok {
+			t.Fatalf("expected *CastExpr in ELSE, got %T", caseExpr.Else)
+		}
+		if elseCast.TargetType != "FLOAT" {
+			t.Fatalf("expected FLOAT, got %q", elseCast.TargetType)
+		}
+	})
+
+	t.Run("COALESCE with CASE inside", func(t *testing.T) {
+		stmt, err := Parse("SELECT COALESCE(CASE WHEN a > 0 THEN a ELSE 0 END, b) FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		fn, ok := sel.Columns[0].Expr.(*FunctionCall)
+		if !ok {
+			t.Fatalf("expected *FunctionCall, got %T", sel.Columns[0].Expr)
+		}
+		if fn.Name != "COALESCE" {
+			t.Fatalf("expected COALESCE, got %q", fn.Name)
+		}
+		if len(fn.Args) != 2 {
+			t.Fatalf("expected 2 args, got %d", len(fn.Args))
+		}
+		innerCase, ok := fn.Args[0].(*CaseExpr)
+		if !ok {
+			t.Fatalf("expected *CaseExpr as first arg, got %T", fn.Args[0])
+		}
+		if len(innerCase.Whens) != 1 {
+			t.Fatalf("expected 1 WHEN in inner CASE, got %d", len(innerCase.Whens))
+		}
+	})
+
+	t.Run("window function with CASE in expression", func(t *testing.T) {
+		stmt, err := Parse("SELECT SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) OVER (ORDER BY id) FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		win, ok := sel.Columns[0].Expr.(*WindowFunctionExpr)
+		if !ok {
+			t.Fatalf("expected *WindowFunctionExpr, got %T", sel.Columns[0].Expr)
+		}
+		if win.FuncName != "SUM" {
+			t.Fatalf("expected SUM, got %q", win.FuncName)
+		}
+		if len(win.Args) != 1 {
+			t.Fatalf("expected 1 arg, got %d", len(win.Args))
+		}
+		innerCase, ok := win.Args[0].(*CaseExpr)
+		if !ok {
+			t.Fatalf("expected *CaseExpr as arg, got %T", win.Args[0])
+		}
+		if len(innerCase.Whens) != 1 {
+			t.Fatalf("expected 1 WHEN, got %d", len(innerCase.Whens))
+		}
+	})
+
+	t.Run("JSONB with CAST", func(t *testing.T) {
+		stmt, err := Parse("SELECT CAST(data->>'count' AS INT) FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		cast, ok := sel.Columns[0].Expr.(*CastExpr)
+		if !ok {
+			t.Fatalf("expected *CastExpr, got %T", sel.Columns[0].Expr)
+		}
+		if cast.TargetType != "INT" {
+			t.Fatalf("expected INT, got %q", cast.TargetType)
+		}
+		jp, ok := cast.Expr.(*JsonPathExpr)
+		if !ok {
+			t.Fatalf("expected *JsonPathExpr, got %T", cast.Expr)
+		}
+		if jp.Op != "->>" {
+			t.Fatalf("expected ->>, got %q", jp.Op)
+		}
+	})
+
+	t.Run("scalar subquery with CASE", func(t *testing.T) {
+		stmt, err := Parse("SELECT * FROM t WHERE col = (SELECT CASE WHEN a > 0 THEN a ELSE 0 END FROM t2);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		bin, ok := sel.Where.(*BinaryExpr)
+		if !ok {
+			t.Fatalf("expected *BinaryExpr, got %T", sel.Where)
+		}
+		sub, ok := bin.Right.(*SubqueryExpr)
+		if !ok {
+			t.Fatalf("expected *SubqueryExpr, got %T", bin.Right)
+		}
+		selStmt, ok := sub.Query.(*SelectStatement)
+		if !ok {
+			t.Fatalf("expected *SelectStatement, got %T", sub.Query)
+		}
+		if len(selStmt.Columns) != 1 {
+			t.Fatalf("expected 1 column, got %d", len(selStmt.Columns))
+		}
+		caseExpr, ok := selStmt.Columns[0].Expr.(*CaseExpr)
+		if !ok {
+			t.Fatalf("expected *CaseExpr in subquery, got %T", selStmt.Columns[0].Expr)
+		}
+		if len(caseExpr.Whens) != 1 {
+			t.Fatalf("expected 1 WHEN, got %d", len(caseExpr.Whens))
+		}
+	})
+
+	t.Run("window function with PARTITION BY multiple cols and frame", func(t *testing.T) {
+		stmt, err := Parse("SELECT SUM(val) OVER (PARTITION BY dept, region ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM t;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		win, ok := sel.Columns[0].Expr.(*WindowFunctionExpr)
+		if !ok {
+			t.Fatalf("expected *WindowFunctionExpr, got %T", sel.Columns[0].Expr)
+		}
+		if len(win.Over.PartitionBy) != 2 {
+			t.Fatalf("expected 2 partition cols, got %d", len(win.Over.PartitionBy))
+		}
+		if len(win.Over.OrderBy) != 1 {
+			t.Fatalf("expected 1 order col, got %d", len(win.Over.OrderBy))
+		}
+		if win.Over.Frame == nil {
+			t.Fatal("expected Frame to be set")
+		}
+		if win.Over.Frame.Mode != "ROWS" {
+			t.Fatalf("expected mode ROWS, got %q", win.Over.Frame.Mode)
+		}
+	})
+
+	t.Run("EXISTS with UNION subquery", func(t *testing.T) {
+		stmt, err := Parse("SELECT * FROM t WHERE EXISTS (SELECT id FROM t1 WHERE a > 1 UNION SELECT id FROM t2 WHERE b > 2);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel := stmt.(*SelectStatement)
+		exists, ok := sel.Where.(*ExistsExpr)
+		if !ok {
+			t.Fatalf("expected *ExistsExpr, got %T", sel.Where)
+		}
+		setOp, ok := exists.Select.(*SetOperationStatement)
+		if !ok {
+			t.Fatalf("expected *SetOperationStatement, got %T", exists.Select)
+		}
+		if setOp.Op != "UNION" {
+			t.Fatalf("expected UNION, got %q", setOp.Op)
+		}
+	})
+}
+
+func TestParseWindowFunctionErrors(t *testing.T) {
+	cases := []string{
+		"SELECT ROW_NUMBER() OVER FROM t;",
+		"SELECT ROW_NUMBER() OVER (PARTITION FROM t;",
+	}
+	for _, q := range cases {
+		if _, err := Parse(q); err == nil {
+			t.Fatalf("expected error for %q", q)
+		}
+	}
+}
+
+func TestParseComparisonSubqueryErrors(t *testing.T) {
+	cases := []string{
+		"SELECT * FROM t WHERE col > ALL;",
+		"SELECT * FROM t WHERE col = ANY;",
+	}
+	for _, q := range cases {
+		if _, err := Parse(q); err == nil {
+			t.Fatalf("expected error for %q", q)
+		}
+	}
+}
