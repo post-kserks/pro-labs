@@ -169,6 +169,12 @@ func (w *WAL) Append(opType byte, payload interface{}) (uint64, error) {
 	return w.appendBytesLocked(opType, payloadBytes)
 }
 
+// Checkpoint усекает WAL после checkpoint. Для корректного checkpoint
+// используйте WriteCheckpointRecord() + сохранение каталога + TruncateWAL().
+// Этот метод усекает WAL ДО сохранения каталога — crash между truncate и
+// сохранением каталога приведёт к потере всех записей.
+//
+// Deprecated: используйте doCheckpoint() в page_engine.go.
 func (w *WAL) Checkpoint() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

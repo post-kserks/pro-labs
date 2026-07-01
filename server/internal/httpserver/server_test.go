@@ -168,6 +168,43 @@ func TestLiveQueryStreamsWithToken(t *testing.T) {
 	}
 }
 
+func TestLiveQueryDBValidation(t *testing.T) {
+	srv := newTestServer(t, mustAuth(t, true, map[string]string{"sekret": "ci"}))
+
+	tests := []struct {
+		name     string
+		database string
+		wantCode int
+	}{
+		{"valid", "shop", http.StatusOK},
+		{"empty", "", http.StatusOK},
+		{"path_traversal", "../etc/passwd", http.StatusBadRequest},
+		{"dots", "..", http.StatusBadRequest},
+		{"slash", "shop/db", http.StatusBadRequest},
+		{"semicolon", "shop%3Brm+-rf+/", http.StatusBadRequest},
+		{"unicode", "%E6%95%B0%E6%8D%AE%E5%BA%93", http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			rec := httptest.NewRecorder()
+			q := "/api/live?query=SELECT+1%3B"
+			if tt.database != "" {
+				q = "/api/live?database=" + tt.database + "&query=SELECT+1%3B"
+			}
+			req := httptest.NewRequest(http.MethodGet, q, nil).WithContext(ctx)
+			req.Header.Set("Authorization", "Bearer sekret")
+			srv.apiMux().ServeHTTP(rec, req)
+			if rec.Code != tt.wantCode {
+				t.Fatalf("database=%q: status %d, want %d (body: %s)", tt.database, rec.Code, tt.wantCode, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestRateLimitingOnAllEndpoints(t *testing.T) {
 	endpoints := []struct {
 		method string
