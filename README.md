@@ -1,6 +1,8 @@
 # VaultDB
 
-SQL-совместимая СУБД с Go-сервером, C++ клиентами и веб-интерфейсом для работы с базой данных.
+SQL-совместимая СУБД с Go-сервером и C++ клиентами.
+
+**Версия: 1.1.0**
 
 ---
 
@@ -50,21 +52,6 @@ cd server && go build -o ../vaultdb-server ./cmd/vaultdb-server
   --config vaultdb.yaml
 ```
 
-### Web UI
-
-Web UI — отдельный Node.js сервер, проксирующий запросы к VaultDB:
-
-```bash
-cd site && npm install
-
-# Запустить (порт 3000, проксирует на :8080)
-VAULTDB_API_TOKEN=vdb_my_token_123 node server.js
-
-# Открыть http://localhost:3000
-```
-
-Web UI автоматически проксирует API-запросы на VaultDB с токеном авторизации.
-
 ---
 
 ## Порты
@@ -72,9 +59,8 @@ Web UI автоматически проксирует API-запросы на V
 | Порт | Протокол | Назначение |
 |------|----------|------------|
 | 5432 | TCP | Клиентский протокол (C++ клиент) |
-| 8080 | HTTP | REST API + метрики |
+| 8080 | HTTP | REST API |
 | 5433 | HTTP | Monitor (health/metrics) |
-| 3000 | HTTP | Web UI (site/server.js) |
 
 ---
 
@@ -88,7 +74,7 @@ curl -X POST http://localhost:8080/api/query \
   -H "Content-Type: application/json" \
   -d '{"database": "mydb", "query": "CREATE DATABASE mydb;"}'
 
-# Выбрать базу и создать таблицу
+# Создать таблицу
 curl -X POST http://localhost:8080/api/query \
   -H "Content-Type: application/json" \
   -d '{"database": "mydb", "query": "CREATE TABLE users (id INT PRIMARY KEY, name TEXT, age INT);"}'
@@ -104,11 +90,9 @@ curl -X POST http://localhost:8080/api/query \
   -d '{"database": "mydb", "query": "SELECT * FROM users;"}'
 ```
 
-### Через Web UI
+### Демо-интерфейс
 
-1. Открыть `http://localhost:3000`
-2. Ввести API токен в модальном окне
-3. Использовать SQL Playground или Quick Queries
+Интерактивный SQL Lab с веб-интерфейсом доступен на ветке **[test](https://github.com/post-kserks/pro-labs/tree/test)**.
 
 ---
 
@@ -120,7 +104,7 @@ curl -X POST http://localhost:8080/api/query \
 - **DQL**: SELECT с JOIN, CTE (включая recursive), window functions, подзапросы
 - **DDL**: CREATE/DROP DATABASE/TABLE/INDEX, ALTER TABLE
 - **Типы данных**: INT, FLOAT, BOOL, TEXT, VARCHAR, JSONB, VECTOR
-- **Операторы**: арифметика, сравнение, JSONB (->, ->>, @>, <@), LIKE,全文検索
+- **Операторы**: арифметика, сравнение, JSONB (->, ->>, @>, <@), LIKE
 
 ### Транзакции
 
@@ -134,10 +118,7 @@ COMMIT;
 ### Time Travel
 
 ```sql
--- Запросить данные в прошлом
 SELECT * FROM t AS OF TIMESTAMP '2024-01-01 00:00:00';
-
--- История изменений строки
 HISTORY t KEY 1;
 ```
 
@@ -150,15 +131,6 @@ WITH RECURSIVE seq AS (
   SELECT n + 1 FROM seq WHERE n < 5
 )
 SELECT * FROM seq;
--- Результат: 1, 2, 3, 4, 5
-```
-
-### Window Functions
-
-```sql
-SELECT name, salary,
-  RANK() OVER (PARTITION BY dept ORDER BY salary DESC) AS rank
-FROM employees;
 ```
 
 ---
@@ -228,7 +200,6 @@ Client (C++) → TCP/HTTP → Lexer → Parser → Optimizer → Executor → St
 │   │   └── ...                # auth, metrics, index и др.
 │   └── benchmark/             # Бенчмарки
 ├── client/                    # C++ клиент (libvaultdb, shell, TUI)
-├── site/                      # Web UI (Node.js + Express прокси)
 ├── tools/                     # Benchmark tools
 ├── docker-compose.yml         # Docker deployment
 └── Dockerfile
