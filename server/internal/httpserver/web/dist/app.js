@@ -65,6 +65,12 @@
   let currentDb = '';
   let features = [];
 
+  // --- Logout (global for onclick) ---
+  window.logout = function() {
+    localStorage.removeItem('vaultdb_token');
+    location.reload();
+  };
+
   // --- Navigation ---
   $$('.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => {
