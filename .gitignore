@@ -48,3 +48,5 @@ server/parser.test
 # Test artifacts
 *.out
 server/coverage.*
+*.md
+docs/compose/
