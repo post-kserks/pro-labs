@@ -38,3 +38,13 @@ server/coverage.html
 server/coverage.out
 coverage.html
 coverage.out
+
+# Binaries
+vaultdb-server
+vaultdb-backup
+server/parser.test
+*.test
+
+# Test artifacts
+*.out
+server/coverage.*
