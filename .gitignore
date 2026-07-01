@@ -48,5 +48,11 @@ server/parser.test
 # Test artifacts
 *.out
 server/coverage.*
-*.md
+
+# Plan/scratch files
+PERFORMANCE_OPTIMIZATION_PLAN.md
+REFACTORING_PLAN.md
+TEST_COVERAGE_PLAN.md
+task.md
+.mimocode/
 docs/compose/
