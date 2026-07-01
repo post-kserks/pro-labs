@@ -1230,10 +1230,10 @@ func TestParseInsertSelect(t *testing.T) {
 
 func TestParseUpdateFromSubquery(t *testing.T) {
 	queries := []struct {
-		sql       string
-		hasSub    bool
-		hasTable  bool
-		alias     string
+		sql      string
+		hasSub   bool
+		hasTable bool
+		alias    string
 	}{
 		{
 			sql:    "UPDATE t1 SET col = s.val FROM (SELECT id, val FROM t2) AS s WHERE t1.id = s.id;",
@@ -1444,10 +1444,10 @@ func TestParseMergeErrors(t *testing.T) {
 
 func TestParseWindowFunctions(t *testing.T) {
 	cases := []struct {
-		name     string
-		query    string
-		funcName string
-		partCols int
+		name      string
+		query     string
+		funcName  string
+		partCols  int
 		orderCols int
 	}{
 		{

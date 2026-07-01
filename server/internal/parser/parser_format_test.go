@@ -63,8 +63,8 @@ func TestFormatExpressionRoundTrip(t *testing.T) {
 		{
 			name: "InExpr",
 			expr: &InExpr{
-				Left:  &ColumnRef{Name: "status"},
-				Not:   false,
+				Left: &ColumnRef{Name: "status"},
+				Not:  false,
 				Right: []Expression{
 					&Value{Type: "string", StrVal: "active"},
 					&Value{Type: "string", StrVal: "pending"},
@@ -75,8 +75,8 @@ func TestFormatExpressionRoundTrip(t *testing.T) {
 		{
 			name: "InExpr NOT",
 			expr: &InExpr{
-				Left:  &ColumnRef{Name: "status"},
-				Not:   true,
+				Left: &ColumnRef{Name: "status"},
+				Not:  true,
 				Right: []Expression{
 					&Value{Type: "string", StrVal: "archived"},
 				},

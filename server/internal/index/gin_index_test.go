@@ -450,9 +450,9 @@ func TestGINTokenizeJSONB(t *testing.T) {
 		wantLen int
 		desc    string
 	}{
-		{`{"a": 1, "b": 2}`, 5, "object with two keys"},       // key:a, 1, key:b, 2
+		{`{"a": 1, "b": 2}`, 5, "object with two keys"}, // key:a, 1, key:b, 2
 		{`[1, 2, 3]`, 3, "array of ints"},
-		{`{"nested": {"inner": true}}`, 4, "nested object"},     // key:nested, key:inner, true
+		{`{"nested": {"inner": true}}`, 4, "nested object"}, // key:nested, key:inner, true
 		{`"plain string"`, 1, "plain string"},
 		{``, 0, "empty string"},
 	}

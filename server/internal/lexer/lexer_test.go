@@ -290,9 +290,9 @@ func TestStringUnicodeMultiByte(t *testing.T) {
 
 func TestNumberEdgeCases(t *testing.T) {
 	tests := []struct {
-		name   string
-		input  string
-		lit    string
+		name    string
+		input   string
+		lit     string
 		isFloat bool
 	}{
 		{"zero", "0", "0", false},

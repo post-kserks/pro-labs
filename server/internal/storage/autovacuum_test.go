@@ -8,10 +8,10 @@ import (
 )
 
 type mockStorageEngine struct {
-	listDatabasesFunc      func() ([]string, error)
-	listTablesFunc         func(db string) ([]TableInfo, error)
-	vacuumFunc             func(db, table string) (*VacuumStats, error)
-	tableVersionStatsFunc  func(db, table string) (*TableVersionStats, error)
+	listDatabasesFunc     func() ([]string, error)
+	listTablesFunc        func(db string) ([]TableInfo, error)
+	vacuumFunc            func(db, table string) (*VacuumStats, error)
+	tableVersionStatsFunc func(db, table string) (*TableVersionStats, error)
 }
 
 func (m *mockStorageEngine) ListDatabases() ([]string, error) {
@@ -42,8 +42,8 @@ func (m *mockStorageEngine) TableVersionStats(db, table string) (*TableVersionSt
 	return &TableVersionStats{}, nil
 }
 
-func (m *mockStorageEngine) DatabaseExists(name string) bool                  { return false }
-func (m *mockStorageEngine) TableExists(dbName, tableName string) bool        { return false }
+func (m *mockStorageEngine) DatabaseExists(name string) bool           { return false }
+func (m *mockStorageEngine) TableExists(dbName, tableName string) bool { return false }
 func (m *mockStorageEngine) GetTableSchema(dbName, tableName string) (*TableSchema, error) {
 	return nil, nil
 }
@@ -74,7 +74,7 @@ func (m *mockStorageEngine) RowHistory(dbName, tableName string, pkValue interfa
 func (m *mockStorageEngine) TableModifiedSince(db, table string, txID uint64) (bool, error) {
 	return false, nil
 }
-func (m *mockStorageEngine) CurrentTxID() uint64                              { return 0 }
+func (m *mockStorageEngine) CurrentTxID() uint64 { return 0 }
 func (m *mockStorageEngine) ListIndexes(dbName, tableName string) ([]string, error) {
 	return nil, nil
 }
@@ -130,10 +130,10 @@ func (m *mockStorageEngine) SetTableRLS(dbName, tableName string, enabled bool) 
 func (m *mockStorageEngine) AddPolicy(dbName, tableName string, policy RLSPolicy) error {
 	return nil
 }
-func (m *mockStorageEngine) CreateDatabase(name string) error         { return nil }
-func (m *mockStorageEngine) DropDatabase(name string) error           { return nil }
-func (m *mockStorageEngine) FinalCheckpoint() error                   { return nil }
-func (m *mockStorageEngine) Close() error                             { return nil }
+func (m *mockStorageEngine) CreateDatabase(name string) error { return nil }
+func (m *mockStorageEngine) DropDatabase(name string) error   { return nil }
+func (m *mockStorageEngine) FinalCheckpoint() error           { return nil }
+func (m *mockStorageEngine) Close() error                     { return nil }
 
 func TestAutoVacuumTriggersOnHighDeadRatio(t *testing.T) {
 	vacuumCalled := false

@@ -117,7 +117,7 @@ type CTEStatement struct {
 type MergeStatement struct {
 	TargetTable    string
 	SourceTable    string
-	SourceQuery    Statement   // subquery source (alternative to SourceTable)
+	SourceQuery    Statement // subquery source (alternative to SourceTable)
 	Alias          string
 	OnCondition    Expression
 	WhenMatched    *MergeWhenClause
@@ -226,7 +226,7 @@ type InsertStatement struct {
 	TableName   string
 	Columns     []string // empty means all columns in schema order
 	Rows        [][]Expression
-	SelectQuery Statement  // INSERT ... SELECT (SelectStatement or SetOperationStatement)
+	SelectQuery Statement         // INSERT ... SELECT (SelectStatement or SetOperationStatement)
 	OnConflict  *OnConflictClause // INSERT ... ON CONFLICT DO ...
 	Returning   []SelectColumn    // RETURNING clause
 }
@@ -247,9 +247,9 @@ type UpdateStatement struct {
 	TableName    string
 	Assignments  []Assignment
 	Where        Expression
-	Returning    []SelectColumn  // RETURNING clause
-	FromTable    string          // UPDATE ... FROM table
-	FromAlias    string          // alias for FROM table or subquery
+	Returning    []SelectColumn   // RETURNING clause
+	FromTable    string           // UPDATE ... FROM table
+	FromAlias    string           // alias for FROM table or subquery
 	FromSubquery *SelectStatement // UPDATE ... FROM (SELECT ...) AS alias
 }
 

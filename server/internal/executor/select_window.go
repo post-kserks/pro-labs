@@ -18,7 +18,7 @@ type windowPartitionData struct {
 
 	// Prefix sums for aggregates: O(n) pre-computation.
 	evaluatedArgs []interface{} // evaluated argument value per position
-	prefixSums   []float64     // running sum of numeric values
+	prefixSums    []float64     // running sum of numeric values
 }
 
 func (c *SelectCommand) extractWindowFunctions() []*parser.WindowFunctionExpr {

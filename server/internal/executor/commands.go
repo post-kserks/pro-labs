@@ -63,7 +63,6 @@ func resolveProjection(schema *storage.TableSchema, requested []string) ([]int, 
 	return indices, columns, nil
 }
 
-
 func normalizeForColumn(value storage.Value, col storage.ColumnSchema) (storage.Value, error) {
 	tmpSchema := storage.TableSchema{Columns: []storage.ColumnSchema{col}}
 	row := storage.Row{value}

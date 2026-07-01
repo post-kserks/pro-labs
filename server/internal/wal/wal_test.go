@@ -356,8 +356,8 @@ func TestScanAndTruncatePartialRecord(t *testing.T) {
 	}
 	f.Write([]byte("VDB1"))
 	f.Write([]byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}) // txID
-	f.Write([]byte{0x02})                                             // opType
-	f.Write([]byte{0xFF, 0xFF, 0xFF, 0xFF})                          // huge payloadLen
+	f.Write([]byte{0x02})                                           // opType
+	f.Write([]byte{0xFF, 0xFF, 0xFF, 0xFF})                         // huge payloadLen
 	f.Close()
 
 	w2, err := Open(path)

@@ -86,13 +86,13 @@ func (o *Optimizer) rowCount(s *TableStatistics) int {
 
 // OptimizedPlan оптимизированный план запроса.
 type OptimizedPlan struct {
-	Stmt             *parser.SelectStatement
-	TableStats       *TableStatistics
-	AccessMethods    map[string]AccessMethod
-	JoinMethods      []JoinMethod
-	Cost             CostEstimate
-	TablePredicates  map[string]parser.Expression
-	RequiredColumns  map[string]map[string]bool
+	Stmt              *parser.SelectStatement
+	TableStats        *TableStatistics
+	AccessMethods     map[string]AccessMethod
+	JoinMethods       []JoinMethod
+	Cost              CostEstimate
+	TablePredicates   map[string]parser.Expression
+	RequiredColumns   map[string]map[string]bool
 	DecorrelatedJoins []parser.JoinClause
 }
 

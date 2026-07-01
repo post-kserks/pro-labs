@@ -37,8 +37,8 @@ type PageStorageEngine struct {
 	tables  map[string]*pageTable // "db/table" → открытая таблица
 	catalog pageCatalog
 
-	wal     *wal.WAL
-	txMgr   *txmanager.Manager
+	wal      *wal.WAL
+	txMgr    *txmanager.Manager
 	bufPool  *BufferPool
 	pageLock *PageLockManager
 
@@ -74,9 +74,9 @@ type pageCatalog struct {
 }
 
 const (
-	pageTupleHeaderSize    = 16
-	maxTxTimesEntries      = 10000
-	keepTxTimesEntries     = 5000
+	pageTupleHeaderSize     = 16
+	maxTxTimesEntries       = 10000
+	keepTxTimesEntries      = 5000
 	catalogAutoSaveInterval = 100
 )
 
@@ -94,8 +94,8 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) 
 	}
 
 	e := &PageStorageEngine{
-		rootDir:  root,
-		tables:   make(map[string]*pageTable),
+		rootDir: root,
+		tables:  make(map[string]*pageTable),
 		catalog: pageCatalog{
 			LastModified: make(map[string]uint64),
 			RowCounts:    make(map[string]int),

@@ -83,7 +83,6 @@ func (hf *HeapFile) Close() error {
 	return firstErr
 }
 
-
 // ReadPage reads a page from disk into buf and verifies its checksum.
 func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
 	hf.mu.RLock()

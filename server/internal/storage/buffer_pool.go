@@ -35,15 +35,15 @@ type BufferPool struct {
 
 // bufferEntry — запись в кэше.
 type bufferEntry struct {
-	pid               page.PageID
-	page              *page.Page
-	hf                *heap.HeapFile  // heap, из которого загружена страница (для write-back)
-	pinCnt            int             // количество активных пользователей (нельзя вытеснить)
-	imageWritten      bool            // full page image уже записан в WAL
-	db                string          // имя БД (для WAL full page image)
-	table             string          // имя таблицы (для WAL full page image)
-	dirty             bool            // страница была изменена и не записана на диск
-	lastModifiedLSN   uint64          // LSN транзакции, последний раз изменившей страницу
+	pid             page.PageID
+	page            *page.Page
+	hf              *heap.HeapFile // heap, из которого загружена страница (для write-back)
+	pinCnt          int            // количество активных пользователей (нельзя вытеснить)
+	imageWritten    bool           // full page image уже записан в WAL
+	db              string         // имя БД (для WAL full page image)
+	table           string         // имя таблицы (для WAL full page image)
+	dirty           bool           // страница была изменена и не записана на диск
+	lastModifiedLSN uint64         // LSN транзакции, последний раз изменившей страницу
 }
 
 // NewBufferPool создаёт новый buffer pool с указанным capacity.
@@ -97,9 +97,9 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile, dbTable ...s
 
 	// Добавляем в кэш
 	entry := &bufferEntry{
-		pid:  pid,
-		page: pg,
-		hf:   hf,
+		pid:    pid,
+		page:   pg,
+		hf:     hf,
 		pinCnt: 1,
 	}
 	if len(dbTable) >= 2 {

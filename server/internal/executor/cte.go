@@ -135,9 +135,9 @@ func ExecuteCTEStatement(stmt *parser.CTEStatement, ctx *ExecutionContext) (*Res
 				tempTable := "_cte_" + selectStmt.TableName
 				dbName, _ := requireCurrentDB(ctx)
 				schema := storage.TableSchema{
-					Name:    tempTable,
+					Name:     tempTable,
 					Database: dbName,
-					Columns: make([]storage.ColumnSchema, len(cteRes.Columns)),
+					Columns:  make([]storage.ColumnSchema, len(cteRes.Columns)),
 				}
 				for i, col := range cteRes.Columns {
 					schema.Columns[i] = storage.ColumnSchema{Name: col, Type: "TEXT"}
@@ -341,9 +341,9 @@ func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (
 
 			// Build schema from CTE result columns
 			schema := storage.TableSchema{
-				Name:    tempTable,
+				Name:     tempTable,
 				Database: dbName,
-				Columns: make([]storage.ColumnSchema, len(cteRes.Columns)),
+				Columns:  make([]storage.ColumnSchema, len(cteRes.Columns)),
 			}
 			for i, col := range cteRes.Columns {
 				schema.Columns[i] = storage.ColumnSchema{Name: col, Type: "TEXT"}

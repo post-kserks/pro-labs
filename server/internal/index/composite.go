@@ -32,10 +32,10 @@ func NewCompositeIndex(name string, columns []string, colIndex []int) *Composite
 	}
 }
 
-func (idx *CompositeIndex) Name() string       { return idx.name }
-func (idx *CompositeIndex) Column() string     { return strings.Join(idx.columns, ",") }
-func (idx *CompositeIndex) ColIndex() int      { return idx.colIndex[0] }
-func (idx *CompositeIndex) Type() string       { return "composite" }
+func (idx *CompositeIndex) Name() string   { return idx.name }
+func (idx *CompositeIndex) Column() string { return strings.Join(idx.columns, ",") }
+func (idx *CompositeIndex) ColIndex() int  { return idx.colIndex[0] }
+func (idx *CompositeIndex) Type() string   { return "composite" }
 func (idx *CompositeIndex) RenameColumn(old, new string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -99,7 +99,6 @@ func formatValue(v interface{}) string {
 		return strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(formatAny(val)), "-"))
 	}
 }
-
 
 func formatAny(v interface{}) string {
 	s := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(formatAnyRaw(v)), "-"))

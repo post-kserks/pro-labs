@@ -340,12 +340,12 @@ func TestSSEMaxDuration(t *testing.T) {
 	}
 
 	srv := New(Config{
-		Storage:                  store,
-		Auth:                     mustAuth(t, false, nil),
-		Metrics:                  metrics.New(),
-		TxManager:                txmanager.NewManager(),
-		Broadcaster:              br,
-		MaxLiveQueryDurationSec:  1,
+		Storage:                 store,
+		Auth:                    mustAuth(t, false, nil),
+		Metrics:                 metrics.New(),
+		TxManager:               txmanager.NewManager(),
+		Broadcaster:             br,
+		MaxLiveQueryDurationSec: 1,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

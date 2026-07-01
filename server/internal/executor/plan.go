@@ -26,8 +26,3 @@ type PlanStats struct {
 	ExecutionMs  float64
 	UsedIndex    bool
 }
-
-
-
-
-

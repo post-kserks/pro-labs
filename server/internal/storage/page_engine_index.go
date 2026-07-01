@@ -29,7 +29,6 @@ func (e *PageStorageEngine) indexMetadataPath(dbName, tableName string) string {
 	return filepath.Join(e.rootDir, dbName, tableName, ".indexes.json")
 }
 
-
 func (e *PageStorageEngine) saveIndexesMetadata(dbName, tableName string, mgr *index.IndexManager) error {
 	indexes := mgr.All()
 	meta := make([]struct {

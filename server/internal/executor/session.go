@@ -42,24 +42,24 @@ type PreparedStatement struct {
 
 // SessionConfig содержит все параметры для создания сессии.
 type SessionConfig struct {
-	Store               storage.StorageEngine
-	Metrics             *metrics.Collector
-	TxManager           *txmanager.Manager
-	Broadcaster         *Broadcaster
-	Embedder            ai.Embedder
-	WAL                 *wal.WAL
-	QueryTimeout        time.Duration
-	MaxRows             int
-	MaxPreparedStmts    int
-	ResultCacheSize     int
-	ResultCacheTTL      time.Duration
+	Store            storage.StorageEngine
+	Metrics          *metrics.Collector
+	TxManager        *txmanager.Manager
+	Broadcaster      *Broadcaster
+	Embedder         ai.Embedder
+	WAL              *wal.WAL
+	QueryTimeout     time.Duration
+	MaxRows          int
+	MaxPreparedStmts int
+	ResultCacheSize  int
+	ResultCacheTTL   time.Duration
 }
 
 func NewSession(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Session {
 	return NewSessionWithConfig(SessionConfig{
-		Store:     store,
-		Metrics:   m,
-		TxManager: txm,
+		Store:       store,
+		Metrics:     m,
+		TxManager:   txm,
 		Broadcaster: b,
 	})
 }

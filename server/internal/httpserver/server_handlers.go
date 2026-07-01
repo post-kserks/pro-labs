@@ -23,7 +23,7 @@ type TransactionRequest struct {
 }
 
 type BatchQueryItem struct {
-	Query string   `json:"query"`
+	Query  string   `json:"query"`
 	Params []string `json:"params"`
 }
 

@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	sequenceMu     sync.Mutex
+	sequenceMu       sync.Mutex
 	sequenceCounters = make(map[string]int64) // key: "db.table.col" -> next value
 )
 

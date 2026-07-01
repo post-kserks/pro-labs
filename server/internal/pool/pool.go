@@ -304,5 +304,3 @@ func (p *Pool) cleanup() {
 
 	p.connections = remaining
 }
-
-

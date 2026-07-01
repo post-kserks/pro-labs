@@ -54,8 +54,6 @@ const (
 	maxPayloadSize = 32 << 20
 )
 
-
-
 type Entry struct {
 	TxID    uint64
 	OpType  byte
@@ -129,7 +127,7 @@ type WAL struct {
 	nextTxID      atomic.Uint64
 	path          string
 	syncCounter   int
-	SyncBatchSize int // number of writes between fsyncs (0 = sync every write)
+	SyncBatchSize int    // number of writes between fsyncs (0 = sync every write)
 	OnAppend      func() // called after each successful WAL append (for metrics)
 }
 
