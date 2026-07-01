@@ -205,28 +205,7 @@ func (s *Server) apiMux() *http.ServeMux {
 				return
 			}
 
-			// Auth check for static files
-			if s.cfg.Auth != nil && s.cfg.Auth.Enabled() {
-				token := r.Header.Get("Authorization")
-				if token == "" {
-					token = r.Header.Get("X-VaultDB-Token")
-				}
-				if !s.cfg.Auth.ValidateToken(strings.TrimPrefix(token, "Bearer ")) {
-					// Login page assets must be accessible without auth
-					if r.URL.Path == "/login.js" || r.URL.Path == "/style.css" {
-						// proceed to serve static file
-					} else if !strings.HasPrefix(r.URL.Path, "/api/") {
-						// Show login page for web UI (inline script)
-						loginHTML := []byte("<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>VaultDB — Авторизация</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh}.login-card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:40px;width:420px;max-width:90vw}.logo{text-align:center;margin-bottom:32px}.logo-icon{font-size:48px;color:#3fb950}.logo-text{font-size:28px;font-weight:600;margin-top:8px}h2{text-align:center;font-size:18px;color:#8b949e;margin-bottom:24px}label{display:block;font-size:13px;color:#8b949e;margin-bottom:6px}input{width:100%;padding:12px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:14px;font-family:monospace;outline:none}input:focus{border-color:#3fb950}.field{margin-bottom:16px}.btn{width:100%;padding:12px;background:#238636;border:none;border-radius:6px;color:#fff;font-size:15px;font-weight:600;cursor:pointer;margin-top:8px}.btn:hover{background:#2ea043}.hint{background:#1c2128;border:1px solid #30363d;border-radius:6px;padding:14px;margin-top:24px;font-size:12px;color:#8b949e;line-height:1.7}.hint strong{color:#e6edf3}.hint code{background:#0d1117;padding:2px 6px;border-radius:4px;font-family:monospace;font-size:11px}.error{color:#f85149;text-align:center;margin-top:12px;font-size:13px;display:none}</style></head><body><div class=\"login-card\"><div class=\"logo\"><div class=\"logo-icon\">⬡</div><div class=\"logo-text\">VaultDB</div></div><h2>Авторизация для доступа к Web UI</h2><form id=\"lf\"><div class=\"field\"><label>API Token</label><input type=\"text\" id=\"ti\" placeholder=\"vdb_sk_...\" autocomplete=\"off\" spellcheck=\"false\"></div><div class=\"error\" id=\"er\">Неверный токен</div><button type=\"submit\" class=\"btn\">Войти</button></form><div class=\"hint\"><strong>Как получить токен:</strong><br>Токен задаётся в VAULTDB_API_TOKENS при запуске сервера.<br><br><strong>Пример:</strong><br><code>VAULTDB_API_TOKENS=vdb_test_token_123</code><br><br><strong>Формат:</strong> <code>vdb_</code> + произвольная строка</div></div><script>document.getElementById('lf').onsubmit=function(e){e.preventDefault();var t=document.getElementById('ti').value.trim();if(!t){document.getElementById('er').style.display='block';return}localStorage.setItem('vaultdb_token',t);fetch('/health',{headers:{Authorization:'Bearer '+t}}).then(function(r){return r.json()}).then(function(h){						if(h.status==='ok'){window.location.replace('/')}else{document.getElementById('er').style.display='block'}}).catch(function(){document.getElementById('er').textContent='Ошибка подключения';document.getElementById('er').style.display='block'})};						var s=localStorage.getItem('vaultdb_token');if(s)document.getElementById('ti').value=s;</script></body></html>")
-						w.Header().Set("Content-Type", "text/html; charset=utf-8")
-						w.Write([]byte(loginHTML))
-						return
-					}
-					writeError(w, http.StatusUnauthorized, errCodeInternal, "unauthorized")
-					return
-				}
-			}
-
+			// Static files served without auth — API endpoints have their own auth middleware
 			// SPA fallback: if the file doesn't exist, serve index.html for client-side routing
 			f, err := distFS.Open(strings.TrimPrefix(r.URL.Path, "/"))
 			if err != nil {
