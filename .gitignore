@@ -34,3 +34,7 @@ vaultdb.yaml
 
 # Windows
 *.exe
+server/coverage.html
+server/coverage.out
+coverage.html
+coverage.out
