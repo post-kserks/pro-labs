@@ -193,11 +193,11 @@ func valueToString(value interface{}) string {
 		}
 		return "false"
 	case int:
-		return fmt.Sprintf("%d", v)
+		return strconv.Itoa(v)
 	case int64:
-		return fmt.Sprintf("%d", v)
+		return strconv.FormatInt(v, 10)
 	case float64:
-		return fmt.Sprintf("%g", v)
+		return strconv.FormatFloat(v, 'g', -1, 64)
 	default:
 		return fmt.Sprintf("%v", v)
 	}
