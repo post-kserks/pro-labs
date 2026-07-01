@@ -2,6 +2,65 @@
   const $ = (s, p = document) => p.querySelector(s);
   const $$ = (s, p = document) => [...p.querySelectorAll(s)];
 
+  // --- Auth gate: show login modal if no token ---
+  function getToken() { return localStorage.getItem('vaultdb_token') || ''; }
+  function hasToken() { return !!getToken(); }
+
+  function showLoginModal() {
+    if ($('#loginModal')) return;
+    const modal = document.createElement('div');
+    modal.id = 'loginModal';
+    modal.style.cssText = 'position:fixed;inset:0;background:#0d1117ee;display:flex;justify-content:center;align-items:center;z-index:9999';
+    modal.innerHTML = `
+      <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:40px;width:400px;max-width:90vw">
+        <div style="text-align:center;margin-bottom:24px">
+          <div style="font-size:40px;color:#3fb950">⬡</div>
+          <div style="font-size:22px;font-weight:600;margin-top:6px">VaultDB</div>
+        </div>
+        <h2 style="text-align:center;font-size:16px;color:#8b949e;margin-bottom:20px">Введите API Token</h2>
+        <div style="margin-bottom:14px">
+          <label style="display:block;font-size:13px;color:#8b949e;margin-bottom:5px">Token</label>
+          <input type="text" id="loginTokenInput" placeholder="vdb_..." style="width:100%;padding:10px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:14px;font-family:monospace;outline:none" autocomplete="off">
+        </div>
+        <div id="loginError" style="color:#f85149;text-align:center;font-size:13px;display:none;margin-bottom:10px">Неверный токен</div>
+        <button id="loginBtn" style="width:100%;padding:10px;background:#238636;border:none;border-radius:6px;color:#fff;font-size:15px;font-weight:600;cursor:pointer">Войти</button>
+        <div style="background:#1c2128;border:1px solid #30363d;border-radius:6px;padding:12px;margin-top:16px;font-size:11px;color:#8b949e;line-height:1.6">
+          <strong style="color:#e6edf3">Как получить токен:</strong><br>
+          Задаётся в <code style="background:#0d1117;padding:1px 4px;border-radius:3px">VAULTDB_API_TOKENS</code> при запуске.<br>
+          Пример: <code style="background:#0d1117;padding:1px 4px;border-radius:3px">VAULTDB_API_TOKENS=vdb_test_token_123</code>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    const saved = getToken();
+    if (saved) $('#loginTokenInput').value = saved;
+    $('#loginBtn').onclick = async () => {
+      const t = $('#loginTokenInput').value.trim();
+      if (!t) { $('#loginError').style.display = 'block'; return; }
+      try {
+        const r = await fetch('/health', { headers: { 'Authorization': 'Bearer ' + t } });
+        const h = await r.json();
+        if (h.status === 'ok') {
+          localStorage.setItem('vaultdb_token', t);
+          modal.remove();
+          location.reload();
+        } else {
+          $('#loginError').style.display = 'block';
+        }
+      } catch { $('#loginError').textContent = 'Ошибка подключения'; $('#loginError').style.display = 'block'; }
+    };
+  }
+
+  async function checkAuth() {
+    const t = getToken();
+    if (!t) { showLoginModal(); return false; }
+    try {
+      const r = await fetch('/health', { headers: { 'Authorization': 'Bearer ' + t } });
+      const h = await r.json();
+      if (h.status !== 'ok') { showLoginModal(); return false; }
+      return true;
+    } catch { showLoginModal(); return false; }
+  }
+
   // --- State ---
   let currentDb = '';
   let features = [];
@@ -567,8 +626,12 @@ SELECT * FROM ledger;`,
   }
 
   // --- Init ---
-  loadDatabases();
-  checkHealth();
-  setInterval(checkHealth, 15000);
+  checkAuth().then(ok => {
+    if (ok) {
+      loadDatabases();
+      checkHealth();
+      setInterval(checkHealth, 15000);
+    }
+  });
 
 })();
