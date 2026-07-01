@@ -253,16 +253,18 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		var pid page.PageID
 		var pg *page.Page
 		havePage := false
+		pageLocked := false
 
 		if cachedPageCount > 0 {
 			pid = pageIDAt(t.tableID, cachedPageCount-1)
-			e.pageLock.RLockPage(pid)
-		pg, err = e.getPage(pid, t.heap, t.schema.Database, t.schema.Name)
-			e.pageLock.UnlockPage(pid)
+			e.pageLock.LockPage(pid)
+			pg, err = e.getPage(pid, t.heap, t.schema.Database, t.schema.Name)
 			if err != nil {
+				e.pageLock.UnlockPageWrite(pid)
 				return 0, err
 			}
 			havePage = true
+			pageLocked = true
 		}
 
 		for {
@@ -277,7 +279,10 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 				cachedPageCount++
 			}
 
-			e.pageLock.LockPage(pid)
+			if !pageLocked {
+				e.pageLock.LockPage(pid)
+			}
+			pageLocked = true
 			slot, err := pg.InsertTuple(tuple)
 			if err == nil {
 				var lsn uint64
@@ -305,9 +310,11 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 
 				e.bufPool.UnpinPageDirty(pid, lsn)
 				e.pageLock.UnlockPageWrite(pid)
+				pageLocked = false
 				break
 			}
 			e.pageLock.UnlockPageWrite(pid)
+			pageLocked = false
 
 			if havePage {
 				e.bufPool.UnpinPage(pid, false)
@@ -697,15 +704,14 @@ func (e *PageStorageEngine) TruncateTable(dbName, tableName string) error {
 		e.mu.Unlock()
 		return err
 	}
-	e.mu.Unlock()
-
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	e.mu.Unlock()
 
 	// Write WAL entry for crash recovery
 	if e.wal != nil {
 		payload := wal.WALTruncateTablePayload{DB: dbName, Table: tableName}
 		if _, err := e.wal.Append(wal.OpTruncateTable, payload); err != nil {
+			t.mu.Unlock()
 			return fmt.Errorf("truncate: wal append: %w", err)
 		}
 	}
@@ -715,6 +721,7 @@ func (e *PageStorageEngine) TruncateTable(dbName, tableName string) error {
 
 	// Close the current heap file
 	if err := t.heap.Close(); err != nil {
+		t.mu.Unlock()
 		return fmt.Errorf("truncate: close heap: %w", err)
 	}
 
@@ -722,11 +729,13 @@ func (e *PageStorageEngine) TruncateTable(dbName, tableName string) error {
 	tableDir := e.tablePath(dbName, tableName)
 	entries, err := readDirFilenames(tableDir)
 	if err != nil {
+		t.mu.Unlock()
 		return fmt.Errorf("truncate: read dir: %w", err)
 	}
 	for _, name := range entries {
 		if strings.HasSuffix(name, ".heap") {
 			if err := removeFile(filepath.Join(tableDir, name)); err != nil {
+				t.mu.Unlock()
 				return fmt.Errorf("truncate: remove segment: %w", err)
 			}
 		}
@@ -735,9 +744,15 @@ func (e *PageStorageEngine) TruncateTable(dbName, tableName string) error {
 	// Create a fresh heap file (same path, same tableID)
 	hf, err := createFreshHeapFile(tableDir)
 	if err != nil {
+		t.mu.Unlock()
 		return fmt.Errorf("truncate: create heap: %w", err)
 	}
 	t.heap = hf
+
+	// Release t.mu before acquiring e.mu for catalog update to avoid deadlock.
+	// t.mu is no longer needed — heap is replaced and all page-level operations
+	// use pageLock, not t.mu.
+	t.mu.Unlock()
 
 	// Update catalog
 	key := dbName + "/" + tableName

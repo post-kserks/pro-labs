@@ -149,3 +149,106 @@ func TestConcurrentTableOperations(t *testing.T) {
 		t.Errorf("expected 0 tables after drops, got %d", len(tables))
 	}
 }
+
+func TestInsertRowsConcurrent(t *testing.T) {
+	engine := newTestPageEngine(t)
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name:    "items",
+		Columns: []ColumnSchema{{Name: "id", Type: "INT"}, {Name: "val", Type: "TEXT"}},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	var total atomic.Int64
+	nWriters := 8
+	nPerWriter := 50
+
+	for w := 0; w < nWriters; w++ {
+		wg.Add(1)
+		go func(writer int) {
+			defer wg.Done()
+			for i := 0; i < nPerWriter; i++ {
+				id := int64(writer*nPerWriter + i)
+				row := Row{id, "data"}
+				n, err := engine.InsertRows("testdb", "items", []Row{row})
+				if err != nil {
+					t.Errorf("writer %d: %v", writer, err)
+					return
+				}
+				total.Add(int64(n))
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	rows, err := engine.ReadCurrentRows("testdb", "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := int64(nWriters * nPerWriter)
+	if int64(len(rows)) != want {
+		t.Errorf("row count = %d, want %d", len(rows), want)
+	}
+}
+
+func TestTruncateConcurrent(t *testing.T) {
+	engine := newTestPageEngine(t)
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name:    "t1",
+		Columns: []ColumnSchema{{Name: "id", Type: "INT"}},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed some rows.
+	for i := 0; i < 50; i++ {
+		if _, err := engine.InsertRows("testdb", "t1", []Row{Row{int64(i)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	var errs atomic.Int64
+
+	// Concurrent writers inserting rows.
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func(writer int) {
+			defer wg.Done()
+			for i := 0; i < 20; i++ {
+				id := int64(writer*1000 + i)
+				_, _ = engine.InsertRows("testdb", "t1", []Row{Row{id}})
+			}
+		}(w)
+	}
+
+	// Concurrent truncates — must not race with writers.
+	for w := 0; w < 2; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 3; i++ {
+				if err := engine.TruncateTable("testdb", "t1"); err != nil {
+					errs.Add(1)
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// After all operations complete the table must still be readable.
+	_, err := engine.ReadCurrentRows("testdb", "t1")
+	if err != nil {
+		t.Fatalf("read after concurrent truncate failed: %v", err)
+	}
+}
