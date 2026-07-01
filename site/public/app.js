@@ -15,7 +15,7 @@
       <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:40px;width:400px;max-width:90vw">
         <div style="text-align:center;margin-bottom:24px">
           <div style="font-size:40px;color:#3fb950">⬡</div>
-          <div style="font-size:22px;font-weight:600;margin-top:6px">VaultDB</div>
+          <div style="font-size:22px;font-weight:600;margin-top:6px">VaultDB Lab</div>
         </div>
         <h2 style="text-align:center;font-size:16px;color:#8b949e;margin-bottom:20px">Введите API Token</h2>
         <div style="margin-bottom:14px">
