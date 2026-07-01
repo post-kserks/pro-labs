@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"vaultdb/internal/index"
 	"vaultdb/internal/storage/heap"
 	"vaultdb/internal/storage/page"
 	"vaultdb/internal/wal"
@@ -174,15 +175,22 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		}
 	}
 
-	// Build set of existing PRIMARY KEY values for fast lookup
+	// Try to find a BTree index on the PK column for O(log n) lookups.
+	// Falls back to full table scan when no index exists.
+	var pkIndex index.Index
 	existingPKs := make(map[interface{}]bool)
 	if pkIdx >= 0 {
-		_ = e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
-			if deletedTx == 0 && pkIdx < len(row) {
-				existingPKs[row[pkIdx]] = true
-			}
-			return false, nil
-		})
+		pkCol := t.schema.Columns[pkIdx].Name
+		pkIndex, _ = e.findIndexForColumn(dbName, tableName, pkCol)
+		if pkIndex == nil {
+			// No index — build O(1) lookup set via full scan (backward compatible)
+			_ = e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+				if deletedTx == 0 && pkIdx < len(row) {
+					existingPKs[row[pkIdx]] = true
+				}
+				return false, nil
+			})
+		}
 	}
 
 	tuples := make([][]byte, 0, len(rows))
@@ -203,10 +211,24 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		// Check PRIMARY KEY constraint
 		if pkIdx >= 0 && pkIdx < len(normalized) {
 			pkVal := normalized[pkIdx]
-			if existingPKs[pkVal] {
-				return 0, fmt.Errorf("duplicate primary key value: %v", pkVal)
+			if pkIndex != nil {
+				// BTree index path: O(log n) lookup per row
+				pkStr := fmt.Sprintf("%v", pkVal)
+				if _, found := pkIndex.Lookup(pkStr); found {
+					return 0, fmt.Errorf("duplicate primary key value: %v", pkVal)
+				}
+				// Also check within this batch (index won't have batch rows yet)
+				if existingPKs[pkVal] {
+					return 0, fmt.Errorf("duplicate primary key value: %v", pkVal)
+				}
+				existingPKs[pkVal] = true
+			} else {
+				// Fallback: O(1) map lookup from pre-built set
+				if existingPKs[pkVal] {
+					return 0, fmt.Errorf("duplicate primary key value: %v", pkVal)
+				}
+				existingPKs[pkVal] = true
 			}
-			existingPKs[pkVal] = true
 		}
 
 		tuple, err := encodePageTuple(txID, 0, normalized)
@@ -309,10 +331,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	e.catalog.LastModified[key] = txID
 	e.catalog.RowCounts[key] += len(rows)
 	startPos := e.catalog.RowCounts[key] - len(rows)
-	if err := e.saveCatalogLocked(); err != nil {
-		e.mu.Unlock()
-		return 0, err
-	}
+	e.markCatalogDirty()
 	e.mu.Unlock()
 
 	// WAL: mark transaction committed so recovery replays rather than rolls back
@@ -489,10 +508,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 			e.catalog.RowCounts[key] = 0
 		}
 	}
-	if err := e.saveCatalogLocked(); err != nil {
-		e.mu.Unlock()
-		return 0, err
-	}
+	e.markCatalogDirty()
 	e.mu.Unlock()
 
 	// WAL: mark transaction committed so recovery replays rather than rolls back
@@ -639,10 +655,7 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	key := dbName + "/" + tableName
 	e.mu.Lock()
 	e.catalog.LastModified[key] = txID
-	if err := e.saveCatalogLocked(); err != nil {
-		e.mu.Unlock()
-		return 0, err
-	}
+	e.markCatalogDirty()
 	e.mu.Unlock()
 
 	// WAL: mark transaction committed so recovery replays rather than rolls back

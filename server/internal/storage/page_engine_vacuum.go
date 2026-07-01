@@ -268,6 +268,14 @@ func (e *PageStorageEngine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// Flush any pending catalog changes before closing.
+	if e.catalogDirty {
+		if err := e.saveCatalogLocked(); err != nil {
+			slog.Error("catalog flush on close failed", "error", err)
+		}
+		e.catalogDirty = false
+	}
+
 	e.bufPool.Close()
 	_ = e.bufPool.FlushAll()
 	for _, t := range e.tables {

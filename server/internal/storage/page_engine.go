@@ -44,6 +44,13 @@ type PageStorageEngine struct {
 
 	indexes   map[string]*index.IndexManager // "db/table" → index manager
 	indexesMu sync.RWMutex
+
+	// Deferred catalog save fields. DML mutations mark the catalog dirty
+	// instead of serializing to JSON after every batch. The catalog is saved
+	// during checkpoints, explicit flushes, or every catalogAutoSaveInterval
+	// mutations as a safety net.
+	catalogDirty         bool
+	catalogMutationCount uint32
 }
 
 type pageTable struct {
@@ -67,9 +74,10 @@ type pageCatalog struct {
 }
 
 const (
-	pageTupleHeaderSize = 16
-	maxTxTimesEntries   = 10000
-	keepTxTimesEntries  = 5000
+	pageTupleHeaderSize    = 16
+	maxTxTimesEntries      = 10000
+	keepTxTimesEntries     = 5000
+	catalogAutoSaveInterval = 100
 )
 
 // NewPageStorageEngine открывает (или создаёт) страничное хранилище в
@@ -134,6 +142,20 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 	committed, inProgress, err := e.wal.AnalyzeTransactions()
 	if err != nil {
 		return fmt.Errorf("wal analysis: %w", err)
+	}
+
+	// Ensure the txMgr knows about all committed WAL transactions so that
+	// recalculateCatalog can identify live tuples. Without this, fresh txMgr
+	// instances would skip tuples whose createdTx exceeds the stale catalog
+	// CurrentTxID (which may not have been saved if catalog saves are deferred).
+	if e.txMgr != nil && len(committed) > 0 {
+		var maxCommitted uint64
+		for xid := range committed {
+			if xid > maxCommitted {
+				maxCommitted = xid
+			}
+		}
+		e.txMgr.EnsureCounterAtLeast(maxCommitted + 1)
 	}
 
 	slog.Info("WAL recovery: analysis complete",
@@ -646,12 +668,15 @@ func (e *PageStorageEngine) doCheckpoint() error {
 
 	// Шаг 4: сохраняем каталог с CheckpointLSN.
 	// Теперь recovery может определить checkpoint LSN из каталога.
+	// Also flushes any deferred DML catalog changes (catalogDirty).
 	e.mu.Lock()
 	e.catalog.CheckpointLSN = checkpointLSN
 	if err := e.saveCatalogLocked(); err != nil {
 		e.mu.Unlock()
 		return fmt.Errorf("checkpoint: save catalog: %w", err)
 	}
+	e.catalogDirty = false
+	e.catalogMutationCount = 0
 	e.mu.Unlock()
 
 	// Шаг 5: усекаем WAL — все dirty pages сброшены, catalog сохранён
@@ -703,6 +728,37 @@ func (e *PageStorageEngine) saveCatalogLocked() error {
 		return err
 	}
 	return os.Rename(tmp, e.catalogPath())
+}
+
+// markCatalogDirty marks the catalog as needing a disk flush. Called under e.mu
+// after DML mutations (InsertRows, UpdateRows, DeleteRows). Auto-saves every
+// catalogAutoSaveInterval mutations as a safety net against long gaps between
+// checkpoints.
+func (e *PageStorageEngine) markCatalogDirty() {
+	e.catalogDirty = true
+	e.catalogMutationCount++
+	if e.catalogMutationCount >= catalogAutoSaveInterval {
+		e.catalogMutationCount = 0
+		if err := e.saveCatalogLocked(); err != nil {
+			slog.Error("catalog auto-save failed", "error", err)
+		} else {
+			e.catalogDirty = false
+		}
+	}
+}
+
+// saveCatalogIfDirty persists the catalog only when there are unsaved mutations.
+// Called under e.mu during checkpoints and explicit flushes.
+func (e *PageStorageEngine) saveCatalogIfDirty() error {
+	if !e.catalogDirty {
+		return nil
+	}
+	if err := e.saveCatalogLocked(); err != nil {
+		return err
+	}
+	e.catalogDirty = false
+	e.catalogMutationCount = 0
+	return nil
 }
 
 // nextTxLocked выделяет новый txID и фиксирует его время (для AS OF).

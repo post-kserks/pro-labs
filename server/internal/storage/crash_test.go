@@ -73,6 +73,11 @@ func TestWALRecoveryAfterCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Recover from WAL — same as production startup path
+	if err := engine2.RecoverFromWAL(); err != nil {
+		t.Fatal(err)
+	}
+
 	// Verify data is still there
 	count, err := engine2.CountRows("testdb", "users")
 	if err != nil {
@@ -137,6 +142,11 @@ func TestWALRecoveryWithPartialWrite(t *testing.T) {
 	txm2 := txmanager.NewManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Recover from WAL
+	if err := engine2.RecoverFromWAL(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -228,6 +238,11 @@ func TestWALRecoveryWithMultipleTables(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Recover from WAL
+	if err := engine2.RecoverFromWAL(); err != nil {
+		t.Fatal(err)
+	}
+
 	// Verify both tables
 	usersCount, err := engine2.CountRows("testdb", "users")
 	if err != nil {
@@ -306,6 +321,11 @@ func TestWALRecoveryAfterDelete(t *testing.T) {
 	txm2 := txmanager.NewManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Recover from WAL
+	if err := engine2.RecoverFromWAL(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -661,6 +681,11 @@ func TestTransactionRecovery(t *testing.T) {
 	txm2 := txmanager.NewManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Recover from WAL
+	if err := engine2.RecoverFromWAL(); err != nil {
 		t.Fatal(err)
 	}
 

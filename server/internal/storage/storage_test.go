@@ -1,11 +1,15 @@
 package storage
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"vaultdb/internal/txmanager"
+	"vaultdb/internal/wal"
 )
 
 func testSchema(dbName string) TableSchema {
@@ -312,4 +316,187 @@ func TestWALRecoveryAfterRestart(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row after restart, got %d", len(rows))
 	}
+}
+
+func TestCatalogBatching(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, "test.wal")
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	txm := txmanager.NewManager()
+	store, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := store.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "t1",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "val", Type: "TEXT"},
+		},
+	}
+	if err := store.CreateTable("db", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	catalogPath := filepath.Join(dir, "pagedb", "_catalog.json")
+
+	// After CreateTable the catalog IS on disk (DDL saves immediately).
+	diskCount := readCatalogRowCount(t, catalogPath, "db/t1")
+	if diskCount != 0 {
+		t.Fatalf("expected 0 rows on disk after CreateTable, got %d", diskCount)
+	}
+
+	// Insert 50 rows — catalog should be dirty but NOT saved to disk.
+	_, err = store.InsertRows("db", "t1", makeRows(50))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	diskCount = readCatalogRowCount(t, catalogPath, "db/t1")
+	if diskCount != 0 {
+		t.Fatalf("catalog should not be on disk after deferred insert, got %d", diskCount)
+	}
+
+	// In-memory catalog IS updated.
+	memCount := store.catalog.RowCounts["db/t1"]
+	if memCount != 50 {
+		t.Fatalf("in-memory row count should be 50, got %d", memCount)
+	}
+
+	// A checkpoint flushes the dirty catalog to disk.
+	if err := store.doCheckpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	diskCount = readCatalogRowCount(t, catalogPath, "db/t1")
+	if diskCount != 50 {
+		t.Fatalf("expected 50 rows on disk after checkpoint, got %d", diskCount)
+	}
+}
+
+func TestCatalogAutoSaveInterval(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, "test.wal")
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	txm := txmanager.NewManager()
+	store, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := store.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "t1",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+		},
+	}
+	if err := store.CreateTable("db", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	catalogPath := filepath.Join(dir, "pagedb", "_catalog.json")
+
+	// Perform exactly catalogAutoSaveInterval inserts — the auto-save
+	// safety net should trigger and persist the catalog.
+	for i := 0; i < catalogAutoSaveInterval; i++ {
+		_, err := store.InsertRows("db", "t1", []Row{{int64(i)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	diskCount := readCatalogRowCount(t, catalogPath, "db/t1")
+	if diskCount != catalogAutoSaveInterval {
+		t.Fatalf("expected auto-save at %d rows, got %d on disk", catalogAutoSaveInterval, diskCount)
+	}
+}
+
+func TestCatalogDirtyFlagResetsAfterCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, "test.wal")
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	txm := txmanager.NewManager()
+	store, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := store.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "t1",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+		},
+	}
+	if err := store.CreateTable("db", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.InsertRows("db", "t1", []Row{{int64(1)}, {int64(2)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !store.catalogDirty {
+		t.Fatal("catalog should be dirty after insert")
+	}
+
+	if err := store.doCheckpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	if store.catalogDirty {
+		t.Fatal("catalog should not be dirty after checkpoint")
+	}
+}
+
+// makeRows generates n rows with a single INT column.
+func makeRows(n int) []Row {
+	rows := make([]Row, n)
+	for i := range rows {
+		rows[i] = Row{int64(i)}
+	}
+	return rows
+}
+
+// readCatalogRowCount reads _catalog.json from disk and returns the row count
+// for the given key.
+func readCatalogRowCount(t *testing.T, path, key string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read catalog: %v", err)
+	}
+	var cat pageCatalog
+	if err := json.Unmarshal(data, &cat); err != nil {
+		t.Fatalf("unmarshal catalog: %v", err)
+	}
+	return cat.RowCounts[key]
 }
