@@ -74,6 +74,28 @@ app.get('/health', async (req, res) => {
   proxyReq.end();
 });
 
+app.get('/metrics', async (req, res) => {
+  const options = {
+    hostname: VAULTDB_HOST,
+    port: VAULTDB_HTTP_PORT,
+    path: '/metrics',
+    method: 'GET',
+    headers: { ...authHeader },
+  };
+  const proxyReq = http.request(options, (proxyRes) => {
+    let body = '';
+    proxyRes.on('data', (chunk) => { body += chunk; });
+    proxyRes.on('end', () => {
+      res.set('Content-Type', proxyRes.headers['content-type'] || 'text/plain');
+      res.send(body);
+    });
+  });
+  proxyReq.on('error', () => {
+    res.status(502).send('Metrics endpoint unreachable');
+  });
+  proxyReq.end();
+});
+
 app.get('/api/health', async (req, res) => {
   const options = {
     hostname: VAULTDB_HOST,
