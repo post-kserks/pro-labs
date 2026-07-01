@@ -21,6 +21,7 @@ services:
     environment:
       VAULTDB_LOG_LEVEL: "${VAULTDB_LOG_LEVEL:-info}"
       VAULTDB_AUTH_ENABLED: "${VAULTDB_AUTH_ENABLED:-true}"
+      VAULTDB_AUTH_SECRET: "${VAULTDB_AUTH_SECRET:?Set VAULTDB_AUTH_SECRET in .env or environment}"
       VAULTDB_API_TOKENS: "${VAULTDB_API_TOKENS:?Set VAULTDB_API_TOKENS in .env or environment}"
 
     healthcheck:

@@ -18,12 +18,24 @@
     });
   });
 
+  // --- Auth helper ---
+  function authHeaders() {
+    const h = { 'Content-Type': 'application/json' };
+    const token = localStorage.getItem('vaultdb_token');
+    if (token) h['Authorization'] = 'Bearer ' + token;
+    return h;
+  }
+
+  async function authFetch(url, opts = {}) {
+    opts.headers = { ...authHeaders(), ...opts.headers };
+    return fetch(url, opts);
+  }
+
   // --- Query execution ---
   async function runQuery(sql, database) {
     const db = database || currentDb;
-    const resp = await fetch('/api/query', {
+    const resp = await authFetch('/api/query', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ database: db, query: sql }),
     });
     return resp.json();
@@ -134,7 +146,7 @@
   // --- Database selector ---
   async function loadDatabases() {
     try {
-      const resp = await fetch('/api/databases');
+      const resp = await authFetch('/api/databases');
       const data = await resp.json();
       const sel = $('#dbSelect');
       const current = sel.value;
@@ -156,7 +168,7 @@
     const tree = $('#schemaTree');
     tree.innerHTML = '<div class="tree-loading">Loading...</div>';
     try {
-      const resp = await fetch('/api/databases');
+      const resp = await authFetch('/api/databases');
       const data = await resp.json();
       const dbs = data.databases || [];
       if (dbs.length === 0) {
@@ -166,7 +178,7 @@
       let html = '';
       for (const db of dbs) {
         html += `<div class="tree-db" data-db="${esc(db.name)}">📁 ${esc(db.name)}</div>`;
-        const tResp = await fetch(`/api/databases/${db.name}/tables`);
+        const tResp = await authFetch(`/api/databases/${db.name}/tables`);
         const tData = await tResp.json();
         (tData.tables || []).forEach(t => {
           html += `<div class="tree-table" data-db="${esc(db.name)}" data-table="${esc(t.name)}">📄 ${esc(t.name)} <span style="color:var(--fg3)">(${t.row_count})</span></div>`;
@@ -186,7 +198,7 @@
     const detail = $('#schemaDetail');
     detail.innerHTML = '<div class="loading">Loading...</div>';
     try {
-      const resp = await fetch(`/api/databases/${db}/tables/${table}/schema`);
+      const resp = await authFetch(`/api/databases/${db}/tables/${table}/schema`);
       const s = await resp.json();
       let html = `<h3>${esc(s.database)}.${esc(s.name)}</h3>`;
       html += `<p style="color:var(--fg2);font-size:13px;margin:8px 0">Rows: ${s.row_count || 0}</p>`;
@@ -503,7 +515,7 @@ SELECT * FROM ledger;`,
 
   async function fetchWALMetrics() {
     try {
-      const resp = await fetch('/api/metrics');
+      const resp = await authFetch('/api/metrics');
       const text = await resp.text();
       const m = text.match(/vaultdb_wal_entries_total\s+(\d+)/);
       return m ? { entries: parseInt(m[1], 10) } : null;
@@ -513,7 +525,7 @@ SELECT * FROM ledger;`,
   // --- Dashboard ---
   async function loadDashboard() {
     try {
-      const resp = await fetch('/api/health');
+      const resp = await authFetch('/api/health');
       const h = await resp.json();
       $('#dashStatus').textContent = h.status || 'unknown';
       $('#dashStatus').style.color = h.status === 'ok' ? 'var(--accent)' : 'var(--err)';
@@ -526,7 +538,7 @@ SELECT * FROM ledger;`,
     }
 
     try {
-      const resp = await fetch('/api/metrics');
+      const resp = await authFetch('/api/metrics');
       const text = await resp.text();
       $('#metricsRaw').textContent = text;
     } catch {
@@ -537,7 +549,7 @@ SELECT * FROM ledger;`,
   // --- Health check ---
   async function checkHealth() {
     try {
-      const resp = await fetch('/api/health');
+      const resp = await authFetch('/api/health');
       const h = await resp.json();
       const dot = $('#statusDot');
       const txt = $('#statusText');

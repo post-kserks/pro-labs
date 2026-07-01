@@ -44,6 +44,5 @@ EXPOSE 5433
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 --start-period=5s \
   CMD ["/vaultdb-server", "--health-check", "--monitor-port", "5433"]
 
-USER vaultdb
 ENTRYPOINT ["/vaultdb-server"]
 CMD ["--host", "0.0.0.0", "--port", "5432", "--http-port", "8080", "--monitor-port", "5433", "--data", "/data", "--config", "/etc/vaultdb/vaultdb.yaml"]
