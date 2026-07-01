@@ -205,21 +205,8 @@ func (s *Server) apiMux() *http.ServeMux {
 				return
 			}
 
-			if s.cfg.Auth != nil && s.cfg.Auth.Enabled() {
-				token := r.Header.Get("Authorization")
-				if token == "" {
-					token = r.Header.Get("X-VaultDB-Token")
-				}
-				// Skip auth for localhost — web UI needs static files without tokens
-				ip := r.RemoteAddr
-				if strings.HasPrefix(ip, "127.0.0.1") || strings.HasPrefix(ip, "[::1]") || strings.HasPrefix(ip, "localhost") {
-					// proceed without auth check
-				} else if !s.cfg.Auth.ValidateToken(strings.TrimPrefix(token, "Bearer ")) {
-					writeError(w, http.StatusUnauthorized, errCodeInternal, "unauthorized")
-					return
-				}
-			}
-
+			// Static files (HTML/CSS/JS) are served without auth.
+			// API endpoints have their own auth middleware.
 			// SPA fallback: if the file doesn't exist, serve index.html for client-side routing
 			f, err := distFS.Open(strings.TrimPrefix(r.URL.Path, "/"))
 			if err != nil {
