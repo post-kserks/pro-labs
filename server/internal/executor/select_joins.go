@@ -12,6 +12,10 @@ import (
 func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftSchema *storage.TableSchema, leftRows []storage.Row) (*storage.TableSchema, []storage.Row, error) {
 	currentSchema := leftSchema
 	currentRows := leftRows
+	// Reusable buffer for building combined rows during join iteration.
+	// Allocated once and reset to zero-length before each cross-product pair,
+	// eliminating per-row allocation from append(append(Row{}, lrow...), rrow...).
+	var combinedBuf storage.Row
 
 	for _, join := range c.stmt.Joins {
 		if !ctx.Storage.TableExists(dbName, join.TableName) {
@@ -58,27 +62,27 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 		case "CROSS":
 			for _, lrow := range currentRows {
 				for _, rrow := range rightRows {
-					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
-					newRows = append(newRows, combinedRow)
+					combinedBuf = append(append(combinedBuf[:0], lrow...), rrow...)
+					newRows = append(newRows, storage.Row(append(storage.Row{}, combinedBuf...)))
 				}
 			}
 
 		case "INNER", "":
-			if join.Condition != nil && tryHashJoin(&newRows, join.Condition, currentRows, rightRows, currentSchema, rightSchema) {
+			if join.Condition != nil && tryHashJoin(&newRows, join.Condition, currentRows, rightRows, currentSchema, rightSchema, &combinedBuf) {
 				break
 			}
 			for _, lrow := range currentRows {
 				for _, rrow := range rightRows {
-					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
-					ok, err := evalExpr(join.Condition, combinedRow, combinedSchema, ctx)
+					combinedBuf = append(append(combinedBuf[:0], lrow...), rrow...)
+					ok, err := evalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
 					if err == nil && ok {
-						newRows = append(newRows, combinedRow)
+						newRows = append(newRows, storage.Row(append(storage.Row{}, combinedBuf...)))
 					}
 				}
 			}
 
 		case "LEFT":
-			if join.Condition != nil && tryHashJoinLeft(&newRows, join.Condition, currentRows, rightRows, currentSchema, rightSchema) {
+			if join.Condition != nil && tryHashJoinLeft(&newRows, join.Condition, currentRows, rightRows, currentSchema, rightSchema, &combinedBuf) {
 				break
 			}
 			rightNulls := make(storage.Row, len(rightSchema.Columns))
@@ -88,10 +92,10 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 			for _, lrow := range currentRows {
 				matched := false
 				for _, rrow := range rightRows {
-					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
-					ok, err := evalExpr(join.Condition, combinedRow, combinedSchema, ctx)
+					combinedBuf = append(append(combinedBuf[:0], lrow...), rrow...)
+					ok, err := evalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
 					if err == nil && ok {
-						newRows = append(newRows, combinedRow)
+						newRows = append(newRows, storage.Row(append(storage.Row{}, combinedBuf...)))
 						matched = true
 					}
 				}
@@ -101,7 +105,7 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 			}
 
 		case "RIGHT":
-			if join.Condition != nil && tryHashJoinRight(&newRows, join.Condition, currentRows, rightRows, currentSchema, rightSchema) {
+			if join.Condition != nil && tryHashJoinRight(&newRows, join.Condition, currentRows, rightRows, currentSchema, rightSchema, &combinedBuf) {
 				break
 			}
 			leftNulls := make(storage.Row, len(currentSchema.Columns))
@@ -111,10 +115,10 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 			for _, rrow := range rightRows {
 				matched := false
 				for _, lrow := range currentRows {
-					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
-					ok, err := evalExpr(join.Condition, combinedRow, combinedSchema, ctx)
+					combinedBuf = append(append(combinedBuf[:0], lrow...), rrow...)
+					ok, err := evalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
 					if err == nil && ok {
-						newRows = append(newRows, combinedRow)
+						newRows = append(newRows, storage.Row(append(storage.Row{}, combinedBuf...)))
 						matched = true
 					}
 				}
@@ -137,10 +141,10 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 			for _, lrow := range currentRows {
 				lmatched := false
 				for ri, rrow := range rightRows {
-					combinedRow := append(append(storage.Row{}, lrow...), rrow...)
-					ok, err := evalExpr(join.Condition, combinedRow, combinedSchema, ctx)
+					combinedBuf = append(append(combinedBuf[:0], lrow...), rrow...)
+					ok, err := evalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
 					if err == nil && ok {
-						newRows = append(newRows, combinedRow)
+						newRows = append(newRows, storage.Row(append(storage.Row{}, combinedBuf...)))
 						lmatched = true
 						rightMatched[ri] = true
 					}
@@ -165,7 +169,7 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 }
 
 // tryHashJoin attempts an equi-join hash join for INNER JOIN.
-func tryHashJoin(result *[]storage.Row, cond parser.Expression, leftRows, rightRows []storage.Row, leftSchema, rightSchema *storage.TableSchema) bool {
+func tryHashJoin(result *[]storage.Row, cond parser.Expression, leftRows, rightRows []storage.Row, leftSchema, rightSchema *storage.TableSchema, buf *storage.Row) bool {
 	leftIdx, rightIdx, ok := extractEquiJoinCols(cond, leftSchema, rightSchema)
 	if !ok {
 		return false
@@ -176,7 +180,8 @@ func tryHashJoin(result *[]storage.Row, cond parser.Expression, leftRows, rightR
 		key := valueToString(lrow[leftIdx])
 		if buckets, ok := hash[key]; ok {
 			for _, ri := range buckets {
-				*result = append(*result, append(append(storage.Row{}, lrow...), rightRows[ri]...))
+				*buf = append(append((*buf)[:0], lrow...), rightRows[ri]...)
+				*result = append(*result, storage.Row(append(storage.Row{}, (*buf)...)))
 			}
 		}
 	}
@@ -184,7 +189,7 @@ func tryHashJoin(result *[]storage.Row, cond parser.Expression, leftRows, rightR
 }
 
 // tryHashJoinLeft does hash join for LEFT JOIN.
-func tryHashJoinLeft(result *[]storage.Row, cond parser.Expression, leftRows, rightRows []storage.Row, leftSchema, rightSchema *storage.TableSchema) bool {
+func tryHashJoinLeft(result *[]storage.Row, cond parser.Expression, leftRows, rightRows []storage.Row, leftSchema, rightSchema *storage.TableSchema, buf *storage.Row) bool {
 	leftIdx, rightIdx, ok := extractEquiJoinCols(cond, leftSchema, rightSchema)
 	if !ok {
 		return false
@@ -197,7 +202,8 @@ func tryHashJoinLeft(result *[]storage.Row, cond parser.Expression, leftRows, ri
 		key := valueToString(lrow[leftIdx])
 		if buckets, ok := hash[key]; ok {
 			for _, ri := range buckets {
-				*result = append(*result, append(append(storage.Row{}, lrow...), rightRows[ri]...))
+				*buf = append(append((*buf)[:0], lrow...), rightRows[ri]...)
+				*result = append(*result, storage.Row(append(storage.Row{}, (*buf)...)))
 			}
 		} else {
 			*result = append(*result, append(append(storage.Row{}, lrow...), rightNulls...))
@@ -207,7 +213,7 @@ func tryHashJoinLeft(result *[]storage.Row, cond parser.Expression, leftRows, ri
 }
 
 // tryHashJoinRight does hash join for RIGHT JOIN.
-func tryHashJoinRight(result *[]storage.Row, cond parser.Expression, leftRows, rightRows []storage.Row, leftSchema, rightSchema *storage.TableSchema) bool {
+func tryHashJoinRight(result *[]storage.Row, cond parser.Expression, leftRows, rightRows []storage.Row, leftSchema, rightSchema *storage.TableSchema, buf *storage.Row) bool {
 	leftIdx, rightIdx, ok := extractEquiJoinCols(cond, leftSchema, rightSchema)
 	if !ok {
 		return false
@@ -221,7 +227,8 @@ func tryHashJoinRight(result *[]storage.Row, cond parser.Expression, leftRows, r
 		key := valueToString(lrow[leftIdx])
 		if buckets, ok := hash[key]; ok {
 			for _, ri := range buckets {
-				*result = append(*result, append(append(storage.Row{}, lrow...), rightRows[ri]...))
+				*buf = append(append((*buf)[:0], lrow...), rightRows[ri]...)
+				*result = append(*result, storage.Row(append(storage.Row{}, (*buf)...)))
 				matched[ri] = true
 			}
 		}

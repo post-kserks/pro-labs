@@ -406,3 +406,81 @@ func TestEvalOperandErrorPropagation(t *testing.T) {
 	// Test: SELECT with non-existent column in aggregate should propagate error
 	executeSQLExpectError(t, session, "SELECT COUNT(nonexistent) FROM t;")
 }
+
+func TestResolveColumnCached(t *testing.T) {
+	schema := &storage.TableSchema{
+		Name: "t",
+		Columns: []storage.ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "val", Type: "TEXT"},
+			{Name: "score", Type: "FLOAT"},
+		},
+	}
+	row := storage.Row{int64(1), "alice", 9.5}
+
+	t.Run("unqualified match via cache", func(t *testing.T) {
+		idx := buildColumnIndex(schema)
+		got, err := resolveColumn(row, schema, "val", idx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "alice" {
+			t.Fatalf("expected alice, got %v", got)
+		}
+	})
+
+	t.Run("case-insensitive cache lookup", func(t *testing.T) {
+		idx := buildColumnIndex(schema)
+		got, err := resolveColumn(row, schema, "VAL", idx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "alice" {
+			t.Fatalf("expected alice, got %v", got)
+		}
+	})
+
+	t.Run("unqualified fallback to linear scan", func(t *testing.T) {
+		got, err := resolveColumn(row, schema, "score", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != 9.5 {
+			t.Fatalf("expected 9.5, got %v", got)
+		}
+	})
+
+	t.Run("unknown column returns error", func(t *testing.T) {
+		idx := buildColumnIndex(schema)
+		_, err := resolveColumn(row, schema, "nonexistent", idx)
+		if err == nil {
+			t.Fatal("expected error for unknown column")
+		}
+	})
+}
+
+func BenchmarkResolveColumnCached(b *testing.B) {
+	schema := &storage.TableSchema{
+		Name: "t",
+		Columns: []storage.ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "val", Type: "TEXT"},
+			{Name: "score", Type: "FLOAT"},
+			{Name: "active", Type: "BOOL"},
+		},
+	}
+	row := storage.Row{int64(1), "alice", 9.5, true}
+	idx := buildColumnIndex(schema)
+
+	b.Run("cached", func(b *testing.B) {
+		for b.Loop() {
+			resolveColumn(row, schema, "val", idx)
+		}
+	})
+
+	b.Run("linear_scan", func(b *testing.B) {
+		for b.Loop() {
+			resolveColumn(row, schema, "val", nil)
+		}
+	})
+}

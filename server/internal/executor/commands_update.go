@@ -35,6 +35,7 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if dbName != "" && ctx.Storage.TableExists(dbName, c.stmt.TableName) {
 			schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
 			if err == nil {
+				ensureColumnIndex(ctx, schema)
 				rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 				if err == nil {
 					for idx, row := range rows {
@@ -192,6 +193,9 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		evalRows = rows
 		evalSchema = schema
 	}
+
+	// Build column index for O(1) lookups during WHERE evaluation.
+	ensureColumnIndex(ctx, evalSchema)
 
 	indices := make([]int, 0)
 	var matchedRows []storage.Row

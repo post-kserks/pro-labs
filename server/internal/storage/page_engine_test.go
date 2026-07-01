@@ -1002,3 +1002,173 @@ func TestTruncateTableEmptyPersistenceAcrossReopen(t *testing.T) {
 		t.Fatalf("after reopen empty truncate: %d rows, want 0", len(rows))
 	}
 }
+
+// pkSchema returns a schema with a PRIMARY KEY column on "id".
+func pkSchema() TableSchema {
+	return TableSchema{
+		Name: "items",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT", PrimaryKey: true},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+}
+
+func TestInsertWithPKIndex(t *testing.T) {
+	e := newPageEngine(t)
+	if err := e.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("testdb", pkSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify that the BTree index was auto-created
+	indexes, err := e.ListIndexes("testdb", "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indexes) == 0 {
+		t.Fatal("expected auto-created PK index")
+	}
+
+	// Insert should succeed
+	n, err := e.InsertRows("testdb", "items", []Row{
+		{int64(1), "apple"},
+		{int64(2), "banana"},
+		{int64(3), "cherry"},
+	})
+	if err != nil || n != 3 {
+		t.Fatalf("insert: n=%d err=%v", n, err)
+	}
+
+	// Duplicate PK should fail
+	_, err = e.InsertRows("testdb", "items", []Row{
+		{int64(1), "apple_dup"},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate PK error")
+	}
+
+	// Batch with duplicate within itself should fail
+	_, err = e.InsertRows("testdb", "items", []Row{
+		{int64(4), "date"},
+		{int64(4), "date_dup"},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate PK error within batch")
+	}
+}
+
+func BenchmarkInsertWithIndex(b *testing.B) {
+	dir := b.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.CreateDatabase("benchdb"); err != nil {
+		b.Fatal(err)
+	}
+	if err := e.CreateTable("benchdb", pkSchema()); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = e.InsertRows("benchdb", "items", []Row{
+			{int64(i), "item"},
+		})
+	}
+}
+
+func BenchmarkInsertWithoutIndex(b *testing.B) {
+	dir := b.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.CreateDatabase("benchdb"); err != nil {
+		b.Fatal(err)
+	}
+	// Table WITHOUT primary key (no auto-index)
+	schema := TableSchema{
+		Name: "items_nopk",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := e.CreateTable("benchdb", schema); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = e.InsertRows("benchdb", "items_nopk", []Row{
+			{int64(i), "item"},
+		})
+	}
+}
+
+func BenchmarkInsertBatchWithIndex(b *testing.B) {
+	dir := b.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.CreateDatabase("benchdb"); err != nil {
+		b.Fatal(err)
+	}
+	if err := e.CreateTable("benchdb", pkSchema()); err != nil {
+		b.Fatal(err)
+	}
+
+	batchSize := 100
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rows := make([]Row, batchSize)
+		for j := 0; j < batchSize; j++ {
+			rows[j] = Row{int64(i*batchSize + j), "item"}
+		}
+		_, _ = e.InsertRows("benchdb", "items", rows)
+	}
+}
+
+func BenchmarkInsertBatchWithoutIndex(b *testing.B) {
+	dir := b.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.CreateDatabase("benchdb"); err != nil {
+		b.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "items_nopk",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := e.CreateTable("benchdb", schema); err != nil {
+		b.Fatal(err)
+	}
+
+	batchSize := 100
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rows := make([]Row, batchSize)
+		for j := 0; j < batchSize; j++ {
+			rows[j] = Row{int64(i*batchSize + j), "item"}
+		}
+		_, _ = e.InsertRows("benchdb", "items_nopk", rows)
+	}
+}

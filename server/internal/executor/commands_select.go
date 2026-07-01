@@ -4,6 +4,8 @@ package executor
 // set-операции, EXPLAIN, HISTORY.
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"strings"
 
@@ -160,6 +162,9 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 			return nil, err
 		}
 	}
+
+	// Build column index for O(1) lookups during expression evaluation.
+	ensureColumnIndex(ctx, combinedSchema)
 
 	// Filter rows (WHERE)
 	filtered := make([]storage.Row, 0, len(combinedRows))
@@ -418,12 +423,26 @@ func (c *SelectCommand) executeDual(ctx *ExecutionContext) (*Result, error) {
 	}, nil
 }
 
+// hashRow computes a SHA-256 hash of a row to use as a dedup key.
+func hashRow(row []string) [32]byte {
+	h := sha256.New()
+	for _, s := range row {
+		var lenBuf [4]byte
+		binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(s)))
+		h.Write(lenBuf[:])
+		h.Write([]byte(s))
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
 // distinctRows удаляет дубликаты строк из результата.
 func distinctRows(rows [][]string) [][]string {
-	seen := make(map[string]bool)
+	seen := make(map[[32]byte]bool)
 	result := make([][]string, 0, len(rows))
 	for _, row := range rows {
-		key := strings.Join(row, "\x00")
+		key := hashRow(row)
 		if !seen[key] {
 			seen[key] = true
 			result = append(result, row)

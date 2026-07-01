@@ -95,6 +95,10 @@ func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	if err != nil {
 		return nil, err
 	}
+
+	// Build column index for O(1) lookups during WHERE evaluation.
+	ensureColumnIndex(ctx, schema)
+
 	rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 	if err != nil {
 		return nil, err

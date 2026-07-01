@@ -123,6 +123,10 @@ type ExecutionContext struct {
 	Stats       *StatisticsCollector
 	Ctx         context.Context
 
+	// ColumnIndex caches lowercased column name → position for O(1) lookups.
+	// Built once per query from the schema; used by resolveColumn.
+	ColumnIndex map[string]int
+
 	// WindowCols maps each window function expression to the synthetic result
 	// column it was materialized into, so several window functions in one
 	// query project their own values.

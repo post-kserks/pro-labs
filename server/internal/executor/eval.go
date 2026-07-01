@@ -73,18 +73,22 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 	case *parser.Value:
 		return parserValueToRaw(*e), nil
 	case *parser.ColumnRef:
+		var colIdx map[string]int
+		if ctx != nil {
+			colIdx = ctx.ColumnIndex
+		}
 		if e.Table == "old" && ctx != nil && ctx.OldRow != nil {
-			return resolveColumn(ctx.OldRow, schema, e.Name)
+			return resolveColumn(ctx.OldRow, schema, e.Name, colIdx)
 		}
 		if e.Table == "new" && ctx != nil && ctx.NewRow != nil {
-			return resolveColumn(ctx.NewRow, schema, e.Name)
+			return resolveColumn(ctx.NewRow, schema, e.Name, colIdx)
 		}
 		if e.Table != "" {
-			if val, err := resolveColumn(row, schema, e.Table+"."+e.Name); err == nil {
+			if val, err := resolveColumn(row, schema, e.Table+"."+e.Name, colIdx); err == nil {
 				return val, nil
 			}
 		}
-		return resolveColumn(row, schema, e.Name)
+		return resolveColumn(row, schema, e.Name, colIdx)
 	case *parser.BinaryExpr:
 		return evalBinary(e, row, schema, ctx)
 	case *parser.AndExpr:
@@ -141,7 +145,7 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 		// Resolve window function to the pre-computed column value
 		if ctx != nil && ctx.WindowCols != nil {
 			if colName, ok := ctx.WindowCols[e]; ok {
-				return resolveColumn(row, schema, colName)
+				return resolveColumn(row, schema, colName, ctx.ColumnIndex)
 			}
 		}
 		return nil, nil

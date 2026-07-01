@@ -10,8 +10,36 @@ import (
 	"vaultdb/internal/storage"
 )
 
+// buildColumnIndex creates a lowercased column-name → position map from the schema.
+// The map is stored in ExecutionContext.ColumnIndex and used by resolveColumn for O(1) lookups.
+func buildColumnIndex(schema *storage.TableSchema) map[string]int {
+	idx := make(map[string]int, len(schema.Columns))
+	for i, col := range schema.Columns {
+		idx[strings.ToLower(col.Name)] = i
+	}
+	return idx
+}
+
+// ensureColumnIndex lazily builds or refreshes ctx.ColumnIndex when the schema changes.
+func ensureColumnIndex(ctx *ExecutionContext, schema *storage.TableSchema) {
+	if ctx == nil || schema == nil {
+		return
+	}
+	ctx.ColumnIndex = buildColumnIndex(schema)
+}
+
 // resolveColumn находит значение столбца по имени в строке данных.
-func resolveColumn(row storage.Row, schema *storage.TableSchema, name string) (interface{}, error) {
+// When columnIndex is non-nil, unqualified lookups use the O(1) cache first,
+// falling back to linear scan only for qualified (table.column) names.
+func resolveColumn(row storage.Row, schema *storage.TableSchema, name string, columnIndex map[string]int) (interface{}, error) {
+	// Fast path: use cached index for unqualified names.
+	if columnIndex != nil && !strings.Contains(name, ".") {
+		if idx, ok := columnIndex[strings.ToLower(name)]; ok && idx < len(row) {
+			return row[idx], nil
+		}
+	}
+
+	// Slow path: linear scan (qualified names or cache miss).
 	for i, column := range schema.Columns {
 		if strings.EqualFold(column.Name, name) {
 			if i < len(row) {
