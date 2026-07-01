@@ -267,3 +267,134 @@ func TestGiSTConcurrentAccess(t *testing.T) {
 		t.Error("Expected at least some entries to be present after concurrent access")
 	}
 }
+
+func TestGiSTEmptyIndex(t *testing.T) {
+	idx := NewGiSTIndex("empty", "col", 0)
+
+	_, ok := idx.Lookup("anything")
+	if ok {
+		t.Fatal("Lookup on empty index should return false")
+	}
+
+	positions := idx.SearchRange(0, 100)
+	if len(positions) != 0 {
+		t.Errorf("SearchRange on empty index should return empty, got %v", positions)
+	}
+
+	positions = idx.SearchOverlap(0, 100)
+	if len(positions) != 0 {
+		t.Errorf("SearchOverlap on empty index should return empty, got %v", positions)
+	}
+}
+
+func TestGiSTInsertDeleteInterface(t *testing.T) {
+	idx := NewGiSTIndex("test_gist", "col", 0)
+
+	idx.Insert("100-200", 0)
+	idx.Insert("300-400", 1)
+
+	if _, ok := idx.Lookup("100-200"); !ok {
+		t.Fatal("Lookup(100-200) should return true after Insert")
+	}
+
+	idx.Delete(0)
+
+	_, ok := idx.Lookup("100-200")
+	if ok {
+		t.Fatal("Lookup(100-200) should return false after Delete")
+	}
+
+	positions, ok := idx.Lookup("300-400")
+	if !ok || len(positions) != 1 {
+		t.Fatalf("Lookup(300-400) = %v, %v; want [1], true", positions, ok)
+	}
+}
+
+func TestGiSTRenameColumn(t *testing.T) {
+	idx := NewGiSTIndex("test_gist", "old_col", 0)
+	idx.RenameColumn("old_col", "new_col")
+
+	if idx.Column() != "new_col" {
+		t.Errorf("Column() = %q, want %q", idx.Column(), "new_col")
+	}
+}
+
+func TestGiSTLargeDataset(t *testing.T) {
+	idx := NewGiSTIndex("large", "col", 0)
+
+	n := 500
+	for i := 0; i < n; i++ {
+		min := float64(i * 10)
+		max := float64(i*10 + 5)
+		idx.Add(i, fmt.Sprintf("%g-%g", min, max))
+	}
+
+	// Verify all entries are findable
+	for i := 0; i < n; i++ {
+		key := fmt.Sprintf("%g-%g", float64(i*10), float64(i*10+5))
+		if _, ok := idx.Lookup(key); !ok {
+			t.Errorf("Lookup(%s) should return true", key)
+		}
+	}
+
+	// Range search: [50, 55] should match entry 5 (50-55)
+	positions := idx.SearchRange(50, 55)
+	if len(positions) < 1 {
+		t.Errorf("SearchRange(50, 55) should find at least 1 result, got %d", len(positions))
+	}
+}
+
+func TestGiSTNilValue(t *testing.T) {
+	idx := NewGiSTIndex("test_gist", "col", 0)
+
+	idx.Add(0, nil)
+
+	// Nil value gets stringified to ""
+	if _, ok := idx.Lookup(""); !ok {
+		t.Error("Lookup('') should find nil-added entry")
+	}
+}
+
+func TestGiSTRebuildEmpty(t *testing.T) {
+	idx := NewGiSTIndex("test_gist", "col", 0)
+	idx.Add(0, "100-200")
+
+	rows := []IndexableRow{}
+	idx.Rebuild(rows)
+
+	_, ok := idx.Lookup("100-200")
+	if ok {
+		t.Fatal("Lookup should return false after rebuild with empty rows")
+	}
+
+	positions := idx.SearchRange(0, 200)
+	if len(positions) != 0 {
+		t.Errorf("SearchRange on empty rebuild should return empty, got %v", positions)
+	}
+}
+
+func TestGiSTRemoveNonExistent(t *testing.T) {
+	idx := NewGiSTIndex("test_gist", "col", 0)
+
+	// Removing from empty index should not panic
+	idx.Remove(0)
+	idx.Remove(999)
+}
+
+func TestGiSTSearchRangeExact(t *testing.T) {
+	idx := NewGiSTIndex("test_gist", "col", 0)
+
+	idx.Add(0, "5-5") // single point
+	idx.Add(1, "10-20")
+	idx.Add(2, "15-15")
+
+	positions := idx.SearchRange(5, 5)
+	if len(positions) != 1 || positions[0] != 0 {
+		t.Errorf("SearchRange(5,5) = %v, want [0]", positions)
+	}
+
+	positions = idx.SearchRange(10, 15)
+	if len(positions) < 1 {
+		t.Errorf("SearchRange(10,15) should find results")
+	}
+}

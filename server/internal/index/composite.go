@@ -155,7 +155,10 @@ func (idx *CompositeIndex) Lookup(value string) ([]int, bool) {
 func (idx *CompositeIndex) Insert(value string, rowPos int) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+	idx.insertLocked(value, rowPos)
+}
 
+func (idx *CompositeIndex) insertLocked(value string, rowPos int) {
 	i := sort.SearchStrings(idx.keys, value)
 	if i < len(idx.keys) && idx.keys[i] == value {
 		idx.values[i] = append(idx.values[i], rowPos)
@@ -209,7 +212,7 @@ func (idx *CompositeIndex) Rebuild(rows []IndexableRow) {
 			continue
 		}
 		key := idx.compositeKey(row.Data)
-		idx.Insert(key, i)
+		idx.insertLocked(key, i)
 	}
 }
 

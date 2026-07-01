@@ -124,8 +124,8 @@ func (g *GINIndex) Add(rowID int, value interface{}) {
 }
 
 func (g *GINIndex) addLocked(rowID int, value interface{}) {
-	s := valueToString(value)
 	if g.indexType == "jsonb" {
+		s := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", value)))
 		g.jsonValues[rowID] = s
 		tokens := tokenizeJSONB(s)
 		g.reverse[rowID] = tokens
@@ -133,6 +133,7 @@ func (g *GINIndex) addLocked(rowID int, value interface{}) {
 			g.data[token] = append(g.data[token], rowID)
 		}
 	} else {
+		s := valueToString(value)
 		lower := strings.ToLower(s)
 		tokens := tokenize(lower)
 		g.reverse[rowID] = tokens
