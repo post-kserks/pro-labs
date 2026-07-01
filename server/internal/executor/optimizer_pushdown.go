@@ -108,7 +108,8 @@ func (o *Optimizer) decorrelateWhere(dbName string, outer *parser.SelectStatemen
 }
 
 func (o *Optimizer) canDecorrelate(outer *parser.SelectStatement, outerExpr parser.Expression, subq *parser.SubqueryExpr) bool {
-	if subq.Query == nil {
+	subSel, ok := subq.Query.(*parser.SelectStatement)
+	if !ok {
 		return false
 	}
 	outerCol, ok := outerExpr.(*parser.ColumnRef)
@@ -117,7 +118,7 @@ func (o *Optimizer) canDecorrelate(outer *parser.SelectStatement, outerExpr pars
 	}
 	_ = outerCol
 	outerTables := o.collectTables(outer)
-	return o.exprReferencesTables(subq.Query.Where, outerTables)
+	return o.exprReferencesTables(subSel.Where, outerTables)
 }
 
 func (o *Optimizer) exprReferencesTables(expr parser.Expression, tables []string) bool {
@@ -151,7 +152,11 @@ func (o *Optimizer) exprReferencesTables(expr parser.Expression, tables []string
 }
 
 func (o *Optimizer) convertToJoin(outer *parser.SelectStatement, outerExpr parser.Expression, subq *parser.SubqueryExpr, joins *[]parser.JoinClause) parser.Expression {
-	subStmt := subq.Query
+	subStmt, ok := subq.Query.(*parser.SelectStatement)
+	if !ok {
+		// Non-SELECT subqueries (UNION etc.) can't be decorrelated — leave as-is
+		return subq
+	}
 	joinTableName := subStmt.TableName
 
 	var innerExpr parser.Expression

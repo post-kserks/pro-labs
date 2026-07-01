@@ -100,6 +100,11 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 		return err
 	}
 
+	// Evict old pages from the buffer pool so that new pages written to the
+	// temp heap (which share the same tableID and therefore the same pageIDs)
+	// don't collide with stale cache entries from the original heap.
+	e.bufPool.InvalidateTable(t.tableID)
+
 	// Write new data to a temporary directory first (crash-safe approach)
 	originalPath := e.tablePath(db, table)
 	tmpPath := originalPath + ".rewrite.tmp"
@@ -132,6 +137,13 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 		return err
 	}
 	if err := hf.Sync(); err != nil {
+		hf.Close()
+		os.RemoveAll(tmpPath)
+		return err
+	}
+
+	// Flush all dirty pages for the temporary heap to disk before closing.
+	if err := e.bufPool.FlushAll(); err != nil {
 		hf.Close()
 		os.RemoveAll(tmpPath)
 		return err

@@ -3,9 +3,12 @@ package storage
 import (
 	"encoding/binary"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"vaultdb/internal/storage/heap"
 	"vaultdb/internal/storage/page"
 	"vaultdb/internal/wal"
 )
@@ -111,14 +114,10 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 		havePage = true
 	}
 
-	dirty := false
 	flush := func() error {
-		if havePage && dirty {
-			if err := retryOnError(func() error { return t.heap.WritePage(pid, pg) }); err != nil {
-				return err
-			}
-			e.bufPool.InvalidatePage(pid)
-			dirty = false
+		if havePage {
+			e.bufPool.UnpinPage(pid, true)
+			havePage = false
 		}
 		return nil
 	}
@@ -130,10 +129,11 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 				if err != nil {
 					return err
 				}
+				newPid.TableID = t.tableID
+				e.bufPool.CachePage(newPid, newPg, t.heap, t.schema.Database, t.schema.Name)
 				pid, pg, havePage = newPid, newPg, true
 			}
 			if _, err := pg.InsertTuple(tuple); err == nil {
-				dirty = true
 				break
 			}
 			// Страница полна — сбрасываем её и выделяем новую
@@ -249,6 +249,8 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 				if err != nil {
 					return 0, err
 				}
+				newPid.TableID = t.tableID
+				e.bufPool.CachePage(newPid, newPg, t.heap, t.schema.Database, t.schema.Name)
 				pid, pg, havePage = newPid, newPg, true
 				cachedPageCount++
 			}
@@ -256,6 +258,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 			e.pageLock.LockPage(pid)
 			slot, err := pg.InsertTuple(tuple)
 			if err == nil {
+				var lsn uint64
 				if e.wal != nil {
 					payload := wal.WALPageInsertPayload{
 						DB:        dbName,
@@ -266,7 +269,8 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 						XID:       txID,
 						TupleData: tuple,
 					}
-					if _, err := e.wal.AppendWithTx(txID, wal.OpPageInsert, payload); err != nil {
+					lsn, err = e.wal.AppendWithTx(txID, wal.OpPageInsert, payload)
+					if err != nil {
 						e.pageLock.UnlockPageWrite(pid)
 						return 0, fmt.Errorf("wal insert: %w", err)
 					}
@@ -277,11 +281,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 					slot uint16
 				}{pid, slot})
 
-				if err := retryOnError(func() error { return t.heap.WritePage(pid, pg) }); err != nil {
-					e.pageLock.UnlockPageWrite(pid)
-					return 0, err
-				}
-				e.bufPool.UnpinPage(pid, true)
+				e.bufPool.UnpinPageDirty(pid, lsn)
 				e.pageLock.UnlockPageWrite(pid)
 				break
 			}
@@ -314,6 +314,13 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		return 0, err
 	}
 	e.mu.Unlock()
+
+	// WAL: mark transaction committed so recovery replays rather than rolls back
+	if e.wal != nil {
+		if _, err := e.wal.AppendWithTx(txID, wal.OpCommit, nil); err != nil {
+			return 0, fmt.Errorf("wal commit: %w", err)
+		}
+	}
 
 	e.updateIndexesOnInsert(dbName, tableName, rows, startPos)
 
@@ -354,14 +361,10 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	pos := 0
 
 	var dirtyPid page.PageID
-	var dirtyPg *page.Page
 	dirty := false
 	flushDirty := func() error {
 		if dirty {
-			if err := retryOnError(func() error { return t.heap.WritePage(dirtyPid, dirtyPg) }); err != nil {
-				return err
-			}
-			e.bufPool.InvalidatePage(dirtyPid)
+			e.bufPool.UnpinPage(dirtyPid, true)
 			dirty = false
 		}
 		return nil
@@ -427,7 +430,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		// Помечаем текущую версию удалённой: in-place запись deleted_tx
 		tuple := pg.GetTuple(slot)
 		binary.LittleEndian.PutUint64(tuple[8:16], txID)
-		dirtyPid, dirtyPg, dirty = pid, pg, true
+		dirtyPid, dirty = pid, true
 
 		if !isDelete {
 			newRow := append(Row(nil), row...)
@@ -492,6 +495,13 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	}
 	e.mu.Unlock()
 
+	// WAL: mark transaction committed so recovery replays rather than rolls back
+	if e.wal != nil {
+		if _, err := e.wal.AppendWithTx(txID, wal.OpCommit, nil); err != nil {
+			return 0, fmt.Errorf("wal commit: %w", err)
+		}
+	}
+
 	return affected, nil
 }
 
@@ -536,14 +546,10 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	pos := 0
 
 	var dirtyPid page.PageID
-	var dirtyPg *page.Page
 	dirty := false
 	flushDirty := func() error {
 		if dirty {
-			if err := retryOnError(func() error { return t.heap.WritePage(dirtyPid, dirtyPg) }); err != nil {
-				return err
-			}
-			e.bufPool.InvalidatePage(dirtyPid)
+			e.bufPool.UnpinPage(dirtyPid, true)
 			dirty = false
 		}
 		return nil
@@ -600,7 +606,7 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 		}
 		tuple := pg.GetTuple(slot)
 		binary.LittleEndian.PutUint64(tuple[8:16], txID)
-		dirtyPid, dirtyPg, dirty = pid, pg, true
+		dirtyPid, dirty = pid, true
 
 		if nv, ok := newByIndex[pos-1]; ok {
 			encoded, err := encodePageTuple(txID, 0, nv)
@@ -639,11 +645,107 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	}
 	e.mu.Unlock()
 
+	// WAL: mark transaction committed so recovery replays rather than rolls back
+	if e.wal != nil {
+		if _, err := e.wal.AppendWithTx(txID, wal.OpCommit, nil); err != nil {
+			return 0, fmt.Errorf("wal commit: %w", err)
+		}
+	}
+
 	return affected, nil
 }
 
 func (e *PageStorageEngine) DeleteRows(dbName, tableName string, indices []int) (int, error) {
 	return e.mutateRows(dbName, tableName, indices, nil, true)
+}
+
+// TruncateTable removes all rows from a table without per-row WAL.
+// Unlike DeleteRows which marks each tuple as dead, this resets the heap file
+// entirely — much faster for large tables.
+func (e *PageStorageEngine) TruncateTable(dbName, tableName string) error {
+	e.mu.Lock()
+	t, err := e.getTableLocked(dbName, tableName, true)
+	if err != nil {
+		e.mu.Unlock()
+		return err
+	}
+	e.mu.Unlock()
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Write WAL entry for crash recovery
+	if e.wal != nil {
+		payload := wal.WALTruncateTablePayload{DB: dbName, Table: tableName}
+		if _, err := e.wal.Append(wal.OpTruncateTable, payload); err != nil {
+			return fmt.Errorf("truncate: wal append: %w", err)
+		}
+	}
+
+	// Invalidate all cached pages for this table
+	e.bufPool.InvalidateTableForce(t.tableID)
+
+	// Close the current heap file
+	if err := t.heap.Close(); err != nil {
+		return fmt.Errorf("truncate: close heap: %w", err)
+	}
+
+	// Remove all segment files and recreate a fresh heap
+	tableDir := e.tablePath(dbName, tableName)
+	entries, err := readDirFilenames(tableDir)
+	if err != nil {
+		return fmt.Errorf("truncate: read dir: %w", err)
+	}
+	for _, name := range entries {
+		if strings.HasSuffix(name, ".heap") {
+			if err := removeFile(filepath.Join(tableDir, name)); err != nil {
+				return fmt.Errorf("truncate: remove segment: %w", err)
+			}
+		}
+	}
+
+	// Create a fresh heap file (same path, same tableID)
+	hf, err := createFreshHeapFile(tableDir)
+	if err != nil {
+		return fmt.Errorf("truncate: create heap: %w", err)
+	}
+	t.heap = hf
+
+	// Update catalog
+	key := dbName + "/" + tableName
+	e.mu.Lock()
+	e.catalog.RowCounts[key] = 0
+	e.catalog.LastModified[key] = e.nextTxLocked()
+	if err := e.saveCatalogLocked(); err != nil {
+		e.mu.Unlock()
+		return fmt.Errorf("truncate: save catalog: %w", err)
+	}
+	e.mu.Unlock()
+
+	return nil
+}
+
+// readDirFilenames returns just the filenames in a directory.
+func readDirFilenames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	return names, nil
+}
+
+// removeFile removes a single file.
+func removeFile(path string) error {
+	return os.Remove(path)
+}
+
+// createFreshHeapFile creates a new heap file with an empty segment 0.
+func createFreshHeapFile(dir string) (*heap.HeapFile, error) {
+	return heap.CreateHeapFile(dir)
 }
 
 // ── Чтение ────────────────────────────────────────────────────────────────

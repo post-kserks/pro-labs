@@ -115,7 +115,7 @@ func TestBufferPoolDirtyFlush(t *testing.T) {
 	}
 	bp.UnpinPage(pid, true) // mark dirty
 
-	err = bp.FlushAll(hf)
+	err = bp.FlushAll()
 	if err != nil {
 		t.Fatalf("FlushAll: %v", err)
 	}

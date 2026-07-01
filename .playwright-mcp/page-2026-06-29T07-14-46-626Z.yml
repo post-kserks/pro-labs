@@ -1,0 +1,44 @@
+- generic [ref=e1]:
+  - navigation [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]: ⬡
+      - generic [ref=e5]: VaultDB
+    - generic [ref=e6]:
+      - button "SQL Playground" [ref=e7] [cursor=pointer]
+      - button "Schema Explorer" [ref=e8] [cursor=pointer]
+      - button "Transaction Lab" [ref=e9] [cursor=pointer]
+      - button "Time Travel" [ref=e10] [cursor=pointer]
+      - button "Feature Gallery" [ref=e11] [cursor=pointer]
+      - button "Dashboard" [ref=e12] [cursor=pointer]
+    - generic [ref=e15]: VaultDB dev
+  - main [ref=e16]:
+    - generic [ref=e17]:
+      - heading "SQL Playground" [level=2] [ref=e18]
+      - paragraph [ref=e19]: Write and execute SQL queries against VaultDB in real time.
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - generic [ref=e22]: "Database:"
+          - combobox [ref=e23]:
+            - option "— select —"
+            - option "demo" [selected]
+        - textbox [ref=e24]: SELECT * FROM users;
+        - generic [ref=e25]:
+          - button "▶ Run Query" [ref=e26] [cursor=pointer]
+          - button "Clear" [ref=e27] [cursor=pointer]
+          - generic [ref=e28]: Ctrl+Enter to run
+      - generic [ref=e42]:
+        - generic:
+          - table
+      - generic [ref=e29]:
+        - heading "Quick Queries" [level=3] [ref=e30]
+        - generic [ref=e31]:
+          - button "Create DB" [ref=e32] [cursor=pointer]
+          - button "Use DB" [ref=e33] [cursor=pointer]
+          - button "Create Table" [ref=e34] [cursor=pointer]
+          - button "Insert Rows" [ref=e35] [cursor=pointer]
+          - button "Select All" [active] [ref=e36] [cursor=pointer]
+          - button "Filter" [ref=e37] [cursor=pointer]
+          - button "Aggregates" [ref=e38] [cursor=pointer]
+          - button "Create Orders" [ref=e39] [cursor=pointer]
+          - button "Insert Orders" [ref=e40] [cursor=pointer]
+          - button "Join" [ref=e41] [cursor=pointer]

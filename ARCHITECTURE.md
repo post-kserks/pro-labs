@@ -506,12 +506,12 @@ PageStorageEngine.CheckpointLoop()
 
 Identified during code audit — see `audit.md` for full details:
 
-| Issue | Priority | Description |
-|-------|----------|-------------|
-| Lock ordering WAL↔PageEngine | Critical | `doCheckpoint()` takes `mu` then `wal.mu`; recovery callbacks take `wal.mu` then `mu`. Currently safe (non-concurrent), but fragile. |
-| Context.Background() in executor | High | Query timeouts use `context.Background()` instead of server shutdown context — long queries aren't cancelled on graceful shutdown. |
-| WAL silent error swallowing | High | Corrupt WAL entries in the middle of the file cause all subsequent valid entries to be silently lost. |
-| getTableForRead/Write duplication | Medium | ~45 lines duplicated between read/write variants, differing only in `RLock` vs `Lock`. |
+| Issue | Priority | Description | Status |
+|-------|----------|-------------|--------|
+| Lock ordering WAL↔PageEngine | Critical | `doCheckpoint()` takes `mu` then `wal.mu`; recovery callbacks take `wal.mu` then `mu`. | Fixed — `mu` released before WAL append in checkpoint |
+| Context.Background() in executor | High | Query timeouts use `context.Background()` instead of server shutdown context — long queries aren't cancelled on graceful shutdown. | Verified — no `context.Background()` found in current code |
+| WAL silent error swallowing | High | Corrupt WAL entries in the middle of the file cause all subsequent valid entries to be silently lost. | Fixed — resync by scanning for next VDB1 magic bytes after corrupt entries |
+| getTableForRead/Write duplication | Medium | ~45 lines duplicated between read/write variants, differing only in `RLock` vs `Lock`. | Acceptable — only 8 lines each, minimal and clear |
 
 ---
 

@@ -346,6 +346,13 @@ func (m *MockStorage) DeleteRows(dbName, tableName string, indices []int) (int, 
 	return len(indices), nil
 }
 
+func (m *MockStorage) TruncateTable(dbName, tableName string) error {
+	if m.rows[dbName] != nil {
+		m.rows[dbName][tableName] = nil
+	}
+	return nil
+}
+
 func (m *MockStorage) Vacuum(dbName, tableName string) (*storage.VacuumStats, error) {
 	return &storage.VacuumStats{
 		TableName:  tableName,

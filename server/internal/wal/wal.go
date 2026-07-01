@@ -42,6 +42,9 @@ const (
 	OpRewriteData   byte = 0x62 // rewrite data chunk
 	OpRewriteCommit byte = 0x63 // rewrite complete
 
+	// Truncate table operation (bulk delete without per-row WAL)
+	OpTruncateTable byte = 0x64
+
 	// Full page image for torn page protection
 	OpFullPageImage byte = 0x70 // полный образ страницы перед модификацией
 )
@@ -96,6 +99,12 @@ type WALSchemaWritePayload struct {
 
 // WALRewritePayload — payload для OpRewriteBegin/OpRewriteCommit
 type WALRewritePayload struct {
+	DB    string
+	Table string
+}
+
+// WALTruncateTablePayload — payload для OpTruncateTable
+type WALTruncateTablePayload struct {
 	DB    string
 	Table string
 }

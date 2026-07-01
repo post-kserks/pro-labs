@@ -79,6 +79,11 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 		if e.Table == "new" && ctx != nil && ctx.NewRow != nil {
 			return resolveColumn(ctx.NewRow, schema, e.Name)
 		}
+		if e.Table != "" {
+			if val, err := resolveColumn(row, schema, e.Table+"."+e.Name); err == nil {
+				return val, nil
+			}
+		}
 		return resolveColumn(row, schema, e.Name)
 	case *parser.BinaryExpr:
 		return evalBinary(e, row, schema, ctx)
@@ -154,11 +159,17 @@ func evalInExpr(e *parser.InExpr, row storage.Row, schema *storage.TableSchema, 
 	for _, right := range e.Right {
 		// Handle subquery: execute it and compare against all results
 		if sub, ok := right.(*parser.SubqueryExpr); ok {
-			subQuery := *sub.Query
-			if row != nil && schema != nil && subQuery.Where != nil {
-				subQuery.Where = injectOuterColumns(subQuery.Where, row, schema)
+			var cmdStmt parser.Statement
+			if sel, ok := sub.Query.(*parser.SelectStatement); ok {
+				subCopy := *sel
+				if row != nil && schema != nil && subCopy.Where != nil {
+					subCopy.Where = injectOuterColumns(subCopy.Where, row, schema)
+				}
+				cmdStmt = &subCopy
+			} else {
+				cmdStmt = sub.Query
 			}
-			cmd, err := CommandFactory(&subQuery)
+			cmd, err := CommandFactory(cmdStmt)
 			if err != nil {
 				return false, err
 			}
@@ -344,12 +355,18 @@ func evalExistsExpr(e *parser.ExistsExpr, row storage.Row, schema *storage.Table
 		return false, fmt.Errorf("EXISTS: subquery is nil")
 	}
 
-	subQuery := *e.Select
-	if row != nil && schema != nil && subQuery.Where != nil && subQuery.TableName != schema.Name {
-		subQuery.Where = injectOuterColumns(subQuery.Where, row, schema)
+	var cmdStmt parser.Statement
+	if sel, ok := e.Select.(*parser.SelectStatement); ok {
+		subCopy := *sel
+		if row != nil && schema != nil && subCopy.Where != nil && subCopy.TableName != schema.Name {
+			subCopy.Where = injectOuterColumns(subCopy.Where, row, schema)
+		}
+		cmdStmt = &subCopy
+	} else {
+		cmdStmt = e.Select
 	}
 
-	cmd, err := CommandFactory(&subQuery)
+	cmd, err := CommandFactory(cmdStmt)
 	if err != nil {
 		return false, fmt.Errorf("EXISTS: %w", err)
 	}
@@ -372,12 +389,18 @@ func evalComparisonSubquery(e *parser.ComparisonSubqueryExpr, row storage.Row, s
 		return false, err
 	}
 
-	subQuery := *e.Subquery
-	if row != nil && schema != nil && subQuery.Where != nil {
-		subQuery.Where = injectOuterColumns(subQuery.Where, row, schema)
+	var cmdStmt parser.Statement
+	if sel, ok := e.Subquery.(*parser.SelectStatement); ok {
+		subCopy := *sel
+		if row != nil && schema != nil && subCopy.Where != nil {
+			subCopy.Where = injectOuterColumns(subCopy.Where, row, schema)
+		}
+		cmdStmt = &subCopy
+	} else {
+		cmdStmt = e.Subquery
 	}
 
-	cmd, err := CommandFactory(&subQuery)
+	cmd, err := CommandFactory(cmdStmt)
 	if err != nil {
 		return false, err
 	}

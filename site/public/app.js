@@ -83,9 +83,7 @@
   }
 
   function esc(s) {
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   // --- SQL Playground ---

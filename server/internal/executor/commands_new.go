@@ -65,18 +65,8 @@ func (c *TruncateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if err := ctx.TxManager.Commit(tx, func(pendingOps []txmanager.PendingOp) error {
 		for _, op := range pendingOps {
 			if op.Type == "truncate" {
-				rows, err := ctx.Storage.ReadCurrentRows(op.DB, op.Table)
-				if err != nil {
+				if err := ctx.Storage.TruncateTable(op.DB, op.Table); err != nil {
 					return err
-				}
-				if len(rows) > 0 {
-					indices := make([]int, len(rows))
-					for i := range indices {
-						indices[i] = i
-					}
-					if _, err := ctx.Storage.DeleteRows(op.DB, op.Table, indices); err != nil {
-						return err
-					}
 				}
 				notifyMutation(ctx, op.DB, op.Table)
 			}
@@ -164,17 +154,47 @@ func (c *MergeCommand) executeMerge(ctx *ExecutionContext, dbName string) (*Resu
 		return nil, err
 	}
 
-	// Read source table
-	if !ctx.Storage.TableExists(dbName, c.stmt.SourceTable) {
-		return nil, fmt.Errorf("source table '%s' does not exist", c.stmt.SourceTable)
-	}
-	sourceRows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.SourceTable)
-	if err != nil {
-		return nil, err
-	}
-	sourceRows, err = applyTxOverlay(ctx, dbName, c.stmt.SourceTable, sourceRows)
-	if err != nil {
-		return nil, err
+	// Read source: either a named table or a subquery
+	var sourceRows []storage.Row
+	var sourceSchema *storage.TableSchema
+	if c.stmt.SourceQuery != nil {
+		// Execute subquery to obtain source rows and schema
+		srcResult, err := c.executeSourceSubquery(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("MERGE USING subquery: %w", err)
+		}
+		sourceRows = make([]storage.Row, len(srcResult.Rows))
+		for i, r := range srcResult.Rows {
+			row := make(storage.Row, len(r))
+			for j, v := range r {
+				row[j] = v
+			}
+			sourceRows[i] = row
+		}
+		// Build a synthetic schema from column names
+		if len(srcResult.Columns) > 0 {
+			cols := make([]storage.ColumnSchema, len(srcResult.Columns))
+			for i, name := range srcResult.Columns {
+				cols[i] = storage.ColumnSchema{Name: name}
+			}
+			sourceSchema = &storage.TableSchema{Name: "MERGE_SOURCE", Columns: cols}
+		}
+	} else {
+		if !ctx.Storage.TableExists(dbName, c.stmt.SourceTable) {
+			return nil, fmt.Errorf("source table '%s' does not exist", c.stmt.SourceTable)
+		}
+		sourceRows, err = ctx.Storage.ReadCurrentRows(dbName, c.stmt.SourceTable)
+		if err != nil {
+			return nil, err
+		}
+		sourceRows, err = applyTxOverlay(ctx, dbName, c.stmt.SourceTable, sourceRows)
+		if err != nil {
+			return nil, err
+		}
+		sourceSchema, err = ctx.Storage.GetTableSchema(dbName, c.stmt.SourceTable)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if len(sourceRows) > maxMergeRows {
@@ -183,10 +203,6 @@ func (c *MergeCommand) executeMerge(ctx *ExecutionContext, dbName string) (*Resu
 
 	// Get schemas
 	targetSchema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TargetTable)
-	if err != nil {
-		return nil, err
-	}
-	sourceSchema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.SourceTable)
 	if err != nil {
 		return nil, err
 	}
@@ -208,6 +224,8 @@ func (c *MergeCommand) executeMerge(ctx *ExecutionContext, dbName string) (*Resu
 	sourceName := c.stmt.SourceTable
 	if c.stmt.Alias != "" {
 		sourceName = c.stmt.Alias
+	} else if sourceName == "" && c.stmt.SourceQuery != nil {
+		sourceName = "MERGE_SOURCE"
 	}
 	for _, col := range sourceSchema.Columns {
 		newCol := col
@@ -216,20 +234,32 @@ func (c *MergeCommand) executeMerge(ctx *ExecutionContext, dbName string) (*Resu
 	}
 
 	affected := 0
+	var returningRows []storage.Row
+	var oldRows []storage.Row
 
 	// Try hash join for simple equality ON conditions
 	eqCols := extractMergeEqualityColumns(c.stmt.OnCondition, c.stmt.TargetTable, sourceName)
 	if len(eqCols) > 0 && c.stmt.WhenMatched != nil {
-		return c.executeMergeHashJoin(ctx, dbName, targetRows, sourceRows, targetSchema, sourceSchema, eqCols, combinedSchema)
-	}
-
-	// Fall back to nested loop for complex ON conditions
-	affected, err = c.executeMergeNestedLoop(ctx, dbName, targetRows, sourceRows, targetSchema, sourceSchema, combinedSchema, sourceName)
-	if err != nil {
-		return nil, err
+		result, retRows, oldR, err := c.executeMergeHashJoin(ctx, dbName, targetRows, sourceRows, targetSchema, sourceSchema, eqCols, combinedSchema)
+		if err != nil {
+			return nil, err
+		}
+		affected = result
+		returningRows = retRows
+		oldRows = oldR
+	} else {
+		// Fall back to nested loop for complex ON conditions
+		affected, returningRows, oldRows, err = c.executeMergeNestedLoop(ctx, dbName, targetRows, sourceRows, targetSchema, sourceSchema, combinedSchema, sourceName)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TargetTable)
+
+	if len(c.stmt.Returning) > 0 && len(returningRows) > 0 {
+		return executeReturningGeneric(returningRows, c.stmt.Returning, targetSchema, ctx, oldRows...)
+	}
 
 	return &Result{
 		Type:    "message",
@@ -237,13 +267,18 @@ func (c *MergeCommand) executeMerge(ctx *ExecutionContext, dbName string) (*Resu
 	}, nil
 }
 
-// executeMergeHashJoin использует hash join для простых ON-условий (col = col).
-func (c *MergeCommand) executeMergeHashJoin(ctx *ExecutionContext, dbName string, targetRows, sourceRows []storage.Row, targetSchema, sourceSchema *storage.TableSchema, eqCols [][2]string, combinedSchema *storage.TableSchema) (*Result, error) {
-	affected := 0
+// executeSourceSubquery runs the USING subquery and returns its result.
+func (c *MergeCommand) executeSourceSubquery(ctx *ExecutionContext) (*Result, error) {
+	cmd := &SelectCommand{stmt: c.stmt.SourceQuery.(*parser.SelectStatement)}
+	return cmd.Execute(ctx)
+}
 
-	// combinedColIdx maps combined-schema column names to their index.
-	// eqCols[0][0] = "heroes.id" (target side), eqCols[0][1] = "u.id" (source side).
-	// Both are qualified names from the combined schema.
+// executeMergeHashJoin использует hash join для простых ON-условий (col = col).
+func (c *MergeCommand) executeMergeHashJoin(ctx *ExecutionContext, dbName string, targetRows, sourceRows []storage.Row, targetSchema, sourceSchema *storage.TableSchema, eqCols [][2]string, combinedSchema *storage.TableSchema) (int, []storage.Row, []storage.Row, error) {
+	affected := 0
+	var returningRows []storage.Row
+	var oldRows []storage.Row
+
 	combinedColIdx := make(map[string]int, len(combinedSchema.Columns))
 	for i, col := range combinedSchema.Columns {
 		combinedColIdx[strings.ToLower(col.Name)] = i
@@ -251,16 +286,20 @@ func (c *MergeCommand) executeMergeHashJoin(ctx *ExecutionContext, dbName string
 
 	targetColOffset := len(targetSchema.Columns)
 
-	// Build index on target rows using the target-side qualified name.
 	targetIndex := make(map[string][]int)
 	for idx, row := range targetRows {
-		// Build a temporary combined row (just the target portion) for key extraction.
 		key := buildMergeKeyFromCombined(row, eqCols[0][0], combinedColIdx, 0)
 		targetIndex[key] = append(targetIndex[key], idx)
 	}
 
+	type pendingUpdate struct {
+		targetIdx int
+		newRow    storage.Row
+		oldRow    storage.Row
+	}
+	var pendingUpdates []pendingUpdate
+
 	for _, sourceRow := range sourceRows {
-		// Build combined row for this source to look up the key.
 		tmpCombined := make(storage.Row, len(combinedSchema.Columns))
 		for i := range tmpCombined {
 			tmpCombined[i] = nil
@@ -273,9 +312,17 @@ func (c *MergeCommand) executeMergeHashJoin(ctx *ExecutionContext, dbName string
 		if len(targetIndices) == 0 {
 			if c.stmt.WhenNotMatched != nil && c.stmt.WhenNotMatched.Action == "INSERT" {
 				if err := c.executeMergeInsert(ctx, dbName, sourceRow, targetSchema, sourceSchema, combinedSchema); err != nil {
-					return nil, err
+					return 0, nil, nil, err
 				}
 				affected++
+				newRow := make(storage.Row, len(targetSchema.Columns))
+				for i := range newRow {
+					if i < len(sourceRow) {
+						newRow[i] = sourceRow[i]
+					}
+				}
+				returningRows = append(returningRows, newRow)
+				oldRows = append(oldRows, newRow)
 			}
 			continue
 		}
@@ -290,31 +337,46 @@ func (c *MergeCommand) executeMergeHashJoin(ctx *ExecutionContext, dbName string
 			}
 
 			if c.stmt.WhenMatched != nil && c.stmt.WhenMatched.Action == "UPDATE" {
-				updates := make(map[string]storage.Value)
+				newRow := make(storage.Row, len(targetRow))
+				copy(newRow, targetRow)
 				for _, assign := range c.stmt.WhenMatched.Assignments {
 					val, err := evalOperand(assign.Value, combinedRow, combinedSchema, ctx)
 					if err != nil {
-						return nil, err
+						return 0, nil, nil, err
 					}
-					updates[assign.Column] = val
+					for ci, sc := range targetSchema.Columns {
+						if strings.EqualFold(sc.Name, assign.Column) && ci < len(newRow) {
+							newRow[ci] = val
+							break
+						}
+					}
 				}
-
-				_, err = ctx.Storage.UpdateRows(dbName, c.stmt.TargetTable, []int{targetIdx}, updates)
-				if err != nil {
-					return nil, err
-				}
-				affected++
+				oldRow := make(storage.Row, len(targetRow))
+				copy(oldRow, targetRow)
+				pendingUpdates = append(pendingUpdates, pendingUpdate{targetIdx: targetIdx, newRow: newRow, oldRow: oldRow})
 			}
 		}
 	}
 
-	return &Result{
-		Type:    "message",
-		Message: fmt.Sprintf("MERGE: %d rows affected.", affected),
-	}, nil
-}
+	if len(pendingUpdates) > 0 {
+		indices := make([]int, len(pendingUpdates))
+		newValues := make([]storage.Row, len(pendingUpdates))
+		for i, pu := range pendingUpdates {
+			indices[i] = pu.targetIdx
+			newValues[i] = pu.newRow
+		}
+		if _, err := ctx.Storage.UpdateRowsDirect(dbName, c.stmt.TargetTable, indices, newValues); err != nil {
+			return 0, nil, nil, err
+		}
+		affected += len(pendingUpdates)
+		for _, pu := range pendingUpdates {
+			returningRows = append(returningRows, pu.newRow)
+			oldRows = append(oldRows, pu.oldRow)
+		}
+	}
 
-// buildMergeKeyFromCombined extracts a key from a combined row using the combined schema column name.
+	return affected, returningRows, oldRows, nil
+}
 func buildMergeKeyFromCombined(row storage.Row, colName string, combinedColIdx map[string]int, _ int) string {
 	ci, ok := combinedColIdx[strings.ToLower(colName)]
 	if !ok || ci >= len(row) {
@@ -323,9 +385,20 @@ func buildMergeKeyFromCombined(row storage.Row, colName string, combinedColIdx m
 	return valueToString(row[ci])
 }
 
-// executeMergeNestedLoop используется для сложных ON-условий.
-func (c *MergeCommand) executeMergeNestedLoop(ctx *ExecutionContext, dbName string, targetRows, sourceRows []storage.Row, targetSchema, sourceSchema *storage.TableSchema, combinedSchema *storage.TableSchema, sourceName string) (int, error) {
+// executeMergeNestedLoop выполняет MERGE через nested loop.
+// Все UPDATE собираются и применяются одним вызовом UpdateRowsDirect,
+// чтобы избежать сдвига позиций при последовательных UpdateRows.
+func (c *MergeCommand) executeMergeNestedLoop(ctx *ExecutionContext, dbName string, targetRows, sourceRows []storage.Row, targetSchema, sourceSchema *storage.TableSchema, combinedSchema *storage.TableSchema, sourceName string) (int, []storage.Row, []storage.Row, error) {
 	affected := 0
+	var returningRows []storage.Row
+	var oldRows []storage.Row
+
+	type pendingUpdate struct {
+		targetIdx int
+		newRow    storage.Row
+		oldRow    storage.Row
+	}
+	var pendingUpdates []pendingUpdate
 
 	for _, sourceRow := range sourceRows {
 		matched := false
@@ -338,15 +411,6 @@ func (c *MergeCommand) executeMergeNestedLoop(ctx *ExecutionContext, dbName stri
 				matched = true
 
 				if c.stmt.WhenMatched != nil && c.stmt.WhenMatched.Action == "UPDATE" {
-					updates := make(map[string]storage.Value)
-					for _, assign := range c.stmt.WhenMatched.Assignments {
-						val, err := evalOperand(assign.Value, combinedRow, combinedSchema, ctx)
-						if err != nil {
-							return 0, err
-						}
-						updates[assign.Column] = val
-					}
-
 					targetIdx := -1
 					for i, tr := range targetRows {
 						if rowsEqual(tr, targetRow) {
@@ -354,14 +418,27 @@ func (c *MergeCommand) executeMergeNestedLoop(ctx *ExecutionContext, dbName stri
 							break
 						}
 					}
-
-					if targetIdx >= 0 {
-						_, err = ctx.Storage.UpdateRows(dbName, c.stmt.TargetTable, []int{targetIdx}, updates)
-						if err != nil {
-							return 0, err
-						}
-						affected++
+					if targetIdx < 0 {
+						break
 					}
+
+					newRow := make(storage.Row, len(targetRow))
+					copy(newRow, targetRow)
+					for _, assign := range c.stmt.WhenMatched.Assignments {
+						val, err := evalOperand(assign.Value, combinedRow, combinedSchema, ctx)
+						if err != nil {
+							return 0, nil, nil, err
+						}
+						for ci, sc := range targetSchema.Columns {
+							if strings.EqualFold(sc.Name, assign.Column) && ci < len(newRow) {
+								newRow[ci] = val
+								break
+							}
+						}
+					}
+					oldRow := make(storage.Row, len(targetRow))
+					copy(oldRow, targetRow)
+					pendingUpdates = append(pendingUpdates, pendingUpdate{targetIdx: targetIdx, newRow: newRow, oldRow: oldRow})
 				}
 				break
 			}
@@ -369,17 +446,46 @@ func (c *MergeCommand) executeMergeNestedLoop(ctx *ExecutionContext, dbName stri
 
 		if !matched && c.stmt.WhenNotMatched != nil && c.stmt.WhenNotMatched.Action == "INSERT" {
 			if err := c.executeMergeInsert(ctx, dbName, sourceRow, targetSchema, sourceSchema, combinedSchema); err != nil {
-				return 0, err
+				return 0, nil, nil, err
 			}
 			affected++
+			newRow := make(storage.Row, len(targetSchema.Columns))
+			for i := range newRow {
+				if i < len(sourceRow) {
+					newRow[i] = sourceRow[i]
+				}
+			}
+			returningRows = append(returningRows, newRow)
+			oldRows = append(oldRows, newRow)
 		}
 	}
 
-	return affected, nil
+	if len(pendingUpdates) > 0 {
+		indices := make([]int, len(pendingUpdates))
+		newValues := make([]storage.Row, len(pendingUpdates))
+		for i, pu := range pendingUpdates {
+			indices[i] = pu.targetIdx
+			newValues[i] = pu.newRow
+		}
+		if _, err := ctx.Storage.UpdateRowsDirect(dbName, c.stmt.TargetTable, indices, newValues); err != nil {
+			return 0, nil, nil, err
+		}
+		affected += len(pendingUpdates)
+		for _, pu := range pendingUpdates {
+			returningRows = append(returningRows, pu.newRow)
+			oldRows = append(oldRows, pu.oldRow)
+		}
+	}
+
+	return affected, returningRows, oldRows, nil
 }
 
 // executeMergeInsert выполняет INSERT для WHEN NOT MATCHED.
 func (c *MergeCommand) executeMergeInsert(ctx *ExecutionContext, dbName string, sourceRow storage.Row, targetSchema, sourceSchema *storage.TableSchema, combinedSchema *storage.TableSchema) error {
+	if c.stmt.WhenNotMatched.SelectQuery != nil {
+		return c.executeMergeInsertSelect(ctx, dbName, sourceRow, targetSchema, sourceSchema, combinedSchema)
+	}
+
 	if len(c.stmt.WhenNotMatched.Values) > 0 && len(c.stmt.WhenNotMatched.Columns) > 0 {
 		if len(c.stmt.WhenNotMatched.Columns) != len(c.stmt.WhenNotMatched.Values[0]) {
 			return fmt.Errorf("MERGE: WHEN NOT MATCHED columns count (%d) doesn't match values count (%d)",
@@ -400,6 +506,73 @@ func (c *MergeCommand) executeMergeInsert(ctx *ExecutionContext, dbName string, 
 		v, err := evalOperand(val, combinedRowForInsert, combinedSchema, ctx)
 		if err != nil {
 			return err
+		}
+		insertValues[i] = v
+	}
+
+	fullInsertRow := make(storage.Row, len(targetSchema.Columns))
+	for i := range fullInsertRow {
+		fullInsertRow[i] = nil
+	}
+
+	if len(c.stmt.WhenNotMatched.Columns) == 0 {
+		if len(insertValues) != len(targetSchema.Columns) {
+			return fmt.Errorf("MERGE INSERT: expected %d values, got %d", len(targetSchema.Columns), len(insertValues))
+		}
+		for i, v := range insertValues {
+			converted, err := normalizeForColumn(v, targetSchema.Columns[i])
+			if err != nil {
+				return fmt.Errorf("MERGE INSERT column '%s': %w", targetSchema.Columns[i].Name, err)
+			}
+			fullInsertRow[i] = converted
+		}
+	} else {
+		targetColIndex := make(map[string]int)
+		for idx, col := range targetSchema.Columns {
+			targetColIndex[strings.ToLower(col.Name)] = idx
+		}
+		for i, colName := range c.stmt.WhenNotMatched.Columns {
+			idx, ok := targetColIndex[strings.ToLower(colName)]
+			if !ok {
+				return fmt.Errorf("MERGE INSERT: unknown target column '%s'", colName)
+			}
+			if i < len(insertValues) {
+				converted, err := normalizeForColumn(insertValues[i], targetSchema.Columns[idx])
+				if err != nil {
+					return fmt.Errorf("MERGE INSERT column '%s': %w", colName, err)
+				}
+				fullInsertRow[idx] = converted
+			}
+		}
+	}
+
+	_, err := ctx.Storage.InsertRows(dbName, c.stmt.TargetTable, []storage.Row{fullInsertRow})
+	return err
+}
+
+// executeMergeInsertSelect handles INSERT ... SELECT in WHEN NOT MATCHED.
+// Each expression in the SELECT list is evaluated against the combined
+// (target + source) row, just like VALUES expressions are.
+func (c *MergeCommand) executeMergeInsertSelect(ctx *ExecutionContext, dbName string, sourceRow storage.Row, targetSchema, sourceSchema *storage.TableSchema, combinedSchema *storage.TableSchema) error {
+	selStmt, ok := c.stmt.WhenNotMatched.SelectQuery.(*parser.SelectStatement)
+	if !ok {
+		return fmt.Errorf("MERGE INSERT: unsupported SELECT query type")
+	}
+
+	combinedRowForInsert := make(storage.Row, len(combinedSchema.Columns))
+	targetColCount := len(targetSchema.Columns)
+	for i, val := range sourceRow {
+		if targetColCount+i < len(combinedRowForInsert) {
+			combinedRowForInsert[targetColCount+i] = val
+		}
+	}
+
+	// Evaluate each SELECT column expression against the combined row
+	insertValues := make(storage.Row, len(selStmt.Columns))
+	for i, col := range selStmt.Columns {
+		v, err := evalOperand(col.Expr, combinedRowForInsert, combinedSchema, ctx)
+		if err != nil {
+			return fmt.Errorf("MERGE INSERT ... SELECT column %d: %w", i, err)
 		}
 		insertValues[i] = v
 	}

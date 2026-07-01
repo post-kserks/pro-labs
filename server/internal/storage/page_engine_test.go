@@ -140,8 +140,13 @@ func TestPageEnginePersistenceAcrossReopen(t *testing.T) {
 	if _, err := e.InsertRows("db", "users", []Row{{int64(1), "alice", 1.5}}); err != nil {
 		t.Fatal(err)
 	}
-	// Имитация краша: НЕ вызываем Close (данные синхронизированы при записи)
-	tx := e.CurrentTxID()
+	// Flush dirty pages to disk before simulating restart.
+	// With write-back buffer pool, data only reaches disk on flush/close.
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx := uint64(1) // txID was 1 after insert
 
 	e2, err := NewPageStorageEngine(dir, nil, nil)
 	if err != nil {
@@ -348,5 +353,162 @@ func TestMVCCVisibility(t *testing.T) {
 	}
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+}
+
+func TestTruncateTable(t *testing.T) {
+	e := newPageEngine(t)
+
+	if err := e.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("db", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows
+	_, err := e.InsertRows("db", "users", []Row{
+		{int64(1), "alice", 9.5},
+		{int64(2), "bob", 7.0},
+		{int64(3), "carol", 8.2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify rows exist
+	rows, err := e.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("before truncate: expected 3 rows, got %d", len(rows))
+	}
+
+	// Truncate the table
+	if err := e.TruncateTable("db", "users"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify all rows are gone
+	rows, err = e.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("after truncate: expected 0 rows, got %d", len(rows))
+	}
+
+	// Verify catalog row count
+	count, err := e.CountRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("after truncate: expected 0 count, got %d", count)
+	}
+
+	// Verify table still exists and can accept new inserts
+	if !e.TableExists("db", "users") {
+		t.Fatal("table should still exist after truncate")
+	}
+	_, err = e.InsertRows("db", "users", []Row{
+		{int64(4), "dave", 6.0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err = e.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("after re-insert: expected 1 row, got %d", len(rows))
+	}
+	if rows[0][0] != int64(4) || rows[0][1] != "dave" {
+		t.Fatalf("re-inserted row mismatch: %#v", rows[0])
+	}
+}
+
+func TestTruncateTableEmpty(t *testing.T) {
+	e := newPageEngine(t)
+
+	if err := e.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("db", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Truncate an empty table — should succeed
+	if err := e.TruncateTable("db", "users"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := e.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected 0 rows, got %d", len(rows))
+	}
+}
+
+func TestTruncateTablePersistenceAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("db", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.InsertRows("db", "users", []Row{
+		{int64(1), "alice", 1.0},
+		{int64(2), "bob", 2.0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Truncate and close
+	if err := e.TruncateTable("db", "users"); err != nil {
+		t.Fatal(err)
+	}
+	tx := e.CurrentTxID()
+	_ = e.Close()
+
+	// Reopen and verify
+	e2, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e2.Close()
+
+	if e2.CurrentTxID() != tx {
+		t.Fatalf("tx counter lost: %d != %d", e2.CurrentTxID(), tx)
+	}
+	rows, err := e2.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("after reopen: expected 0 rows, got %d", len(rows))
+	}
+
+	// Verify we can insert new data
+	if _, err := e2.InsertRows("db", "users", []Row{
+		{int64(3), "carol", 3.0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = e2.ReadCurrentRows("db", "users")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("after re-insert post-truncate: %d rows, err=%v", len(rows), err)
+	}
+	if rows[0][0] != int64(3) || rows[0][1] != "carol" {
+		t.Fatalf("re-inserted row mismatch: %#v", rows[0])
 	}
 }

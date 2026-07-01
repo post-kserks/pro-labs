@@ -1,0 +1,33 @@
+- generic [ref=e1]:
+  - navigation [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]: ⬡
+      - generic [ref=e5]: VaultDB
+    - generic [ref=e6]:
+      - button "SQL Playground" [ref=e7] [cursor=pointer]
+      - button "Schema Explorer" [ref=e8] [cursor=pointer]
+      - button "Transaction Lab" [ref=e9] [cursor=pointer]
+      - button "Time Travel" [ref=e10] [cursor=pointer]
+      - button "Feature Gallery" [ref=e11] [cursor=pointer]
+      - button "Dashboard" [active] [ref=e12] [cursor=pointer]
+    - generic [ref=e15]: VaultDB dev
+  - main [ref=e16]:
+    - generic [ref=e97]:
+      - heading "Performance Dashboard" [level=2] [ref=e98]
+      - paragraph [ref=e99]: Real-time metrics from VaultDB.
+      - generic [ref=e100]:
+        - generic [ref=e101]:
+          - generic [ref=e102]: Status
+          - generic [ref=e103]: ok
+        - generic [ref=e104]:
+          - generic [ref=e105]: Version
+          - generic [ref=e106]: dev
+        - generic [ref=e107]:
+          - generic [ref=e108]: Uptime
+          - generic [ref=e109]: 14m 52s
+        - generic [ref=e110]:
+          - generic [ref=e111]: Connections
+          - generic [ref=e112]: "0"
+      - generic [ref=e113]:
+        - heading "Metrics (Prometheus format)" [level=3] [ref=e114]
+        - generic [ref=e115]: "# HELP vaultdb_queries_total Total SQL queries executed # TYPE vaultdb_queries_total counter vaultdb_queries_total{type=\"select\",status=\"ok\"} 21 vaultdb_queries_total{type=\"select\",status=\"error\"} 4 vaultdb_queries_total{type=\"insert\",status=\"ok\"} 3 vaultdb_queries_total{type=\"insert\",status=\"error\"} 0 vaultdb_queries_total{type=\"update\",status=\"ok\"} 6 vaultdb_queries_total{type=\"update\",status=\"error\"} 0 vaultdb_queries_total{type=\"delete\",status=\"ok\"} 0 vaultdb_queries_total{type=\"delete\",status=\"error\"} 0 vaultdb_queries_total{type=\"ddl\",status=\"ok\"} 8 vaultdb_queries_total{type=\"ddl\",status=\"error\"} 1 vaultdb_queries_total{type=\"explain\",status=\"ok\"} 0 vaultdb_queries_total{type=\"explain\",status=\"error\"} 0 vaultdb_queries_total{type=\"transaction\",status=\"ok\"} 0 vaultdb_queries_total{type=\"transaction\",status=\"error\"} 0 vaultdb_queries_total{type=\"other\",status=\"ok\"} 14 vaultdb_queries_total{type=\"other\",status=\"error\"} 2 # HELP vaultdb_query_duration_seconds Query duration # TYPE vaultdb_query_duration_seconds histogram vaultdb_query_duration_seconds_bucket{le=\"0.001\"} 40 vaultdb_query_duration_seconds_bucket{le=\"0.005\"} 44 vaultdb_query_duration_seconds_bucket{le=\"0.01\"} 52 vaultdb_query_duration_seconds_bucket{le=\"0.025\"} 52 vaultdb_query_duration_seconds_bucket{le=\"0.05\"} 52 vaultdb_query_duration_seconds_bucket{le=\"0.1\"} 52 vaultdb_query_duration_seconds_bucket{le=\"0.25\"} 52 vaultdb_query_duration_seconds_bucket{le=\"0.5\"} 52 vaultdb_query_duration_seconds_bucket{le=\"1\"} 52 vaultdb_query_duration_seconds_bucket{le=\"+Inf\"} 52 vaultdb_query_duration_seconds_sum 0.063741957 vaultdb_query_duration_seconds_count 52 # HELP vaultdb_query_duration_percentile Query duration percentiles (from last 10k samples) # TYPE vaultdb_query_duration_percentile summary vaultdb_query_duration_percentile{quantile=\"0.5\"} 7.0625e-05 vaultdb_query_duration_percentile{quantile=\"0.95\"} 0.006051708 vaultdb_query_duration_percentile{quantile=\"0.99\"} 0.006884584 # HELP vaultdb_active_connections Active TCP connections # TYPE vaultdb_active_connections gauge vaultdb_active_connections 0 # HELP vaultdb_uptime_seconds Server uptime # TYPE vaultdb_uptime_seconds gauge vaultdb_uptime_seconds 892 # HELP vaultdb_wal_entries_total WAL entries written # TYPE vaultdb_wal_entries_total counter vaultdb_wal_entries_total 0 # HELP vaultdb_wal_checkpoint_total WAL checkpoints performed # TYPE vaultdb_wal_checkpoint_total counter vaultdb_wal_checkpoint_total 0 # HELP vaultdb_index_lookups_total Index lookup hits and misses # TYPE vaultdb_index_lookups_total counter vaultdb_index_lookups_total{result=\"hit\"} 0 vaultdb_index_lookups_total{result=\"miss\"} 0 # HELP vaultdb_storage_rows Total rows per table (current versions) # TYPE vaultdb_storage_rows gauge vaultdb_storage_rows{database=\"timetravel\",table=\"_objects\"} 0 vaultdb_storage_rows{database=\"timetravel\",table=\"documents\"} 1"

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"log/slog"
@@ -57,6 +58,12 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 	}
 
 	rowsBefore, rowsAfter := 0, 0
+	// Flush all dirty pages to disk before reading directly from heap files.
+	// Without this, write-back cached pages would be invisible to the scan.
+	if err := e.bufPool.FlushAll(); err != nil {
+		os.Remove(shadowPath)
+		return nil, fmt.Errorf("vacuum: flush dirty pages: %w", err)
+	}
 	for g := uint32(0); g < total; g++ {
 		pid := pageIDAt(t.tableID, g)
 		var pg page.Page
@@ -134,6 +141,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		return nil, err
 	}
 	t.heap = newHF
+	e.bufPool.InvalidateTable(t.tableID)
 
 	// Обновляем каталог (кратковременный global lock).
 	e.mu.Lock()
@@ -239,10 +247,10 @@ func (e *PageStorageEngine) CurrentTxID() uint64 {
 func (e *PageStorageEngine) FinalCheckpoint() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if err := e.bufPool.FlushAll(); err != nil {
+		return err
+	}
 	for _, t := range e.tables {
-		if err := e.bufPool.FlushAll(t.heap); err != nil {
-			return err
-		}
 		if err := t.heap.Sync(); err != nil {
 			return err
 		}
@@ -250,13 +258,19 @@ func (e *PageStorageEngine) FinalCheckpoint() error {
 	return nil
 }
 
+// StartBackgroundFlush запускает фоновую горутину для periodic flush dirty pages.
+func (e *PageStorageEngine) StartBackgroundFlush(ctx context.Context, interval time.Duration) {
+	e.bufPool.StartBackgroundFlush(ctx, interval)
+}
+
 // Close закрывает движок и все ресурсы.
 func (e *PageStorageEngine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	e.bufPool.Close()
+	_ = e.bufPool.FlushAll()
 	for _, t := range e.tables {
-		_ = e.bufPool.FlushAll(t.heap)
 		_ = t.heap.Sync()
 		_ = t.heap.Close()
 	}

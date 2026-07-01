@@ -81,14 +81,14 @@ func (p *sqlParser) parseComparison() (Expression, error) {
 			if err != nil {
 				return nil, err
 			}
-			sel, ok := stmt.(*SelectStatement)
-			if !ok {
-				return nil, fmt.Errorf("expected SELECT statement in %s subquery", quantifier)
+			stmt, err = p.parseSetOperation(stmt)
+			if err != nil {
+				return nil, err
 			}
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 				return nil, err
 			}
-			return &ComparisonSubqueryExpr{Left: left, Operator: op, Quantifier: quantifier, Subquery: sel}, nil
+			return &ComparisonSubqueryExpr{Left: left, Operator: op, Quantifier: quantifier, Subquery: stmt}, nil
 		}
 
 		right, err := p.parseAddition()
@@ -115,11 +115,11 @@ func (p *sqlParser) parseComparison() (Expression, error) {
 			if err != nil {
 				return nil, err
 			}
-			if selectStmt, ok := stmt.(*SelectStatement); ok {
-				list = []Expression{&SubqueryExpr{Query: selectStmt}}
-			} else {
-				return nil, fmt.Errorf("expected SELECT statement in subquery")
+			stmt, err = p.parseSetOperation(stmt)
+			if err != nil {
+				return nil, err
 			}
+			list = []Expression{&SubqueryExpr{Query: stmt}}
 		} else {
 			var err error
 			list, err = p.parseValueListUntilRParen()
@@ -155,9 +155,22 @@ func (p *sqlParser) parseComparison() (Expression, error) {
 			if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
 				return nil, err
 			}
-			list, err := p.parseValueListUntilRParen()
-			if err != nil {
-				return nil, err
+			var list []Expression
+			if p.current().Type == lexer.TOKEN_SELECT {
+				stmt, err := p.parseSelect()
+				if err != nil {
+					return nil, err
+				}
+				stmt, err = p.parseSetOperation(stmt)
+				if err != nil {
+					return nil, err
+				}
+				list = []Expression{&SubqueryExpr{Query: stmt}}
+			} else {
+				list, err = p.parseValueListUntilRParen()
+				if err != nil {
+					return nil, err
+				}
 			}
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 				return nil, err
@@ -186,14 +199,14 @@ func (p *sqlParser) parseComparison() (Expression, error) {
 			if err != nil {
 				return nil, err
 			}
+			stmt, err = p.parseSetOperation(stmt)
+			if err != nil {
+				return nil, err
+			}
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 				return nil, err
 			}
-			selectStmt, ok := stmt.(*SelectStatement)
-			if !ok {
-				return nil, fmt.Errorf("expected SELECT statement in NOT EXISTS")
-			}
-			return &ExistsExpr{Select: selectStmt, Not: true}, nil
+			return &ExistsExpr{Select: stmt, Not: true}, nil
 		}
 		return left, nil
 	case lexer.TOKEN_IS:
@@ -282,7 +295,7 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 				return nil, err
 			}
-			return &SubqueryExpr{Query: stmt.(*SelectStatement)}, nil
+			return &SubqueryExpr{Query: stmt}, nil
 		}
 		expr, err := p.parseExpression()
 		if err != nil {
@@ -305,14 +318,14 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 		if err != nil {
 			return nil, err
 		}
+		stmt, err = p.parseSetOperation(stmt)
+		if err != nil {
+			return nil, err
+		}
 		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 			return nil, err
 		}
-		selectStmt, ok := stmt.(*SelectStatement)
-		if !ok {
-			return nil, fmt.Errorf("expected SELECT statement in EXISTS")
-		}
-		return &ExistsExpr{Select: selectStmt, Not: false}, nil
+		return &ExistsExpr{Select: stmt, Not: false}, nil
 	case lexer.TOKEN_CAST:
 		return p.parseCast()
 	case lexer.TOKEN_CASE:

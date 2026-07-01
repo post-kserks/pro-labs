@@ -1,0 +1,56 @@
+- generic [ref=e1]:
+  - navigation [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]: ⬡
+      - generic [ref=e5]: VaultDB
+    - generic [ref=e6]:
+      - button "SQL Playground" [ref=e7] [cursor=pointer]
+      - button "Schema Explorer" [ref=e8] [cursor=pointer]
+      - button "Transaction Lab" [ref=e9] [cursor=pointer]
+      - button "Time Travel" [ref=e10] [cursor=pointer]
+      - button "Feature Gallery" [ref=e11] [cursor=pointer]
+      - button "Dashboard" [ref=e12] [cursor=pointer]
+    - generic [ref=e15]: VaultDB dev
+  - main [ref=e16]:
+    - generic [ref=e224]:
+      - heading "Time Travel" [level=2] [ref=e225]
+      - paragraph [ref=e226]: Query historical data using AS OF and versioning.
+      - generic [ref=e227]:
+        - heading "Setup" [level=3] [ref=e228]
+        - textbox [ref=e229]: DROP DATABASE timetravel; CREATE DATABASE timetravel; USE timetravel; CREATE TABLE documents (id INT PRIMARY KEY, title TEXT, content TEXT); INSERT INTO documents VALUES (1, 'Draft', 'Initial draft'); UPDATE documents SET content = 'Version 2 — added details' WHERE id = 1; UPDATE documents SET content = 'Version 3 — final' WHERE id = 1;
+        - button "Run Setup" [ref=e230] [cursor=pointer]
+      - generic [ref=e231]:
+        - heading "Time Travel Queries" [level=3] [ref=e232]
+        - generic [ref=e233]:
+          - button "AS OF (early)" [ref=e234] [cursor=pointer]
+          - button "Current state" [ref=e235] [cursor=pointer]
+          - button "Row History (id=1)" [active] [ref=e236] [cursor=pointer]
+      - generic [ref=e237]:
+        - generic [ref=e239]: rows — 0 affected
+        - table [ref=e242]:
+          - rowgroup [ref=e243]:
+            - row "created_tx deleted_tx id title content" [ref=e244]:
+              - columnheader "created_tx" [ref=e245]
+              - columnheader "deleted_tx" [ref=e246]
+              - columnheader "id" [ref=e247]
+              - columnheader "title" [ref=e248]
+              - columnheader "content" [ref=e249]
+          - rowgroup [ref=e250]:
+            - row "81 82 1 Draft Initial draft" [ref=e251]:
+              - cell "81" [ref=e252]
+              - cell "82" [ref=e253]
+              - cell "1" [ref=e254]
+              - cell "Draft" [ref=e255]
+              - cell "Initial draft" [ref=e256]
+            - row "82 83 1 Draft Version 2 — added details" [ref=e257]:
+              - cell "82" [ref=e258]
+              - cell "83" [ref=e259]
+              - cell "1" [ref=e260]
+              - cell "Draft" [ref=e261]
+              - cell "Version 2 — added details" [ref=e262]
+            - row "83 CURRENT 1 Draft Version 3 — final" [ref=e263]:
+              - cell "83" [ref=e264]
+              - cell "CURRENT" [ref=e265]
+              - cell "1" [ref=e266]
+              - cell "Draft" [ref=e267]
+              - cell "Version 3 — final" [ref=e268]

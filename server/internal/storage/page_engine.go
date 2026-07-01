@@ -80,16 +80,21 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) 
 		return nil, err
 	}
 
+	bufPool := NewBufferPool(defaultBufferPoolCapacity)
+	if w != nil {
+		bufPool.SetWAL(w)
+	}
+
 	e := &PageStorageEngine{
-		rootDir: root,
-		tables:  make(map[string]*pageTable),
+		rootDir:  root,
+		tables:   make(map[string]*pageTable),
 		catalog: pageCatalog{
 			LastModified: make(map[string]uint64),
 			RowCounts:    make(map[string]int),
 		},
-		wal:     w,
-		txMgr:   txMgr,
-		bufPool:  NewBufferPool(defaultBufferPoolCapacity),
+		wal:      w,
+		txMgr:    txMgr,
+		bufPool:  bufPool,
 		pageLock: NewPageLockManager(),
 		indexes:  make(map[string]*index.IndexManager),
 	}
@@ -134,6 +139,12 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 	slog.Info("WAL recovery: analysis complete",
 		"committed", len(committed),
 		"in_progress", len(inProgress))
+
+	// Ensure all tables on disk are opened so redo phase can find them.
+	// With write-back buffer pool, data may only exist in WAL, not on disk.
+	if err := e.ensureAllTablesOpen(); err != nil {
+		slog.Warn("failed to discover tables before WAL recovery", "error", err)
+	}
 
 	// Фаза 2: Redo — воспроизводим ВСЕ записи (и committed, и in-progress)
 	if err := e.redoPhase(); err != nil {
@@ -279,6 +290,12 @@ func (e *PageStorageEngine) redoPhase() error {
 				"txid", entry.TxID)
 		case wal.OpRewriteCommit, wal.OpRewriteData:
 			// Rewrite already completed — nothing to redo (data was written to heap)
+		case wal.OpTruncateTable:
+			var p wal.WALTruncateTablePayload
+			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+				return err
+			}
+			return e.redoTruncateTable(p)
 		case wal.OpFullPageImage:
 			var p wal.FullPageImagePayload
 			if err := json.Unmarshal(entry.Payload, &p); err != nil {
@@ -398,6 +415,49 @@ func (e *PageStorageEngine) redoSchemaWrite(p wal.WALSchemaWritePayload) error {
 	defer e.mu.Unlock()
 
 	return os.WriteFile(e.schemaPathFor(p.DB, p.Table), []byte(p.Schema), 0o644)
+}
+
+func (e *PageStorageEngine) redoTruncateTable(p wal.WALTruncateTablePayload) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	key := p.DB + "/" + p.Table
+	t, ok := e.tables[key]
+	if !ok {
+		// Table not loaded yet; catalog recalc will fix row counts
+		return nil
+	}
+
+	// Invalidate cached pages
+	e.bufPool.InvalidateTableForce(t.tableID)
+
+	// Close the heap
+	if err := t.heap.Close(); err != nil {
+		return fmt.Errorf("redo truncate: close heap: %w", err)
+	}
+
+	// Remove all segment files and recreate fresh heap
+	tableDir := e.tablePath(p.DB, p.Table)
+	entries, err := os.ReadDir(tableDir)
+	if err != nil {
+		return fmt.Errorf("redo truncate: read dir: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".heap") {
+			if err := os.Remove(filepath.Join(tableDir, entry.Name())); err != nil {
+				return fmt.Errorf("redo truncate: remove segment: %w", err)
+			}
+		}
+	}
+
+	hf, err := heap.CreateHeapFile(tableDir)
+	if err != nil {
+		return fmt.Errorf("redo truncate: create heap: %w", err)
+	}
+	t.heap = hf
+
+	e.catalog.RowCounts[key] = 0
+	return nil
 }
 
 func (e *PageStorageEngine) replayFullPageImage(p wal.FullPageImagePayload) error {
@@ -567,11 +627,9 @@ func (e *PageStorageEngine) doCheckpoint() error {
 	// Шаг 2: сбрасываем dirty pages из buffer pool
 	e.mu.Lock()
 	if e.bufPool != nil {
-		for _, t := range e.tables {
-			if err := e.bufPool.FlushDirtyPagesUpToLSN(lsn, t.heap); err != nil {
-				e.mu.Unlock()
-				return fmt.Errorf("checkpoint: flush dirty pages: %w", err)
-			}
+		if err := e.bufPool.FlushDirtyPagesUpToLSN(lsn); err != nil {
+			e.mu.Unlock()
+			return fmt.Errorf("checkpoint: flush dirty pages: %w", err)
 		}
 	}
 	e.mu.Unlock()

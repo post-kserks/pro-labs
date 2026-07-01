@@ -104,6 +104,7 @@ func (m *mockStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 func (m *mockStorageEngine) DeleteRows(dbName, tableName string, indices []int) (int, error) {
 	return 0, nil
 }
+func (m *mockStorageEngine) TruncateTable(dbName, tableName string) error { return nil }
 func (m *mockStorageEngine) AlterTableAddColumn(dbName, tableName string, col ColumnSchema, defaultVal Value) error {
 	return nil
 }

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"vaultdb/internal/storage"
@@ -103,6 +104,12 @@ func coerceToColumn(value storage.Value, column storage.ColumnSchema) (storage.V
 				return nil, fmt.Errorf("cannot cast FLOAT to INT without precision loss")
 			}
 			return int64(v), nil
+		case string:
+			parsed, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("cannot parse string as INT: %q", v)
+			}
+			return parsed, nil
 		default:
 			return nil, fmt.Errorf("expected INT-compatible value, got %T", value)
 		}
@@ -114,6 +121,12 @@ func coerceToColumn(value storage.Value, column storage.ColumnSchema) (storage.V
 			return float64(v), nil
 		case int:
 			return float64(v), nil
+		case string:
+			parsed, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return nil, fmt.Errorf("cannot parse string as FLOAT: %q", v)
+			}
+			return parsed, nil
 		default:
 			return nil, fmt.Errorf("expected FLOAT-compatible value, got %T", value)
 		}

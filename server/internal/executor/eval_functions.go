@@ -111,18 +111,23 @@ func evalFunctionCall(fn *parser.FunctionCall, row storage.Row, schema *storage.
 
 // executeSubquery выполняет скалярный подзапрос.
 func executeSubquery(sub *parser.SubqueryExpr, outerRow storage.Row, outerSchema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
-	subQuery := *sub.Query
-
-	if outerRow != nil && outerSchema != nil && subQuery.Where != nil {
-		subQuery.Where = injectOuterColumns(subQuery.Where, outerRow, outerSchema)
+	var cmd parser.Statement
+	if sel, ok := sub.Query.(*parser.SelectStatement); ok {
+		subCopy := *sel
+		if outerRow != nil && outerSchema != nil && subCopy.Where != nil {
+			subCopy.Where = injectOuterColumns(subCopy.Where, outerRow, outerSchema)
+		}
+		cmd = &subCopy
+	} else {
+		cmd = sub.Query
 	}
 
-	cmd, err := CommandFactory(&subQuery)
+	command, err := CommandFactory(cmd)
 	if err != nil {
 		return nil, err
 	}
 
-	res, err := cmd.Execute(ctx)
+	res, err := command.Execute(ctx)
 	if err != nil {
 		return nil, err
 	}
