@@ -1,9 +1,13 @@
 package storage
 
 import (
+	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"vaultdb/internal/txmanager"
+	"vaultdb/internal/wal"
 )
 
 // Компайл-проверка: PageStorageEngine реализует StorageEngine.
@@ -510,5 +514,491 @@ func TestTruncateTablePersistenceAcrossReopen(t *testing.T) {
 	}
 	if rows[0][0] != int64(3) || rows[0][1] != "carol" {
 		t.Fatalf("re-inserted row mismatch: %#v", rows[0])
+	}
+}
+
+func TestVacuumReclaimSpace(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	// Insert many rows
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "a", 1.0},
+		{int64(2), "b", 2.0},
+		{int64(3), "c", 3.0},
+		{int64(4), "d", 4.0},
+	})
+
+	// Delete half
+	_, _ = e.DeleteRows("db", "users", []int{0, 2})
+
+	// Check version stats before vacuum — dead rows exist
+	vstats, _ := e.TableVersionStats("db", "users")
+	if vstats.TotalRows != 4 {
+		t.Fatalf("before vacuum: total=%d, want 4", vstats.TotalRows)
+	}
+	if vstats.DeadRows != 2 {
+		t.Fatalf("before vacuum: dead=%d, want 2", vstats.DeadRows)
+	}
+
+	// Record file size before vacuum
+	sizeBefore := e.tableSizeLocked("db", "users")
+
+	stats, err := e.Vacuum("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReclaimedRows != 2 {
+		t.Fatalf("vacuum reclaimed: %d, want 2", stats.ReclaimedRows)
+	}
+
+	// Verify no dead rows remain
+	vstats, _ = e.TableVersionStats("db", "users")
+	if vstats.DeadRows != 0 {
+		t.Fatalf("after vacuum: dead=%d, want 0", vstats.DeadRows)
+	}
+	if vstats.TotalRows != 2 {
+		t.Fatalf("after vacuum: total=%d, want 2", vstats.TotalRows)
+	}
+
+	// File size should not have grown
+	sizeAfter := e.tableSizeLocked("db", "users")
+	if sizeAfter > sizeBefore {
+		t.Fatalf("file grew after vacuum: before=%d after=%d", sizeBefore, sizeAfter)
+	}
+
+	// Remaining rows should be correct
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 2 {
+		t.Fatalf("rows after vacuum: %d, want 2", len(rows))
+	}
+}
+
+func TestVacuumEmptyTable(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	stats, err := e.Vacuum("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.RowsBefore != 0 || stats.RowsAfter != 0 || stats.ReclaimedRows != 0 {
+		t.Fatalf("vacuum on empty: %+v", stats)
+	}
+}
+
+func TestVacuumAllDead(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "a", 1.0},
+		{int64(2), "b", 2.0},
+	})
+	// Delete all rows
+	_, _ = e.DeleteRows("db", "users", []int{0, 1})
+
+	stats, err := e.Vacuum("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.RowsBefore != 2 || stats.RowsAfter != 0 || stats.ReclaimedRows != 2 {
+		t.Fatalf("vacuum all dead: %+v", stats)
+	}
+
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 0 {
+		t.Fatalf("after vacuum all dead: %d rows, want 0", len(rows))
+	}
+}
+
+func TestVacuumConcurrentReads(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	// Insert data
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "a", 1.0},
+		{int64(2), "b", 2.0},
+	})
+	_, _ = e.DeleteRows("db", "users", []int{0})
+
+	// Start concurrent reads while vacuum runs
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+	errCh := make(chan error, 10)
+
+	// Launch readers
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					rows, err := e.ReadCurrentRows("db", "users")
+					if err != nil {
+						errCh <- err
+						return
+					}
+					// Rows count should be 0 or 1 (vacuum may be in progress)
+					if len(rows) > 1 {
+						errCh <- fmt.Errorf("reader %d: unexpected row count %d", id, len(rows))
+						return
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+		}(i)
+	}
+
+	// Launch vacuum
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := e.Vacuum("db", "users"); err != nil {
+			errCh <- err
+		}
+	}()
+
+	// Wait a bit for concurrent operations
+	time.Sleep(50 * time.Millisecond)
+	close(done)
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Fatalf("concurrent error: %v", err)
+	}
+
+	// Verify final state
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 1 {
+		t.Fatalf("final rows: %d, want 1", len(rows))
+	}
+}
+
+func TestTruncateTableRecovery(t *testing.T) {
+	dir := t.TempDir()
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	txm := txmanager.NewManager()
+	e, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "a", 1.0},
+		{int64(2), "b", 2.0},
+	})
+
+	// Truncate
+	if err := e.TruncateTable("db", "users"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify empty
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 0 {
+		t.Fatalf("after truncate: %d rows, want 0", len(rows))
+	}
+
+	// Close without checkpoint (simulate crash)
+	w.Close()
+
+	// Reopen and recover
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	e2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e2.RecoverFromWAL(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Table should still be empty after recovery
+	rows, err = e2.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("after recovery: %d rows, want 0", len(rows))
+	}
+
+	// Should be able to insert new data
+	_, err = e2.InsertRows("db", "users", []Row{{int64(3), "c", 3.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err = e2.ReadCurrentRows("db", "users")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("after re-insert: %d rows, err=%v", len(rows), err)
+	}
+}
+
+func TestTruncateTableMultiple(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	// Insert, truncate, insert again, truncate again
+	_, _ = e.InsertRows("db", "users", []Row{{int64(1), "a", 1.0}})
+	_ = e.TruncateTable("db", "users")
+
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(2), "b", 2.0},
+		{int64(3), "c", 3.0},
+	})
+	_ = e.TruncateTable("db", "users")
+
+	rows, err := e.ReadCurrentRows("db", "users")
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("after double truncate: %d rows, err=%v", len(rows), err)
+	}
+
+	// Insert once more — should work
+	_, _ = e.InsertRows("db", "users", []Row{{int64(4), "d", 4.0}})
+	rows, _ = e.ReadCurrentRows("db", "users")
+	if len(rows) != 1 || rows[0][0] != int64(4) {
+		t.Fatalf("after triple insert: %#v", rows)
+	}
+}
+
+func TestRowHistoryMultipleVersions(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	// Insert version 1
+	_, _ = e.InsertRows("db", "users", []Row{{int64(1), "alice_v1", 1.0}})
+	tx1 := e.CurrentTxID()
+
+	// Delete
+	_, _ = e.DeleteRows("db", "users", []int{0})
+
+	// Insert version 2 (re-insert same PK)
+	_, _ = e.InsertRows("db", "users", []Row{{int64(1), "alice_v2", 2.0}})
+	tx3 := e.CurrentTxID()
+
+	history, err := e.RowHistory("db", "users", int64(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history length: %d, want 2", len(history))
+	}
+
+	// First version: created at tx1, deleted at tx2
+	if history[0].CreatedTx != tx1 {
+		t.Fatalf("history[0].CreatedTx = %d, want %d", history[0].CreatedTx, tx1)
+	}
+	if history[0].DeletedTx == 0 {
+		t.Fatal("first version should be deleted")
+	}
+
+	// Second version: created at tx3, not deleted
+	if history[1].CreatedTx != tx3 {
+		t.Fatalf("history[1].CreatedTx = %d, want %d", history[1].CreatedTx, tx3)
+	}
+	if history[1].DeletedTx != 0 {
+		t.Fatalf("second version should not be deleted, got DeletedTx=%d", history[1].DeletedTx)
+	}
+
+	// Current rows should show only the live version
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 1 || rows[0][1] != "alice_v2" {
+		t.Fatalf("current rows: %#v", rows)
+	}
+}
+
+func TestRowHistoryNonExistentPK(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	_, _ = e.InsertRows("db", "users", []Row{{int64(1), "alice", 1.0}})
+
+	history, err := e.RowHistory("db", "users", int64(999))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 0 {
+		t.Fatalf("history for non-existent PK: %d, want 0", len(history))
+	}
+}
+
+func TestTableVersionStatsAfterInsertDelete(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	// Empty table
+	stats, _ := e.TableVersionStats("db", "users")
+	if stats.TotalRows != 0 || stats.DeadRows != 0 {
+		t.Fatalf("empty table stats: %+v", stats)
+	}
+
+	// Insert 5 rows
+	rows := make([]Row, 5)
+	for i := range rows {
+		rows[i] = Row{int64(i), "user", float64(i)}
+	}
+	_, _ = e.InsertRows("db", "users", rows)
+
+	stats, _ = e.TableVersionStats("db", "users")
+	if stats.TotalRows != 5 || stats.DeadRows != 0 {
+		t.Fatalf("after insert: %+v", stats)
+	}
+
+	// Delete 3 rows (indices 0, 1, 2)
+	_, _ = e.DeleteRows("db", "users", []int{0, 1, 2})
+
+	stats, _ = e.TableVersionStats("db", "users")
+	if stats.TotalRows != 5 {
+		t.Fatalf("after delete total: %d, want 5", stats.TotalRows)
+	}
+	if stats.DeadRows != 3 {
+		t.Fatalf("after delete dead: %d, want 3", stats.DeadRows)
+	}
+}
+
+func TestTableVersionStatsAfterUpdate(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "alice", 1.0},
+		{int64(2), "bob", 2.0},
+	})
+
+	// Update creates a new version (old one marked dead)
+	_, _ = e.UpdateRows("db", "users", []int{0}, map[string]Value{"name": "alice_v2"})
+
+	stats, _ := e.TableVersionStats("db", "users")
+	if stats.TotalRows != 3 {
+		t.Fatalf("after update total: %d, want 3", stats.TotalRows)
+	}
+	if stats.DeadRows != 1 {
+		t.Fatalf("after update dead: %d, want 1", stats.DeadRows)
+	}
+
+	// After vacuum, only live rows remain (updated alice + bob)
+	_, _ = e.Vacuum("db", "users")
+
+	stats, _ = e.TableVersionStats("db", "users")
+	if stats.TotalRows != 2 || stats.DeadRows != 0 {
+		t.Fatalf("after vacuum: %+v", stats)
+	}
+}
+
+func TestVacuumPersistenceAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "a", 1.0},
+		{int64(2), "b", 2.0},
+	})
+	_, _ = e.DeleteRows("db", "users", []int{0})
+
+	_, _ = e.Vacuum("db", "users")
+
+	// Verify vacuum result within the same engine session
+	rows, err := e.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0][0] != int64(2) {
+		t.Fatalf("after vacuum: %#v", rows)
+	}
+
+	stats, _ := e.TableVersionStats("db", "users")
+	if stats.TotalRows != 1 || stats.DeadRows != 0 {
+		t.Fatalf("after vacuum stats: %+v", stats)
+	}
+
+	// Verify version stats stay correct after more operations
+	_, _ = e.InsertRows("db", "users", []Row{{int64(3), "c", 3.0}})
+	stats, _ = e.TableVersionStats("db", "users")
+	if stats.TotalRows != 2 || stats.DeadRows != 0 {
+		t.Fatalf("after re-insert stats: %+v", stats)
+	}
+
+	// Finalize and close cleanly
+	_ = e.Close()
+
+	// Reopen and verify catalog state persisted (no dead rows)
+	e2, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e2.Close()
+
+	// Read current rows — catalog should reflect correct count
+	count, err := e2.CountRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("after reopen count: %d, want 2", count)
+	}
+}
+
+func TestTruncateTableEmptyPersistenceAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	// Truncate an empty table, then close
+	if err := e.TruncateTable("db", "users"); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.Close()
+
+	// Reopen
+	e2, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e2.Close()
+
+	rows, err := e2.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("after reopen empty truncate: %d rows, want 0", len(rows))
 	}
 }
