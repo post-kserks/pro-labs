@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,5 +118,104 @@ func TestScannerBufferSize(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSetupLoggerDebug(t *testing.T) {
+	logger := setupLogger("debug")
+	if logger == nil {
+		t.Fatal("setupLogger returned nil")
+	}
+}
+
+func TestSetupLoggerInfo(t *testing.T) {
+	logger := setupLogger("info")
+	if logger == nil {
+		t.Fatal("setupLogger returned nil")
+	}
+}
+
+func TestSetupLoggerDefault(t *testing.T) {
+	logger := setupLogger("")
+	if logger == nil {
+		t.Fatal("setupLogger returned nil")
+	}
+}
+
+func TestGenerateToken(t *testing.T) {
+	token, err := generateToken()
+	if err != nil {
+		t.Fatalf("generateToken() error: %v", err)
+	}
+	if !strings.HasPrefix(token, "vdb_sk_") {
+		t.Errorf("token = %q, want prefix 'vdb_sk_'", token)
+	}
+	if len(token) != 55 { // "vdb_sk_" (7) + 48 hex chars (24 bytes)
+		t.Errorf("token length = %d, want 55", len(token))
+	}
+}
+
+func TestGenerateTokenUnique(t *testing.T) {
+	tokens := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		token, err := generateToken()
+		if err != nil {
+			t.Fatalf("generateToken() error on iteration %d: %v", i, err)
+		}
+		if tokens[token] {
+			t.Fatalf("duplicate token generated: %s", token)
+		}
+		tokens[token] = true
+	}
+}
+
+func TestTokensFromEnvEmpty(t *testing.T) {
+	os.Unsetenv("VAULTDB_API_TOKENS")
+	tokens := tokensFromEnv()
+	if tokens != nil {
+		t.Errorf("tokensFromEnv() = %v, want nil for empty env", tokens)
+	}
+}
+
+func TestTokensFromEnvSingle(t *testing.T) {
+	t.Setenv("VAULTDB_API_TOKENS", "tok_abc123")
+	tokens := tokensFromEnv()
+	if len(tokens) != 1 {
+		t.Fatalf("expected 1 token, got %d", len(tokens))
+	}
+	if _, ok := tokens["tok_abc123"]; !ok {
+		t.Errorf("expected token 'tok_abc123' in map, got %v", tokens)
+	}
+}
+
+func TestTokensFromEnvMultiple(t *testing.T) {
+	t.Setenv("VAULTDB_API_TOKENS", "tok1,tok2,tok3")
+	tokens := tokensFromEnv()
+	if len(tokens) != 3 {
+		t.Fatalf("expected 3 tokens, got %d", len(tokens))
+	}
+	for _, tok := range []string{"tok1", "tok2", "tok3"} {
+		if _, ok := tokens[tok]; !ok {
+			t.Errorf("expected token %q in map", tok)
+		}
+	}
+}
+
+func TestTokensFromEnvWithEmptyParts(t *testing.T) {
+	t.Setenv("VAULTDB_API_TOKENS", "tok1,,tok2,")
+	tokens := tokensFromEnv()
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 tokens (skip empty), got %d", len(tokens))
+	}
+}
+
+func TestTokensFromEnvLabels(t *testing.T) {
+	t.Setenv("VAULTDB_API_TOKENS", "tok1,tok2")
+	tokens := tokensFromEnv()
+	if tokens["tok1"] != "env-token-1" {
+		t.Errorf("label for tok1 = %q, want 'env-token-1'", tokens["tok1"])
+	}
+	if tokens["tok2"] != "env-token-2" {
+		t.Errorf("label for tok2 = %q, want 'env-token-2'", tokens["tok2"])
 	}
 }
