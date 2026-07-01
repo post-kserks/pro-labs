@@ -49,6 +49,31 @@ app.post('/api/query', async (req, res) => {
   }
 });
 
+app.get('/health', async (req, res) => {
+  const options = {
+    hostname: VAULTDB_HOST,
+    port: VAULTDB_HTTP_PORT,
+    path: '/health',
+    method: 'GET',
+    headers: { ...authHeader },
+  };
+  const proxyReq = http.request(options, (proxyRes) => {
+    let body = '';
+    proxyRes.on('data', (chunk) => { body += chunk; });
+    proxyRes.on('end', () => {
+      try {
+        res.json(JSON.parse(body));
+      } catch {
+        res.json({ status: 'offline' });
+      }
+    });
+  });
+  proxyReq.on('error', () => {
+    res.json({ status: 'offline' });
+  });
+  proxyReq.end();
+});
+
 app.get('/api/health', async (req, res) => {
   const options = {
     hostname: VAULTDB_HOST,

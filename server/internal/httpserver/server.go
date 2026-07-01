@@ -3,12 +3,9 @@ package httpserver
 import (
 	"context"
 	"crypto/tls"
-	"embed"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -20,9 +17,6 @@ import (
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
 )
-
-//go:embed web/dist/*
-var webUIFiles embed.FS
 
 type Config struct {
 	Host                      string
@@ -197,29 +191,12 @@ func (s *Server) apiMux() *http.ServeMux {
 	mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics))))
 	mux.HandleFunc("/dashboard", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleDashboard)))
 
-	distFS, err := fs.Sub(webUIFiles, "web/dist")
-	if err == nil {
-		fileServer := http.FileServer(http.FS(distFS))
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/health" || r.URL.Path == "/ready" || r.URL.Path == "/metrics" {
-				return
-			}
-
-			// Static files served without auth — API endpoints have their own auth middleware
-			// SPA fallback: if the file doesn't exist, serve index.html for client-side routing
-			f, err := distFS.Open(strings.TrimPrefix(r.URL.Path, "/"))
-			if err != nil {
-				r.URL.Path = "/"
-			} else {
-				f.Close()
-			}
-			fileServer.ServeHTTP(w, r)
-		})
-	} else {
-		mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "web UI is not embedded", http.StatusNotFound)
-		})
-	}
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" || r.URL.Path == "/ready" || r.URL.Path == "/metrics" {
+			return
+		}
+		http.NotFound(w, r)
+	})
 
 	return mux
 }
