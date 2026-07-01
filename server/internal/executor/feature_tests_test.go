@@ -89,10 +89,6 @@ func TestMergeUpdateWithColumnRef(t *testing.T) {
 	executeSQL(t, session, "INSERT INTO mtarget VALUES (1, 'Frodo', 'old_frodo'), (2, 'Sam', 'old_sam');")
 	executeSQL(t, session, "INSERT INTO msource VALUES (1, 'new_frodo'), (2, 'new_sam');")
 
-	// Verify data before merge
-	pre := executeSQL(t, session, "SELECT id, name, val FROM mtarget ORDER BY id;")
-	t.Logf("Before: row0=%v row1=%v", pre.Rows[0], pre.Rows[1])
-
 	executeSQL(t, session, `
 		MERGE INTO mtarget
 		USING msource AS s
@@ -100,16 +96,12 @@ func TestMergeUpdateWithColumnRef(t *testing.T) {
 		WHEN MATCHED THEN UPDATE SET val = s.val;
 	`)
 
-	// Check all rows
-	post := executeSQL(t, session, "SELECT id, name, val FROM mtarget ORDER BY id;")
-	for i, row := range post.Rows {
-		t.Logf("After row %d: %v", i, row)
+	result := executeSQL(t, session, "SELECT name, val FROM mtarget ORDER BY id;")
+	if result.Rows[0][0] != "Frodo" || result.Rows[0][1] != "new_frodo" {
+		t.Errorf("row 1: expected ('Frodo', 'new_frodo'), got (%s, %s)", result.Rows[0][0], result.Rows[0][1])
 	}
-	if post.Rows[0][0] != "1" || post.Rows[0][2] != "new_frodo" {
-		t.Errorf("row 1: expected val='new_frodo', got %s", post.Rows[0][2])
-	}
-	if post.Rows[1][0] != "2" || post.Rows[1][2] != "new_sam" {
-		t.Errorf("row 2: expected val='new_sam', got %s", post.Rows[1][2])
+	if result.Rows[1][0] != "Sam" || result.Rows[1][1] != "new_sam" {
+		t.Errorf("row 2: expected ('Sam', 'new_sam'), got (%s, %s)", result.Rows[1][0], result.Rows[1][1])
 	}
 }
 
