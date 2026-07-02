@@ -34,17 +34,25 @@ CREATE TABLE users (
 
 **Column Types:**
 - `INT` — 64-bit integer
+- `BIGINT` — 64-bit integer (alias for INT)
 - `FLOAT` — 64-bit floating point
+- `NUMERIC(p, s)` — arbitrary precision decimal
 - `VARCHAR(n)` — variable-length string with optional max length
 - `TEXT` — unlimited text
 - `BOOL` — boolean (true/false)
 - `TIMESTAMP` — date and time
+- `TIMESTAMPTZ` — timezone-aware timestamp
+- `SERIAL` — auto-incrementing integer (shorthand for INT AUTO_INCREMENT)
 - `JSON` — JSON data
 
 **Constraints:**
 - `PRIMARY KEY` — unique identifier
 - `NOT NULL` — required field
+- `UNIQUE` — unique constraint
 - `DEFAULT value` — default value
+- `AUTO_INCREMENT` — auto-generate sequential values (works before or after PRIMARY KEY)
+- `GENERATED ALWAYS AS (expr) STORED` — computed columns
+- `GENERATED ALWAYS AS IDENTITY` — PostgreSQL-compatible identity column
 
 ### ALTER TABLE
 
@@ -69,6 +77,13 @@ DROP INDEX idx_users_email;
 DROP TABLE users;
 ```
 
+### IF EXISTS / IF NOT EXISTS
+
+```sql
+CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY);
+DROP TABLE IF EXISTS users;
+```
+
 ---
 
 ## DML (Data Manipulation Language)
@@ -78,6 +93,16 @@ DROP TABLE users;
 ```sql
 INSERT INTO users (id, name, email) VALUES (1, 'Alice', 'alice@example.com');
 INSERT INTO users VALUES (2, 'Bob', 'bob@example.com', 25, CURRENT_TIMESTAMP);
+```
+
+### UPSERT (ON CONFLICT)
+
+```sql
+INSERT INTO users (id, name) VALUES (1, 'Alice')
+ON CONFLICT (id) DO UPDATE SET name = 'new Alice';
+
+INSERT INTO users (id, name) VALUES (1, 'Alice')
+ON CONFLICT (id) DO NOTHING;
 ```
 
 ### UPDATE
@@ -111,6 +136,7 @@ SELECT DISTINCT age FROM users;
 ```sql
 SELECT * FROM users WHERE age > 25;
 SELECT * FROM users WHERE name LIKE 'A%';
+SELECT * FROM users WHERE name ILIKE '%alice%';  -- case-insensitive
 SELECT * FROM users WHERE id IN (1, 2, 3);
 SELECT * FROM users WHERE email IS NOT NULL;
 SELECT * FROM users WHERE age BETWEEN 20 AND 30;
@@ -128,6 +154,12 @@ SELECT * FROM users ORDER BY age DESC, name ASC;
 ```sql
 SELECT * FROM users LIMIT 10;
 SELECT * FROM users LIMIT 10 OFFSET 20;
+```
+
+### LIMIT and OFFSET with Parameters
+
+```sql
+SELECT * FROM users LIMIT $1 OFFSET $2;
 ```
 
 ### JOINs
@@ -161,6 +193,19 @@ SELECT SUM(amount), AVG(amount), MIN(amount), MAX(amount) FROM orders;
 SELECT name, age, ROW_NUMBER() OVER (ORDER BY age) FROM users;
 SELECT name, age, RANK() OVER (PARTITION BY department ORDER BY salary DESC) FROM employees;
 SELECT name, salary, SUM(salary) OVER (ORDER BY id) FROM employees;
+```
+
+### Cascading CTEs
+
+```sql
+WITH
+stage_stats AS (
+    SELECT stage, COUNT(*) as c FROM deals GROUP BY stage
+),
+ordered AS (
+    SELECT stage, c FROM stage_stats
+)
+SELECT * FROM ordered;
 ```
 
 ### Common Table Expressions (CTEs)
@@ -200,6 +245,8 @@ COMMIT;
 -- Or rollback on error:
 ROLLBACK;
 ```
+
+**Note:** Transactions are supported over both TCP (port 5432) and HTTP API (via session tracking).
 
 ---
 
