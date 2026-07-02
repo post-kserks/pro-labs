@@ -86,6 +86,8 @@ func ExecuteCTEStatement(stmt *parser.CTEStatement, ctx *ExecutionContext) (*Res
 		})
 	}
 
+	dbName, _ := requireCurrentDB(ctx)
+
 	if stmt.Recursive {
 		for i := range stmt.CTEs {
 			cte := &stmt.CTEs[i]
@@ -100,6 +102,46 @@ func ExecuteCTEStatement(stmt *parser.CTEStatement, ctx *ExecutionContext) (*Res
 				Result:  res,
 			})
 		}
+	} else {
+		// Execute non-recursive CTEs in order so cascading references work.
+		for i := range stmt.CTEs {
+			cte, _ := scope.ResolveCTE(stmt.CTEs[i].Name)
+			res, err := scope.ExecuteCTE(cte, ctx)
+			if err != nil {
+				return nil, fmt.Errorf("CTE '%s': %w", cte.Name, err)
+			}
+			// Materialize result as temp table so later CTEs can SELECT from it.
+			tempTable := cte.Name
+			_ = ctx.Storage.DropTable(dbName, tempTable)
+			schema := storage.TableSchema{
+				Name:     tempTable,
+				Database: dbName,
+				Columns:  make([]storage.ColumnSchema, len(res.Columns)),
+			}
+			for j, col := range res.Columns {
+				schema.Columns[j] = storage.ColumnSchema{Name: col, Type: "TEXT"}
+			}
+			if err := ctx.Storage.CreateTable(dbName, schema); err != nil {
+				return nil, fmt.Errorf("CTE '%s' temp table: %w", cte.Name, err)
+			}
+			rows := make([]storage.Row, len(res.Rows))
+			for j, r := range res.Rows {
+				row := make(storage.Row, len(r))
+				for k, v := range r {
+					row[k] = v
+				}
+				rows[j] = row
+			}
+			if _, err := ctx.Storage.InsertRows(dbName, tempTable, rows); err != nil {
+				return nil, fmt.Errorf("CTE '%s' temp insert: %w", cte.Name, err)
+			}
+		}
+		// Cleanup temp tables after body executes.
+		defer func() {
+			for i := range stmt.CTEs {
+				_ = ctx.Storage.DropTable(dbName, stmt.CTEs[i].Name)
+			}
+		}()
 	}
 
 	if selectStmt, ok := stmt.Body.(*parser.SelectStatement); ok {
@@ -294,6 +336,8 @@ func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (
 
 	scope := NewCTEScope()
 
+	dbName, _ := requireCurrentDB(ctx)
+
 	// Регистрируем CTE
 	for i := range stmt.CTEs {
 		scope.RegisterCTE(&CTEDefinition{
@@ -302,6 +346,44 @@ func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (
 			Query:   stmt.CTEs[i].Query,
 		})
 	}
+
+	// Execute CTEs in order so cascading references resolve via temp tables.
+	for i := range stmt.CTEs {
+		cte, _ := scope.ResolveCTE(stmt.CTEs[i].Name)
+		res, err := scope.ExecuteCTE(cte, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("CTE '%s': %w", cte.Name, err)
+		}
+		tempTable := cte.Name
+		_ = ctx.Storage.DropTable(dbName, tempTable)
+		schema := storage.TableSchema{
+			Name:     tempTable,
+			Database: dbName,
+			Columns:  make([]storage.ColumnSchema, len(res.Columns)),
+		}
+		for j, col := range res.Columns {
+			schema.Columns[j] = storage.ColumnSchema{Name: col, Type: "TEXT"}
+		}
+		if err := ctx.Storage.CreateTable(dbName, schema); err != nil {
+			return nil, fmt.Errorf("CTE '%s' temp table: %w", cte.Name, err)
+		}
+		rows := make([]storage.Row, len(res.Rows))
+		for j, r := range res.Rows {
+			row := make(storage.Row, len(r))
+			for k, v := range r {
+				row[k] = v
+			}
+			rows[j] = row
+		}
+		if _, err := ctx.Storage.InsertRows(dbName, tempTable, rows); err != nil {
+			return nil, fmt.Errorf("CTE '%s' temp insert: %w", cte.Name, err)
+		}
+	}
+	defer func() {
+		for i := range stmt.CTEs {
+			_ = ctx.Storage.DropTable(dbName, stmt.CTEs[i].Name)
+		}
+	}()
 
 	// Проверяем, ссылается ли SELECT на CTE
 	if stmt.TableName != "" {
@@ -337,7 +419,6 @@ func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (
 
 			// Create temporary table from CTE result
 			tempTable := "_cte_" + stmt.TableName
-			dbName, _ := requireCurrentDB(ctx)
 
 			// Build schema from CTE result columns
 			schema := storage.TableSchema{
