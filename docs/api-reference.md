@@ -351,7 +351,7 @@ Liveness probe.
 ```json
 {
   "status": "ok",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "uptime_seconds": 3600,
   "active_connections": 5,
   "storage": "ok"

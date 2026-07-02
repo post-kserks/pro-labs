@@ -15,7 +15,7 @@ func TestVersionAsColumnName(t *testing.T) {
 		{"INSERT with version column", "INSERT INTO deals (id, version) VALUES (1, 1);"},
 		{"UPDATE with version column", "UPDATE deals SET version = 2 WHERE id = 1;"},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := parser.Parse(tt.query)
