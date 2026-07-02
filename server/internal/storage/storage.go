@@ -15,6 +15,7 @@ type ColumnSchema struct {
 	Type          string   `json:"type"`
 	VarcharLen    int      `json:"varchar_len,omitempty"`
 	IsComputed    bool     `json:"is_computed,omitempty"`
+	ComputedExpr  string   `json:"computed_expr,omitempty"`
 	EnumValues    []string `json:"enum_values,omitempty"`
 	NotNull       bool     `json:"not_null,omitempty"`
 	PrimaryKey    bool     `json:"primary_key,omitempty"`

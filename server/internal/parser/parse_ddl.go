@@ -615,6 +615,12 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 					return nil, err
 				}
 				col.Computed = expr
+				// Optionally consume STORED or VIRTUAL keyword
+				if p.current().Type == lexer.TOKEN_STORED {
+					p.advance() // STORED
+				} else if p.current().Type == lexer.TOKEN_VIRTUAL {
+					p.advance() // VIRTUAL
+				}
 			}
 		} else if p.current().Type == lexer.TOKEN_BY {
 			p.advance() // BY

@@ -190,6 +190,9 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 				}
 				normalized[i] = converted
 			}
+			if err := applyComputedColumns(normalized, schema, ctx); err != nil {
+				return nil, err
+			}
 			result = append(result, normalized)
 		}
 		return result, nil
@@ -237,6 +240,9 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 			normalized[colIdx] = converted
 		}
 		applyDefaults(normalized, schema, specifiedCols)
+		if err := applyComputedColumns(normalized, schema, ctx); err != nil {
+			return nil, err
+		}
 		result = append(result, normalized)
 	}
 
@@ -364,6 +370,9 @@ func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string
 			}
 		}
 		applyDefaults(storageRow, schema, nil)
+		if err := applyComputedColumns(storageRow, schema, ctx); err != nil {
+			return nil, fmt.Errorf("INSERT ... SELECT: %w", err)
+		}
 		for j, col := range schema.Columns {
 			if col.NotNull && j < len(storageRow) && storageRow[j] == nil {
 				return nil, fmt.Errorf("INSERT ... SELECT: NOT NULL constraint failed for column '%s' in row %d", col.Name, ri)
@@ -429,4 +438,26 @@ func applyDefaults(row storage.Row, schema *storage.TableSchema, specifiedCols m
 			row[i] = *col.Default
 		}
 	}
+}
+
+// applyComputedColumns evaluates computed column expressions and sets the values.
+func applyComputedColumns(row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) error {
+	for i, col := range schema.Columns {
+		if col.IsComputed && col.ComputedExpr != "" {
+			expr, err := parser.ParseExpression(col.ComputedExpr)
+			if err != nil {
+				return fmt.Errorf("parsing computed expression for column '%s': %w", col.Name, err)
+			}
+			val, err := evalOperand(expr, row, schema, ctx)
+			if err != nil {
+				return fmt.Errorf("evaluating computed expression for column '%s': %w", col.Name, err)
+			}
+			converted, err := normalizeForColumn(val, col)
+			if err != nil {
+				return fmt.Errorf("normalizing computed expression for column '%s': %w", col.Name, err)
+			}
+			row[i] = converted
+		}
+	}
+	return nil
 }

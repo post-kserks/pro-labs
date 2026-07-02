@@ -421,3 +421,66 @@ func TestDefaultMultipleRows(t *testing.T) {
 		t.Fatalf("expected 3 rows with default, got %q", result.Rows[0][0])
 	}
 }
+
+func TestComputedColumnInt(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE calc (price INT, qty INT, total INT GENERATED ALWAYS AS (price * qty) STORED);")
+	executeSQL(t, session, "INSERT INTO calc (price, qty) VALUES (10, 3);")
+
+	result := executeSQL(t, session, "SELECT total FROM calc;")
+	if result.Rows[0][0] != "30" {
+		t.Fatalf("expected computed total '30', got %q", result.Rows[0][0])
+	}
+}
+
+func TestComputedColumnExpression(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE items (price INT, tax INT, total INT GENERATED ALWAYS AS (price + tax) STORED);")
+	executeSQL(t, session, "INSERT INTO items (price, tax) VALUES (100, 15);")
+
+	result := executeSQL(t, session, "SELECT total FROM items;")
+	if result.Rows[0][0] != "115" {
+		t.Fatalf("expected computed total '115', got %q", result.Rows[0][0])
+	}
+}
+
+func TestComputedColumnMultipleRows(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE prices (base INT, double INT GENERATED ALWAYS AS (base * 2) STORED);")
+	executeSQL(t, session, "INSERT INTO prices (base) VALUES (5), (10), (25);")
+
+	result := executeSQL(t, session, "SELECT double FROM prices ORDER BY double;")
+	if len(result.Rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "10" || result.Rows[1][0] != "20" || result.Rows[2][0] != "50" {
+		t.Fatalf("expected values 10, 20, 50, got %q, %q, %q", result.Rows[0][0], result.Rows[1][0], result.Rows[2][0])
+	}
+}
+
+func TestComputedColumnOverwritesInsertValue(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE t (x INT, y INT GENERATED ALWAYS AS (x + 1) STORED);")
+	executeSQL(t, session, "INSERT INTO t (x, y) VALUES (5, 999);")
+
+	result := executeSQL(t, session, "SELECT y FROM t;")
+	if result.Rows[0][0] != "6" {
+		t.Fatalf("expected computed value '6' to overwrite inserted '999', got %q", result.Rows[0][0])
+	}
+}
+
+func TestComputedColumnWithVirtual(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE vtest (a INT, b INT GENERATED ALWAYS AS (a * 3) VIRTUAL);")
+	executeSQL(t, session, "INSERT INTO vtest (a) VALUES (7);")
+
+	result := executeSQL(t, session, "SELECT b FROM vtest;")
+	if result.Rows[0][0] != "21" {
+		t.Fatalf("expected computed value '21', got %q", result.Rows[0][0])
+	}
+}

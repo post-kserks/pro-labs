@@ -31,6 +31,7 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			Type:          column.DataType,
 			VarcharLen:    column.VarcharLen,
 			IsComputed:    column.Computed != nil,
+			ComputedExpr:  parser.FormatExpression(column.Computed),
 			PrimaryKey:    column.PrimaryKey,
 			NotNull:       column.NotNull,
 			EnumValues:    column.EnumValues,
@@ -116,9 +117,11 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	switch action := c.stmt.Action.(type) {
 	case *parser.AlterAddColumn:
 		col := storage.ColumnSchema{
-			Name:       action.Column.Name,
-			Type:       action.Column.DataType,
-			VarcharLen: action.Column.VarcharLen,
+			Name:          action.Column.Name,
+			Type:          action.Column.DataType,
+			VarcharLen:    action.Column.VarcharLen,
+			IsComputed:    action.Column.Computed != nil,
+			ComputedExpr:  parser.FormatExpression(action.Column.Computed),
 		}
 		var defaultVal interface{}
 		if action.Column.Default != nil {
