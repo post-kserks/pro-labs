@@ -1314,6 +1314,73 @@ type flushResponseWriter struct {
 
 func (f *flushResponseWriter) Flush() {}
 
+func TestApplyParamsMixedTypes(t *testing.T) {
+	tests := []struct {
+		name   string
+		query  string
+		params []string
+		want   string
+	}{
+		{
+			name:   "string param is quoted",
+			query:  "SELECT * FROM t WHERE name = $1;",
+			params: []string{"Alice"},
+			want:   "SELECT * FROM t WHERE name = 'Alice';",
+		},
+		{
+			name:   "integer param is not quoted",
+			query:  "SELECT * FROM t WHERE id = $1;",
+			params: []string{"42"},
+			want:   "SELECT * FROM t WHERE id = 42;",
+		},
+		{
+			name:   "float param is not quoted",
+			query:  "SELECT * FROM t WHERE val = $1;",
+			params: []string{"3.14"},
+			want:   "SELECT * FROM t WHERE val = 3.14;",
+		},
+		{
+			name:   "negative integer is not quoted",
+			query:  "SELECT * FROM t WHERE id = $1;",
+			params: []string{"-5"},
+			want:   "SELECT * FROM t WHERE id = -5;",
+		},
+		{
+			name:   "mixed types",
+			query:  "SELECT * FROM t WHERE id = $1 AND name = $2 AND val = $3;",
+			params: []string{"7", "Bob", "2.5"},
+			want:   "SELECT * FROM t WHERE id = 7 AND name = 'Bob' AND val = 2.5;",
+		},
+		{
+			name:   "string with special chars stays quoted",
+			query:  "SELECT * FROM t WHERE name = $1;",
+			params: []string{"it's a test"},
+			want:   "SELECT * FROM t WHERE name = 'it\\'s a test';",
+		},
+		{
+			name:   "zero is not quoted",
+			query:  "SELECT * FROM t WHERE id = $1;",
+			params: []string{"0"},
+			want:   "SELECT * FROM t WHERE id = 0;",
+		},
+		{
+			name:   "negative float is not quoted",
+			query:  "SELECT * FROM t WHERE val = $1;",
+			params: []string{"-1.5"},
+			want:   "SELECT * FROM t WHERE val = -1.5;",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := applyParams(tt.query, tt.params)
+			if got != tt.want {
+				t.Errorf("applyParams(%q, %v) = %q, want %q", tt.query, tt.params, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHandleQueryStreamClientDisconnect(t *testing.T) {
 	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
 

@@ -877,6 +877,11 @@ func parseHTTPRowValue(v interface{}) storage.Value {
 	}
 }
 
+func isNumeric(s string) bool {
+	_, err := strconv.ParseFloat(s, 64)
+	return err == nil
+}
+
 func applyParams(query string, params []string) string {
 	var buf strings.Builder
 	inString := false
@@ -923,11 +928,15 @@ func applyParams(query string, params []string) string {
 				idx, err := strconv.Atoi(numStr)
 				if err == nil && idx >= 1 && idx <= len(params) {
 					val := params[idx-1]
-					val = strings.ReplaceAll(val, `\`, `\\`)
-					val = strings.ReplaceAll(val, "'", "\\'")
-					buf.WriteByte('\'')
-					buf.WriteString(val)
-					buf.WriteByte('\'')
+					if isNumeric(val) {
+						buf.WriteString(val)
+					} else {
+						val = strings.ReplaceAll(val, `\`, `\\`)
+						val = strings.ReplaceAll(val, "'", "\\'")
+						buf.WriteByte('\'')
+						buf.WriteString(val)
+						buf.WriteByte('\'')
+					}
 					i = j - 1
 					continue
 				}
