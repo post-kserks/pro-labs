@@ -38,7 +38,7 @@ type BatchResponseResult struct {
 	Columns    []string         `json:"columns"`
 	Rows       [][]interface{} `json:"rows"`
 	Affected   int              `json:"affected"`
-	DurationMs float64          `json:"duration_ms"`
+	DurationMs int64            `json:"duration_ms"`
 	Message    string           `json:"message,omitempty"`
 	Error      string           `json:"error,omitempty"`
 }
@@ -114,7 +114,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
 	}
-	duration := float64(time.Since(start).Microseconds()) / 1000.0
+	duration := time.Since(start).Milliseconds()
 
 	response := map[string]interface{}{
 		"status":      "ok",
@@ -177,7 +177,7 @@ func (s *Server) handleTransaction(w http.ResponseWriter, r *http.Request) {
 		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
 	}
-	duration := float64(time.Since(start).Microseconds()) / 1000.0
+	duration := time.Since(start).Milliseconds()
 
 	response := map[string]interface{}{
 		"status":      "ok",
@@ -252,7 +252,7 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 
 		start := time.Now()
 		result, err := session.Execute(stmt)
-		duration := float64(time.Since(start).Microseconds()) / 1000.0
+		duration := time.Since(start).Milliseconds()
 		session.Close()
 
 		if err != nil {

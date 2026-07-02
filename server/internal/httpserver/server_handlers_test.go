@@ -90,6 +90,32 @@ func TestHandleQueryBasic(t *testing.T) {
 	}
 }
 
+func TestHandleQueryDurationMsIsInteger(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+
+	duration, ok := res["duration_ms"].(float64)
+	if !ok {
+		t.Fatalf("duration_ms missing or wrong type: %v (%T)", res["duration_ms"], res["duration_ms"])
+	}
+	if duration != float64(int64(duration)) {
+		t.Fatalf("duration_ms = %v, want integer value", duration)
+	}
+}
+
 func TestHandleQueryEmpty(t *testing.T) {
 	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
 
