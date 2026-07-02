@@ -78,11 +78,25 @@ func (p *sqlParser) parseInsert() (Statement, error) {
 		if err := p.consume(lexer.TOKEN_CONFLICT, "CONFLICT"); err != nil {
 			return nil, err
 		}
+
+		// Parse optional conflict target: ON CONFLICT (col1, col2)
+		var conflictColumns []string
+		if p.current().Type == lexer.TOKEN_LPAREN {
+			p.advance()
+			conflictColumns, err = p.parseColumnList()
+			if err != nil {
+				return nil, err
+			}
+			if err := p.consume(lexer.TOKEN_RPAREN, ")"); err != nil {
+				return nil, err
+			}
+		}
+
 		if err := p.consume(lexer.TOKEN_DO, "DO"); err != nil {
 			return nil, err
 		}
 
-		onConflict = &OnConflictClause{}
+		onConflict = &OnConflictClause{Columns: conflictColumns}
 
 		if p.current().Type == lexer.TOKEN_NOTHING {
 			p.advance()
