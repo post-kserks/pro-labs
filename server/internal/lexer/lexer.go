@@ -141,6 +141,7 @@ const (
 	TOKEN_SAVEPOINT
 	TOKEN_RELEASE
 	TOKEN_EXISTS
+	TOKEN_IF
 
 	// Data types
 	TOKEN_INT
@@ -655,6 +656,7 @@ var keywords = map[string]TokenType{
 	"SAVEPOINT":      TOKEN_SAVEPOINT,
 	"RELEASE":        TOKEN_RELEASE,
 	"EXISTS":         TOKEN_EXISTS,
+	"IF":             TOKEN_IF,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -803,6 +805,7 @@ var tokenNames = [...]string{
 	TOKEN_SAVEPOINT:         "SAVEPOINT",
 	TOKEN_RELEASE:           "RELEASE",
 	TOKEN_EXISTS:            "EXISTS",
+	TOKEN_IF:                "IF",
 	TOKEN_IDENT:             "IDENT",
 	TOKEN_INT_LIT:           "INT_LIT",
 	TOKEN_FLOAT_LIT:         "FLOAT_LIT",

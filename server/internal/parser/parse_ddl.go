@@ -484,6 +484,19 @@ func (p *sqlParser) parseCreateProcedure() (Statement, error) {
 
 func (p *sqlParser) parseCreateTable() (Statement, error) {
 	p.advance() // TABLE
+
+	ifNotExists := false
+	if p.current().Type == lexer.TOKEN_IF {
+		p.advance() // IF
+		if err := p.consume(lexer.TOKEN_NOT, "NOT"); err != nil {
+			return nil, err
+		}
+		if err := p.consume(lexer.TOKEN_EXISTS, "EXISTS"); err != nil {
+			return nil, err
+		}
+		ifNotExists = true
+	}
+
 	tableName, err := p.consumeIdent("table name")
 	if err != nil {
 		return nil, err
@@ -494,7 +507,7 @@ func (p *sqlParser) parseCreateTable() (Statement, error) {
 		if err := p.consume(lexer.TOKEN_SCHEMA, "SCHEMA"); err != nil {
 			return nil, err
 		}
-		return &CreateTableStatement{TableName: tableName, InferSchema: true}, nil
+		return &CreateTableStatement{TableName: tableName, InferSchema: true, IfNotExists: ifNotExists}, nil
 	}
 
 	if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
@@ -524,7 +537,7 @@ func (p *sqlParser) parseCreateTable() (Statement, error) {
 		return nil, fmt.Errorf("syntax error: CREATE TABLE requires at least one column")
 	}
 
-	return &CreateTableStatement{TableName: tableName, Columns: columns}, nil
+	return &CreateTableStatement{TableName: tableName, Columns: columns, IfNotExists: ifNotExists}, nil
 }
 
 func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
@@ -738,11 +751,19 @@ func (p *sqlParser) parseDrop() (Statement, error) {
 		return p.parseDropDatabase()
 	case lexer.TOKEN_TABLE:
 		p.advance()
+		ifExists := false
+		if p.current().Type == lexer.TOKEN_IF {
+			p.advance() // IF
+			if err := p.consume(lexer.TOKEN_EXISTS, "EXISTS"); err != nil {
+				return nil, err
+			}
+			ifExists = true
+		}
 		name, err := p.consumeIdent("table name")
 		if err != nil {
 			return nil, err
 		}
-		return &DropTableStatement{TableName: name}, nil
+		return &DropTableStatement{TableName: name, IfExists: ifExists}, nil
 	case lexer.TOKEN_VIEW:
 		return p.parseDropView()
 	case lexer.TOKEN_TRIGGER:

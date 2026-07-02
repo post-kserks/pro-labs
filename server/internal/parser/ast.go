@@ -50,13 +50,15 @@ type ColumnDef struct {
 }
 
 type CreateTableStatement struct {
-	TableName   string
-	Columns     []ColumnDef
-	InferSchema bool
+	TableName    string
+	Columns      []ColumnDef
+	InferSchema  bool
+	IfNotExists  bool
 }
 
 type DropTableStatement struct {
 	TableName string
+	IfExists  bool
 }
 
 // DML.

@@ -2719,3 +2719,89 @@ func TestParseCreateTableWithBigIntNumericTimestampz(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCreateTableIfNotExists(t *testing.T) {
+	t.Run("IF NOT EXISTS", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE IF NOT EXISTS heroes (id INT, name TEXT);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if !create.IfNotExists {
+			t.Fatal("expected IfNotExists to be true")
+		}
+		if create.TableName != "heroes" {
+			t.Fatalf("expected table name 'heroes', got %q", create.TableName)
+		}
+		if len(create.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(create.Columns))
+		}
+	})
+
+	t.Run("without IF NOT EXISTS", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE heroes (id INT);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if create.IfNotExists {
+			t.Fatal("expected IfNotExists to be false")
+		}
+	})
+
+	t.Run("IF NOT EXISTS with INFER SCHEMA", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE IF NOT EXISTS heroes INFER SCHEMA;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if !create.IfNotExists {
+			t.Fatal("expected IfNotExists to be true")
+		}
+		if !create.InferSchema {
+			t.Fatal("expected InferSchema to be true")
+		}
+	})
+}
+
+func TestParseDropTableIfExists(t *testing.T) {
+	t.Run("IF EXISTS", func(t *testing.T) {
+		stmt, err := Parse("DROP TABLE IF EXISTS heroes;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		drop, ok := stmt.(*DropTableStatement)
+		if !ok {
+			t.Fatalf("expected *DropTableStatement, got %T", stmt)
+		}
+		if !drop.IfExists {
+			t.Fatal("expected IfExists to be true")
+		}
+		if drop.TableName != "heroes" {
+			t.Fatalf("expected table name 'heroes', got %q", drop.TableName)
+		}
+	})
+
+	t.Run("without IF EXISTS", func(t *testing.T) {
+		stmt, err := Parse("DROP TABLE heroes;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		drop, ok := stmt.(*DropTableStatement)
+		if !ok {
+			t.Fatalf("expected *DropTableStatement, got %T", stmt)
+		}
+		if drop.IfExists {
+			t.Fatal("expected IfExists to be false")
+		}
+	})
+}
