@@ -2951,3 +2951,70 @@ func TestParseDropTableIfExists(t *testing.T) {
 		}
 	})
 }
+
+func TestParseCreateTableWithSerial(t *testing.T) {
+	t.Run("SERIAL PRIMARY KEY", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id SERIAL PRIMARY KEY);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 1 {
+			t.Fatalf("expected 1 column, got %d", len(create.Columns))
+		}
+		col := create.Columns[0]
+		if col.Name != "id" {
+			t.Errorf("column name = %q, want %q", col.Name, "id")
+		}
+		if col.DataType != "INT" {
+			t.Errorf("DataType = %q, want %q", col.DataType, "INT")
+		}
+		if !col.AutoIncrement {
+			t.Error("expected AutoIncrement to be true")
+		}
+		if !col.PrimaryKey {
+			t.Error("expected PrimaryKey to be true")
+		}
+	})
+
+	t.Run("SERIAL without PRIMARY KEY", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id SERIAL);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		col := create.Columns[0]
+		if col.DataType != "INT" {
+			t.Errorf("DataType = %q, want %q", col.DataType, "INT")
+		}
+		if !col.AutoIncrement {
+			t.Error("expected AutoIncrement to be true")
+		}
+	})
+
+	t.Run("SERIAL with other columns", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id SERIAL PRIMARY KEY, name TEXT);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(create.Columns))
+		}
+		if create.Columns[0].DataType != "INT" || !create.Columns[0].AutoIncrement {
+			t.Errorf("first column: DataType=%q AutoIncrement=%v", create.Columns[0].DataType, create.Columns[0].AutoIncrement)
+		}
+		if create.Columns[1].DataType != "TEXT" {
+			t.Errorf("second column: DataType=%q, want TEXT", create.Columns[1].DataType)
+		}
+	})
+}

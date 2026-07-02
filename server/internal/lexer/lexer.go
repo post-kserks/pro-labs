@@ -164,6 +164,7 @@ const (
 	TOKEN_BIGINT
 	TOKEN_NUMERIC
 	TOKEN_TIMESTAMPTZ
+	TOKEN_SERIAL
 
 	// Literals and identifiers
 	TOKEN_IDENT
@@ -611,6 +612,7 @@ var keywords = map[string]TokenType{
 	"BIGINT":         TOKEN_BIGINT,
 	"NUMERIC":        TOKEN_NUMERIC,
 	"TIMESTAMPTZ":    TOKEN_TIMESTAMPTZ,
+	"SERIAL":         TOKEN_SERIAL,
 	"VACUUM":         TOKEN_VACUUM,
 	"MIGRATION":      TOKEN_MIGRATION,
 	"POLICY":         TOKEN_POLICY,
@@ -761,6 +763,7 @@ var tokenNames = [...]string{
 	TOKEN_BIGINT:            "BIGINT",
 	TOKEN_NUMERIC:           "NUMERIC",
 	TOKEN_TIMESTAMPTZ:       "TIMESTAMPTZ",
+	TOKEN_SERIAL:            "SERIAL",
 	TOKEN_VACUUM:            "VACUUM",
 	TOKEN_MIGRATION:         "MIGRATION",
 	TOKEN_POLICY:            "POLICY",

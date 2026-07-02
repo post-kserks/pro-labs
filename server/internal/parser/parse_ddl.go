@@ -546,6 +546,26 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 		return nil, err
 	}
 
+	// SERIAL is a shorthand for INT with AUTO_INCREMENT
+	if p.current().Type == lexer.TOKEN_SERIAL {
+		p.advance()
+		col := &ColumnDef{Name: colName, DataType: "INT", AutoIncrement: true}
+
+		if p.current().Type == lexer.TOKEN_NOT && p.peek().Type == lexer.TOKEN_NULL {
+			p.advance()
+			p.advance()
+			col.NotNull = true
+		}
+
+		if p.current().Type == lexer.TOKEN_PRIMARY && p.peek().Type == lexer.TOKEN_KEY {
+			p.advance()
+			p.advance()
+			col.PrimaryKey = true
+		}
+
+		return col, nil
+	}
+
 	dataType, varcharLen, err := p.parseColumnType()
 	if err != nil {
 		return nil, err
