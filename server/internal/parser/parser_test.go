@@ -2517,3 +2517,41 @@ func TestParseComparisonSubqueryErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestLimitWithParamRef(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t LIMIT $1 OFFSET $2;")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	sel, ok := stmt.(*SelectStatement)
+	if !ok {
+		t.Fatalf("expected *SelectStatement, got %T", stmt)
+	}
+	if !sel.HasLimit {
+		t.Fatal("expected HasLimit to be true")
+	}
+	if sel.LimitExpr == nil {
+		t.Fatal("expected LimitExpr to be set")
+	}
+	param1, ok := sel.LimitExpr.(*ParamRef)
+	if !ok {
+		t.Fatalf("expected *ParamRef for LimitExpr, got %T", sel.LimitExpr)
+	}
+	if param1.Index != 1 {
+		t.Fatalf("expected param index 1 for limit, got %d", param1.Index)
+	}
+	if !sel.HasOffset {
+		t.Fatal("expected HasOffset to be true")
+	}
+	if sel.OffsetExpr == nil {
+		t.Fatal("expected OffsetExpr to be set")
+	}
+	param2, ok := sel.OffsetExpr.(*ParamRef)
+	if !ok {
+		t.Fatalf("expected *ParamRef for OffsetExpr, got %T", sel.OffsetExpr)
+	}
+	if param2.Index != 2 {
+		t.Fatalf("expected param index 2 for offset, got %d", param2.Index)
+	}
+}

@@ -447,31 +447,49 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 	if p.current().Type == lexer.TOKEN_LIMIT {
 		p.advance()
 		limitTok := p.current()
-		if limitTok.Type != lexer.TOKEN_INT_LIT {
+		switch limitTok.Type {
+		case lexer.TOKEN_INT_LIT:
+			limit, err := strconv.Atoi(limitTok.Literal)
+			if err != nil || limit < 0 {
+				return nil, p.syntaxError(limitTok, "LIMIT must be a non-negative integer")
+			}
+			p.advance()
+			stmt.Limit = limit
+			stmt.HasLimit = true
+		case lexer.TOKEN_PARAM:
+			expr, err := p.parseExpression()
+			if err != nil {
+				return nil, err
+			}
+			stmt.LimitExpr = expr
+			stmt.HasLimit = true
+		default:
 			return nil, p.expectedError("LIMIT value", limitTok)
 		}
-		limit, err := strconv.Atoi(limitTok.Literal)
-		if err != nil || limit < 0 {
-			return nil, p.syntaxError(limitTok, "LIMIT must be a non-negative integer")
-		}
-		p.advance()
-		stmt.Limit = limit
-		stmt.HasLimit = true
 	}
 
 	if p.current().Type == lexer.TOKEN_OFFSET {
 		p.advance()
 		offsetTok := p.current()
-		if offsetTok.Type != lexer.TOKEN_INT_LIT {
+		switch offsetTok.Type {
+		case lexer.TOKEN_INT_LIT:
+			offset, err := strconv.Atoi(offsetTok.Literal)
+			if err != nil || offset < 0 {
+				return nil, p.syntaxError(offsetTok, "OFFSET must be a non-negative integer")
+			}
+			p.advance()
+			stmt.Offset = offset
+			stmt.HasOffset = true
+		case lexer.TOKEN_PARAM:
+			expr, err := p.parseExpression()
+			if err != nil {
+				return nil, err
+			}
+			stmt.OffsetExpr = expr
+			stmt.HasOffset = true
+		default:
 			return nil, p.expectedError("OFFSET value", offsetTok)
 		}
-		offset, err := strconv.Atoi(offsetTok.Literal)
-		if err != nil || offset < 0 {
-			return nil, p.syntaxError(offsetTok, "OFFSET must be a non-negative integer")
-		}
-		p.advance()
-		stmt.Offset = offset
-		stmt.HasOffset = true
 	}
 
 	return stmt, nil

@@ -91,8 +91,10 @@ type SelectStatement struct {
 	OrderBy      []OrderItem
 	Limit        int
 	HasLimit     bool
+	LimitExpr    Expression // parameterized limit ($N), nil when using literal
 	Offset       int
 	HasOffset    bool
+	OffsetExpr   Expression // parameterized offset ($N), nil when using literal
 	CountAll     bool // Deprecated: replace with COUNT(*) aggregate function
 	AsOf         *AsOfClause
 	CTEs         []CTEDefinition // WITH clause definitions
