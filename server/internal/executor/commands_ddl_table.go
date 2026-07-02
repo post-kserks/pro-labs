@@ -117,11 +117,11 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	switch action := c.stmt.Action.(type) {
 	case *parser.AlterAddColumn:
 		col := storage.ColumnSchema{
-			Name:          action.Column.Name,
-			Type:          action.Column.DataType,
-			VarcharLen:    action.Column.VarcharLen,
-			IsComputed:    action.Column.Computed != nil,
-			ComputedExpr:  parser.FormatExpression(action.Column.Computed),
+			Name:         action.Column.Name,
+			Type:         action.Column.DataType,
+			VarcharLen:   action.Column.VarcharLen,
+			IsComputed:   action.Column.Computed != nil,
+			ComputedExpr: parser.FormatExpression(action.Column.Computed),
 		}
 		var defaultVal interface{}
 		if action.Column.Default != nil {

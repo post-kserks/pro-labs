@@ -8,22 +8,22 @@ import (
 )
 
 const (
-	errCodeBadRequest        = 3001
-	errCodeParseError        = 3002
-	errCodeUnknownColumn     = 3003
-	errCodeStorageError      = 3004
-	errCodeTxUnsupported     = 3005
-	errCodeRateLimited       = 3006
-	errCodeNotNullViolation  = 3007
-	errCodeTypeMismatch      = 3008
-	errCodeTableNotFound     = 3009
-	errCodeDatabaseNotFound  = 3010
-	errCodeDuplicateValue    = 3011
-	errCodeCheckConstraint   = 3012
-	errCodeForeignKey        = 3013
-	errCodeQueryTimeout      = 3014
-	errCodeInternal          = 5000
-	errCodeNotImplemented    = 9999
+	errCodeBadRequest       = 3001
+	errCodeParseError       = 3002
+	errCodeUnknownColumn    = 3003
+	errCodeStorageError     = 3004
+	errCodeTxUnsupported    = 3005
+	errCodeRateLimited      = 3006
+	errCodeNotNullViolation = 3007
+	errCodeTypeMismatch     = 3008
+	errCodeTableNotFound    = 3009
+	errCodeDatabaseNotFound = 3010
+	errCodeDuplicateValue   = 3011
+	errCodeCheckConstraint  = 3012
+	errCodeForeignKey       = 3013
+	errCodeQueryTimeout     = 3014
+	errCodeInternal         = 5000
+	errCodeNotImplemented   = 9999
 
 	DefaultMaxLiveQuerySubscriptions = 1000
 )

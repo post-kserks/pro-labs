@@ -34,14 +34,14 @@ type BatchRequest struct {
 }
 
 type BatchResponseResult struct {
-	Status     string           `json:"status"`
-	Type       string           `json:"type"`
-	Columns    []string         `json:"columns"`
+	Status     string          `json:"status"`
+	Type       string          `json:"type"`
+	Columns    []string        `json:"columns"`
 	Rows       [][]interface{} `json:"rows"`
-	Affected   int              `json:"affected"`
-	DurationMs int64            `json:"duration_ms"`
-	Message    string           `json:"message,omitempty"`
-	Error      string           `json:"error,omitempty"`
+	Affected   int             `json:"affected"`
+	DurationMs int64           `json:"duration_ms"`
+	Message    string          `json:"message,omitempty"`
+	Error      string          `json:"error,omitempty"`
 }
 
 func (s *Server) newSession() *executor.Session {

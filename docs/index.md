@@ -1,6 +1,6 @@
 # VaultDB Documentation
 
-**Version 1.1.0**
+**Version 1.1.1**
 
 VaultDB is a SQL-compatible database engine with a custom page-based storage engine, WAL-based crash recovery, MVCC transactions, multiple index types, and both TCP and HTTP interfaces.
 

@@ -2717,9 +2717,9 @@ func TestNormalizeWhitespace(t *testing.T) {
 
 func TestParseCreateTableWithNotNull(t *testing.T) {
 	tests := []struct {
-		name     string
-		sql      string
-		wantNN   []bool // expected NotNull per column
+		name   string
+		sql    string
+		wantNN []bool // expected NotNull per column
 	}{
 		{
 			name:   "single NOT NULL column",

@@ -50,10 +50,10 @@ type ColumnDef struct {
 }
 
 type CreateTableStatement struct {
-	TableName    string
-	Columns      []ColumnDef
-	InferSchema  bool
-	IfNotExists  bool
+	TableName   string
+	Columns     []ColumnDef
+	InferSchema bool
+	IfNotExists bool
 }
 
 type DropTableStatement struct {
@@ -97,7 +97,7 @@ type SelectStatement struct {
 	Offset       int
 	HasOffset    bool
 	OffsetExpr   Expression // parameterized offset ($N), nil when using literal
-	CountAll     bool // Deprecated: replace with COUNT(*) aggregate function
+	CountAll     bool       // Deprecated: replace with COUNT(*) aggregate function
 	AsOf         *AsOfClause
 	CTEs         []CTEDefinition // WITH clause definitions
 	Distinct     bool            // SELECT DISTINCT
