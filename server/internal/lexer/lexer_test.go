@@ -406,7 +406,6 @@ func TestAllKeywords(t *testing.T) {
 		{"OF", TOKEN_OF},
 		{"ON", TOKEN_ON},
 		{"TIMESTAMP", TOKEN_TIMESTAMP},
-		{"VERSION", TOKEN_VERSION},
 		{"HISTORY", TOKEN_HISTORY},
 		{"KEY", TOKEN_KEY},
 		{"PRIMARY", TOKEN_PRIMARY},
