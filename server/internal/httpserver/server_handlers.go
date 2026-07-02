@@ -967,6 +967,13 @@ func parseHTTPRowValue(v interface{}) storage.Value {
 }
 
 func isNumeric(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	// Don't treat +7999 as numeric — SQL doesn't accept +prefix literals
+	if s[0] == '+' {
+		return false
+	}
 	_, err := strconv.ParseFloat(s, 64)
 	return err == nil
 }
