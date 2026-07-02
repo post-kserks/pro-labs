@@ -8,14 +8,22 @@ import (
 )
 
 const (
-	errCodeBadRequest     = 3001
-	errCodeParseError     = 3002
-	errCodeUnknownColumn  = 3003
-	errCodeStorageError   = 3004
-	errCodeTxUnsupported  = 3005
-	errCodeRateLimited    = 3006
-	errCodeInternal       = 5000
-	errCodeNotImplemented = 9999
+	errCodeBadRequest        = 3001
+	errCodeParseError        = 3002
+	errCodeUnknownColumn     = 3003
+	errCodeStorageError      = 3004
+	errCodeTxUnsupported     = 3005
+	errCodeRateLimited       = 3006
+	errCodeNotNullViolation  = 3007
+	errCodeTypeMismatch      = 3008
+	errCodeTableNotFound     = 3009
+	errCodeDatabaseNotFound  = 3010
+	errCodeDuplicateValue    = 3011
+	errCodeCheckConstraint   = 3012
+	errCodeForeignKey        = 3013
+	errCodeQueryTimeout      = 3014
+	errCodeInternal          = 5000
+	errCodeNotImplemented    = 9999
 
 	DefaultMaxLiveQuerySubscriptions = 1000
 )
@@ -87,11 +95,73 @@ func writeStorageError(w http.ResponseWriter, status, code int, err error, logge
 	if len(msg) > 200 {
 		msg = msg[:200] + "..."
 	}
+
+	// Classify error and use specific error code
+	specificCode := classifyError(err)
+	if specificCode != 0 {
+		code = specificCode
+	}
+
 	writeJSON(w, status, map[string]interface{}{
 		"status":     "error",
 		"error_code": code,
 		"message":    msg,
 	})
+}
+
+func classifyError(err error) int {
+	msg := err.Error()
+
+	// NOT NULL constraint violations
+	if containsAny(msg, "NOT NULL constraint failed") {
+		return errCodeNotNullViolation
+	}
+
+	// Type mismatch / conversion errors
+	if containsAny(msg, "cannot convert", "cannot parse", "invalid ENUM value") {
+		return errCodeTypeMismatch
+	}
+
+	// Table not found
+	if containsAny(msg, "does not exist") && containsAny(msg, "table") {
+		return errCodeTableNotFound
+	}
+
+	// Database not found
+	if containsAny(msg, "does not exist") && containsAny(msg, "database") {
+		return errCodeDatabaseNotFound
+	}
+
+	// Duplicate value / unique violations
+	if containsAny(msg, "duplicate primary key", "already exists", "UNIQUE constraint") {
+		return errCodeDuplicateValue
+	}
+
+	// CHECK constraint violations
+	if containsAny(msg, "CHECK constraint") {
+		return errCodeCheckConstraint
+	}
+
+	// FOREIGN KEY violations
+	if containsAny(msg, "foreign key constraint") {
+		return errCodeForeignKey
+	}
+
+	// Query timeout
+	if containsAny(msg, "query timeout") {
+		return errCodeQueryTimeout
+	}
+
+	return 0
+}
+
+func containsAny(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func emptyIfNil(columns []string) []string {

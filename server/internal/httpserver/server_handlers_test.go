@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1402,5 +1403,118 @@ func TestHandleQueryStreamClientDisconnect(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("handler did not return after client disconnect — goroutine leak")
+	}
+}
+
+func TestErrorCodesForDifferentErrors(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	// Create a table with NOT NULL and PRIMARY KEY constraints
+	createTableBody := `{"database":"testdb","query":"CREATE TABLE constrained (id INT PRIMARY KEY, name TEXT NOT NULL, value FLOAT);"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(createTableBody))
+	srv.apiMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create table failed: %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Insert an initial row for duplicate key test
+	insertBody := `{"database":"testdb","query":"INSERT INTO constrained (id, name, value) VALUES (1, 'apple', 1.5);"}`
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(insertBody))
+	srv.apiMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initial insert failed: %d: %s", rec.Code, rec.Body.String())
+	}
+
+	tests := []struct {
+		name     string
+		query    string
+		wantCode int
+		wantMsg  string
+	}{
+		{
+			name:     "NOT NULL violation",
+			query:    "INSERT INTO constrained (id, name, value) VALUES (100, NULL, 1.0);",
+			wantCode: errCodeNotNullViolation,
+			wantMsg:  "NOT NULL constraint failed",
+		},
+		{
+			name:     "type mismatch",
+			query:    "INSERT INTO constrained (id, name, value) VALUES ('not_a_number', 'test', 1.0);",
+			wantCode: errCodeTypeMismatch,
+			wantMsg:  "cannot parse",
+		},
+		{
+			name:     "table not found",
+			query:    "SELECT * FROM nonexistent;",
+			wantCode: errCodeTableNotFound,
+			wantMsg:  "does not exist",
+		},
+		{
+			name:     "duplicate primary key",
+			query:    "INSERT INTO constrained (id, name, value) VALUES (1, 'apple', 1.5);",
+			wantCode: errCodeDuplicateValue,
+			wantMsg:  "duplicate primary key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := `{"database":"testdb","query":"` + tt.query + `"}`
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+			srv.apiMux().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+
+			var res map[string]interface{}
+			if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+				t.Fatal(err)
+			}
+
+			if res["error_code"] != float64(tt.wantCode) {
+				t.Errorf("error_code = %v, want %v", res["error_code"], tt.wantCode)
+			}
+
+			msg, ok := res["message"].(string)
+			if !ok || !strings.Contains(msg, tt.wantMsg) {
+				t.Errorf("message = %v, want containing %q", res["message"], tt.wantMsg)
+			}
+		})
+	}
+}
+
+func TestClassifyError(t *testing.T) {
+	tests := []struct {
+		name     string
+		msg      string
+		wantCode int
+	}{
+		{"NOT NULL", "NOT NULL constraint failed for column 'name'", errCodeNotNullViolation},
+		{"type mismatch int", "cannot convert 'abc' to INT", errCodeTypeMismatch},
+		{"type mismatch float", "cannot convert 'xyz' to FLOAT", errCodeTypeMismatch},
+		{"type mismatch parse", "cannot parse string as INT: \"abc\"", errCodeTypeMismatch},
+		{"invalid ENUM", "invalid ENUM value 'x' for column 'status'", errCodeTypeMismatch},
+		{"table not found", "table 'items' does not exist", errCodeTableNotFound},
+		{"database not found", "database 'testdb' does not exist", errCodeDatabaseNotFound},
+		{"duplicate PK", "duplicate primary key value: 1", errCodeDuplicateValue},
+		{"already exists", "table 'items' already exists", errCodeDuplicateValue},
+		{"CHECK constraint", "CHECK constraint 'positive_val' violated", errCodeCheckConstraint},
+		{"foreign key", "foreign key constraint 'fk_dept' violated", errCodeForeignKey},
+		{"query timeout", "query timeout: context deadline exceeded", errCodeQueryTimeout},
+		{"unknown error", "some other error", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := fmt.Errorf("%s", tt.msg)
+			got := classifyError(err)
+			if got != tt.wantCode {
+				t.Errorf("classifyError(%q) = %d, want %d", tt.msg, got, tt.wantCode)
+			}
+		})
 	}
 }
