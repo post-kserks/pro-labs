@@ -2579,3 +2579,34 @@ func TestParseWithoutSemicolon(t *testing.T) {
 		})
 	}
 }
+
+func TestParseMultilineSQL(t *testing.T) {
+	query := "SELECT\n\tid,\n\tname\nFROM\n\theroes\nWHERE\n\tlevel > 5\n;"
+	stmt, err := Parse(query)
+	if err != nil {
+		t.Fatalf("Parse(%q) returned error: %v", query, err)
+	}
+	sel, ok := stmt.(*SelectStatement)
+	if !ok {
+		t.Fatalf("expected *SelectStatement, got %T", stmt)
+	}
+	if sel.TableName != "heroes" {
+		t.Fatalf("unexpected table name: %s", sel.TableName)
+	}
+}
+
+func TestNormalizeWhitespace(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"SELECT\nFROM\nheroes;", "SELECT FROM heroes;"},
+		{"SELECT\t*\tFROM\theroes;", "SELECT * FROM heroes;"},
+		{"SELECT  *   FROM\n\theroes;", "SELECT * FROM heroes;"},
+	}
+	for _, tt := range tests {
+		got := normalizeWhitespace(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeWhitespace(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}

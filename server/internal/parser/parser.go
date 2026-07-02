@@ -213,6 +213,14 @@ func formatValueSQL(v Value) string {
 	}
 }
 
+func normalizeWhitespace(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	return s
+}
+
 func parse(sql string) (Statement, error) {
 	const maxInputSize = 10 * 1024 * 1024 // 10MB
 	if len(sql) > maxInputSize {
@@ -222,6 +230,7 @@ func parse(sql string) (Statement, error) {
 	if sql == "" {
 		return nil, fmt.Errorf("syntax error: empty query")
 	}
+	sql = normalizeWhitespace(sql)
 	if !strings.HasSuffix(sql, ";") {
 		sql = sql + ";"
 	}
