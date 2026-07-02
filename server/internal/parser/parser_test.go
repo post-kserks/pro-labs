@@ -88,7 +88,6 @@ func TestParseTimeTravelShape(t *testing.T) {
 func TestParseErrors(t *testing.T) {
 	cases := []string{
 		"",
-		"SELECT * FROM heroes",
 		"CREATE TABLE heroes (id DOUBLE);",
 		"INSERT INTO heroes VALUES ();",
 	}
@@ -931,7 +930,6 @@ func TestParserErrorSanitization(t *testing.T) {
 		input string
 	}{
 		{"empty query", ""},
-		{"missing semicolon", "SELECT * FROM heroes"},
 		{"illegal token", "SELECT @@invalid FROM t;"},
 		{"bad syntax", "SELECT * FROM heroes WHERE;"},
 		{"unexpected token after semicolon", "SELECT 1; SELECT 2;"},
@@ -2553,5 +2551,31 @@ func TestLimitWithParamRef(t *testing.T) {
 	}
 	if param2.Index != 2 {
 		t.Fatalf("expected param index 2 for offset, got %d", param2.Index)
+	}
+}
+
+func TestParseWithoutSemicolon(t *testing.T) {
+	queries := []string{
+		"SELECT 1",
+		"SELECT * FROM heroes",
+		"INSERT INTO heroes VALUES (1, 'test')",
+		"UPDATE heroes SET level = 10 WHERE id = 1",
+		"DELETE FROM heroes WHERE id = 1",
+		"CREATE TABLE test (id INT)",
+		"DROP TABLE test",
+		"SHOW DATABASES",
+	}
+
+	for _, query := range queries {
+		query := query
+		t.Run(query, func(t *testing.T) {
+			stmt, err := Parse(query)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", query, err)
+			}
+			if stmt == nil {
+				t.Fatal("expected non-nil statement")
+			}
+		})
 	}
 }

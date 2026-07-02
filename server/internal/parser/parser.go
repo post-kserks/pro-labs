@@ -218,8 +218,12 @@ func parse(sql string) (Statement, error) {
 	if len(sql) > maxInputSize {
 		return nil, fmt.Errorf("query too large (%d bytes, max 10MB)", len(sql))
 	}
-	if strings.TrimSpace(sql) == "" {
+	sql = strings.TrimSpace(sql)
+	if sql == "" {
 		return nil, fmt.Errorf("syntax error: empty query")
+	}
+	if !strings.HasSuffix(sql, ";") {
+		sql = sql + ";"
 	}
 
 	l := lexer.New(sql)
