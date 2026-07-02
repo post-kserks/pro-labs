@@ -57,6 +57,48 @@ func TestEvalLikeNulls(t *testing.T) {
 	}
 }
 
+func TestEvalILike(t *testing.T) {
+	cases := []struct {
+		text, pattern string
+		want          bool
+	}{
+		{"Hello", "hello", true},
+		{"HELLO", "%ello", true},
+		{"HeLLo", "h%o", true},
+		{"hello", "WORLD", false},
+		{"", "%", true},
+		{"Hello World", "%world", true},
+		{"Hello World", "%WORLD", true},
+		{"abc", "A%C", true},
+		{"ABC", "%b%", true},
+		{"Hello", "h_llo", true},
+		{"HELLO", "H_LLO", true},
+		{"HELLO", "h_llo", true},
+		{"hello", "HELLO", true},
+		{"Hello", "hello", true},
+		{"hElLo", "%El%", true},
+	}
+
+	for _, c := range cases {
+		got, err := evalILike(c.text, c.pattern)
+		if err != nil {
+			t.Fatalf("evalILike(%q, %q): %v", c.text, c.pattern, err)
+		}
+		if got != c.want {
+			t.Errorf("evalILike(%q, %q) = %v, want %v", c.text, c.pattern, got, c.want)
+		}
+	}
+}
+
+func TestEvalILikeNulls(t *testing.T) {
+	if got, _ := evalILike(nil, "%"); got {
+		t.Error("NULL ILIKE '%' must be false")
+	}
+	if got, _ := evalILike("x", nil); got {
+		t.Error("'x' ILIKE NULL must be false")
+	}
+}
+
 func TestLikeCacheEviction(t *testing.T) {
 	c := newLikePatternCache(2)
 	for i := 0; i < 5; i++ {

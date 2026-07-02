@@ -77,6 +77,7 @@ const (
 	TOKEN_IN
 	TOKEN_IS
 	TOKEN_LIKE
+	TOKEN_ILIKE
 	TOKEN_SEMANTIC_MATCH
 	TOKEN_FTS_MATCH
 	TOKEN_ALTER
@@ -569,6 +570,7 @@ var keywords = map[string]TokenType{
 	"IN":             TOKEN_IN,
 	"IS":             TOKEN_IS,
 	"LIKE":           TOKEN_LIKE,
+	"ILIKE":          TOKEN_ILIKE,
 	"SEMANTIC_MATCH": TOKEN_SEMANTIC_MATCH,
 	"FTS_MATCH":      TOKEN_FTS_MATCH,
 	"ALTER":          TOKEN_ALTER,
@@ -718,6 +720,7 @@ var tokenNames = [...]string{
 	TOKEN_IN:                "IN",
 	TOKEN_IS:                "IS",
 	TOKEN_LIKE:              "LIKE",
+	TOKEN_ILIKE:             "ILIKE",
 	TOKEN_FOR:               "FOR",
 	TOKEN_USING:             "USING",
 	TOKEN_SEMANTIC_MATCH:    "SEMANTIC_MATCH",

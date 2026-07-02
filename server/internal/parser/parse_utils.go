@@ -103,6 +103,13 @@ func (p *sqlParser) parseComparison() (Expression, error) {
 			return nil, err
 		}
 		return &BinaryExpr{Left: left, Operator: "LIKE", Right: right}, nil
+	case lexer.TOKEN_ILIKE:
+		p.advance()
+		right, err := p.parseAddition()
+		if err != nil {
+			return nil, err
+		}
+		return &BinaryExpr{Left: left, Operator: "ILIKE", Right: right}, nil
 	case lexer.TOKEN_IN:
 		p.advance()
 		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
@@ -185,6 +192,15 @@ func (p *sqlParser) parseComparison() (Expression, error) {
 				return nil, err
 			}
 			return &NotExpr{Expr: &BinaryExpr{Left: left, Operator: "LIKE", Right: right}}, nil
+		}
+		if p.peek().Type == lexer.TOKEN_ILIKE {
+			p.advance() // NOT
+			p.advance() // ILIKE
+			right, err := p.parseAddition()
+			if err != nil {
+				return nil, err
+			}
+			return &NotExpr{Expr: &BinaryExpr{Left: left, Operator: "ILIKE", Right: right}}, nil
 		}
 		if p.peek().Type == lexer.TOKEN_EXISTS {
 			p.advance() // NOT

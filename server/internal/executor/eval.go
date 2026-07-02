@@ -40,6 +40,8 @@ func evalBinary(expr *parser.BinaryExpr, row storage.Row, schema *storage.TableS
 		return evalArithmetic(left, right, expr.Operator)
 	case "LIKE":
 		return evalLike(left, right)
+	case "ILIKE":
+		return evalILike(left, right)
 	case "IS":
 		return left == nil, nil
 	case "IS NOT":

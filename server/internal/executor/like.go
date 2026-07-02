@@ -166,3 +166,25 @@ func evalLike(left, right interface{}) (bool, error) {
 	}
 	return cp.match(text), nil
 }
+
+// evalILike implements SQL ILIKE: case-insensitive pattern matching.
+// Same as evalLike but converts both operands to lowercase before matching.
+func evalILike(left, right interface{}) (bool, error) {
+	if left == nil || right == nil {
+		return false, nil
+	}
+	pattern, ok := right.(string)
+	if !ok {
+		return false, fmt.Errorf("ILIKE pattern must be a string, got %T", right)
+	}
+	text, ok := left.(string)
+	if !ok {
+		text = valueToString(left)
+	}
+
+	cp, err := likeCache.getOrCompile(strings.ToLower(pattern))
+	if err != nil {
+		return false, err
+	}
+	return cp.match(strings.ToLower(text)), nil
+}
