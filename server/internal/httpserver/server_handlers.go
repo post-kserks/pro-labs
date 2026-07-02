@@ -33,14 +33,14 @@ type BatchRequest struct {
 }
 
 type BatchResponseResult struct {
-	Status     string     `json:"status"`
-	Type       string     `json:"type"`
-	Columns    []string   `json:"columns"`
-	Rows       [][]string `json:"rows"`
-	Affected   int        `json:"affected"`
-	DurationMs float64    `json:"duration_ms"`
-	Message    string     `json:"message,omitempty"`
-	Error      string     `json:"error,omitempty"`
+	Status     string           `json:"status"`
+	Type       string           `json:"type"`
+	Columns    []string         `json:"columns"`
+	Rows       [][]interface{} `json:"rows"`
+	Affected   int              `json:"affected"`
+	DurationMs float64          `json:"duration_ms"`
+	Message    string           `json:"message,omitempty"`
+	Error      string           `json:"error,omitempty"`
 }
 
 func (s *Server) newSession() *executor.Session {
@@ -120,7 +120,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		"status":      "ok",
 		"type":        result.Type,
 		"columns":     emptyIfNil(result.Columns),
-		"rows":        emptyRowsIfNil(result.Rows),
+		"rows":        convertRows(result.Rows, result.Schema),
 		"affected":    result.Affected,
 		"duration_ms": duration,
 	}
@@ -183,7 +183,7 @@ func (s *Server) handleTransaction(w http.ResponseWriter, r *http.Request) {
 		"status":      "ok",
 		"type":        result.Type,
 		"columns":     emptyIfNil(result.Columns),
-		"rows":        emptyRowsIfNil(result.Rows),
+		"rows":        convertRows(result.Rows, result.Schema),
 		"affected":    result.Affected,
 		"duration_ms": duration,
 	}
@@ -268,7 +268,7 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 			Status:     "ok",
 			Type:       result.Type,
 			Columns:    emptyIfNil(result.Columns),
-			Rows:       emptyRowsIfNil(result.Rows),
+			Rows:       convertRows(result.Rows, result.Schema),
 			Affected:   result.Affected,
 			DurationMs: duration,
 			Message:    result.Message,
@@ -880,6 +880,54 @@ func parseHTTPRowValue(v interface{}) storage.Value {
 func isNumeric(s string) bool {
 	_, err := strconv.ParseFloat(s, 64)
 	return err == nil
+}
+
+func convertRowValue(value string, colType string) interface{} {
+	if value == "" {
+		return nil
+	}
+	switch strings.ToUpper(colType) {
+	case "INT", "BIGINT", "INTEGER":
+		if v, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return v
+		}
+	case "FLOAT", "NUMERIC", "DOUBLE", "REAL", "DECIMAL":
+		if v, err := strconv.ParseFloat(value, 64); err == nil {
+			return v
+		}
+	case "BOOL", "BOOLEAN":
+		switch strings.ToLower(value) {
+		case "true", "t", "1", "yes":
+			return true
+		case "false", "f", "0", "no":
+			return false
+		}
+	case "JSONB", "JSON":
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(value), &parsed); err == nil {
+			return parsed
+		}
+	}
+	return value
+}
+
+func convertRows(rows [][]string, schema *storage.TableSchema) [][]interface{} {
+	if rows == nil {
+		return [][]interface{}{}
+	}
+	result := make([][]interface{}, len(rows))
+	for i, row := range rows {
+		converted := make([]interface{}, len(row))
+		for j, val := range row {
+			if schema != nil && j < len(schema.Columns) {
+				converted[j] = convertRowValue(val, schema.Columns[j].Type)
+			} else {
+				converted[j] = val
+			}
+		}
+		result[i] = converted
+	}
+	return result
 }
 
 func applyParams(query string, params []string) string {

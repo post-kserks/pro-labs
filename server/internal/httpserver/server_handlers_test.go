@@ -1181,6 +1181,106 @@ func TestQueryWithNullValues(t *testing.T) {
 	}
 }
 
+func TestQueryCountReturnsNumber(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	body := `{"database":"testdb","query":"SELECT COUNT(*) AS cnt FROM items;"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := res["rows"].([]interface{})
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+
+	row := rows[0].([]interface{})
+	if len(row) != 1 {
+		t.Fatalf("expected 1 column in row, got %d", len(row))
+	}
+
+	// COUNT(*) should be a number, not a string
+	val := row[0]
+	switch v := val.(type) {
+	case float64:
+		if v != 3.0 {
+			t.Fatalf("COUNT(*) = %v, want 3", v)
+		}
+	case int64:
+		if v != 3 {
+			t.Fatalf("COUNT(*) = %v, want 3", v)
+		}
+	default:
+		t.Fatalf("COUNT(*) should be a number, got %T (%v)", val, val)
+	}
+}
+
+func TestQueryBoolReturnsBoolean(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	// Create a table with BOOL column
+	createBody := `{"database":"testdb","query":"CREATE TABLE booltest (id INT, active BOOL);"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(createBody))
+	srv.apiMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create: status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Insert rows with BOOL values
+	insertBody := `{"database":"testdb","query":"INSERT INTO booltest (id, active) VALUES (1, true), (2, false);"}`
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(insertBody))
+	srv.apiMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("insert: status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Query the rows
+	selectBody := `{"database":"testdb","query":"SELECT * FROM booltest;"}`
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(selectBody))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("select: status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := res["rows"].([]interface{})
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+
+	// First row: id=1, active=true
+	row0 := rows[0].([]interface{})
+	if row0[0] != float64(1) && row0[0] != int64(1) {
+		t.Fatalf("first row id should be number, got %T (%v)", row0[0], row0[0])
+	}
+	if row0[1] != true {
+		t.Fatalf("first row active should be true, got %T (%v)", row0[1], row0[1])
+	}
+
+	// Second row: id=2, active=false
+	row1 := rows[1].([]interface{})
+	if row1[1] != false {
+		t.Fatalf("second row active should be false, got %T (%v)", row1[1], row1[1])
+	}
+}
+
 func TestStreamingLargeResult(t *testing.T) {
 	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
 

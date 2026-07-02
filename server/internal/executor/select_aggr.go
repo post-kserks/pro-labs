@@ -337,10 +337,23 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 
 	resultRows = c.orderAndPageGrouped(resultRows, projectColumns)
 
+	resultSchema := &storage.TableSchema{
+		Name:    c.stmt.TableName,
+		Columns: make([]storage.ColumnSchema, len(c.stmt.Columns)),
+	}
+	for i, col := range c.stmt.Columns {
+		colType := inferTypeFromExpr(col.Expr, schema)
+		resultSchema.Columns[i] = storage.ColumnSchema{
+			Name: projectColumns[i],
+			Type: colType,
+		}
+	}
+
 	return &Result{
 		Type:     "rows",
 		Columns:  projectColumns,
 		Rows:     resultRows,
+		Schema:   resultSchema,
 		AsOfNote: asOfNote,
 	}, nil
 }

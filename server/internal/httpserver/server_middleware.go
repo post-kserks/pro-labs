@@ -171,13 +171,6 @@ func emptyIfNil(columns []string) []string {
 	return columns
 }
 
-func emptyRowsIfNil(rows [][]string) [][]string {
-	if rows == nil {
-		return [][]string{}
-	}
-	return rows
-}
-
 func extractHealthToken(r *http.Request) string {
 	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimPrefix(auth, "Bearer ")
