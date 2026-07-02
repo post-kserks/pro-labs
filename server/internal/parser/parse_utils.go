@@ -346,6 +346,15 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 		return p.parseCast()
 	case lexer.TOKEN_CASE:
 		return p.parseCase()
+	case lexer.TOKEN_UUID:
+		p.advance()
+		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+			return nil, err
+		}
+		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+			return nil, err
+		}
+		return &FunctionCall{Name: "UUID", Args: nil}, nil
 	case lexer.TOKEN_LEFT:
 		// LEFT(str, n) function
 		p.advance()

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -542,4 +543,33 @@ func BenchmarkResolveColumnCached(b *testing.B) {
 			resolveColumn(row, schema, "val", nil)
 		}
 	})
+}
+
+func TestFnUuid(t *testing.T) {
+	session := mockSetupSession(t)
+	uuidRe := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+	// Basic format test
+	res := executeSQL(t, session, "SELECT UUID() FROM t WHERE id = 1;")
+	if len(res.Rows) != 1 || len(res.Rows[0]) != 1 {
+		t.Fatalf("expected 1 row with 1 column, got %v", res.Rows)
+	}
+	got := res.Rows[0][0]
+	if !uuidRe.MatchString(got) {
+		t.Fatalf("UUID() returned invalid format: %q", got)
+	}
+
+	// Verify uniqueness: call UUID() multiple times and check all results are unique
+	res1 := executeSQL(t, session, "SELECT UUID() FROM t WHERE id = 1;")
+	res2 := executeSQL(t, session, "SELECT UUID() FROM t WHERE id = 2;")
+	res3 := executeSQL(t, session, "SELECT UUID() FROM t WHERE id = 3;")
+	u1, u2, u3 := res1.Rows[0][0], res2.Rows[0][0], res3.Rows[0][0]
+	for _, u := range []string{u1, u2, u3} {
+		if !uuidRe.MatchString(u) {
+			t.Fatalf("UUID() returned invalid format: %q", u)
+		}
+	}
+	if u1 == u2 || u1 == u3 || u2 == u3 {
+		t.Fatalf("expected unique UUIDs, got: %s, %s, %s", u1, u2, u3)
+	}
 }
