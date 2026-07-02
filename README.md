@@ -102,9 +102,9 @@ curl -X POST http://localhost:8080/api/query \
 
 - **DML**: INSERT, UPDATE, DELETE, UPSERT (ON CONFLICT), MERGE, TRUNCATE
 - **DQL**: SELECT с JOIN, CTE (включая recursive), window functions, подзапросы
-- **DDL**: CREATE/DROP DATABASE/TABLE/INDEX, ALTER TABLE
-- **Типы данных**: INT, FLOAT, BOOL, TEXT, VARCHAR, JSONB, VECTOR
-- **Операторы**: арифметика, сравнение, JSONB (->, ->>, @>, <@), LIKE
+- **DDL**: CREATE/DROP DATABASE/TABLE/INDEX, ALTER TABLE, IF EXISTS/IF NOT EXISTS, GENERATED ALWAYS AS IDENTITY, GENERATED ALWAYS AS (вычисляемые колонки), SERIAL
+- **Типы данных**: INT, BIGINT, FLOAT, BOOL, TEXT, VARCHAR, NUMERIC(p,s), JSONB, VECTOR, TIMESTAMPTZ
+- **Операторы**: арифметика, сравнение, JSONB (->, ->>, @>, <@), LIKE, ILIKE
 
 ### Транзакции
 
@@ -114,6 +114,8 @@ BEGIN;
   UPDATE accounts SET val = val - 100 WHERE id = 1;
 COMMIT;
 ```
+
+HTTP API также поддерживает транзакции через отслеживание сессий.
 
 ### Time Travel
 

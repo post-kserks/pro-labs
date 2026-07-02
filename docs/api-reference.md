@@ -36,7 +36,8 @@ Execute a single SQL statement.
 {
   "database": "mydb",
   "query": "SELECT * FROM users WHERE age > 25;",
-  "params": ["param1", "param2"]
+  "params": ["param1", "param2"],
+  "session_id": "optional-session-id"
 }
 ```
 
@@ -45,6 +46,7 @@ Execute a single SQL statement.
 | `database` | string | Yes | Database name (use `""` for DDL like CREATE DATABASE) |
 | `query` | string | Yes | SQL statement |
 | `params` | array | No | Positional parameters for `$1`, `$2`, ... |
+| `session_id` | string | No | Session ID for transaction support. Omit for stateless requests. |
 
 ### Response (SELECT)
 
@@ -54,11 +56,12 @@ Execute a single SQL statement.
   "type": "select",
   "columns": ["id", "name", "age"],
   "rows": [
-    ["1", "Alice", "30"],
-    ["2", "Bob", "25"]
+    [1, "Alice", 30],
+    [2, "Bob", 25]
   ],
   "affected": 0,
-  "duration_ms": 1.23
+  "duration_ms": 1.23,
+  "session_id": "session-id-if-used"
 }
 ```
 
@@ -94,8 +97,12 @@ Execute a single SQL statement.
 | 3004 | Storage error |
 | 3005 | Transaction unsupported over HTTP |
 | 3006 | Rate limited |
-| 5000 | Internal error |
-| 9999 | Not implemented |
+| 3007 | Not found |
+| 3008 | Already exists |
+| 3009 | Permission denied |
+| 3010 | Timeout |
+| 3011 | Not supported |
+| 3012 | Internal error |
 
 ---
 
@@ -129,7 +136,7 @@ data: {"affected":0,"duration_ms":1.5}
 
 ## POST /api/transaction
 
-Execute transaction control commands (stateless per call).
+Execute transaction control commands.
 
 ### Request
 
@@ -141,6 +148,24 @@ Execute transaction control commands (stateless per call).
 ```
 
 **Actions**: `begin`, `commit`, `rollback`
+
+### Session-based Transactions
+
+For multi-statement transactions over HTTP, use the `session_id` field in `/api/query`:
+
+```json
+// Step 1: Begin transaction
+{"database": "mydb", "query": "BEGIN", "session_id": "sess-123"}
+
+// Step 2: Execute queries in the same session
+{"database": "mydb", "query": "INSERT INTO users VALUES (1, 'Alice')", "session_id": "sess-123"}
+{"database": "mydb", "query": "UPDATE accounts SET balance = balance - 100", "session_id": "sess-123"}
+
+// Step 3: Commit
+{"database": "mydb", "query": "COMMIT", "session_id": "sess-123"}
+```
+
+Sessions expire after 5 minutes of inactivity.
 
 ---
 

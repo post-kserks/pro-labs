@@ -75,17 +75,24 @@ ROLLBACK TO SAVEPOINT sp1;  -- sp2 is also removed
 COMMIT;
 ```
 
-## Transaction over HTTP
+## HTTP Transaction Support
 
-The HTTP API does not support multi-statement transactions. Each HTTP request is a single auto-committed statement. Use the TCP protocol for transactional work.
+HTTP API now supports multi-statement transactions via session tracking:
+
+1. Include a `session_id` field in your requests
+2. Execute `BEGIN` to start a transaction
+3. Execute subsequent queries with the same `session_id`
+4. Execute `COMMIT` or `ROLLBACK` to end the transaction
 
 ```json
-POST /api/transaction
-{
-  "action": "begin",
-  "database": "mydb"
-}
+{"database": "mydb", "query": "BEGIN", "session_id": "sess-123"}
+{"database": "mydb", "query": "INSERT INTO users VALUES (1, 'Alice')", "session_id": "sess-123"}
+{"database": "mydb", "query": "COMMIT", "session_id": "sess-123"}
 ```
+
+Sessions expire after 5 minutes of inactivity. If a session expires, any active transaction is automatically rolled back.
+
+**Without session_id:** Requests are auto-committed (stateless mode, previous behavior).
 
 ## Transaction over TCP
 
