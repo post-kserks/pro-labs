@@ -122,6 +122,9 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 
 	for i, row := range rowsToInsert {
 		for j, col := range schema.Columns {
+			if col.NotNull && j < len(row) && row[j] == nil {
+				return nil, fmt.Errorf("NOT NULL constraint failed for column '%s'", col.Name)
+			}
 			if col.Type == "ENUM" && len(col.EnumValues) > 0 && j < len(row) && row[j] != nil {
 				val := valueToString(row[j])
 				valid := false
@@ -343,7 +346,7 @@ func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string
 	}
 
 	rowsToInsert := make([]storage.Row, 0, len(res.Rows))
-	for _, row := range res.Rows {
+	for ri, row := range res.Rows {
 		storageRow := make(storage.Row, len(schema.Columns))
 		for i := range schema.Columns {
 			if i < len(row) {
@@ -352,6 +355,11 @@ func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string
 					return nil, fmt.Errorf("INSERT ... SELECT: column '%s': %w", schema.Columns[i].Name, err)
 				}
 				storageRow[i] = val
+			}
+		}
+		for j, col := range schema.Columns {
+			if col.NotNull && j < len(storageRow) && storageRow[j] == nil {
+				return nil, fmt.Errorf("INSERT ... SELECT: NOT NULL constraint failed for column '%s' in row %d", col.Name, ri)
 			}
 		}
 		rowsToInsert = append(rowsToInsert, storageRow)

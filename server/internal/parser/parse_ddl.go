@@ -545,6 +545,12 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 		col.DataType = "ENUM"
 	}
 
+	if p.current().Type == lexer.TOKEN_NOT && p.peek().Type == lexer.TOKEN_NULL {
+		p.advance() // NOT
+		p.advance() // NULL
+		col.NotNull = true
+	}
+
 	if p.current().Type == lexer.TOKEN_DEFAULT {
 		p.advance()
 		expr, err := p.parseExpression()
@@ -584,6 +590,12 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 	if p.current().Type == lexer.TOKEN_AUTO_INCREMENT {
 		p.advance()
 		col.AutoIncrement = true
+	}
+
+	if p.current().Type == lexer.TOKEN_NOT && p.peek().Type == lexer.TOKEN_NULL {
+		p.advance() // NOT
+		p.advance() // NULL
+		col.NotNull = true
 	}
 
 	return col, nil

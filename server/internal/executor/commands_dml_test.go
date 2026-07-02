@@ -306,3 +306,49 @@ func TestTruncateConcurrentInsertAtomicity(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateTableWithNotNull(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE nn_test (id INT NOT NULL, name VARCHAR(100), age INT);")
+
+	// Verify the table was created
+	result := executeSQL(t, session, "SELECT * FROM nn_test;")
+	if result.Type != "rows" {
+		t.Fatalf("expected rows result, got %s", result.Type)
+	}
+}
+
+func TestInsertNullIntoNotNullColumn(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE nn_test (id INT NOT NULL, name VARCHAR(100), age INT);")
+
+	// Inserting NULL into a NOT NULL column should fail
+	executeSQLExpectError(t, session, "INSERT INTO nn_test (id, name) VALUES (NULL, 'Alice');")
+
+	// Inserting a valid value should succeed
+	executeSQL(t, session, "INSERT INTO nn_test (id, name) VALUES (1, 'Alice');")
+
+	// Inserting NULL into a nullable column should succeed
+	executeSQL(t, session, "INSERT INTO nn_test (id, name, age) VALUES (2, 'Bob', NULL);")
+}
+
+func TestUpdateNullIntoNotNullColumn(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE nn_test (id INT NOT NULL, name VARCHAR(100), age INT);")
+	executeSQL(t, session, "INSERT INTO nn_test (id, name, age) VALUES (1, 'Alice', 30);")
+
+	// Updating a NOT NULL column to NULL should fail
+	executeSQLExpectError(t, session, "UPDATE nn_test SET id = NULL WHERE id = 1;")
+
+	// Updating a nullable column to NULL should succeed
+	executeSQL(t, session, "UPDATE nn_test SET age = NULL WHERE id = 1;")
+
+	// Verify the update worked
+	result := executeSQL(t, session, "SELECT age FROM nn_test WHERE id = 1;")
+	if result.Rows[0][0] != "" {
+		t.Fatalf("expected NULL age, got %q", result.Rows[0][0])
+	}
+}

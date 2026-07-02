@@ -2610,3 +2610,58 @@ func TestNormalizeWhitespace(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCreateTableWithNotNull(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		wantNN   []bool // expected NotNull per column
+	}{
+		{
+			name:   "single NOT NULL column",
+			sql:    "CREATE TABLE t (id INT NOT NULL, name VARCHAR(100));",
+			wantNN: []bool{true, false},
+		},
+		{
+			name:   "multiple NOT NULL columns",
+			sql:    "CREATE TABLE t (id INT NOT NULL, name VARCHAR(100) NOT NULL, age INT);",
+			wantNN: []bool{true, true, false},
+		},
+		{
+			name:   "NOT NULL with DEFAULT",
+			sql:    "CREATE TABLE t (id INT NOT NULL DEFAULT 1, name VARCHAR(100));",
+			wantNN: []bool{true, false},
+		},
+		{
+			name:   "NOT NULL with PRIMARY KEY",
+			sql:    "CREATE TABLE t (id INT PRIMARY KEY NOT NULL, name VARCHAR(100));",
+			wantNN: []bool{true, false},
+		},
+		{
+			name:   "no NOT NULL",
+			sql:    "CREATE TABLE t (id INT, name VARCHAR(100));",
+			wantNN: []bool{false, false},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := Parse(tt.sql)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tt.sql, err)
+			}
+			create, ok := stmt.(*CreateTableStatement)
+			if !ok {
+				t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+			}
+			if len(create.Columns) != len(tt.wantNN) {
+				t.Fatalf("expected %d columns, got %d", len(tt.wantNN), len(create.Columns))
+			}
+			for i, want := range tt.wantNN {
+				if create.Columns[i].NotNull != want {
+					t.Errorf("column %d (%s): NotNull = %v, want %v", i, create.Columns[i].Name, create.Columns[i].NotNull, want)
+				}
+			}
+		})
+	}
+}

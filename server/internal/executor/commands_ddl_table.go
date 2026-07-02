@@ -32,6 +32,7 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			VarcharLen:    column.VarcharLen,
 			IsComputed:    column.Computed != nil,
 			PrimaryKey:    column.PrimaryKey,
+			NotNull:       column.NotNull,
 			EnumValues:    column.EnumValues,
 			AutoIncrement: column.AutoIncrement,
 		})
@@ -235,10 +236,14 @@ func (c *DescribeTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	rows := make([][]string, 0, len(schema.Columns))
 	for _, column := range schema.Columns {
+		nullable := "YES"
+		if column.NotNull {
+			nullable = "NO"
+		}
 		rows = append(rows, []string{
 			column.Name,
 			formatColumnType(column),
-			"YES",
+			nullable,
 			createdAt,
 		})
 	}

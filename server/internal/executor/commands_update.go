@@ -248,6 +248,11 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 				}
 			}
 		}
+		for ci, col := range schema.Columns {
+			if col.NotNull && ci < len(newRow) && newRow[ci] == nil {
+				return nil, fmt.Errorf("NOT NULL constraint failed for column '%s'", col.Name)
+			}
+		}
 		if err := enforceCheckConstraints(schema, newRow); err != nil {
 			return nil, fmt.Errorf("row %d: %w", indices[i], err)
 		}
