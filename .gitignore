@@ -57,3 +57,8 @@ task.md
 .mimocode/
 docs/compose/
 .playwright-mcp/
+
+# Build artifacts
+dist/
+*.min.js
+*.min.css
