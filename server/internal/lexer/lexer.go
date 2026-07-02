@@ -165,6 +165,7 @@ const (
 	TOKEN_NUMERIC
 	TOKEN_TIMESTAMPTZ
 	TOKEN_SERIAL
+	TOKEN_IDENTITY
 
 	// Literals and identifiers
 	TOKEN_IDENT
@@ -613,6 +614,7 @@ var keywords = map[string]TokenType{
 	"NUMERIC":        TOKEN_NUMERIC,
 	"TIMESTAMPTZ":    TOKEN_TIMESTAMPTZ,
 	"SERIAL":         TOKEN_SERIAL,
+	"IDENTITY":       TOKEN_IDENTITY,
 	"VACUUM":         TOKEN_VACUUM,
 	"MIGRATION":      TOKEN_MIGRATION,
 	"POLICY":         TOKEN_POLICY,
@@ -764,6 +766,7 @@ var tokenNames = [...]string{
 	TOKEN_NUMERIC:           "NUMERIC",
 	TOKEN_TIMESTAMPTZ:       "TIMESTAMPTZ",
 	TOKEN_SERIAL:            "SERIAL",
+	TOKEN_IDENTITY:          "IDENTITY",
 	TOKEN_VACUUM:            "VACUUM",
 	TOKEN_MIGRATION:         "MIGRATION",
 	TOKEN_POLICY:            "POLICY",

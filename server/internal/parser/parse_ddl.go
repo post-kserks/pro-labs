@@ -595,23 +595,42 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 
 	if p.current().Type == lexer.TOKEN_GENERATED {
 		p.advance() // GENERATED
-		if err := p.consume(lexer.TOKEN_ALWAYS, "ALWAYS"); err != nil {
-			return nil, err
+		if p.current().Type == lexer.TOKEN_ALWAYS {
+			p.advance() // ALWAYS
+			if err := p.consume(lexer.TOKEN_AS, "AS"); err != nil {
+				return nil, err
+			}
+			if p.current().Type == lexer.TOKEN_IDENTITY {
+				p.advance() // IDENTITY
+				col.AutoIncrement = true
+			} else {
+				if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+					return nil, err
+				}
+				expr, err := p.parseExpression()
+				if err != nil {
+					return nil, err
+				}
+				if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+					return nil, err
+				}
+				col.Computed = expr
+			}
+		} else if p.current().Type == lexer.TOKEN_BY {
+			p.advance() // BY
+			if err := p.consume(lexer.TOKEN_DEFAULT, "DEFAULT"); err != nil {
+				return nil, err
+			}
+			if err := p.consume(lexer.TOKEN_AS, "AS"); err != nil {
+				return nil, err
+			}
+			if err := p.consume(lexer.TOKEN_IDENTITY, "IDENTITY"); err != nil {
+				return nil, err
+			}
+			col.AutoIncrement = true
+		} else {
+			return nil, p.expectedError("ALWAYS or BY", p.current())
 		}
-		if err := p.consume(lexer.TOKEN_AS, "AS"); err != nil {
-			return nil, err
-		}
-		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
-			return nil, err
-		}
-		expr, err := p.parseExpression()
-		if err != nil {
-			return nil, err
-		}
-		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
-			return nil, err
-		}
-		col.Computed = expr
 	}
 
 	if p.current().Type == lexer.TOKEN_PRIMARY && p.peek().Type == lexer.TOKEN_KEY {
