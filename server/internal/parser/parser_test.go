@@ -305,6 +305,46 @@ func TestParseInsertWithConflict(t *testing.T) {
 			t.Fatalf("expected assignment column 'name', got %q", ins.OnConflict.Assignments[0].Column)
 		}
 	})
+
+	t.Run("conflict target columns DO UPDATE", func(t *testing.T) {
+		stmt, err := Parse("INSERT INTO t (id, name) VALUES (1, 'test') ON CONFLICT (id) DO UPDATE SET name = 'updated';")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		ins, ok := stmt.(*InsertStatement)
+		if !ok {
+			t.Fatalf("expected *InsertStatement, got %T", stmt)
+		}
+		if ins.OnConflict == nil {
+			t.Fatal("expected OnConflict clause")
+		}
+		if len(ins.OnConflict.Columns) != 1 || ins.OnConflict.Columns[0] != "id" {
+			t.Fatalf("expected conflict columns [id], got %v", ins.OnConflict.Columns)
+		}
+		if ins.OnConflict.Action != "UPDATE" {
+			t.Fatalf("expected action 'UPDATE', got %q", ins.OnConflict.Action)
+		}
+	})
+
+	t.Run("conflict target columns DO NOTHING", func(t *testing.T) {
+		stmt, err := Parse("INSERT INTO t (id, name) VALUES (1, 'a') ON CONFLICT (id, name) DO NOTHING;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		ins, ok := stmt.(*InsertStatement)
+		if !ok {
+			t.Fatalf("expected *InsertStatement, got %T", stmt)
+		}
+		if ins.OnConflict == nil {
+			t.Fatal("expected OnConflict clause")
+		}
+		if len(ins.OnConflict.Columns) != 2 || ins.OnConflict.Columns[0] != "id" || ins.OnConflict.Columns[1] != "name" {
+			t.Fatalf("expected conflict columns [id name], got %v", ins.OnConflict.Columns)
+		}
+		if ins.OnConflict.Action != "NOTHING" {
+			t.Fatalf("expected action 'NOTHING', got %q", ins.OnConflict.Action)
+		}
+	})
 }
 
 func TestParseInsertWithReturning(t *testing.T) {
@@ -3015,6 +3055,74 @@ func TestParseCreateTableWithSerial(t *testing.T) {
 		}
 		if create.Columns[1].DataType != "TEXT" {
 			t.Errorf("second column: DataType=%q, want TEXT", create.Columns[1].DataType)
+		}
+	})
+}
+
+func TestParseCreateTableAutoIncrementBeforePrimaryKey(t *testing.T) {
+	t.Run("INT AUTO_INCREMENT PRIMARY KEY", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE deals (id INT AUTO_INCREMENT PRIMARY KEY);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 1 {
+			t.Fatalf("expected 1 column, got %d", len(create.Columns))
+		}
+		col := create.Columns[0]
+		if col.Name != "id" {
+			t.Errorf("column name = %q, want %q", col.Name, "id")
+		}
+		if col.DataType != "INT" {
+			t.Errorf("DataType = %q, want %q", col.DataType, "INT")
+		}
+		if !col.AutoIncrement {
+			t.Error("expected AutoIncrement to be true")
+		}
+		if !col.PrimaryKey {
+			t.Error("expected PrimaryKey to be true")
+		}
+	})
+
+	t.Run("INT PRIMARY KEY AUTO_INCREMENT (existing order)", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE deals (id INT PRIMARY KEY AUTO_INCREMENT);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		col := create.Columns[0]
+		if !col.AutoIncrement {
+			t.Error("expected AutoIncrement to be true")
+		}
+		if !col.PrimaryKey {
+			t.Error("expected PrimaryKey to be true")
+		}
+	})
+
+	t.Run("deals table with multiple columns", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE deals (id INT AUTO_INCREMENT PRIMARY KEY, name TEXT NOT NULL);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(create.Columns))
+		}
+		col := create.Columns[0]
+		if !col.AutoIncrement || !col.PrimaryKey {
+			t.Errorf("first column: AutoIncrement=%v PrimaryKey=%v", col.AutoIncrement, col.PrimaryKey)
+		}
+		if create.Columns[1].DataType != "TEXT" || !create.Columns[1].NotNull {
+			t.Errorf("second column: DataType=%q NotNull=%v", create.Columns[1].DataType, create.Columns[1].NotNull)
 		}
 	})
 }

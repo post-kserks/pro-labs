@@ -639,12 +639,19 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 		}
 	}
 
+	// Check for AUTO_INCREMENT before PRIMARY KEY (MySQL syntax allows both orderings)
+	if p.current().Type == lexer.TOKEN_AUTO_INCREMENT {
+		p.advance()
+		col.AutoIncrement = true
+	}
+
 	if p.current().Type == lexer.TOKEN_PRIMARY && p.peek().Type == lexer.TOKEN_KEY {
 		p.advance() // PRIMARY
 		p.advance() // KEY
 		col.PrimaryKey = true
 	}
 
+	// Also check for AUTO_INCREMENT after PRIMARY KEY (existing behavior)
 	if p.current().Type == lexer.TOKEN_AUTO_INCREMENT {
 		p.advance()
 		col.AutoIncrement = true
