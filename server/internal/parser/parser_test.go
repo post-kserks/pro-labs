@@ -2666,6 +2666,88 @@ func TestParseCreateTableWithNotNull(t *testing.T) {
 	}
 }
 
+func TestVarcharWithNotNull(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		wantCols []struct {
+			name     string
+			dataType string
+			varchar  int
+			notNull  bool
+		}
+	}{
+		{
+			name: "VARCHAR(100) NOT NULL",
+			sql:  "CREATE TABLE t (name VARCHAR(100) NOT NULL);",
+			wantCols: []struct {
+				name     string
+				dataType string
+				varchar  int
+				notNull  bool
+			}{
+				{name: "name", dataType: "VARCHAR", varchar: 100, notNull: true},
+			},
+		},
+		{
+			name: "VARCHAR(100) NOT NULL DEFAULT ''",
+			sql:  "CREATE TABLE t (name VARCHAR(100) NOT NULL DEFAULT '');",
+			wantCols: []struct {
+				name     string
+				dataType string
+				varchar  int
+				notNull  bool
+			}{
+				{name: "name", dataType: "VARCHAR", varchar: 100, notNull: true},
+			},
+		},
+		{
+			name: "mixed columns with VARCHAR constraints",
+			sql:  "CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(100) NOT NULL, email VARCHAR(255) UNIQUE);",
+			wantCols: []struct {
+				name     string
+				dataType string
+				varchar  int
+				notNull  bool
+			}{
+				{name: "id", dataType: "INT", varchar: 0, notNull: false},
+				{name: "name", dataType: "VARCHAR", varchar: 100, notNull: true},
+				{name: "email", dataType: "VARCHAR", varchar: 255, notNull: false},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := Parse(tt.sql)
+			if err != nil {
+				t.Fatalf("Parse(%q) error: %v", tt.sql, err)
+			}
+			create, ok := stmt.(*CreateTableStatement)
+			if !ok {
+				t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+			}
+			if len(create.Columns) != len(tt.wantCols) {
+				t.Fatalf("expected %d columns, got %d", len(tt.wantCols), len(create.Columns))
+			}
+			for i, wc := range tt.wantCols {
+				col := create.Columns[i]
+				if col.Name != wc.name {
+					t.Errorf("column %d: Name = %q, want %q", i, col.Name, wc.name)
+				}
+				if col.DataType != wc.dataType {
+					t.Errorf("column %d (%s): DataType = %q, want %q", i, col.Name, col.DataType, wc.dataType)
+				}
+				if col.VarcharLen != wc.varchar {
+					t.Errorf("column %d (%s): VarcharLen = %d, want %d", i, col.Name, col.VarcharLen, wc.varchar)
+				}
+				if col.NotNull != wc.notNull {
+					t.Errorf("column %d (%s): NotNull = %v, want %v", i, col.Name, col.NotNull, wc.notNull)
+				}
+			}
+		})
+	}
+}
+
 func TestParseCreateTableWithBigIntNumericTimestampz(t *testing.T) {
 	tests := []struct {
 		name      string

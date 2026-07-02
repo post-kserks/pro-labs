@@ -605,6 +605,11 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 		col.AutoIncrement = true
 	}
 
+	if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "UNIQUE" {
+		p.advance()
+		col.Unique = true
+	}
+
 	if p.current().Type == lexer.TOKEN_NOT && p.peek().Type == lexer.TOKEN_NULL {
 		p.advance() // NOT
 		p.advance() // NULL
