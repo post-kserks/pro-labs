@@ -116,7 +116,7 @@ func TestTableDataUnknownColumn(t *testing.T) {
 	}
 }
 
-func TestQueryRejectsTransactions(t *testing.T) {
+func TestQueryAcceptsTransactions(t *testing.T) {
 	srv := newTestServer(t, mustAuth(t, false, nil))
 
 	rec := httptest.NewRecorder()
@@ -124,11 +124,18 @@ func TestQueryRejectsTransactions(t *testing.T) {
 		strings.NewReader(`{"database":"shop","query":"BEGIN;"}`))
 	srv.apiMux().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("BEGIN over HTTP accepted: status %d body %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("BEGIN over HTTP failed: status %d body %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "transactions") {
-		t.Fatalf("error message not explanatory: %s", rec.Body.String())
+	var res map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res["status"] != "ok" {
+		t.Fatalf("status = %v, want ok", res["status"])
+	}
+	if _, ok := res["session_id"].(string); !ok {
+		t.Fatalf("expected session_id in response")
 	}
 }
 

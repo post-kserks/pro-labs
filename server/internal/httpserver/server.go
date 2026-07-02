@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,6 +54,90 @@ type Server struct {
 	br                  *executor.Broadcaster
 	activeSubscriptions atomic.Int64
 	nextSubID           atomic.Int64
+	sessions            *sessionStore
+}
+
+// sessionStore manages HTTP transaction sessions keyed by session ID.
+type sessionStore struct {
+	mu       sync.Mutex
+	sessions map[string]*httpSessionEntry
+	stopOnce sync.Once
+	stopCh   chan struct{}
+}
+
+type httpSessionEntry struct {
+	session    *executor.Session
+	database   string
+	lastAccess time.Time
+}
+
+const sessionIdleTimeout = 5 * time.Minute
+
+func newSessionStore() *sessionStore {
+	ss := &sessionStore{
+		sessions: make(map[string]*httpSessionEntry),
+		stopCh:   make(chan struct{}),
+	}
+	go ss.cleanupLoop()
+	return ss
+}
+
+func (ss *sessionStore) cleanupLoop() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ss.stopCh:
+			return
+		case <-ticker.C:
+			ss.cleanup()
+		}
+	}
+}
+
+func (ss *sessionStore) cleanup() {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	now := time.Now()
+	for id, entry := range ss.sessions {
+		if now.Sub(entry.lastAccess) > sessionIdleTimeout {
+			entry.session.Close()
+			delete(ss.sessions, id)
+		}
+	}
+}
+
+func (ss *sessionStore) get(id string) *httpSessionEntry {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	entry, ok := ss.sessions[id]
+	if !ok {
+		return nil
+	}
+	entry.lastAccess = time.Now()
+	return entry
+}
+
+func (ss *sessionStore) put(id string, entry *httpSessionEntry) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	ss.sessions[id] = entry
+}
+
+func (ss *sessionStore) remove(id string) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	entry, ok := ss.sessions[id]
+	if ok {
+		entry.session.Close()
+		delete(ss.sessions, id)
+	}
+}
+
+func (ss *sessionStore) stop() {
+	ss.stopOnce.Do(func() {
+		close(ss.stopCh)
+	})
 }
 
 func New(cfg Config) *Server {
@@ -95,6 +180,7 @@ func New(cfg Config) *Server {
 		metrics:   m,
 		txm:       txm,
 		br:        br,
+		sessions:  newSessionStore(),
 	}
 }
 
@@ -170,6 +256,8 @@ func (s *Server) Start(ctx context.Context) error {
 	defer cancel()
 	_ = apiServer.Shutdown(shutdownCtx)
 	_ = monitorServer.Shutdown(shutdownCtx)
+
+	s.sessions.stop()
 
 	return nil
 }

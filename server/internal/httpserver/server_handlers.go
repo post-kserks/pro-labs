@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -66,9 +67,10 @@ func (s *Server) newSession() *executor.Session {
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
 	var req struct {
-		Database string   `json:"database"`
-		Query    string   `json:"query"`
-		Params   []string `json:"params"`
+		Database  string   `json:"database"`
+		Query     string   `json:"query"`
+		Params    []string `json:"params"`
+		SessionID string   `json:"session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		if err.Error() == "http: request body too large" {
@@ -95,26 +97,68 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch stmt.(type) {
-	case *parser.BeginStatement, *parser.CommitStatement, *parser.RollbackStatement:
-		writeError(w, http.StatusBadRequest, errCodeTxUnsupported,
-			"transactions are not supported over the stateless HTTP API; use the TCP client on port 5432")
-		return
-	}
+	_, isTx := stmt.(*parser.BeginStatement)
+	_, isCommit := stmt.(*parser.CommitStatement)
+	_, isRollback := stmt.(*parser.RollbackStatement)
 
-	session := s.newSession()
-	defer session.Close()
-	if req.Database != "" {
-		session.SetCurrentDatabase(req.Database)
+	var session *executor.Session
+	var sessionID string
+	ephemeral := false
+
+	if req.SessionID != "" {
+		entry := s.sessions.get(req.SessionID)
+		if entry == nil {
+			writeError(w, http.StatusBadRequest, errCodeTxUnsupported,
+				"unknown session_id; BEGIN a new transaction first")
+			return
+		}
+		session = entry.session
+		sessionID = req.SessionID
+		if req.Database != "" && req.Database != entry.database {
+			session.SetCurrentDatabase(req.Database)
+		}
+	} else {
+		if isCommit || isRollback {
+			writeError(w, http.StatusBadRequest, errCodeTxUnsupported,
+				"session_id is required for COMMIT/ROLLBACK")
+			return
+		}
+		session = s.newSession()
+		if req.Database != "" {
+			session.SetCurrentDatabase(req.Database)
+		}
+		ephemeral = true
 	}
 
 	start := time.Now()
 	result, err := session.Execute(stmt)
+	duration := time.Since(start).Milliseconds()
+
 	if err != nil {
+		if !ephemeral {
+			s.sessions.remove(sessionID)
+		} else {
+			session.Close()
+		}
 		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
 	}
-	duration := time.Since(start).Milliseconds()
+
+	if isTx {
+		if ephemeral {
+			sessionID = generateSessionID()
+		}
+		entry := &httpSessionEntry{
+			session:    session,
+			database:   req.Database,
+			lastAccess: time.Now(),
+		}
+		s.sessions.put(sessionID, entry)
+	} else if isCommit || isRollback {
+		s.sessions.remove(sessionID)
+	} else if ephemeral {
+		session.Close()
+	}
 
 	response := map[string]interface{}{
 		"status":      "ok",
@@ -123,6 +167,9 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		"rows":        convertRows(result.Rows, result.Schema),
 		"affected":    result.Affected,
 		"duration_ms": duration,
+	}
+	if sessionID != "" {
+		response["session_id"] = sessionID
 	}
 	if result.Message != "" {
 		response["message"] = result.Message
@@ -762,8 +809,9 @@ func (s *Server) handlePostTableData(w http.ResponseWriter, r *http.Request, dbN
 func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
 	var req struct {
-		Database string `json:"database"`
-		Query    string `json:"query"`
+		Database  string `json:"database"`
+		Query     string `json:"query"`
+		SessionID string `json:"session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		if err.Error() == "http: request body too large" {
@@ -786,11 +834,37 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch stmt.(type) {
-	case *parser.BeginStatement, *parser.CommitStatement, *parser.RollbackStatement:
-		writeError(w, http.StatusBadRequest, errCodeTxUnsupported,
-			"transactions are not supported over the stateless HTTP API; use the TCP client on port 5432")
-		return
+	_, isTx := stmt.(*parser.BeginStatement)
+	_, isCommit := stmt.(*parser.CommitStatement)
+	_, isRollback := stmt.(*parser.RollbackStatement)
+
+	var session *executor.Session
+	var sessionID string
+	ephemeral := false
+
+	if req.SessionID != "" {
+		entry := s.sessions.get(req.SessionID)
+		if entry == nil {
+			writeError(w, http.StatusBadRequest, errCodeTxUnsupported,
+				"unknown session_id; BEGIN a new transaction first")
+			return
+		}
+		session = entry.session
+		sessionID = req.SessionID
+		if req.Database != "" && req.Database != entry.database {
+			session.SetCurrentDatabase(req.Database)
+		}
+	} else {
+		if isCommit || isRollback {
+			writeError(w, http.StatusBadRequest, errCodeTxUnsupported,
+				"session_id is required for COMMIT/ROLLBACK")
+			return
+		}
+		session = s.newSession()
+		if req.Database != "" {
+			session.SetCurrentDatabase(req.Database)
+		}
+		ephemeral = true
 	}
 
 	flusher, ok := w.(http.Flusher)
@@ -803,16 +877,31 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	session := s.newSession()
-	defer session.Close()
-	if req.Database != "" {
-		session.SetCurrentDatabase(req.Database)
-	}
-
 	result, err := session.Execute(stmt)
 	if err != nil {
+		if !ephemeral {
+			s.sessions.remove(sessionID)
+		} else {
+			session.Close()
+		}
 		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
+	}
+
+	if isTx {
+		if ephemeral {
+			sessionID = generateSessionID()
+		}
+		entry := &httpSessionEntry{
+			session:    session,
+			database:   req.Database,
+			lastAccess: time.Now(),
+		}
+		s.sessions.put(sessionID, entry)
+	} else if isCommit || isRollback {
+		s.sessions.remove(sessionID)
+	} else if ephemeral {
+		session.Close()
 	}
 
 	type sseMsg struct {
@@ -928,6 +1017,12 @@ func convertRows(rows [][]string, schema *storage.TableSchema) [][]interface{} {
 		result[i] = converted
 	}
 	return result
+}
+
+func generateSessionID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%x", b)
 }
 
 func applyParams(query string, params []string) string {

@@ -399,7 +399,7 @@ func TestHandleStreamingEmptyQuery(t *testing.T) {
 	}
 }
 
-func TestHandleStreamingTransactionsRejected(t *testing.T) {
+func TestHandleStreamingTransactionsAccepted(t *testing.T) {
 	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
 
 	body := `{"database":"testdb","query":"BEGIN;"}`
@@ -407,16 +407,13 @@ func TestHandleStreamingTransactionsRejected(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
 	srv.apiMux().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 
-	var res map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(res["message"].(string), "transactions") {
-		t.Fatalf("unexpected error: %v", res["message"])
+	bodyStr := rec.Body.String()
+	if !strings.Contains(bodyStr, "event: done") {
+		t.Fatalf("expected done event in stream response: %s", bodyStr)
 	}
 }
 
@@ -1642,5 +1639,216 @@ func TestClassifyError(t *testing.T) {
 				t.Errorf("classifyError(%q) = %d, want %d", tt.msg, got, tt.wantCode)
 			}
 		})
+	}
+}
+
+func TestHTTPTransactionLifecycle(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	// Step 1: BEGIN
+	body := `{"database":"testdb","query":"BEGIN;"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("BEGIN failed: %d: %s", rec.Code, rec.Body.String())
+	}
+	var beginRes map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &beginRes); err != nil {
+		t.Fatal(err)
+	}
+	sid, ok := beginRes["session_id"].(string)
+	if !ok || sid == "" {
+		t.Fatalf("expected session_id in BEGIN response, got %v", beginRes["session_id"])
+	}
+
+	// Step 2: INSERT with session_id
+	body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"INSERT INTO items (id, name, value) VALUES (100, 'txitem', 9.9);"}`, sid)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("INSERT failed: %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Step 3: COMMIT with session_id
+	body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"COMMIT;"}`, sid)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("COMMIT failed: %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Step 4: Verify data persists after COMMIT
+	body = `{"database":"testdb","query":"SELECT * FROM items WHERE id = 100;"}`
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("SELECT failed: %d: %s", rec.Code, rec.Body.String())
+	}
+	var selectRes map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &selectRes); err != nil {
+		t.Fatal(err)
+	}
+	rows := selectRes["rows"].([]interface{})
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row after commit, got %d", len(rows))
+	}
+}
+
+func TestHTTPTransactionRollback(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	// BEGIN
+	body := `{"database":"testdb","query":"BEGIN;"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("BEGIN failed: %d: %s", rec.Code, rec.Body.String())
+	}
+	var beginRes map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &beginRes)
+	sid := beginRes["session_id"].(string)
+
+	// INSERT
+	body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"INSERT INTO items (id, name, value) VALUES (200, 'rollback', 1.0);"}`, sid)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("INSERT failed: %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// ROLLBACK
+	body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"ROLLBACK;"}`, sid)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ROLLBACK failed: %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify data does NOT exist after ROLLBACK
+	body = `{"database":"testdb","query":"SELECT * FROM items WHERE id = 200;"}`
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("SELECT failed: %d: %s", rec.Code, rec.Body.String())
+	}
+	var selectRes map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &selectRes)
+	rows := selectRes["rows"].([]interface{})
+	if len(rows) != 0 {
+		t.Fatalf("expected 0 rows after rollback, got %d", len(rows))
+	}
+}
+
+func TestHTTPTransactionCommitRequiresSessionID(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	body := `{"database":"testdb","query":"COMMIT;"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHTTPTransactionUnknownSessionID(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	body := `{"database":"testdb","session_id":"nonexistent","query":"SELECT * FROM items;"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHTTPTransactionBackwardCompatible(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	// Without session_id should work as before
+	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var res map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if res["status"] != "ok" {
+		t.Fatalf("status = %v, want ok", res["status"])
+	}
+	// No session_id in response for ephemeral queries
+	if _, has := res["session_id"]; has {
+		t.Fatal("expected no session_id for stateless query")
+	}
+}
+
+func TestHTTPTransactionMultipleQueriesInTx(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	// BEGIN
+	body := `{"database":"testdb","query":"BEGIN;"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("BEGIN failed: %d: %s", rec.Code, rec.Body.String())
+	}
+	var beginRes map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &beginRes)
+	sid := beginRes["session_id"].(string)
+
+	// Multiple INSERTs
+	for i, name := range []string{"a", "b", "c"} {
+		id := 300 + i
+		body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"INSERT INTO items (id, name, value) VALUES (%d, '%s', 1.0);"}`, sid, id, name)
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+		srv.apiMux().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("INSERT %d failed: %d: %s", id, rec.Code, rec.Body.String())
+		}
+	}
+
+	// COMMIT
+	body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"COMMIT;"}`, sid)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("COMMIT failed: %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify all 3 rows exist
+	body = `{"database":"testdb","query":"SELECT * FROM items WHERE id >= 300 AND id <= 302;"}`
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("SELECT failed: %d: %s", rec.Code, rec.Body.String())
+	}
+	var selectRes map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &selectRes)
+	rows := selectRes["rows"].([]interface{})
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows after multi-insert commit, got %d", len(rows))
 	}
 }
