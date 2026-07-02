@@ -2665,3 +2665,57 @@ func TestParseCreateTableWithNotNull(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCreateTableWithBigIntNumericTimestampz(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		wantTypes []string
+	}{
+		{
+			name:      "BIGINT type",
+			sql:       "CREATE TABLE t (id BIGINT);",
+			wantTypes: []string{"INT"},
+		},
+		{
+			name:      "NUMERIC type",
+			sql:       "CREATE TABLE t (amount NUMERIC);",
+			wantTypes: []string{"FLOAT"},
+		},
+		{
+			name:      "TIMESTAMPTZ type",
+			sql:       "CREATE TABLE t (created_at TIMESTAMPTZ);",
+			wantTypes: []string{"TIMESTAMP"},
+		},
+		{
+			name:      "all new types together",
+			sql:       "CREATE TABLE t (id BIGINT, amount NUMERIC, ts TIMESTAMPTZ);",
+			wantTypes: []string{"INT", "FLOAT", "TIMESTAMP"},
+		},
+		{
+			name:      "new types mixed with existing",
+			sql:       "CREATE TABLE t (id INT, big_id BIGINT, ts TIMESTAMPTZ, name TEXT);",
+			wantTypes: []string{"INT", "INT", "TIMESTAMP", "TEXT"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := Parse(tt.sql)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tt.sql, err)
+			}
+			create, ok := stmt.(*CreateTableStatement)
+			if !ok {
+				t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+			}
+			if len(create.Columns) != len(tt.wantTypes) {
+				t.Fatalf("expected %d columns, got %d", len(tt.wantTypes), len(create.Columns))
+			}
+			for i, want := range tt.wantTypes {
+				if create.Columns[i].DataType != want {
+					t.Errorf("column %d (%s): DataType = %q, want %q", i, create.Columns[i].Name, create.Columns[i].DataType, want)
+				}
+			}
+		})
+	}
+}

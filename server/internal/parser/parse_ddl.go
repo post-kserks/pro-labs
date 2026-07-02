@@ -677,6 +677,15 @@ func (p *sqlParser) parseColumnType() (string, int, error) {
 	case lexer.TOKEN_JSONB:
 		p.advance()
 		return "JSONB", 0, nil
+	case lexer.TOKEN_BIGINT:
+		p.advance()
+		return "INT", 0, nil
+	case lexer.TOKEN_NUMERIC:
+		p.advance()
+		return "FLOAT", 0, nil
+	case lexer.TOKEN_TIMESTAMPTZ:
+		p.advance()
+		return "TIMESTAMP", 0, nil
 	case lexer.TOKEN_ARRAY:
 		p.advance() // ARRAY
 		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
