@@ -24,6 +24,11 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("create table: %w", err)
 	}
 
+	// IF NOT EXISTS: skip silently if table already exists
+	if c.stmt.IfNotExists && ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+		return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' already exists, skipping.", c.stmt.TableName)}, nil
+	}
+
 	columns := make([]storage.ColumnSchema, 0, len(c.stmt.Columns))
 	for _, column := range c.stmt.Columns {
 		col := storage.ColumnSchema{
@@ -78,6 +83,12 @@ func (c *DropTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if _, err := sanitizeObjectName(c.stmt.TableName); err != nil {
 		return nil, fmt.Errorf("drop table: %w", err)
 	}
+
+	// IF EXISTS: skip silently if table doesn't exist
+	if c.stmt.IfExists && !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+		return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' does not exist, skipping.", c.stmt.TableName)}, nil
+	}
+
 	if ctx.Session.planCache != nil {
 		ctx.Session.planCache.Invalidate(c.stmt.TableName)
 	}
