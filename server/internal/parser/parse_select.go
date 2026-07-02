@@ -285,20 +285,22 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 				UseVersion: false,
 			}
 		}
-	case lexer.TOKEN_VERSION:
-		p.advance()
-		verTok := p.current()
-		if verTok.Type != lexer.TOKEN_INT_LIT {
-			return nil, p.expectedError("VERSION number", verTok)
-		}
-		ver, err := strconv.ParseUint(verTok.Literal, 10, 64)
-		if err != nil {
-			return nil, p.syntaxError(verTok, "VERSION must be a positive integer")
-		}
-		p.advance()
-		asOf = &AsOfClause{
-			Version:    ver,
-			UseVersion: true,
+	case lexer.TOKEN_IDENT:
+		if strings.ToUpper(p.current().Literal) == "VERSION" {
+			p.advance()
+			verTok := p.current()
+			if verTok.Type != lexer.TOKEN_INT_LIT {
+				return nil, p.expectedError("VERSION number", verTok)
+			}
+			ver, err := strconv.ParseUint(verTok.Literal, 10, 64)
+			if err != nil {
+				return nil, p.syntaxError(verTok, "VERSION must be a positive integer")
+			}
+			p.advance()
+			asOf = &AsOfClause{
+				Version:    ver,
+				UseVersion: true,
+			}
 		}
 	}
 

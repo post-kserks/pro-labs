@@ -85,6 +85,70 @@ func TestParseTimeTravelShape(t *testing.T) {
 	}
 }
 
+func TestParseVersionAsColumnName(t *testing.T) {
+	t.Run("CREATE TABLE with version column", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE deals (id INT PRIMARY KEY, version INT);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(create.Columns))
+		}
+		if create.Columns[1].Name != "version" {
+			t.Fatalf("expected column name 'version', got %q", create.Columns[1].Name)
+		}
+	})
+
+	t.Run("SELECT with version in WHERE clause", func(t *testing.T) {
+		stmt, err := Parse("SELECT * FROM deals WHERE version = 1;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel, ok := stmt.(*SelectStatement)
+		if !ok {
+			t.Fatalf("expected *SelectStatement, got %T", stmt)
+		}
+		if sel.Where == nil {
+			t.Fatal("expected WHERE clause")
+		}
+	})
+
+	t.Run("INSERT with version column", func(t *testing.T) {
+		stmt, err := Parse("INSERT INTO deals (id, version) VALUES (1, 1);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		insert, ok := stmt.(*InsertStatement)
+		if !ok {
+			t.Fatalf("expected *InsertStatement, got %T", stmt)
+		}
+		if len(insert.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(insert.Columns))
+		}
+		if insert.Columns[1] != "version" {
+			t.Fatalf("expected column name 'version', got %q", insert.Columns[1])
+		}
+	})
+
+	t.Run("Time travel with VERSION still works", func(t *testing.T) {
+		stmt, err := Parse("SELECT * FROM t VERSION 5;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		sel, ok := stmt.(*SelectStatement)
+		if !ok {
+			t.Fatalf("expected *SelectStatement, got %T", stmt)
+		}
+		if sel.AsOf == nil || !sel.AsOf.UseVersion || sel.AsOf.Version != 5 {
+			t.Fatalf("unexpected as_of clause: %#v", sel.AsOf)
+		}
+	})
+}
+
 func TestParseErrors(t *testing.T) {
 	cases := []string{
 		"",
