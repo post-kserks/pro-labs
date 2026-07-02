@@ -26,7 +26,7 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	columns := make([]storage.ColumnSchema, 0, len(c.stmt.Columns))
 	for _, column := range c.stmt.Columns {
-		columns = append(columns, storage.ColumnSchema{
+		col := storage.ColumnSchema{
 			Name:          column.Name,
 			Type:          column.DataType,
 			VarcharLen:    column.VarcharLen,
@@ -35,7 +35,19 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			NotNull:       column.NotNull,
 			EnumValues:    column.EnumValues,
 			AutoIncrement: column.AutoIncrement,
-		})
+		}
+		if column.Default != nil {
+			val, err := evalOperand(column.Default, nil, nil, ctx)
+			if err != nil {
+				return nil, fmt.Errorf("evaluating default for column '%s': %w", column.Name, err)
+			}
+			converted, err := normalizeForColumn(val, col)
+			if err != nil {
+				return nil, fmt.Errorf("normalizing default for column '%s': %w", column.Name, err)
+			}
+			col.Default = &converted
+		}
+		columns = append(columns, col)
 	}
 
 	schema := storage.TableSchema{

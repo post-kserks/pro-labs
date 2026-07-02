@@ -209,6 +209,11 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 		mappedColumns[i] = idx
 	}
 
+	specifiedCols := make(map[int]bool, len(mappedColumns))
+	for _, idx := range mappedColumns {
+		specifiedCols[idx] = true
+	}
+
 	for rowIndex, row := range c.stmt.Rows {
 		if len(row) != len(mappedColumns) {
 			return nil, fmt.Errorf("insert row %d has %d values, expected %d", rowIndex, len(row), len(mappedColumns))
@@ -231,6 +236,7 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 			}
 			normalized[colIdx] = converted
 		}
+		applyDefaults(normalized, schema, specifiedCols)
 		result = append(result, normalized)
 	}
 
@@ -357,6 +363,7 @@ func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string
 				storageRow[i] = val
 			}
 		}
+		applyDefaults(storageRow, schema, nil)
 		for j, col := range schema.Columns {
 			if col.NotNull && j < len(storageRow) && storageRow[j] == nil {
 				return nil, fmt.Errorf("INSERT ... SELECT: NOT NULL constraint failed for column '%s' in row %d", col.Name, ri)
@@ -410,5 +417,16 @@ func convertStringToValue(s string, col storage.ColumnSchema) (storage.Value, er
 		return s, nil
 	default:
 		return s, nil
+	}
+}
+
+// applyDefaults fills in DEFAULT values for columns that were not specified
+// in the INSERT column list. specifiedCols is a set of column indices that
+// were explicitly provided in the INSERT statement.
+func applyDefaults(row storage.Row, schema *storage.TableSchema, specifiedCols map[int]bool) {
+	for i, col := range schema.Columns {
+		if row[i] == nil && col.Default != nil && !specifiedCols[i] {
+			row[i] = *col.Default
+		}
 	}
 }

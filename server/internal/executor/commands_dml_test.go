@@ -352,3 +352,72 @@ func TestUpdateNullIntoNotNullColumn(t *testing.T) {
 		t.Fatalf("expected NULL age, got %q", result.Rows[0][0])
 	}
 }
+
+func TestCreateTableWithDefault(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE def_test (id INT, name VARCHAR(100) DEFAULT 'unknown', score FLOAT DEFAULT 0.0, active BOOL DEFAULT TRUE);")
+
+	// Insert without specifying columns — defaults should be applied
+	executeSQL(t, session, "INSERT INTO def_test (id) VALUES (1);")
+
+	result := executeSQL(t, session, "SELECT name, score, active FROM def_test WHERE id = 1;")
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "unknown" {
+		t.Fatalf("expected default name 'unknown', got %q", result.Rows[0][0])
+	}
+	if result.Rows[0][1] != "0" {
+		t.Fatalf("expected default score '0', got %q", result.Rows[0][1])
+	}
+	if result.Rows[0][2] != "true" {
+		t.Fatalf("expected default active 'true', got %q", result.Rows[0][2])
+	}
+}
+
+func TestDefaultOnlyAppliedWhenColumnNotSpecified(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE def_test2 (id INT, label VARCHAR(100) DEFAULT 'fallback');")
+
+	// Explicitly specify column with NULL — default should NOT replace it
+	executeSQL(t, session, "INSERT INTO def_test2 (id, label) VALUES (1, NULL);")
+
+	result := executeSQL(t, session, "SELECT label FROM def_test2 WHERE id = 1;")
+	if result.Rows[0][0] != "" {
+		t.Fatalf("expected NULL label (explicit NULL), got %q", result.Rows[0][0])
+	}
+
+	// Column not specified — default should apply
+	executeSQL(t, session, "INSERT INTO def_test2 (id) VALUES (2);")
+
+	result = executeSQL(t, session, "SELECT label FROM def_test2 WHERE id = 2;")
+	if result.Rows[0][0] != "fallback" {
+		t.Fatalf("expected default 'fallback', got %q", result.Rows[0][0])
+	}
+}
+
+func TestDefaultWithInt(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE def_int (id INT, counter INT DEFAULT 42);")
+	executeSQL(t, session, "INSERT INTO def_int (id) VALUES (1);")
+
+	result := executeSQL(t, session, "SELECT counter FROM def_int WHERE id = 1;")
+	if result.Rows[0][0] != "42" {
+		t.Fatalf("expected default counter '42', got %q", result.Rows[0][0])
+	}
+}
+
+func TestDefaultMultipleRows(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE def_multi (id INT, status VARCHAR(50) DEFAULT 'pending');")
+	executeSQL(t, session, "INSERT INTO def_multi (id) VALUES (1), (2), (3);")
+
+	result := executeSQL(t, session, "SELECT COUNT(*) FROM def_multi WHERE status = 'pending';")
+	if result.Rows[0][0] != "3" {
+		t.Fatalf("expected 3 rows with default, got %q", result.Rows[0][0])
+	}
+}

@@ -19,6 +19,7 @@ type ColumnSchema struct {
 	NotNull       bool     `json:"not_null,omitempty"`
 	PrimaryKey    bool     `json:"primary_key,omitempty"`
 	AutoIncrement bool     `json:"auto_increment,omitempty"`
+	Default       *Value   `json:"default,omitempty"`
 }
 
 // TableSchema describes a table.
