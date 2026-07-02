@@ -53,25 +53,45 @@ func evalFtsMatchScored(text, query string) float64 {
 	return score
 }
 
-// evalJsonContains проверяет содержит ли JSON массив все элементы другого массива.
+// evalJsonContains проверяет содержит ли JSON объект/массив все ключи/элементы другого.
 func evalJsonContains(left, right interface{}) (interface{}, error) {
 	leftStr := valueToString(left)
 	rightStr := valueToString(right)
 	rawLeft, err := storage.DecodeJSON([]byte(leftStr))
 	if err != nil {
-		return nil, fmt.Errorf("JSON contains: left is not JSON array")
-	}
-	leftArr, ok := rawLeft.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("JSON contains: left is not JSON array")
+		return nil, fmt.Errorf("JSON contains: left is not valid JSON")
 	}
 	rawRight, err := storage.DecodeJSON([]byte(rightStr))
 	if err != nil {
-		return nil, fmt.Errorf("JSON contains: right is not JSON array")
+		return nil, fmt.Errorf("JSON contains: right is not valid JSON")
 	}
-	rightArr, ok := rawRight.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("JSON contains: right is not JSON array")
+
+	// Object containment: check that all keys in right exist in left with matching values.
+	if leftObj, lok := rawLeft.(map[string]interface{}); lok {
+		rightObj, rok := rawRight.(map[string]interface{})
+		if !rok {
+			return nil, fmt.Errorf("JSON contains: right is not JSON object")
+		}
+		for k, rv := range rightObj {
+			lv, ok := leftObj[k]
+			if !ok {
+				return false, nil
+			}
+			if !jsonValuesEqual(lv, rv) {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+
+	// Array containment (original logic).
+	leftArr, lok := rawLeft.([]interface{})
+	if !lok {
+		return nil, fmt.Errorf("JSON contains: left is not JSON array or object")
+	}
+	rightArr, rok := rawRight.([]interface{})
+	if !rok {
+		return nil, fmt.Errorf("JSON contains: right is not JSON array or object")
 	}
 	leftSet := make(map[string]bool)
 	for _, v := range leftArr {
@@ -85,25 +105,52 @@ func evalJsonContains(left, right interface{}) (interface{}, error) {
 	return true, nil
 }
 
-// evalJsonContainedBy проверяет содержится ли JSON массив внутри другого.
+// jsonValuesEqual compares two decoded JSON values for equality.
+func jsonValuesEqual(a, b interface{}) bool {
+	aj, _ := json.Marshal(a)
+	bj, _ := json.Marshal(b)
+	return string(aj) == string(bj)
+}
+
+// evalJsonContainedBy проверяет содержится ли JSON объект/массив внутри другого.
 func evalJsonContainedBy(left, right interface{}) (interface{}, error) {
 	leftStr := valueToString(left)
 	rightStr := valueToString(right)
 	rawLeft, err := storage.DecodeJSON([]byte(leftStr))
 	if err != nil {
-		return nil, fmt.Errorf("JSON contained by: left is not JSON array")
-	}
-	leftArr, ok := rawLeft.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("JSON contained by: left is not JSON array")
+		return nil, fmt.Errorf("JSON contained by: left is not valid JSON")
 	}
 	rawRight, err := storage.DecodeJSON([]byte(rightStr))
 	if err != nil {
-		return nil, fmt.Errorf("JSON contained by: right is not JSON array")
+		return nil, fmt.Errorf("JSON contained by: right is not valid JSON")
 	}
-	rightArr, ok := rawRight.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("JSON contained by: right is not JSON array")
+
+	// Object containment: left is contained by right means right contains left.
+	if leftObj, lok := rawLeft.(map[string]interface{}); lok {
+		rightObj, rok := rawRight.(map[string]interface{})
+		if !rok {
+			return nil, fmt.Errorf("JSON contained by: right is not JSON object")
+		}
+		for k, lv := range leftObj {
+			rv, ok := rightObj[k]
+			if !ok {
+				return false, nil
+			}
+			if !jsonValuesEqual(lv, rv) {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+
+	// Array containment (original logic).
+	leftArr, lok := rawLeft.([]interface{})
+	if !lok {
+		return nil, fmt.Errorf("JSON contained by: left is not JSON array or object")
+	}
+	rightArr, rok := rawRight.([]interface{})
+	if !rok {
+		return nil, fmt.Errorf("JSON contained by: right is not JSON array or object")
 	}
 	rightSet := make(map[string]bool)
 	for _, v := range rightArr {

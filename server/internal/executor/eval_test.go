@@ -209,6 +209,65 @@ func TestEvalCaseWhen(t *testing.T) {
 	}
 }
 
+func TestJsonContainsObject(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE DATABASE testjson;")
+	executeSQL(t, session, "USE testjson;")
+	executeSQL(t, session, "CREATE TABLE docs (id INT, data JSONB);")
+
+	executeSQL(t, session, `INSERT INTO docs VALUES (1, '{"name": "Alice", "age": 30, "city": "Moscow"}');`)
+	executeSQL(t, session, `INSERT INTO docs VALUES (2, '{"name": "Bob", "age": 25, "city": "SPb"}');`)
+	executeSQL(t, session, `INSERT INTO docs VALUES (3, '{"name": "Charlie", "age": 35}');`)
+
+	// Object containment: right is subset of left
+	t.Run("subset_match", func(t *testing.T) {
+		res := executeSQL(t, session, `SELECT id FROM docs WHERE data @> '{"age": 30}' ORDER BY id;`)
+		if len(res.Rows) != 1 || res.Rows[0][0] != "1" {
+			t.Fatalf("expected [1], got %v", res.Rows)
+		}
+	})
+
+	t.Run("multi_key_subset", func(t *testing.T) {
+		res := executeSQL(t, session, `SELECT id FROM docs WHERE data @> '{"name": "Alice", "city": "Moscow"}' ORDER BY id;`)
+		if len(res.Rows) != 1 || res.Rows[0][0] != "1" {
+			t.Fatalf("expected [1], got %v", res.Rows)
+		}
+	})
+
+	t.Run("empty_right_matches_all", func(t *testing.T) {
+		res := executeSQL(t, session, `SELECT COUNT(*) FROM docs WHERE data @> '{}';`)
+		if res.Rows[0][0] != "3" {
+			t.Fatalf("expected 3, got %s", res.Rows[0][0])
+		}
+	})
+
+	t.Run("no_match", func(t *testing.T) {
+		res := executeSQL(t, session, `SELECT id FROM docs WHERE data @> '{"name": "Dave"}';`)
+		if len(res.Rows) != 0 {
+			t.Fatalf("expected 0, got %d", len(res.Rows))
+		}
+	})
+
+	t.Run("missing_key", func(t *testing.T) {
+		res := executeSQL(t, session, `SELECT id FROM docs WHERE data @> '{"city": "Moscow"}' ORDER BY id;`)
+		if len(res.Rows) != 1 || res.Rows[0][0] != "1" {
+			t.Fatalf("expected [1], got %v", res.Rows)
+		}
+	})
+
+	// Array containment should still work
+	t.Run("array_containment_still_works", func(t *testing.T) {
+		executeSQL(t, session, "CREATE TABLE tags (id INT, items JSONB);")
+		executeSQL(t, session, `INSERT INTO tags VALUES (1, '["a", "b", "c"]');`)
+		executeSQL(t, session, `INSERT INTO tags VALUES (2, '["x", "y"]');`)
+		res := executeSQL(t, session, `SELECT id FROM tags WHERE items @> '["a"]' ORDER BY id;`)
+		if len(res.Rows) != 1 || res.Rows[0][0] != "1" {
+			t.Fatalf("expected [1], got %v", res.Rows)
+		}
+	})
+}
+
 func TestSanitizeObjectName(t *testing.T) {
 	tests := []struct {
 		name    string
