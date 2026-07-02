@@ -5,6 +5,58 @@ import (
 	"testing"
 )
 
+func TestJsonNullHandling(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"null_literal", "null"},
+		{"empty_bytes", ""},
+		{"whitespace_only", "   \t\n  "},
+		{"empty_object", "{}"},
+		{"empty_array", "[]"},
+		{"null_with_whitespace", "  null  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := DecodeJSON([]byte(tt.input))
+			if err != nil {
+				t.Fatalf("DecodeJSON(%q) error: %v", tt.input, err)
+			}
+			// null, empty, and whitespace should return nil
+			switch tt.name {
+			case "null_literal", "empty_bytes", "whitespace_only", "null_with_whitespace":
+				if raw != nil {
+					t.Fatalf("DecodeJSON(%q) = %v (%T), want nil", tt.input, raw, raw)
+				}
+			case "empty_object":
+				if raw == nil {
+					t.Fatal("DecodeJSON({}) = nil, want non-nil empty object")
+				}
+				m, ok := raw.(map[string]interface{})
+				if !ok {
+					t.Fatalf("DecodeJSON({}) returned %T, want map[string]interface{}", raw)
+				}
+				if len(m) != 0 {
+					t.Errorf("DecodeJSON({}) = %v, want empty map", m)
+				}
+			case "empty_array":
+				if raw == nil {
+					t.Fatal("DecodeJSON([]) = nil, want non-nil empty array")
+				}
+				arr, ok := raw.([]interface{})
+				if !ok {
+					t.Fatalf("DecodeJSON([]) returned %T, want []interface{}", raw)
+				}
+				if len(arr) != 0 {
+					t.Errorf("DecodeJSON([]) = %v, want empty slice", arr)
+				}
+			}
+		})
+	}
+}
+
 func TestDecodeJSON_LargeIntegers(t *testing.T) {
 	tests := []struct {
 		name     string

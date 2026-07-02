@@ -9,6 +9,9 @@ import (
 // Unlike json.Unmarshal into interface{}, which converts all JSON numbers to float64,
 // this function uses json.Number internally and converts integer-like numbers to int64.
 func DecodeJSON(data []byte) (interface{}, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, nil
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var raw interface{}
