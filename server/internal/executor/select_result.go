@@ -11,6 +11,34 @@ import (
 	"vaultdb/internal/storage"
 )
 
+// resolveLimitOffset evaluates LimitExpr/OffsetExpr (parameterised LIMIT/OFFSET)
+// and returns the resolved integer values. When the expression variants are set,
+// they take precedence over the literal Limit/Offset fields.
+func (c *SelectCommand) resolveLimitOffset(ctx *ExecutionContext) (int, bool, int, bool) {
+	limit, hasLimit := c.stmt.Limit, c.stmt.HasLimit
+	offset, hasOffset := c.stmt.Offset, c.stmt.HasOffset
+
+	if c.stmt.LimitExpr != nil {
+		val, err := evalOperand(c.stmt.LimitExpr, nil, nil, ctx)
+		if err == nil {
+			if v, ok := toInt64(val); ok {
+				limit = int(v)
+				hasLimit = true
+			}
+		}
+	}
+	if c.stmt.OffsetExpr != nil {
+		val, err := evalOperand(c.stmt.OffsetExpr, nil, nil, ctx)
+		if err == nil {
+			if v, ok := toInt64(val); ok {
+				offset = int(v)
+				hasOffset = true
+			}
+		}
+	}
+	return limit, hasLimit, offset, hasOffset
+}
+
 func (c *SelectCommand) applyOrderBy(rows []storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		for _, item := range c.stmt.OrderBy {
@@ -166,16 +194,17 @@ func (c *SelectCommand) executeWithStats(ctx *ExecutionContext) (*PlanStats, *Re
 
 	// Pagination (OFFSET and LIMIT)
 	start := 0
-	if c.stmt.HasOffset {
-		start = c.stmt.Offset
+	limit, hasLimit, offset, hasOffset := c.resolveLimitOffset(ctx)
+	if hasOffset {
+		start = offset
 		if start > len(filtered) {
 			start = len(filtered)
 		}
 	}
 
 	end := len(filtered)
-	if c.stmt.HasLimit {
-		end = start + c.stmt.Limit
+	if hasLimit {
+		end = start + limit
 		if end > len(filtered) {
 			end = len(filtered)
 		}
@@ -489,15 +518,16 @@ func (c *SelectCommand) executeDerivedTable(ctx *ExecutionContext) (*Result, err
 	}
 
 	start := 0
-	if c.stmt.HasOffset {
-		start = c.stmt.Offset
+	limit, hasLimit, offset, hasOffset := c.resolveLimitOffset(ctx)
+	if hasOffset {
+		start = offset
 		if start > len(filtered) {
 			start = len(filtered)
 		}
 	}
 	end := len(filtered)
-	if c.stmt.HasLimit {
-		end = start + c.stmt.Limit
+	if hasLimit {
+		end = start + limit
 		if end > len(filtered) {
 			end = len(filtered)
 		}

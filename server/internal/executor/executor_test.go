@@ -777,3 +777,57 @@ func TestUpdateFromSubquery(t *testing.T) {
 		t.Fatalf("expected Boromir level 5, got %v", verify.Rows[0])
 	}
 }
+
+func TestParamLimitOffset(t *testing.T) {
+	session := setupSession(t)
+	seedHeroes(t, session)
+
+	// Prepare a statement with parameterised LIMIT and OFFSET
+	executeSQL(t, session, "PREPARE page AS SELECT name FROM heroes ORDER BY id LIMIT $1 OFFSET $2;")
+
+	// OFFSET 0, LIMIT 2 → first two rows
+	result := executeSQL(t, session, "EXECUTE page (2, 0);")
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "Aragorn" || result.Rows[1][0] != "Legolas" {
+		t.Fatalf("expected [Aragorn, Legolas], got %v", result.Rows)
+	}
+
+	// OFFSET 2, LIMIT 2 → rows 3 and 4
+	result = executeSQL(t, session, "EXECUTE page (2, 2);")
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "Gimli" || result.Rows[1][0] != "Boromir" {
+		t.Fatalf("expected [Gimli, Boromir], got %v", result.Rows)
+	}
+
+	// OFFSET 1, LIMIT 2 → rows 2 and 3
+	result = executeSQL(t, session, "EXECUTE page (2, 1);")
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "Legolas" || result.Rows[1][0] != "Gimli" {
+		t.Fatalf("expected [Legolas, Gimli], got %v", result.Rows)
+	}
+
+	// LIMIT larger than total rows
+	result = executeSQL(t, session, "EXECUTE page (100, 0);")
+	if len(result.Rows) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(result.Rows))
+	}
+
+	// OFFSET beyond total rows
+	result = executeSQL(t, session, "EXECUTE page (10, 100);")
+	if len(result.Rows) != 0 {
+		t.Fatalf("expected 0 rows, got %d", len(result.Rows))
+	}
+
+	// Only LIMIT param, no OFFSET
+	executeSQL(t, session, "PREPARE limited AS SELECT name FROM heroes ORDER BY id LIMIT $1;")
+	result = executeSQL(t, session, "EXECUTE limited (1);")
+	if len(result.Rows) != 1 || result.Rows[0][0] != "Aragorn" {
+		t.Fatalf("expected [Aragorn], got %v", result.Rows)
+	}
+}

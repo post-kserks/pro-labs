@@ -399,15 +399,16 @@ func (c *SelectCommand) orderAndPageGrouped(rows [][]string, projectColumns []st
 	}
 
 	start := 0
-	if c.stmt.HasOffset {
-		start = c.stmt.Offset
+	limit, hasLimit, offset, hasOffset := c.resolveLimitOffset(nil)
+	if hasOffset {
+		start = offset
 		if start > len(rows) {
 			start = len(rows)
 		}
 	}
 	end := len(rows)
-	if c.stmt.HasLimit {
-		end = start + c.stmt.Limit
+	if hasLimit {
+		end = start + limit
 		if end > len(rows) {
 			end = len(rows)
 		}

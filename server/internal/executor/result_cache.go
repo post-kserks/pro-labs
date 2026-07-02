@@ -183,8 +183,14 @@ func ResultCacheKey(stmt *parser.SelectStatement, dbName string) string {
 	if stmt.HasLimit {
 		key += fmt.Sprintf(":L%d", stmt.Limit)
 	}
+	if stmt.LimitExpr != nil {
+		key += ":LE:" + formatExpressionForCache(stmt.LimitExpr)
+	}
 	if stmt.HasOffset {
 		key += fmt.Sprintf(":OF%d", stmt.Offset)
+	}
+	if stmt.OffsetExpr != nil {
+		key += ":OE:" + formatExpressionForCache(stmt.OffsetExpr)
 	}
 	if stmt.Distinct {
 		key += ":D"

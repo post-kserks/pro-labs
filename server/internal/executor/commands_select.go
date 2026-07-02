@@ -98,9 +98,15 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 				subSel.HasLimit = true
 				subSel.Limit = c.stmt.Limit
 			}
+			if c.stmt.LimitExpr != nil {
+				subSel.LimitExpr = c.stmt.LimitExpr
+			}
 			if c.stmt.HasOffset {
 				subSel.HasOffset = true
 				subSel.Offset = c.stmt.Offset
+			}
+			if c.stmt.OffsetExpr != nil {
+				subSel.OffsetExpr = c.stmt.OffsetExpr
 			}
 			if c.stmt.Distinct {
 				subSel.Distinct = true
@@ -255,16 +261,17 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 
 	// Pagination (OFFSET and LIMIT) after DISTINCT
 	start := 0
-	if c.stmt.HasOffset {
-		start = c.stmt.Offset
+	limit, hasLimit, offset, hasOffset := c.resolveLimitOffset(ctx)
+	if hasOffset {
+		start = offset
 		if start > len(resultRows) {
 			start = len(resultRows)
 		}
 	}
 
 	end := len(resultRows)
-	if c.stmt.HasLimit {
-		end = start + c.stmt.Limit
+	if hasLimit {
+		end = start + limit
 		if end > len(resultRows) {
 			end = len(resultRows)
 		}

@@ -466,6 +466,12 @@ func bindParams(stmt parser.Statement, params []parser.Value) (parser.Statement,
 				bound.Joins[i].Condition = bindExpr(join.Condition, params)
 			}
 		}
+		if s.LimitExpr != nil {
+			bound.LimitExpr = bindExpr(s.LimitExpr, params)
+		}
+		if s.OffsetExpr != nil {
+			bound.OffsetExpr = bindExpr(s.OffsetExpr, params)
+		}
 		return &bound, nil
 	case *parser.UpdateStatement:
 		bound := *s
