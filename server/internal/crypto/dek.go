@@ -36,16 +36,13 @@ func (m *DEKManager) metaPath() string {
 	return filepath.Join(m.dbPath, ".encryption_meta.json")
 }
 
-func (m *DEKManager) saltPath() string {
-	return filepath.Join(m.dbPath, ".salt")
-}
-
 // GenerateAndStoreDEK creates a new DEK, encrypts it with KEK, and stores it.
 func (m *DEKManager) GenerateAndStoreDEK(ctx context.Context, ks KeySource) (*EncryptionManager, error) {
 	kek, err := ks.GetKEK(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get KEK: %w", err)
 	}
+	defer zeroizeSlice(kek)
 
 	dek := make([]byte, 32)
 	if _, err := rand.Read(dek); err != nil {
@@ -68,7 +65,7 @@ func (m *DEKManager) GenerateAndStoreDEK(ctx context.Context, ks KeySource) (*En
 		DEKCreatedAt: time.Now(),
 	}
 	metaBytes, _ := json.MarshalIndent(meta, "", "  ")
-	if err := os.WriteFile(m.metaPath(), metaBytes, 0644); err != nil {
+	if err := os.WriteFile(m.metaPath(), metaBytes, 0600); err != nil {
 		return nil, fmt.Errorf("write meta: %w", err)
 	}
 
@@ -81,6 +78,7 @@ func (m *DEKManager) LoadDEK(ctx context.Context, ks KeySource) (*EncryptionMana
 	if err != nil {
 		return nil, fmt.Errorf("get KEK: %w", err)
 	}
+	defer zeroizeSlice(kek)
 
 	encDEK, err := os.ReadFile(m.dekPath())
 	if err != nil {
@@ -127,4 +125,10 @@ func decryptDEK(encDEK, kek []byte) ([]byte, error) {
 	nonce := encDEK[:nonceSize]
 	ciphertext := encDEK[nonceSize:]
 	return aesGCM.Open(nil, nonce, ciphertext, nil)
+}
+
+func zeroizeSlice(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }

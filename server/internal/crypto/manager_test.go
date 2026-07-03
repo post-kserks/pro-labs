@@ -118,3 +118,27 @@ func TestZeroize(t *testing.T) {
 		}
 	}
 }
+
+func TestZeroizeBlocksUsage(t *testing.T) {
+	dek := make([]byte, 32)
+	if _, err := rand.Read(dek); err != nil {
+		t.Fatal(err)
+	}
+
+	em, err := NewEncryptionManager(dek, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	em.Zeroize()
+
+	_, _, err = em.EncryptPage([]byte("data"), []byte("page"))
+	if err == nil {
+		t.Error("expected EncryptPage to fail after Zeroize")
+	}
+
+	_, err = em.DecryptPage([]byte("nonce"), []byte("ciphertext"), []byte("page"))
+	if err == nil {
+		t.Error("expected DecryptPage to fail after Zeroize")
+	}
+}
