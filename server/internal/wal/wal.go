@@ -481,6 +481,7 @@ func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
 	txID := binary.LittleEndian.Uint64(fixedHdr[4:12])
 	opType := fixedHdr[12]
 	isEncrypted := fixedHdr[13] != 0
+	keyVersion := binary.LittleEndian.Uint32(fixedHdr[14:18])
 	var nonce [12]byte
 	copy(nonce[:], fixedHdr[18:30])
 	payloadLen := binary.LittleEndian.Uint32(fixedHdr[30:34])
@@ -513,7 +514,7 @@ func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
 		if w.em != nil {
 			aad := make([]byte, 8)
 			binary.LittleEndian.PutUint64(aad, txID)
-			plaintext, err := w.em.DecryptPage(nonce[:], payload, aad)
+			plaintext, err := w.em.DecryptPage(nonce[:], payload, aad, keyVersion)
 			if err != nil {
 				return Entry{}, 0, fmt.Errorf("wal: decrypt payload: %w", err)
 			}

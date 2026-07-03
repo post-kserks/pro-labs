@@ -59,7 +59,7 @@ func TestGenerateAndStoreDEK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decrypted, err := em.DecryptPage(nonce, ciphertext, pageID)
+	decrypted, err := em.DecryptPage(nonce, ciphertext, pageID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestLoadDEK(t *testing.T) {
 		t.Fatalf("LoadDEK: %v", err)
 	}
 
-	decrypted, err := em2.DecryptPage(nonce, ciphertext, pageID)
+	decrypted, err := em2.DecryptPage(nonce, ciphertext, pageID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

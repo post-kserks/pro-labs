@@ -150,7 +150,7 @@ func (hf *HeapFile) ReadPageEncrypted(pid page.PageID, buf *page.Page, em *crypt
 	}
 	ciphertext := raw[page.EncryptedPageHeaderSize:]
 
-	plaintext, err := em.DecryptPage(hdr.Nonce[:], ciphertext, pid.Bytes())
+	plaintext, err := em.DecryptPage(hdr.Nonce[:], ciphertext, pid.Bytes(), hdr.KeyVersion)
 	if err != nil {
 		return fmt.Errorf("decrypt page %v: %w", pid, err)
 	}
