@@ -3,12 +3,14 @@
 package heap
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 
+	"vaultdb/internal/crypto"
 	"vaultdb/internal/storage/page"
 )
 
@@ -108,6 +110,59 @@ func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
 	return nil
 }
 
+// ReadPageEncrypted reads a page from disk into buf, decrypting if necessary.
+// If em is nil, the page is read as plaintext (same as ReadPage).
+func (hf *HeapFile) ReadPageEncrypted(pid page.PageID, buf *page.Page, em *crypto.EncryptionManager) error {
+	hf.mu.RLock()
+	if hf.closed {
+		hf.mu.RUnlock()
+		return errors.New("heap file is closed")
+	}
+	if int(pid.SegmentNo) >= len(hf.segments) {
+		hf.mu.RUnlock()
+		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
+	}
+	seg := hf.segments[pid.SegmentNo]
+	hf.mu.RUnlock()
+
+	if em == nil {
+		if _, err := seg.ReadAt(buf[:], pid.FileOffset()); err != nil {
+			return fmt.Errorf("readpage %v: %w", pid, err)
+		}
+		if !buf.VerifyChecksum() {
+			return fmt.Errorf("page %v: stored=%d computed=%d: %w",
+				pid, buf.Header().Checksum, buf.ComputeChecksum(), ErrChecksumMismatch)
+		}
+		return nil
+	}
+
+	raw := make([]byte, page.EncryptedOnDiskPageSize)
+	if _, err := seg.ReadAt(raw, pid.EncryptedFileOffset()); err != nil {
+		return fmt.Errorf("readpage encrypted %v: %w", pid, err)
+	}
+
+	if !page.IsEncryptedPage(raw) {
+		return fmt.Errorf("page %v: expected encrypted page, got unencrypted or corrupt data", pid)
+	}
+	hdr, err := page.ParseEncryptedHeader(raw)
+	if err != nil {
+		return err
+	}
+	ciphertext := raw[page.EncryptedPageHeaderSize:]
+
+	plaintext, err := em.DecryptPage(hdr.Nonce[:], ciphertext, pid.Bytes())
+	if err != nil {
+		return fmt.Errorf("decrypt page %v: %w", pid, err)
+	}
+	copy(buf[:], plaintext)
+
+	if !buf.VerifyChecksum() {
+		return fmt.Errorf("page %v: stored=%d computed=%d: %w",
+			pid, buf.Header().Checksum, buf.ComputeChecksum(), ErrChecksumMismatch)
+	}
+	return nil
+}
+
 // WritePage computes the page checksum and writes the page to disk.
 // It does NOT fsync — durability ordering is the WAL's responsibility.
 func (hf *HeapFile) WritePage(pid page.PageID, buf *page.Page) error {
@@ -125,6 +180,43 @@ func (hf *HeapFile) WritePage(pid page.PageID, buf *page.Page) error {
 
 	buf.SetChecksum()
 	_, err := seg.WriteAt(buf[:], pid.FileOffset())
+	return err
+}
+
+// WritePageEncrypted encrypts the page and writes it to disk. If em is nil,
+// the page is written in plaintext (same as WritePage).
+func (hf *HeapFile) WritePageEncrypted(pid page.PageID, buf *page.Page, em *crypto.EncryptionManager) error {
+	hf.mu.RLock()
+	if hf.closed {
+		hf.mu.RUnlock()
+		return errors.New("heap file is closed")
+	}
+	if int(pid.SegmentNo) >= len(hf.segments) {
+		hf.mu.RUnlock()
+		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
+	}
+	seg := hf.segments[pid.SegmentNo]
+	hf.mu.RUnlock()
+
+	if em == nil {
+		buf.SetChecksum()
+		_, err := seg.WriteAt(buf[:], pid.FileOffset())
+		return err
+	}
+
+	buf.SetChecksum()
+	nonce, ciphertext, err := em.EncryptPage(buf[:], pid.Bytes())
+	if err != nil {
+		return fmt.Errorf("encrypt page: %w", err)
+	}
+
+	out := make([]byte, page.EncryptedOnDiskPageSize)
+	copy(out[0:4], []byte(page.EncryptedPageMagic))
+	binary.LittleEndian.PutUint32(out[4:8], em.KeyVersion())
+	copy(out[8:20], nonce)
+	copy(out[20:], ciphertext)
+
+	_, err = seg.WriteAt(out, pid.EncryptedFileOffset())
 	return err
 }
 
