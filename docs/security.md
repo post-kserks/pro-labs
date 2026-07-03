@@ -185,7 +185,9 @@ encryption:
 
 - **Envelope Encryption**: KEK (Key Encryption Key) encrypts DEK (Data Encryption Key)
 - **Passphrase**: Key derived via Argon2id (64MB memory, 3 iterations)
-- **Key Rotation**: Planned but not yet implemented
+- **OS Keychain**: macOS Keychain, Linux libsecret, Windows DPAPI
+- **KMS**: AWS KMS, HashiCorp Vault, Azure Key Vault
+- **Key Rotation**: KEK rotation is instant (<1 second), DEK rotation is online
 
 ### Security Properties
 

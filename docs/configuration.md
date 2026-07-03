@@ -42,6 +42,13 @@ auth:
   max_fails: 10
   block_for_seconds: 300
 
+encryption:
+  enabled: false
+  key_source: "passphrase"       # passphrase | os_keychain | kms
+  default_scope: "all"           # all | tables_only | off
+  encrypt_catalog: false
+  encrypt_wal: true
+
 ai:
   provider: ""
   endpoint: ""
@@ -229,6 +236,40 @@ ai:
 - **Type**: integer
 - **Default**: `300`
 - **Description**: Duration of IP block after exceeding `max_fails`.
+
+## Encryption Options
+
+### `encryption.enabled`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable Transparent Data Encryption (TDE). When enabled, all data pages and WAL are encrypted with AES-256-GCM.
+
+### `encryption.key_source`
+
+- **Type**: string
+- **Default**: `"passphrase"`
+- **Options**: `"passphrase"`, `"os_keychain"`, `"kms"`
+- **Description**: Source of the Key Encryption Key (KEK). `passphrase` derives KEK from password via Argon2id. `os_keychain` uses system keychain (macOS/Linux/Windows). `kms` uses external KMS (AWS/Vault/Azure).
+
+### `encryption.default_scope`
+
+- **Type**: string
+- **Default**: `"all"`
+- **Options**: `"all"`, `"tables_only"`, `"off"`
+- **Description**: Default encryption scope for new databases. `all` encrypts everything, `tables_only` encrypts only table data, `off` disables encryption.
+
+### `encryption.encrypt_catalog`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Whether to encrypt table/column names in the catalog. When false, schema is readable without the key (useful for recovery).
+
+### `encryption.encrypt_wal`
+
+- **Type**: boolean
+- **Default**: `true`
+- **Description**: Whether to encrypt WAL records. Should be `true` when `encryption.enabled` is `true`.
 
 ## AI Options
 

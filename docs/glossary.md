@@ -37,3 +37,9 @@
 | **WAL** | Write-Ahead Logging — durability protocol ensuring crash recovery |
 | **XMax** | Transaction ID that deleted a tuple (0 if live) — field in tuple header |
 | **XMin** | Transaction ID that created a tuple — field in tuple header |
+| **TDE** | Transparent Data Encryption — page-level encryption using AES-256-GCM |
+| **DEK** | Data Encryption Key — encrypts actual page data (32 bytes for AES-256) |
+| **KEK** | Key Encryption Key — encrypts the DEK (from passphrase, keychain, or KMS) |
+| **Envelope Encryption** | Two-level key scheme where KEK encrypts DEK, enabling fast key rotation |
+| **AES-256-GCM** | Authenticated encryption providing confidentiality and integrity in one pass |
+| **Argon2id** | Memory-hard key derivation function resistant to GPU/ASIC brute-force |
