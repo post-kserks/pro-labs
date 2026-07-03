@@ -48,6 +48,15 @@ func GenerateSalt() ([]byte, error) {
 	return salt, err
 }
 
+// GenerateKey generates a cryptographically secure 32-byte key for AES-256.
+func GenerateKey() ([]byte, error) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generate key: %w", err)
+	}
+	return key, nil
+}
+
 // FileKeySource reads a passphrase from a file and derives a KEK.
 type FileKeySource struct {
 	filePath string

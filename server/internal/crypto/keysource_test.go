@@ -110,3 +110,21 @@ func TestGenerateSalt(t *testing.T) {
 		t.Fatal("two consecutive salts are identical (extremely unlikely)")
 	}
 }
+
+func TestGenerateKey(t *testing.T) {
+	key, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if len(key) != 32 {
+		t.Fatalf("key length = %d, want 32", len(key))
+	}
+
+	key2, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey (second): %v", err)
+	}
+	if string(key) == string(key2) {
+		t.Fatal("two consecutive keys are identical (extremely unlikely)")
+	}
+}

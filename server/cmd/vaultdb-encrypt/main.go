@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"vaultdb/internal/crypto"
 	"vaultdb/internal/osdisk"
@@ -34,11 +36,16 @@ func main() {
 func cmdInit() {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	dbPath := fs.String("database", "", "Path to database directory")
-	passphrase := fs.String("passphrase", "", "Encryption passphrase")
 	fs.Parse(os.Args[2:])
 
-	if *dbPath == "" || *passphrase == "" {
-		fmt.Fprintln(os.Stderr, "--database and --passphrase are required")
+	if *dbPath == "" {
+		fmt.Fprintln(os.Stderr, "--database is required")
+		os.Exit(1)
+	}
+
+	passphrase, err := readPassphrase()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading passphrase: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -54,7 +61,7 @@ func cmdInit() {
 		os.Exit(1)
 	}
 
-	ks := crypto.NewPassphraseKeySource(*passphrase, salt)
+	ks := crypto.NewPassphraseKeySource(passphrase, salt)
 	dekMgr := crypto.NewDEKManager(*dbPath)
 
 	ctx := context.Background()
@@ -69,6 +76,41 @@ func cmdInit() {
 	fmt.Printf("  Database: %s\n", *dbPath)
 	fmt.Printf("  Algorithm: AES-256-GCM\n")
 	fmt.Printf("  Key source: passphrase\n")
+}
+
+func readPassphrase() (string, error) {
+	// 1. Try environment variable first.
+	if env := os.Getenv("VAULTDB_ENCRYPTION_PASSPHRASE"); env != "" {
+		return env, nil
+	}
+
+	// 2. Read from stdin if not a terminal.
+	if !isTerminal() {
+		scanner := bufio.NewScanner(os.Stdin)
+		if scanner.Scan() {
+			return strings.TrimSpace(scanner.Text()), nil
+		}
+		if err := scanner.Err(); err != nil {
+			return "", fmt.Errorf("reading stdin: %w", err)
+		}
+		return "", fmt.Errorf("no passphrase provided on stdin")
+	}
+
+	// 3. Interactive prompt.
+	fmt.Fprint(os.Stderr, "Enter passphrase: ")
+	scanner := bufio.NewScanner(os.Stdin)
+	if scanner.Scan() {
+		return strings.TrimSpace(scanner.Text()), nil
+	}
+	return "", fmt.Errorf("no passphrase entered")
+}
+
+func isTerminal() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 func cmdStatus() {
@@ -106,13 +148,13 @@ func cmdGenerateKey() {
 	outputPath := fs.String("output", "key.bin", "Output file for generated key")
 	fs.Parse(os.Args[2:])
 
-	salt, err := crypto.GenerateSalt()
+	key, err := crypto.GenerateKey()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating key: %v\n", err)
 		os.Exit(1)
 	}
 
-	if err := os.WriteFile(*outputPath, salt, 0600); err != nil {
+	if err := os.WriteFile(*outputPath, key, 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing key: %v\n", err)
 		os.Exit(1)
 	}

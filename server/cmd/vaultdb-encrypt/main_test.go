@@ -57,7 +57,8 @@ func TestCmdInitSuccess(t *testing.T) {
 	bin := buildEncrypt(t)
 	dbDir := t.TempDir()
 
-	cmd := exec.Command(bin, "init", "--database", dbDir, "--passphrase", "test-passphrase-123")
+	cmd := exec.Command(bin, "init", "--database", dbDir)
+	cmd.Env = append(os.Environ(), "VAULTDB_ENCRYPTION_PASSPHRASE=test-passphrase-123")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("init failed: %v\n%s", err, out)
@@ -83,6 +84,27 @@ func TestCmdInitSuccess(t *testing.T) {
 	}
 }
 
+func TestCmdInitReadsFromEnvVar(t *testing.T) {
+	bin := buildEncrypt(t)
+	dbDir := t.TempDir()
+
+	cmd := exec.Command(bin, "init", "--database", dbDir)
+	cmd.Env = append(os.Environ(), "VAULTDB_ENCRYPTION_PASSPHRASE=env-secret-pass")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("init with env var failed: %v\n%s", err, out)
+	}
+
+	if got := string(out); got == "" {
+		t.Error("expected success message")
+	}
+
+	dekPath := filepath.Join(dbDir, ".dek.enc")
+	if _, err := os.Stat(dekPath); os.IsNotExist(err) {
+		t.Error("DEK file not created")
+	}
+}
+
 func TestCmdStatusNotInitialized(t *testing.T) {
 	bin := buildEncrypt(t)
 	dbDir := t.TempDir()
@@ -103,7 +125,8 @@ func TestCmdStatusInitialized(t *testing.T) {
 	dbDir := t.TempDir()
 
 	// Initialize first
-	cmd := exec.Command(bin, "init", "--database", dbDir, "--passphrase", "test-passphrase-123")
+	cmd := exec.Command(bin, "init", "--database", dbDir)
+	cmd.Env = append(os.Environ(), "VAULTDB_ENCRYPTION_PASSPHRASE=test-passphrase-123")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("init failed: %v\n%s", err, out)
 	}
