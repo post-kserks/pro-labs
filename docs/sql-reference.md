@@ -354,4 +354,11 @@ Shows table schema.
 SHOW DATABASES;
 SHOW TABLES;
 SHOW INDEXES ON users;
+SHOW ENCRYPTION STATUS;
 ```
+
+`SHOW ENCRYPTION STATUS` displays encryption information for the current database:
+- `database` — database name
+- `encrypted` — yes/no
+- `algorithm` — encryption algorithm (e.g., AES-256-GCM)
+- `key_source` — key source type (passphrase, os_keychain, kms)

@@ -68,6 +68,21 @@ CREATE TABLE users (
 ALTER TABLE users ALTER COLUMN ssn SET ENCRYPTED;
 ```
 
+### Checking Encryption Status
+
+```sql
+SHOW ENCRYPTION STATUS;
+```
+
+Output:
+```
++----------+------------+---------------+------------+
+| database | encrypted  | algorithm     | key_source |
++----------+------------+---------------+------------+
+| mydb     | yes        | AES-256-GCM   | passphrase |
++----------+------------+---------------+------------+
+```
+
 ## Configuration
 
 ```yaml
