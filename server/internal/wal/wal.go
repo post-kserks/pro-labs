@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"vaultdb/internal/crypto"
 )
 
 const (
@@ -55,9 +57,10 @@ const (
 )
 
 type Entry struct {
-	TxID    uint64
-	OpType  byte
-	Payload []byte
+	TxID      uint64
+	OpType    byte
+	Payload   []byte
+	Encrypted bool // true if payload is still ciphertext (EM was nil during read)
 }
 
 // WALPageInsertPayload — payload для OpPageInsert
@@ -127,8 +130,9 @@ type WAL struct {
 	nextTxID      atomic.Uint64
 	path          string
 	syncCounter   int
-	SyncBatchSize int    // number of writes between fsyncs (0 = sync every write)
-	OnAppend      func() // called after each successful WAL append (for metrics)
+	SyncBatchSize int                    // number of writes between fsyncs (0 = sync every write)
+	OnAppend      func()                 // called after each successful WAL append (for metrics)
+	em            *crypto.EncryptionManager // nil = no encryption
 }
 
 func Open(path string) (*WAL, error) {
@@ -181,7 +185,7 @@ func (w *WAL) Checkpoint() error {
 	if err != nil {
 		return fmt.Errorf("wal: marshal checkpoint payload: %w", err)
 	}
-	record, err := buildRecord(w.nextTxID.Add(1), OpCheckpoint, payload)
+	record, err := buildRecord(w.nextTxID.Add(1), OpCheckpoint, payload, nil)
 	if err != nil {
 		return err
 	}
@@ -213,7 +217,7 @@ func (w *WAL) WriteCheckpointRecord() (uint64, error) {
 		return 0, fmt.Errorf("wal: marshal checkpoint payload: %w", err)
 	}
 	txID := w.nextTxID.Add(1)
-	record, err := buildRecord(txID, OpCheckpoint, payload)
+	record, err := buildRecord(txID, OpCheckpoint, payload, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -260,6 +264,9 @@ func (w *WAL) Recover() ([]Entry, error) {
 			}
 			break
 		}
+		if entry.Encrypted && w.em == nil {
+			return nil, fmt.Errorf("wal: record at txID %d is encrypted but no EncryptionManager is set", entry.TxID)
+		}
 		if entry.TxID > maxTxID {
 			maxTxID = entry.TxID
 		}
@@ -296,6 +303,11 @@ func (w *WAL) CurrentTxID() uint64 {
 	return w.nextTxID.Load()
 }
 
+// SetEncryptionManager enables WAL encryption. Pass nil to disable.
+func (w *WAL) SetEncryptionManager(em *crypto.EncryptionManager) {
+	w.em = em
+}
+
 // AppendWithTx записывает запись в WAL с указанным txID (не инкрементирует автоматически).
 func (w *WAL) AppendWithTx(txID uint64, opType byte, payload interface{}) (uint64, error) {
 	w.mu.Lock()
@@ -330,7 +342,7 @@ func (w *WAL) WriteFullPageImage(txID uint64, db, table string, segmentNo uint16
 }
 
 func (w *WAL) appendBytesLockedWithTx(txID uint64, opType byte, payload []byte) (uint64, error) {
-	record, err := buildRecord(txID, opType, payload)
+	record, err := buildRecord(txID, opType, payload, w.em)
 	if err != nil {
 		return 0, err
 	}
@@ -368,7 +380,7 @@ func (w *WAL) appendBytesLockedWithTx(txID uint64, opType byte, payload []byte) 
 func (w *WAL) appendBytesLocked(opType byte, payload []byte) (uint64, error) {
 	txID := w.nextTxID.Add(1)
 
-	record, err := buildRecord(txID, opType, payload)
+	record, err := buildRecord(txID, opType, payload, w.em)
 	if err != nil {
 		return 0, err
 	}
@@ -401,24 +413,54 @@ func (w *WAL) appendBytesLocked(opType byte, payload []byte) (uint64, error) {
 	return txID, nil
 }
 
-func buildRecord(txID uint64, opType byte, payload []byte) ([]byte, error) {
+// buildRecord creates a WAL record.
+// Layout: magic(4) + txID(8) + opType(1) + encrypted(1) + keyVersion(4) + nonce(12) + payloadLen(4) + payload + crc(4)
+// When not encrypted, keyVersion=0, nonce=12 zero bytes.
+func buildRecord(txID uint64, opType byte, payload []byte, enc *crypto.EncryptionManager) ([]byte, error) {
 	if len(payload) > maxPayloadSize {
 		return nil, fmt.Errorf("wal: payload too large (%d bytes)", len(payload))
 	}
 
-	// Fixed layout: magic(4) + txID(8) + opType(1) + payloadLen(4) + payload + crc(4)
-	recordLen := 4 + 8 + 1 + 4 + len(payload) + 4
+	isEncrypted := enc != nil
+	var nonce [12]byte
+	var keyVersion uint32
+
+	if isEncrypted {
+		// Build AAD from txID (8 bytes)
+		aad := make([]byte, 8)
+		binary.LittleEndian.PutUint64(aad, txID)
+
+		var err error
+		n, ciphertext, err := enc.EncryptPage(payload, aad)
+		if err != nil {
+			return nil, fmt.Errorf("wal: encrypt payload: %w", err)
+		}
+		copy(nonce[:], n)
+		keyVersion = enc.KeyVersion()
+		payload = ciphertext
+	}
+
+	// Fixed layout: magic(4) + txID(8) + opType(1) + encrypted(1) + keyVersion(4) + nonce(12) + payloadLen(4) + payload + crc(4)
+	fixedLen := 4 + 8 + 1 + 1 + 4 + 12 + 4 // 34 bytes header
+	recordLen := fixedLen + len(payload) + 4  // +4 for CRC
 	record := make([]byte, recordLen)
 
 	copy(record[0:4], recordMagic)
 	binary.LittleEndian.PutUint64(record[4:12], txID)
 	record[12] = opType
-	binary.LittleEndian.PutUint32(record[13:17], uint32(len(payload)))
-	copy(record[17:17+len(payload)], payload)
+	if isEncrypted {
+		record[13] = 1
+	} else {
+		record[13] = 0
+	}
+	binary.LittleEndian.PutUint32(record[14:18], keyVersion)
+	copy(record[18:30], nonce[:])
+	binary.LittleEndian.PutUint32(record[30:34], uint32(len(payload)))
+	copy(record[34:34+len(payload)], payload)
 
 	// CRC32 over everything except the CRC field itself
-	crc := crc32.ChecksumIEEE(record[:17+len(payload)])
-	binary.LittleEndian.PutUint32(record[17+len(payload):], crc)
+	crc := crc32.ChecksumIEEE(record[:34+len(payload)])
+	binary.LittleEndian.PutUint32(record[34+len(payload):], crc)
 
 	return record, nil
 }
@@ -426,9 +468,10 @@ func buildRecord(txID uint64, opType byte, payload []byte) ([]byte, error) {
 // readEntryFrom reads a single WAL entry from the current file position.
 // Returns the entry, the number of bytes read, and any error.
 // Returns io.EOF when no more entries.
-// Uses a single 17-byte read for the fixed header to minimize I/O syscalls.
+// Uses a single read for the fixed header to minimize I/O syscalls.
+// Layout: magic(4) + txID(8) + opType(1) + encrypted(1) + keyVersion(4) + nonce(12) + payloadLen(4) + payload + crc(4)
 func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
-	fixedHdr := make([]byte, 17) // magic(4) + txID(8) + opType(1) + payloadLen(4)
+	fixedHdr := make([]byte, 34) // magic(4) + txID(8) + opType(1) + encrypted(1) + keyVersion(4) + nonce(12) + payloadLen(4)
 	if _, err := io.ReadFull(f, fixedHdr); err != nil {
 		return Entry{}, 0, err
 	}
@@ -437,7 +480,10 @@ func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
 	}
 	txID := binary.LittleEndian.Uint64(fixedHdr[4:12])
 	opType := fixedHdr[12]
-	payloadLen := binary.LittleEndian.Uint32(fixedHdr[13:17])
+	isEncrypted := fixedHdr[13] != 0
+	var nonce [12]byte
+	copy(nonce[:], fixedHdr[18:30])
+	payloadLen := binary.LittleEndian.Uint32(fixedHdr[30:34])
 
 	if payloadLen > maxPayloadSize {
 		return Entry{}, 0, fmt.Errorf("wal: payload too large (%d bytes)", payloadLen)
@@ -454,15 +500,31 @@ func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
 	}
 	storedCRC := binary.LittleEndian.Uint32(crcBuf)
 
-	// Verify checksum incrementally: fixedHdr(17) + payload
+	// Verify checksum incrementally: fixedHdr(34) + payload
 	calculated := crc32.ChecksumIEEE(fixedHdr)
 	calculated = crc32.Update(calculated, crc32.IEEETable, payload)
 	if storedCRC != calculated {
 		return Entry{}, 0, fmt.Errorf("wal: checksum mismatch")
 	}
 
-	totalSize := int64(17 + int(payloadLen) + 4)
-	return Entry{TxID: txID, OpType: opType, Payload: payload}, totalSize, nil
+	// Decrypt if encrypted
+	var stillEncrypted bool
+	if isEncrypted {
+		if w.em != nil {
+			aad := make([]byte, 8)
+			binary.LittleEndian.PutUint64(aad, txID)
+			plaintext, err := w.em.DecryptPage(nonce[:], payload, aad)
+			if err != nil {
+				return Entry{}, 0, fmt.Errorf("wal: decrypt payload: %w", err)
+			}
+			payload = plaintext
+		} else {
+			stillEncrypted = true
+		}
+	}
+
+	totalSize := int64(34 + int(payloadLen) + 4)
+	return Entry{TxID: txID, OpType: opType, Payload: payload, Encrypted: stillEncrypted}, totalSize, nil
 }
 
 // scanAndTruncate streams through the WAL to find maxTxID and truncate
