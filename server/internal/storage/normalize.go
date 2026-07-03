@@ -62,7 +62,7 @@ func normalizeValue(value interface{}, col ColumnSchema) (Value, error) {
 			return nil, fmt.Errorf("expected BOOL, got %T", value)
 		}
 		return boolVal, nil
-	case "TEXT", "VARCHAR":
+	case "TEXT", "VARCHAR", "BLOB":
 		strVal, ok := value.(string)
 		if !ok {
 			return nil, fmt.Errorf("expected %s, got %T", col.Type, value)
