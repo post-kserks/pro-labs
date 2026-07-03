@@ -68,6 +68,7 @@ func (m *MockStorage) DropDatabase(name string) error {
 
 func (m *MockStorage) FinalCheckpoint() error { return nil }
 func (m *MockStorage) Close() error           { return nil }
+func (m *MockStorage) DataDir() string        { return "" }
 
 // ReadOnlyEngine
 

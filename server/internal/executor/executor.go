@@ -93,6 +93,9 @@ func init() {
 	registerCommand(reflect.TypeOf((*parser.CallProcedureStatement)(nil)), func(s parser.Statement) Command {
 		return &CallProcedureCommand{stmt: s.(*parser.CallProcedureStatement)}
 	})
+	registerCommand(reflect.TypeOf((*parser.ShowEncryptionStatusStatement)(nil)), func(s parser.Statement) Command {
+		return &ShowEncryptionStatusCommand{stmt: s.(*parser.ShowEncryptionStatusStatement)}
+	})
 }
 
 // Command is the Command pattern abstraction.

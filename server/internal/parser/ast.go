@@ -35,6 +35,8 @@ type ShowTablesStatement struct {
 	DatabaseName string // empty means current session database
 }
 
+type ShowEncryptionStatusStatement struct{}
+
 type DescribeTableStatement struct {
 	TableName    string
 	DatabaseName string // empty means current session database
@@ -392,6 +394,7 @@ func (*DropDatabaseStatement) statementNode()    {}
 func (*UseDatabaseStatement) statementNode()     {}
 func (*ShowDatabasesStatement) statementNode()   {}
 func (*ShowTablesStatement) statementNode()      {}
+func (*ShowEncryptionStatusStatement) statementNode() {}
 func (*DescribeTableStatement) statementNode()   {}
 func (*CreateTableStatement) statementNode()     {}
 func (*DropTableStatement) statementNode()       {}
@@ -433,6 +436,7 @@ func (*DropDatabaseStatement) StatementType() string    { return "DROP_DATABASE"
 func (*UseDatabaseStatement) StatementType() string     { return "USE_DATABASE" }
 func (*ShowDatabasesStatement) StatementType() string   { return "SHOW_DATABASES" }
 func (*ShowTablesStatement) StatementType() string      { return "SHOW_TABLES" }
+func (*ShowEncryptionStatusStatement) StatementType() string { return "SHOW_ENCRYPTION_STATUS" }
 func (*DescribeTableStatement) StatementType() string   { return "DESCRIBE_TABLE" }
 func (*CreateTableStatement) StatementType() string     { return "CREATE_TABLE" }
 func (*DropTableStatement) StatementType() string       { return "DROP_TABLE" }

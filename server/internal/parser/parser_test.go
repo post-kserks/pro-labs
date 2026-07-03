@@ -14,6 +14,7 @@ func TestParseValidStatements(t *testing.T) {
 		"SHOW DATABASES;",
 		"SHOW TABLES;",
 		"SHOW TABLES FROM mydb;",
+		"SHOW ENCRYPTION STATUS;",
 		"DESCRIBE heroes;",
 		"DESCRIBE heroes FROM mydb;",
 		"SELECT * FROM heroes;",
@@ -3492,4 +3493,17 @@ func TestParseCreateTableWithEncryptedColumn(t *testing.T) {
 			t.Fatal("expected Encrypted to be true")
 		}
 	})
+}
+
+func TestParseShowEncryptionStatus(t *testing.T) {
+	stmt, err := Parse("SHOW ENCRYPTION STATUS;")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if _, ok := stmt.(*ShowEncryptionStatusStatement); !ok {
+		t.Fatalf("expected *ShowEncryptionStatusStatement, got %T", stmt)
+	}
+	if stmt.StatementType() != "SHOW_ENCRYPTION_STATUS" {
+		t.Fatalf("expected StatementType SHOW_ENCRYPTION_STATUS, got %s", stmt.StatementType())
+	}
 }

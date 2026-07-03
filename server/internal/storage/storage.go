@@ -139,6 +139,7 @@ type AdminEngine interface {
 	DropDatabase(name string) error
 	FinalCheckpoint() error
 	Close() error
+	DataDir() string
 }
 
 // StorageEngine is the full abstraction used by executor.

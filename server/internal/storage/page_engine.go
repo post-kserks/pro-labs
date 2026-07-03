@@ -695,6 +695,10 @@ func (e *PageStorageEngine) dbPath(db string) string {
 	return filepath.Join(e.rootDir, db)
 }
 
+func (e *PageStorageEngine) DataDir() string {
+	return e.rootDir
+}
+
 func (e *PageStorageEngine) tablePath(db, table string) string {
 	return filepath.Join(e.rootDir, db, table)
 }

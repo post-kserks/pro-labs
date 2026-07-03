@@ -143,6 +143,7 @@ const (
 	TOKEN_EXISTS
 	TOKEN_IF
 	TOKEN_ENCRYPTED
+	TOKEN_ENCRYPTION
 
 	// Data types
 	TOKEN_INT
@@ -668,6 +669,7 @@ var keywords = map[string]TokenType{
 	"IF":               TOKEN_IF,
 	"BLOB":             TOKEN_BLOB,
 	"ENCRYPTED":        TOKEN_ENCRYPTED,
+	"ENCRYPTION":       TOKEN_ENCRYPTION,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -823,6 +825,7 @@ var tokenNames = [...]string{
 	TOKEN_IF:                "IF",
 	TOKEN_BLOB:              "BLOB",
 	TOKEN_ENCRYPTED:         "ENCRYPTED",
+	TOKEN_ENCRYPTION:        "ENCRYPTION",
 	TOKEN_IDENT:             "IDENT",
 	TOKEN_INT_LIT:           "INT_LIT",
 	TOKEN_FLOAT_LIT:         "FLOAT_LIT",

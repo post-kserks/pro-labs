@@ -134,6 +134,7 @@ func (m *mockStorageEngine) CreateDatabase(name string) error { return nil }
 func (m *mockStorageEngine) DropDatabase(name string) error   { return nil }
 func (m *mockStorageEngine) FinalCheckpoint() error           { return nil }
 func (m *mockStorageEngine) Close() error                     { return nil }
+func (m *mockStorageEngine) DataDir() string                  { return "" }
 
 func TestAutoVacuumTriggersOnHighDeadRatio(t *testing.T) {
 	vacuumCalled := false

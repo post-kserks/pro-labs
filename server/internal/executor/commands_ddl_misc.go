@@ -3,8 +3,11 @@ package executor
 // DDL commands for vacuum, migration, policies, views, triggers, functions, procedures.
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -572,4 +575,48 @@ func (c *CallProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return lastResult, nil
 	}
 	return &Result{Type: "message", Message: "procedure executed (no result)"}, nil
+}
+
+type ShowEncryptionStatusCommand struct {
+	stmt *parser.ShowEncryptionStatusStatement
+}
+
+func (c *ShowEncryptionStatusCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	dekPath := filepath.Join(ctx.Storage.DataDir(), dbName, ".dek.enc")
+	metaPath := filepath.Join(ctx.Storage.DataDir(), dbName, ".encryption_meta.json")
+
+	encrypted := false
+	algorithm := "-"
+	keySource := "-"
+
+	if _, err := os.Stat(dekPath); err == nil {
+		encrypted = true
+		algorithm = "AES-256-GCM"
+
+		if data, err := os.ReadFile(metaPath); err == nil {
+			var meta struct {
+				KeySource string `json:"key_source"`
+			}
+			if json.Unmarshal(data, &meta) == nil && meta.KeySource != "" {
+				keySource = meta.KeySource
+			}
+		}
+	}
+
+	encStr := "no"
+	if encrypted {
+		encStr = "yes"
+	}
+
+	rows := [][]string{{dbName, encStr, algorithm, keySource}}
+	return &Result{
+		Type:    "rows",
+		Columns: []string{"database", "encrypted", "algorithm", "key_source"},
+		Rows:    rows,
+	}, nil
 }

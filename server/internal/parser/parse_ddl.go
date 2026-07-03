@@ -284,6 +284,13 @@ func (p *sqlParser) parseShow() (Statement, error) {
 	case lexer.TOKEN_DATABASES:
 		p.advance()
 		return &ShowDatabasesStatement{}, nil
+	case lexer.TOKEN_ENCRYPTION:
+		p.advance() // ENCRYPTION
+		if p.current().Type != lexer.TOKEN_IDENT || strings.ToUpper(p.current().Literal) != "STATUS" {
+			return nil, p.expectedError("STATUS", p.current())
+		}
+		p.advance() // STATUS
+		return &ShowEncryptionStatusStatement{}, nil
 	case lexer.TOKEN_TABLES:
 		p.advance()
 		stmt := &ShowTablesStatement{}
@@ -307,7 +314,7 @@ func (p *sqlParser) parseShow() (Statement, error) {
 		}
 		return &ShowIndexesStatement{TableName: tableName}, nil
 	default:
-		return nil, p.expectedError("DATABASES, TABLES or INDEXES", p.current())
+		return nil, p.expectedError("DATABASES, TABLES, INDEXES or ENCRYPTION", p.current())
 	}
 }
 

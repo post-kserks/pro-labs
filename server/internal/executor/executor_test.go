@@ -885,3 +885,40 @@ func TestDropDatabaseIfExists(t *testing.T) {
 		t.Fatalf("unexpected message: %s", res.Message)
 	}
 }
+
+func TestShowEncryptionStatus(t *testing.T) {
+	session := setupSession(t)
+
+	// Check encryption status for mydb (not encrypted)
+	result := executeSQL(t, session, "SHOW ENCRYPTION STATUS;")
+
+	// Verify columns
+	if len(result.Columns) != 4 {
+		t.Fatalf("expected 4 columns, got %d", len(result.Columns))
+	}
+	expectedCols := []string{"database", "encrypted", "algorithm", "key_source"}
+	for i, col := range expectedCols {
+		if result.Columns[i] != col {
+			t.Fatalf("expected column %s at index %d, got %s", col, i, result.Columns[i])
+		}
+	}
+
+	// Verify single row
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(result.Rows))
+	}
+
+	// Verify not encrypted
+	if result.Rows[0][0] != "mydb" {
+		t.Errorf("expected database=mydb, got %s", result.Rows[0][0])
+	}
+	if result.Rows[0][1] != "no" {
+		t.Errorf("expected encrypted=no, got %s", result.Rows[0][1])
+	}
+	if result.Rows[0][2] != "-" {
+		t.Errorf("expected algorithm=-, got %s", result.Rows[0][2])
+	}
+	if result.Rows[0][3] != "-" {
+		t.Errorf("expected key_source=-, got %s", result.Rows[0][3])
+	}
+}
