@@ -341,6 +341,7 @@ ai:
 | `VAULTDB_MTLS_ENABLED` | `auth.mtls_enabled` | Enable mTLS |
 | `VAULTDB_MTLS_CA_FILE` | `auth.mtls_ca_file` | CA file for mTLS |
 | `VAULTDB_AI_API_KEY` | `ai.api_key` | AI embedding API key |
+| `VAULTDB_ENCRYPTION_PASSPHRASE` | `encryption.key_source` | Passphrase for TDE encryption (when using `passphrase` key source) |
 
 ## Validation Rules
 

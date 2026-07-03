@@ -132,3 +132,39 @@ storage:
 ```
 
 When `encrypted_disk_check: enforce`, the server refuses to start if `data_dir` is not on an encrypted volume.
+
+**Note:** OS disk encryption and TDE are complementary layers, not alternatives. TDE protects data even if disk access is obtained (e.g., backup theft, root access). OS encryption protects the physical disk.
+
+## Disaster Recovery
+
+### Passphrase Loss
+
+**If the passphrase is lost and no backup exists, all encrypted data is permanently unrecoverable.** The DEK is encrypted with the KEK derived from the passphrase, and there is no backdoor.
+
+### Best Practices
+
+1. **Backup your passphrase** in a secure location (password manager, physical safe)
+2. **Use KMS for production** — cloud KMS providers offer key recovery mechanisms
+3. **Test recovery** before deploying to production
+4. **Consider `encrypt_catalog: false`** — allows schema inspection without the key (but data remains encrypted)
+
+### Recovery Options
+
+| Scenario | Recovery |
+|----------|----------|
+| Passphrase lost, KMS available | Use KMS to decrypt DEK |
+| Passphrase lost, OS keychain available | Use keychain to retrieve KEK |
+| Passphrase lost, no backups | **Data is lost** |
+| Server crash during migration | Re-run migration (idempotent for key setup) |
+
+## Migration Atomicity
+
+The `vaultdb-encrypt migrate` command performs two file writes:
+1. `.dek.enc` — encrypted DEK
+2. `.encryption_meta.json` — metadata
+
+If the process crashes between these writes:
+- `.dek.enc` exists but no metadata → metadata will be recreated on next `status` check
+- Partial `.dek.enc` → re-run `migrate` to regenerate
+
+The actual page encryption happens when the server starts with `encryption.enabled: true`. Migration only sets up the keys.
