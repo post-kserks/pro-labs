@@ -831,3 +831,57 @@ func TestParamLimitOffset(t *testing.T) {
 		t.Fatalf("expected [Aragorn], got %v", result.Rows)
 	}
 }
+
+func TestCreateDatabaseIfNotExists(t *testing.T) {
+	dir := t.TempDir()
+	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	session := NewSession(store, nil, txm, nil)
+
+	// Create database normally
+	executeSQL(t, session, "CREATE DATABASE testdb;")
+
+	// Create same database with IF NOT EXISTS — should succeed without error
+	res := executeSQL(t, session, "CREATE DATABASE IF NOT EXISTS testdb;")
+	if res.Message != "Database 'testdb' already exists, skipping." {
+		t.Fatalf("unexpected message: %s", res.Message)
+	}
+
+	// Create new database with IF NOT EXISTS — should succeed
+	executeSQL(t, session, "CREATE DATABASE IF NOT EXISTS newdb;")
+
+	// Verify newdb was created
+	executeSQL(t, session, "USE newdb;")
+}
+
+func TestDropDatabaseIfExists(t *testing.T) {
+	dir := t.TempDir()
+	txm := txmanager.NewManager()
+	store, err := storage.NewPageStorageEngine(dir, nil, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	session := NewSession(store, nil, txm, nil)
+
+	// Create and then drop a database
+	executeSQL(t, session, "CREATE DATABASE testdb;")
+	executeSQL(t, session, "DROP DATABASE testdb;")
+
+	// Drop non-existent database with IF EXISTS — should succeed without error
+	res := executeSQL(t, session, "DROP DATABASE IF EXISTS testdb;")
+	if res.Message != "Database 'testdb' does not exist, skipping." {
+		t.Fatalf("unexpected message: %s", res.Message)
+	}
+
+	// Create and drop with IF EXISTS — should succeed
+	executeSQL(t, session, "CREATE DATABASE anotherdb;")
+	res = executeSQL(t, session, "DROP DATABASE IF EXISTS anotherdb;")
+	if res.Message != "Database 'anotherdb' dropped successfully." {
+		t.Fatalf("unexpected message: %s", res.Message)
+	}
+}

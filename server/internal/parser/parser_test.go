@@ -5,7 +5,9 @@ import "testing"
 func TestParseValidStatements(t *testing.T) {
 	queries := []string{
 		"CREATE DATABASE mydb;",
+		"CREATE DATABASE IF NOT EXISTS mydb;",
 		"DROP DATABASE mydb;",
+		"DROP DATABASE IF EXISTS mydb;",
 		"USE mydb;",
 		"CREATE TABLE heroes (id INT, name VARCHAR(100), alive BOOL);",
 		"DROP TABLE heroes;",
@@ -2985,6 +2987,72 @@ func TestParseDropTableIfExists(t *testing.T) {
 		drop, ok := stmt.(*DropTableStatement)
 		if !ok {
 			t.Fatalf("expected *DropTableStatement, got %T", stmt)
+		}
+		if drop.IfExists {
+			t.Fatal("expected IfExists to be false")
+		}
+	})
+}
+
+func TestParseCreateDatabaseIfNotExists(t *testing.T) {
+	t.Run("IF NOT EXISTS", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE IF NOT EXISTS mydb;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if !create.IfNotExists {
+			t.Fatal("expected IfNotExists to be true")
+		}
+		if create.DatabaseName != "mydb" {
+			t.Fatalf("expected database name 'mydb', got %q", create.DatabaseName)
+		}
+	})
+
+	t.Run("without IF NOT EXISTS", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE mydb;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if create.IfNotExists {
+			t.Fatal("expected IfNotExists to be false")
+		}
+	})
+}
+
+func TestParseDropDatabaseIfExists(t *testing.T) {
+	t.Run("IF EXISTS", func(t *testing.T) {
+		stmt, err := Parse("DROP DATABASE IF EXISTS mydb;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		drop, ok := stmt.(*DropDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *DropDatabaseStatement, got %T", stmt)
+		}
+		if !drop.IfExists {
+			t.Fatal("expected IfExists to be true")
+		}
+		if drop.DatabaseName != "mydb" {
+			t.Fatalf("expected database name 'mydb', got %q", drop.DatabaseName)
+		}
+	})
+
+	t.Run("without IF EXISTS", func(t *testing.T) {
+		stmt, err := Parse("DROP DATABASE mydb;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		drop, ok := stmt.(*DropDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *DropDatabaseStatement, got %T", stmt)
 		}
 		if drop.IfExists {
 			t.Fatal("expected IfExists to be false")

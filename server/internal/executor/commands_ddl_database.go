@@ -18,6 +18,10 @@ func (c *CreateDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) 
 	if _, err := sanitizeObjectName(c.stmt.DatabaseName); err != nil {
 		return nil, fmt.Errorf("create database: %w", err)
 	}
+	// IF NOT EXISTS: skip silently if database already exists
+	if c.stmt.IfNotExists && ctx.Storage.DatabaseExists(c.stmt.DatabaseName) {
+		return &Result{Type: "message", Message: fmt.Sprintf("Database '%s' already exists, skipping.", c.stmt.DatabaseName)}, nil
+	}
 	if err := ctx.Storage.CreateDatabase(c.stmt.DatabaseName); err != nil {
 		return nil, err
 	}
@@ -48,6 +52,10 @@ type DropDatabaseCommand struct {
 func (c *DropDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if _, err := sanitizeObjectName(c.stmt.DatabaseName); err != nil {
 		return nil, fmt.Errorf("drop database: %w", err)
+	}
+	// IF EXISTS: skip silently if database doesn't exist
+	if c.stmt.IfExists && !ctx.Storage.DatabaseExists(c.stmt.DatabaseName) {
+		return &Result{Type: "message", Message: fmt.Sprintf("Database '%s' does not exist, skipping.", c.stmt.DatabaseName)}, nil
 	}
 	if err := ctx.Storage.DropDatabase(c.stmt.DatabaseName); err != nil {
 		return nil, err

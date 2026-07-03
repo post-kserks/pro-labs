@@ -15,10 +15,12 @@ type AsOfClause struct {
 // DDL.
 type CreateDatabaseStatement struct {
 	DatabaseName string
+	IfNotExists  bool
 }
 
 type DropDatabaseStatement struct {
 	DatabaseName string
+	IfExists     bool
 }
 
 type UseDatabaseStatement struct {
