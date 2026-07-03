@@ -66,12 +66,22 @@ type AIConfig struct {
 	CacheSize    int    `yaml:"cache_size"`
 }
 
+// EncryptionConfig — параметры Transparent Data Encryption (TDE).
+type EncryptionConfig struct {
+	Enabled        bool   `yaml:"enabled"`
+	KeySource      string `yaml:"key_source"`      // passphrase | os_keychain | kms
+	DefaultScope   string `yaml:"default_scope"`   // all | tables_only | off
+	EncryptCatalog bool   `yaml:"encrypt_catalog"`
+	EncryptWAL     bool   `yaml:"encrypt_wal"`
+}
+
 // Config — корневая конфигурация vaultdb.yaml.
 type Config struct {
-	Server  ServerConfig  `yaml:"server"`
-	Storage StorageConfig `yaml:"storage"`
-	Auth    AuthConfig    `yaml:"auth"`
-	AI      AIConfig      `yaml:"ai"`
+	Server     ServerConfig     `yaml:"server"`
+	Storage    StorageConfig    `yaml:"storage"`
+	Auth       AuthConfig       `yaml:"auth"`
+	AI         AIConfig         `yaml:"ai"`
+	Encryption EncryptionConfig `yaml:"encryption"`
 }
 
 const (
@@ -230,6 +240,22 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Auth.BlockForSec == 0 {
 		cfg.Auth.BlockForSec = DefaultAuthBlockForSec
+	}
+	if cfg.Encryption.KeySource == "" {
+		cfg.Encryption.KeySource = "passphrase"
+	}
+	if cfg.Encryption.DefaultScope == "" {
+		cfg.Encryption.DefaultScope = "all"
+	}
+	if cfg.Encryption.KeySource != "passphrase" &&
+		cfg.Encryption.KeySource != "os_keychain" &&
+		cfg.Encryption.KeySource != "kms" {
+		return fmt.Errorf("unknown encryption.key_source %q (want passphrase|os_keychain|kms)", cfg.Encryption.KeySource)
+	}
+	if cfg.Encryption.DefaultScope != "all" &&
+		cfg.Encryption.DefaultScope != "tables_only" &&
+		cfg.Encryption.DefaultScope != "off" {
+		return fmt.Errorf("unknown encryption.default_scope %q (want all|tables_only|off)", cfg.Encryption.DefaultScope)
 	}
 
 	// Validate port ranges

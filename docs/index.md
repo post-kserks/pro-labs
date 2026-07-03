@@ -42,6 +42,7 @@ VaultDB is a SQL-compatible database engine with a custom page-based storage eng
 - [Monitoring and Metrics](monitoring.md) — Prometheus metrics, health checks, dashboards
 - [Log Rotation](logging.md) — Structured logging, audit trail
 - [Security](security.md) — Authentication, TLS, mTLS, brute-force protection
+- [Encryption](encryption.md) — Transparent Data Encryption, key management, SQL syntax
 
 ### Reference
 

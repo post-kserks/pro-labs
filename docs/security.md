@@ -168,6 +168,37 @@ Policies are stored in the table's `_schema.json`:
 }
 ```
 
+## Transparent Data Encryption (TDE)
+
+VaultDB supports page-level encryption using AES-256-GCM.
+
+### Enabling TDE
+
+```yaml
+# vaultdb.yaml
+encryption:
+  enabled: true
+  key_source: "passphrase"
+```
+
+### Key Management
+
+- **Envelope Encryption**: KEK (Key Encryption Key) encrypts DEK (Data Encryption Key)
+- **Passphrase**: Key derived via Argon2id (64MB memory, 3 iterations)
+- **Key Rotation**: KEK rotation is instant (<1s), DEK rotation is online
+
+### Security Properties
+
+- Pages are encrypted with AES-256-GCM (authenticated encryption)
+- Each page has unique nonce preventing replay attacks
+- PageID is bound as AAD preventing page swap attacks
+- WAL is also encrypted to prevent data leakage through journal
+
+### Performance
+
+- With AES-NI: ~17% overhead on INSERT/SELECT
+- Without AES-NI: 300-500% overhead (warning logged)
+
 ## Network Security
 
 ### Port Separation
