@@ -14,8 +14,10 @@ type AsOfClause struct {
 
 // DDL.
 type CreateDatabaseStatement struct {
-	DatabaseName string
-	IfNotExists  bool
+	DatabaseName  string
+	IfNotExists   bool
+	Encrypted     bool
+	EncryptionKey string
 }
 
 type DropDatabaseStatement struct {
@@ -49,6 +51,7 @@ type ColumnDef struct {
 	PrimaryKey    bool
 	Unique        bool
 	AutoIncrement bool
+	Encrypted     bool
 }
 
 type CreateTableStatement struct {
@@ -56,6 +59,7 @@ type CreateTableStatement struct {
 	Columns     []ColumnDef
 	InferSchema bool
 	IfNotExists bool
+	Encrypted   bool
 }
 
 type DropTableStatement struct {

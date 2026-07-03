@@ -537,7 +537,13 @@ func (p *sqlParser) parseCreateTable() (Statement, error) {
 		return nil, fmt.Errorf("syntax error: CREATE TABLE requires at least one column")
 	}
 
-	return &CreateTableStatement{TableName: tableName, Columns: columns, IfNotExists: ifNotExists}, nil
+	encrypted := false
+	if p.current().Type == lexer.TOKEN_ENCRYPTED {
+		p.advance()
+		encrypted = true
+	}
+
+	return &CreateTableStatement{TableName: tableName, Columns: columns, IfNotExists: ifNotExists, Encrypted: encrypted}, nil
 }
 
 func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
@@ -666,6 +672,11 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 		p.advance() // NOT
 		p.advance() // NULL
 		col.NotNull = true
+	}
+
+	if p.current().Type == lexer.TOKEN_ENCRYPTED {
+		p.advance()
+		col.Encrypted = true
 	}
 
 	return col, nil

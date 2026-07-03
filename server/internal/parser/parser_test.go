@@ -3281,7 +3281,7 @@ func TestParseCreateTableWithBlob(t *testing.T) {
 		},
 		{
 			name:      "multiple BLOB columns",
-			sql:       "CREATE TABLE t (encrypted BLOB, image BLOB);",
+			sql:       "CREATE TABLE t (enc_data BLOB, image BLOB);",
 			wantTypes: []string{"BLOB", "BLOB"},
 		},
 		{
@@ -3315,4 +3315,181 @@ func TestParseCreateTableWithBlob(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseCreateDatabaseEncrypted(t *testing.T) {
+	t.Run("ENCRYPTED WITH KEY", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE mydb ENCRYPTED WITH KEY 'secret123';")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if !create.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+		if create.EncryptionKey != "secret123" {
+			t.Fatalf("expected EncryptionKey 'secret123', got %q", create.EncryptionKey)
+		}
+	})
+
+	t.Run("ENCRYPTED without KEY", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE mydb ENCRYPTED;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if !create.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+		if create.EncryptionKey != "" {
+			t.Fatalf("expected empty EncryptionKey, got %q", create.EncryptionKey)
+		}
+	})
+
+	t.Run("IF NOT EXISTS ENCRYPTED WITH KEY", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE IF NOT EXISTS mydb ENCRYPTED WITH KEY 'mykey';")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if !create.IfNotExists {
+			t.Fatal("expected IfNotExists to be true")
+		}
+		if !create.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+		if create.EncryptionKey != "mykey" {
+			t.Fatalf("expected EncryptionKey 'mykey', got %q", create.EncryptionKey)
+		}
+	})
+
+	t.Run("not encrypted", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE mydb;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if create.Encrypted {
+			t.Fatal("expected Encrypted to be false")
+		}
+	})
+}
+
+func TestParseCreateTableEncrypted(t *testing.T) {
+	t.Run("ENCRYPTED table", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id INT) ENCRYPTED;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if !create.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+	})
+
+	t.Run("not encrypted table", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id INT);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if create.Encrypted {
+			t.Fatal("expected Encrypted to be false")
+		}
+	})
+
+	t.Run("IF NOT EXISTS ENCRYPTED", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE IF NOT EXISTS t (id INT) ENCRYPTED;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if !create.IfNotExists {
+			t.Fatal("expected IfNotExists to be true")
+		}
+		if !create.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+	})
+}
+
+func TestParseCreateTableWithEncryptedColumn(t *testing.T) {
+	t.Run("single encrypted column", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (secret TEXT ENCRYPTED);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 1 {
+			t.Fatalf("expected 1 column, got %d", len(create.Columns))
+		}
+		if !create.Columns[0].Encrypted {
+			t.Fatal("expected column Encrypted to be true")
+		}
+	})
+
+	t.Run("mixed encrypted and non-encrypted columns", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id INT, secret TEXT ENCRYPTED, name VARCHAR(100));")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 3 {
+			t.Fatalf("expected 3 columns, got %d", len(create.Columns))
+		}
+		if create.Columns[0].Encrypted {
+			t.Fatal("expected column 'id' Encrypted to be false")
+		}
+		if !create.Columns[1].Encrypted {
+			t.Fatal("expected column 'secret' Encrypted to be true")
+		}
+		if create.Columns[2].Encrypted {
+			t.Fatal("expected column 'name' Encrypted to be false")
+		}
+	})
+
+	t.Run("encrypted column with other constraints", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (secret TEXT NOT NULL ENCRYPTED);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		col := create.Columns[0]
+		if !col.NotNull {
+			t.Fatal("expected NotNull to be true")
+		}
+		if !col.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+	})
 }

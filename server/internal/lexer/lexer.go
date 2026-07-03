@@ -142,6 +142,7 @@ const (
 	TOKEN_RELEASE
 	TOKEN_EXISTS
 	TOKEN_IF
+	TOKEN_ENCRYPTED
 
 	// Data types
 	TOKEN_INT
@@ -658,14 +659,15 @@ var keywords = map[string]TokenType{
 	"CALL":           TOKEN_CALL,
 	"JSONB":          TOKEN_JSONB,
 	"RETURNING":      TOKEN_RETURNING,
-	"MERGE":          TOKEN_MERGE,
-	"MATCHED":        TOKEN_MATCHED,
-	"TRUNCATE":       TOKEN_TRUNCATE,
-	"SAVEPOINT":      TOKEN_SAVEPOINT,
-	"RELEASE":        TOKEN_RELEASE,
-	"EXISTS":         TOKEN_EXISTS,
-	"IF":             TOKEN_IF,
-	"BLOB":           TOKEN_BLOB,
+	"MERGE":            TOKEN_MERGE,
+	"MATCHED":          TOKEN_MATCHED,
+	"TRUNCATE":         TOKEN_TRUNCATE,
+	"SAVEPOINT":        TOKEN_SAVEPOINT,
+	"RELEASE":          TOKEN_RELEASE,
+	"EXISTS":           TOKEN_EXISTS,
+	"IF":               TOKEN_IF,
+	"BLOB":             TOKEN_BLOB,
+	"ENCRYPTED":        TOKEN_ENCRYPTED,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -820,6 +822,7 @@ var tokenNames = [...]string{
 	TOKEN_EXISTS:            "EXISTS",
 	TOKEN_IF:                "IF",
 	TOKEN_BLOB:              "BLOB",
+	TOKEN_ENCRYPTED:         "ENCRYPTED",
 	TOKEN_IDENT:             "IDENT",
 	TOKEN_INT_LIT:           "INT_LIT",
 	TOKEN_FLOAT_LIT:         "FLOAT_LIT",
