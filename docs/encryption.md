@@ -2,6 +2,47 @@
 
 VaultDB provides Transparent Data Encryption (TDE) with AES-256-GCM, envelope encryption, and OS-level disk encryption detection.
 
+## Quick Start
+
+### For a New Database
+
+```bash
+# 1. Set passphrase
+export VAULTDB_ENCRYPTION_PASSPHRASE="your-secure-passphrase"
+
+# 2. Start server with encryption enabled
+vaultdb-server --config vaultdb.yaml
+
+# 3. Create encrypted database via SQL
+psql -c "CREATE DATABASE secure_db ENCRYPTED WITH KEY 'passphrase';"
+```
+
+### For an Existing Database
+
+```bash
+# 1. Set passphrase
+export VAULTDB_ENCRYPTION_PASSPHRASE="your-secure-passphrase"
+
+# 2. Initialize encryption
+vaultdb-encrypt init --database /path/to/data/existing_db
+
+# 3. Restart server with encryption enabled
+vaultdb-server --config vaultdb.yaml
+
+# 4. Verify encryption status
+vaultdb-encrypt status --database /path/to/data/existing_db
+```
+
+### Configuration (vaultdb.yaml)
+
+```yaml
+encryption:
+  enabled: true
+  key_source: "passphrase"
+  default_scope: "all"
+  encrypt_wal: true
+```
+
 ## SQL Syntax
 
 ### Creating an Encrypted Database
@@ -37,7 +78,25 @@ encryption:
   default_scope: "all"           # all | tables_only | off
   encrypt_catalog: false
   encrypt_wal: true
+
+  # KMS configuration (when key_source: "kms")
+  kms:
+    provider: "aws-kms"          # aws-kms | hashicorp-vault | azure-keyvault
+    key_id: "arn:aws:kms:..."    # provider-specific key identifier
+    region: "us-east-1"          # for AWS KMS
+    # endpoint: "..."            # for HashiCorp Vault
+    # token: "..."               # for HashiCorp Vault
 ```
+
+### Encryption Scope
+
+| Scope | What Gets Encrypted | Use Case |
+|-------|---------------------|----------|
+| `all` | Table pages, WAL, TOAST | Maximum protection (default) |
+| `tables_only` | Table pages only | Debugging, compliance (encrypt PII only) |
+| `off` | Nothing | Disable encryption |
+
+**Note:** With `tables_only`, an attacker with disk access can read table schemas (catalog) and transaction logs (WAL). Only actual row data is protected.
 
 ### Key Sources
 
