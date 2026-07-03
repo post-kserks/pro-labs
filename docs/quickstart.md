@@ -109,9 +109,62 @@ nc localhost 5432
 curl http://localhost:5433/health
 ```
 
+## 9. Use as Go Library (Embedded Mode)
+
+VaultDB can be embedded directly in your Go application without running a separate server:
+
+```go
+package main
+
+import (
+    "fmt"
+    "vaultdb"
+)
+
+func main() {
+    // Open database
+    db, err := vaultdb.Open("./data")
+    if err != nil {
+        panic(err)
+    }
+    defer db.Close()
+
+    // Create database
+    _, err = db.Query("", "CREATE DATABASE myapp;")
+    if err != nil {
+        panic(err)
+    }
+
+    // Create table
+    _, err = db.Query("myapp", "CREATE TABLE users (id INT PRIMARY KEY, name TEXT);")
+    if err != nil {
+        panic(err)
+    }
+
+    // Insert data
+    result, err := db.Query("myapp", "INSERT INTO users VALUES (1, 'Alice');")
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("Inserted %d rows\n", result.Affected)
+
+    // Query data
+    result, err = db.Query("myapp", "SELECT * FROM users;")
+    if err != nil {
+        panic(err)
+    }
+    for _, row := range result.Rows {
+        fmt.Printf("User: %s\n", row[1])
+    }
+}
+```
+
+**Note:** The `Result` type is public and accessible from external modules.
+
 ## Next Steps
 
 - [SQL Reference](sql-reference.md) — Complete SQL syntax
 - [Configuration](configuration.md) — All options
 - [HTTP API](api-reference.md) — REST endpoint details
 - [Indexes](indexes.md) — Index types and optimization
+- [Encryption](encryption.md) — TDE and key management
