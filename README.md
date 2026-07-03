@@ -117,6 +117,19 @@ COMMIT;
 
 HTTP API также поддерживает транзакции через отслеживание сессий.
 
+### Шифрование (TDE)
+
+Transparent Data Encryption — AES-256-GCM на уровне страниц.
+
+```bash
+# Инициализировать шифрование
+export VAULTDB_ENCRYPTION_PASSPHRASE="my-secret-passphrase"
+vaultdb-encrypt init --database mydb
+
+# Проверить статус
+vaultdb-encrypt status --database mydb
+```
+
 ### Time Travel
 
 ```sql
@@ -168,6 +181,7 @@ auth:
 | VAULTDB_API_TOKENS | API токены |
 | VAULTDB_AUTH_SECRET | HMAC секрет |
 | VAULTDB_LOG_LEVEL | Уровень логирования |
+| VAULTDB_ENCRYPTION_PASSPHRASE | Passphrase для шифрования TDE |
 
 ---
 
@@ -233,6 +247,7 @@ Client (C++) → TCP/HTTP → Lexer → Parser → Optimizer → Executor → St
 | [Бэкап и восстановление](docs/backup.md) | Backup/restore, CLI tool |
 | [Мониторинг](docs/monitoring.md) | Prometheus metrics, health endpoints |
 | [Безопасность](docs/security.md) | Auth, TLS, mTLS, RLS |
+| [Шифрование](docs/encryption.md) | TDE, AES-256-GCM, управление ключами |
 
 ### Справочник API
 
@@ -250,12 +265,15 @@ Client (C++) → TCP/HTTP → Lexer → Parser → Optimizer → Executor → St
 ├── server/                    # Go сервер
 │   ├── cmd/vaultdb-server/    # Точка входа
 │   ├── cmd/vaultdb-backup/    # Утилита бэкапа
-│   ├── internal/              # Ядро (18 пакетов)
+│   ├── cmd/vaultdb-encrypt/   # Утилита шифрования
+│   ├── internal/              # Ядро (19 пакетов)
 │   │   ├── executor/          # Выполнение запросов
 │   │   ├── parser/            # SQL парсер
 │   │   ├── storage/           # Storage engine + buffer pool
 │   │   ├── wal/               # Write-Ahead Log
 │   │   ├── txmanager/         # MVCC транзакции
+│   │   ├── crypto/            # Шифрование (AES-256-GCM)
+│   │   ├── osdisk/            # Детекция шифрования диска
 │   │   └── ...                # auth, metrics, index и др.
 │   └── benchmark/             # Бенчмарки
 ├── client/                    # C++ клиент (libvaultdb, shell, TUI)
