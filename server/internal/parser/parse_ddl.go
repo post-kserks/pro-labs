@@ -686,6 +686,9 @@ func (p *sqlParser) parseColumnType() (string, int, error) {
 	case lexer.TOKEN_TEXT:
 		p.advance()
 		return "TEXT", 0, nil
+	case lexer.TOKEN_BLOB:
+		p.advance()
+		return "BLOB", 0, nil
 	case lexer.TOKEN_VARCHAR:
 		p.advance()
 		if p.current().Type == lexer.TOKEN_LPAREN {

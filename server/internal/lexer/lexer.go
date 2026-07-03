@@ -168,6 +168,7 @@ const (
 	TOKEN_TIMESTAMPTZ
 	TOKEN_SERIAL
 	TOKEN_IDENTITY
+	TOKEN_BLOB
 
 	// Literals and identifiers
 	TOKEN_IDENT
@@ -664,6 +665,7 @@ var keywords = map[string]TokenType{
 	"RELEASE":        TOKEN_RELEASE,
 	"EXISTS":         TOKEN_EXISTS,
 	"IF":             TOKEN_IF,
+	"BLOB":           TOKEN_BLOB,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -817,6 +819,7 @@ var tokenNames = [...]string{
 	TOKEN_RELEASE:           "RELEASE",
 	TOKEN_EXISTS:            "EXISTS",
 	TOKEN_IF:                "IF",
+	TOKEN_BLOB:              "BLOB",
 	TOKEN_IDENT:             "IDENT",
 	TOKEN_INT_LIT:           "INT_LIT",
 	TOKEN_FLOAT_LIT:         "FLOAT_LIT",

@@ -3262,3 +3262,57 @@ func TestParseCreateTableWithGeneratedIdentity(t *testing.T) {
 		}
 	})
 }
+
+func TestParseCreateTableWithBlob(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		wantTypes []string
+	}{
+		{
+			name:      "BLOB type",
+			sql:       "CREATE TABLE t (data BLOB);",
+			wantTypes: []string{"BLOB"},
+		},
+		{
+			name:      "BLOB with other types",
+			sql:       "CREATE TABLE t (id INT, name TEXT, data BLOB);",
+			wantTypes: []string{"INT", "TEXT", "BLOB"},
+		},
+		{
+			name:      "multiple BLOB columns",
+			sql:       "CREATE TABLE t (encrypted BLOB, image BLOB);",
+			wantTypes: []string{"BLOB", "BLOB"},
+		},
+		{
+			name:      "BLOB with NOT NULL",
+			sql:       "CREATE TABLE t (data BLOB NOT NULL);",
+			wantTypes: []string{"BLOB"},
+		},
+		{
+			name:      "BLOB with DEFAULT",
+			sql:       "CREATE TABLE t (data BLOB DEFAULT '')",
+			wantTypes: []string{"BLOB"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := Parse(tt.sql)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tt.sql, err)
+			}
+			create, ok := stmt.(*CreateTableStatement)
+			if !ok {
+				t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+			}
+			if len(create.Columns) != len(tt.wantTypes) {
+				t.Fatalf("expected %d columns, got %d", len(tt.wantTypes), len(create.Columns))
+			}
+			for i, want := range tt.wantTypes {
+				if create.Columns[i].DataType != want {
+					t.Errorf("column %d (%s): DataType = %q, want %q", i, create.Columns[i].Name, create.Columns[i].DataType, want)
+				}
+			}
+		})
+	}
+}
