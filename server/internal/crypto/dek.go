@@ -93,6 +93,16 @@ func (m *DEKManager) LoadDEK(ctx context.Context, ks KeySource) (*EncryptionMana
 	return NewEncryptionManager(dek, "v1")
 }
 
+// EncryptDEK encrypts a DEK with a KEK.
+func EncryptDEK(dek, kek []byte) ([]byte, error) {
+	return encryptDEK(dek, kek)
+}
+
+// DecryptDEK decrypts an encrypted DEK with a KEK.
+func DecryptDEK(encDEK, kek []byte) ([]byte, error) {
+	return decryptDEK(encDEK, kek)
+}
+
 func encryptDEK(dek, kek []byte) ([]byte, error) {
 	block, err := aes.NewCipher(kek)
 	if err != nil {
@@ -131,4 +141,9 @@ func zeroizeSlice(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+}
+
+// ZeroizeSlice zeros out a byte slice.
+func ZeroizeSlice(b []byte) {
+	zeroizeSlice(b)
 }

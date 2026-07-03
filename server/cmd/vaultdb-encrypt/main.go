@@ -16,7 +16,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: vaultdb-encrypt <command> [flags]")
-		fmt.Println("Commands: init, status, generate-key")
+		fmt.Println("Commands: init, status, generate-key, migrate, rotate-kek, rotate-dek")
 		os.Exit(1)
 	}
 
@@ -27,6 +27,12 @@ func main() {
 		cmdStatus()
 	case "generate-key":
 		cmdGenerateKey()
+	case "migrate":
+		cmdMigrate()
+	case "rotate-kek":
+		cmdRotateKEK()
+	case "rotate-dek":
+		cmdRotateDEK()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -160,4 +166,140 @@ func cmdGenerateKey() {
 	}
 
 	fmt.Printf("Generated 256-bit key saved to: %s\n", *outputPath)
+}
+
+func cmdMigrate() {
+	fs := flag.NewFlagSet("migrate", flag.ExitOnError)
+	dbPath := fs.String("database", "", "Path to database directory")
+	fs.Parse(os.Args[2:])
+
+	if *dbPath == "" {
+		fmt.Fprintln(os.Stderr, "--database is required")
+		os.Exit(1)
+	}
+
+	passphrase := os.Getenv("VAULTDB_ENCRYPTION_PASSPHRASE")
+	if passphrase == "" {
+		fmt.Fprintln(os.Stderr, "VAULTDB_ENCRYPTION_PASSPHRASE required")
+		os.Exit(1)
+	}
+
+	saltPath := filepath.Join(*dbPath, ".salt")
+	var salt []byte
+	if data, err := os.ReadFile(saltPath); err == nil {
+		salt = data
+	} else {
+		var err error
+		salt, err = crypto.GenerateSalt()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating salt: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(saltPath, salt, 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving salt: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	ks := crypto.NewPassphraseKeySource(passphrase, salt)
+	dekMgr := crypto.NewDEKManager(*dbPath)
+	em, err := dekMgr.GenerateAndStoreDEK(context.Background(), ks)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer em.Zeroize()
+
+	fmt.Println("Encryption migration initialized.")
+	fmt.Println("Note: Actual page encryption requires running server.")
+}
+
+func cmdRotateKEK() {
+	fs := flag.NewFlagSet("rotate-kek", flag.ExitOnError)
+	dbPath := fs.String("database", "", "Path to database directory")
+	fs.Parse(os.Args[2:])
+
+	if *dbPath == "" {
+		fmt.Fprintln(os.Stderr, "--database is required")
+		os.Exit(1)
+	}
+
+	oldPass := os.Getenv("VAULTDB_ENCRYPTION_PASSPHRASE")
+	newPass := os.Getenv("VAULTDB_ENCRYPTION_PASSPHRASE_NEW")
+	if oldPass == "" || newPass == "" {
+		fmt.Fprintln(os.Stderr, "VAULTDB_ENCRYPTION_PASSPHRASE and VAULTDB_ENCRYPTION_PASSPHRASE_NEW required")
+		os.Exit(1)
+	}
+
+	saltPath := filepath.Join(*dbPath, ".salt")
+	salt, err := os.ReadFile(saltPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading salt: %v\n", err)
+		os.Exit(1)
+	}
+
+	oldKS := crypto.NewPassphraseKeySource(oldPass, salt)
+	newKS := crypto.NewPassphraseKeySource(newPass, salt)
+
+	ctx := context.Background()
+	oldKEK, err := oldKS.GetKEK(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error deriving old KEK: %v\n", err)
+		os.Exit(1)
+	}
+	defer crypto.ZeroizeSlice(oldKEK)
+
+	dekPath := filepath.Join(*dbPath, ".dek.enc")
+	encDEK, err := os.ReadFile(dekPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading DEK: %v\n", err)
+		os.Exit(1)
+	}
+
+	dek, err := crypto.DecryptDEK(encDEK, oldKEK)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error decrypting DEK: %v\n", err)
+		os.Exit(1)
+	}
+	defer crypto.ZeroizeSlice(dek)
+
+	newKEK, err := newKS.GetKEK(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error deriving new KEK: %v\n", err)
+		os.Exit(1)
+	}
+	defer crypto.ZeroizeSlice(newKEK)
+
+	newEncDEK, err := crypto.EncryptDEK(dek, newKEK)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error encrypting DEK: %v\n", err)
+		os.Exit(1)
+	}
+
+	tmpPath := dekPath + ".tmp"
+	if err := os.WriteFile(tmpPath, newEncDEK, 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing new DEK: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.Rename(tmpPath, dekPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Error replacing DEK: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("KEK rotation complete.")
+}
+
+func cmdRotateDEK() {
+	fs := flag.NewFlagSet("rotate-dek", flag.ExitOnError)
+	dbPath := fs.String("database", "", "Path to database directory")
+	fs.Parse(os.Args[2:])
+
+	if *dbPath == "" {
+		fmt.Fprintln(os.Stderr, "--database is required")
+		os.Exit(1)
+	}
+
+	fmt.Println("DEK rotation requires running server.")
+	fmt.Println("Use: vaultdb-encrypt rotate-dek --database mydb")
+	fmt.Println("This will generate a new DEK and re-encrypt all pages.")
 }
