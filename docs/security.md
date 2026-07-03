@@ -47,7 +47,11 @@ auth:
 ### Bypass Rules
 
 - When `auth.enabled: false`, all requests pass through
-- **Localhost always bypasses auth** (`127.0.0.1`, `::1`, `localhost`)
+- **Monitor port (5433)**: `/health` and `/ready` endpoints do not require authentication
+- **HTTP API (8080)**: All endpoints require authentication, including requests from localhost
+- **TCP protocol (5432)**: Authentication is required for all connections
+
+> **Note:** For local development, set `auth.enabled: false` or use the auto-generated token from `{data_dir}/.generated-token`.
 
 ## TLS Encryption
 
