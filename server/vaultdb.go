@@ -61,12 +61,12 @@ func (db *VaultDB) Close() error {
 }
 
 // Query executes a single SQL query.
-func (db *VaultDB) Query(dbName, sql string) (*executor.Result, error) {
+func (db *VaultDB) Query(dbName, sql string) (*Result, error) {
 	return db.QueryContext(context.Background(), dbName, sql)
 }
 
 // QueryContext executes a single SQL query with a context for cancellation.
-func (db *VaultDB) QueryContext(ctx context.Context, dbName, sql string) (*executor.Result, error) {
+func (db *VaultDB) QueryContext(ctx context.Context, dbName, sql string) (*Result, error) {
 	stmt, err := parser.Parse(sql)
 	if err != nil {
 		return nil, err
@@ -82,5 +82,10 @@ func (db *VaultDB) QueryContext(ctx context.Context, dbName, sql string) (*execu
 		session.SetCurrentDatabase(dbName)
 	}
 
-	return session.Execute(stmt)
+	internalResult, err := session.Execute(stmt)
+	if err != nil {
+		return nil, err
+	}
+
+	return fromInternal(internalResult), nil
 }
