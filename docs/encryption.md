@@ -47,6 +47,12 @@ encryption:
 | `os_keychain` | Stored in system keychain (macOS Keychain, Linux libsecret, Windows DPAPI) |
 | `kms` | External KMS (AWS KMS, HashiCorp Vault, Azure Key Vault) |
 
+> **Note:** The following features are planned but not yet implemented:
+> - `vaultdb-encrypt migrate` — online re-encryption
+> - `vaultdb-encrypt rotate-kek` / `rotate-dek` — key rotation
+> - `os_keychain` and `kms` key sources
+> Currently supported: `passphrase` key source with `vaultdb-encrypt init` and `status`.
+
 ### Key Management
 
 VaultDB uses envelope encryption:
