@@ -336,15 +336,42 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	txID := e.nextTxLocked()
 	e.mu.Unlock()
 
-	t, err := e.getTableForWrite(dbName, tableName)
-	if err != nil {
-		return 0, err
+	useRowLocks := len(indices) <= 10
+
+	var t *pageTable
+	var err error
+	if useRowLocks {
+		// Small batch: lock individual rows instead of the whole table.
+		t, err = e.getTableForRead(dbName, tableName)
+		if err != nil {
+			return 0, err
+		}
+		// Acquire row-level exclusive locks on each target row.
+		for _, idx := range indices {
+			if err = e.rowLocks.LockRow(dbName, tableName, uint64(idx), txID, LockExclusive); err != nil {
+				t.mu.RUnlock()
+				return 0, err
+			}
+		}
+	} else {
+		// Bulk operation: fall back to table-level write lock.
+		t, err = e.getTableForWrite(dbName, tableName)
+		if err != nil {
+			return 0, err
+		}
 	}
 	mutateLockReleased := false
 	defer func() {
 		if !mutateLockReleased {
 			mutateLockReleased = true
-			t.mu.Unlock()
+			if useRowLocks {
+				for _, idx := range indices {
+					e.rowLocks.UnlockRow(dbName, tableName, uint64(idx), txID)
+				}
+				t.mu.RUnlock()
+			} else {
+				t.mu.Unlock()
+			}
 		}
 	}()
 
@@ -485,7 +512,14 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	// Освобождаем t.mu ПЕРЕД e.mu, чтобы избежать deadlock:
 	// t.mu → e.mu vs e.mu.RLock → t.mu
 	mutateLockReleased = true
-	t.mu.Unlock()
+	if useRowLocks {
+		for _, idx := range indices {
+			e.rowLocks.UnlockRow(dbName, tableName, uint64(idx), txID)
+		}
+		t.mu.RUnlock()
+	} else {
+		t.mu.Unlock()
+	}
 
 	key := dbName + "/" + tableName
 	e.mu.Lock()

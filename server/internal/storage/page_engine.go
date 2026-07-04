@@ -41,6 +41,7 @@ type PageStorageEngine struct {
 	txMgr    *txmanager.Manager
 	bufPool  *BufferPool
 	pageLock *PageLockManager
+	rowLocks *RowLockManager
 
 	indexes   map[string]*index.IndexManager // "db/table" → index manager
 	indexesMu sync.RWMutex
@@ -110,6 +111,7 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) 
 		txMgr:    txMgr,
 		bufPool:  bufPool,
 		pageLock: NewPageLockManager(),
+		rowLocks: NewRowLockManager(30 * time.Second),
 		indexes:  make(map[string]*index.IndexManager),
 		schemas:  make(map[string]*TableSchema),
 	}
