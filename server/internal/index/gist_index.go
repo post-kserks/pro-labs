@@ -87,6 +87,18 @@ func (g *GiSTIndex) Type() string   { return "gist" }
 func (g *GiSTIndex) Name() string   { return g.name }
 func (g *GiSTIndex) Column() string { return g.column }
 func (g *GiSTIndex) ColIndex() int  { return g.colIndex }
+
+// Columns returns nil — GiST index does not support index-only scan.
+func (g *GiSTIndex) Columns() []string { return nil }
+
+// HasStoredColumns returns false — GiST index does not store columns.
+func (g *GiSTIndex) HasStoredColumns() bool { return false }
+
+// GetStoredColumns returns nil — GiST index does not store columns.
+func (g *GiSTIndex) GetStoredColumns(rowPos int) (map[string]interface{}, bool) {
+	return nil, false
+}
+
 func (g *GiSTIndex) RenameColumn(old, new string) {
 	g.mu.Lock()
 	g.column = new

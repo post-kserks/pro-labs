@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"vaultdb/internal/index"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -216,6 +217,11 @@ func (m *MockStorage) FindIndexForColumn(dbName, tableName, column string) (stri
 		}
 	}
 	return "", false
+}
+
+func (m *MockStorage) GetIndex(dbName, tableName, indexName string) (index.Index, bool) {
+	// MockStorage doesn't track full index objects, return nil
+	return nil, false
 }
 
 func (m *MockStorage) IndexLookup(dbName, tableName, column, value string) ([]int, bool) {

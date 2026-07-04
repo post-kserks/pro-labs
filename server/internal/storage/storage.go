@@ -1,6 +1,10 @@
 package storage
 
-import "time"
+import (
+	"time"
+
+	"vaultdb/internal/index"
+)
 
 // Value is a single cell value in a row.
 // Supported runtime types: int64, float64, string, bool, nil.
@@ -107,6 +111,7 @@ type ReadOnlyEngine interface {
 	SchemaVersion() uint64
 	ListIndexes(dbName, tableName string) ([]string, error)
 	FindIndexForColumn(dbName, tableName, column string) (string, bool)
+	GetIndex(dbName, tableName, indexName string) (index.Index, bool)
 	IndexLookup(dbName, tableName, column, value string) ([]int, bool)
 	IndexRangeLookup(dbName, tableName, column, low, high string) ([]int, bool)
 	IndexFTSLookup(dbName, tableName, column, query string) ([]int, bool)

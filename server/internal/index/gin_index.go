@@ -52,6 +52,18 @@ func (g *GINIndex) Type() string   { return "gin" }
 func (g *GINIndex) Name() string   { return g.name }
 func (g *GINIndex) Column() string { return g.column }
 func (g *GINIndex) ColIndex() int  { return g.colIndex }
+
+// Columns returns nil — GIN index does not support index-only scan.
+func (g *GINIndex) Columns() []string { return nil }
+
+// HasStoredColumns returns false — GIN index does not store columns.
+func (g *GINIndex) HasStoredColumns() bool { return false }
+
+// GetStoredColumns returns nil — GIN index does not store columns.
+func (g *GINIndex) GetStoredColumns(rowPos int) (map[string]interface{}, bool) {
+	return nil, false
+}
+
 func (g *GINIndex) RenameColumn(old, new string) {
 	g.mu.Lock()
 	g.column = new

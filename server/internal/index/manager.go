@@ -16,6 +16,10 @@ type Index interface {
 	Insert(value string, rowPos int)
 	Delete(rowPos int)
 	Rebuild(rows []IndexableRow)
+	// Index-only scan support
+	Columns() []string           // returns column names this index covers
+	HasStoredColumns() bool      // true if index stores column data
+	GetStoredColumns(rowPos int) (map[string]interface{}, bool)
 }
 
 // NewByType создаёт индекс по типу.

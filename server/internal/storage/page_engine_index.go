@@ -199,6 +199,24 @@ func (e *PageStorageEngine) FindIndexForColumn(dbName, tableName, column string)
 	return idx.Name(), true
 }
 
+// GetIndex returns the index object for the given index name.
+func (e *PageStorageEngine) GetIndex(dbName, tableName, indexName string) (index.Index, bool) {
+	e.indexesMu.RLock()
+	key := dbName + "/" + tableName
+	mgr, ok := e.indexes[key]
+	e.indexesMu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	idxs := mgr.All()
+	for _, idx := range idxs {
+		if idx.Name() == indexName {
+			return idx, true
+		}
+	}
+	return nil, false
+}
+
 // findIndexForColumn returns the Index object for the given column, or nil if none exists.
 // Unlike FindIndexForColumn, it does not create an IndexManager if none exists.
 func (e *PageStorageEngine) findIndexForColumn(dbName, tableName, column string) (index.Index, bool) {

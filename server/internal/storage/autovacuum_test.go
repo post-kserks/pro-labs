@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	"vaultdb/internal/index"
 )
 
 type mockStorageEngine struct {
@@ -81,6 +83,9 @@ func (m *mockStorageEngine) ListIndexes(dbName, tableName string) ([]string, err
 }
 func (m *mockStorageEngine) FindIndexForColumn(dbName, tableName, column string) (string, bool) {
 	return "", false
+}
+func (m *mockStorageEngine) GetIndex(dbName, tableName, indexName string) (index.Index, bool) {
+	return nil, false
 }
 func (m *mockStorageEngine) IndexLookup(dbName, tableName, column, value string) ([]int, bool) {
 	return nil, false

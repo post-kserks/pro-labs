@@ -42,6 +42,17 @@ func (idx *HashIndex) Name() string   { return idx.name }
 func (idx *HashIndex) Column() string { return idx.column }
 func (idx *HashIndex) ColIndex() int  { return idx.colIndex }
 
+// Columns returns nil — hash index does not support index-only scan.
+func (idx *HashIndex) Columns() []string { return nil }
+
+// HasStoredColumns returns false — hash index does not store columns.
+func (idx *HashIndex) HasStoredColumns() bool { return false }
+
+// GetStoredColumns returns nil — hash index does not store columns.
+func (idx *HashIndex) GetStoredColumns(rowPos int) (map[string]interface{}, bool) {
+	return nil, false
+}
+
 // RenameColumn renames the indexed column (used by ALTER TABLE RENAME COLUMN).
 // The data mapping is unchanged, only the column label moves.
 func (idx *HashIndex) RenameColumn(old, new string) {
