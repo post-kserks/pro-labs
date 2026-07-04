@@ -95,6 +95,21 @@ INSERT INTO users (id, name, email) VALUES (1, 'Alice', 'alice@example.com');
 INSERT INTO users VALUES (2, 'Bob', 'bob@example.com', 25, CURRENT_TIMESTAMP);
 ```
 
+### INSERT OR REPLACE
+
+If a row with the same PRIMARY KEY exists, it is replaced entirely:
+
+```sql
+INSERT OR REPLACE INTO users (id, name) VALUES (1, 'Alice Updated');
+```
+
+This is equivalent to:
+
+```sql
+INSERT INTO users (id, name) VALUES (1, 'Alice Updated')
+  ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name;
+```
+
 ### UPSERT (ON CONFLICT)
 
 ```sql
