@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 
 	"vaultdb/internal/lexer"
 )
@@ -12,11 +13,11 @@ func (p *sqlParser) parseInsert() (Statement, error) {
 	orReplace := false
 	if p.current().Type == lexer.TOKEN_OR {
 		p.advance()
-		if p.current().Type == lexer.TOKEN_REPLACE {
+		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "REPLACE" {
 			p.advance()
 			orReplace = true
 		} else {
-			return nil, p.expectedError("REPLACE", p.current())
+			return nil, fmt.Errorf("syntax error: expected REPLACE after OR")
 		}
 	}
 
