@@ -922,3 +922,98 @@ func TestShowEncryptionStatus(t *testing.T) {
 		t.Errorf("expected key_source=-, got %s", result.Rows[0][3])
 	}
 }
+
+func TestInsertOrReplace(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE DATABASE testdb;")
+	executeSQL(t, session, "USE testdb;")
+	executeSQL(t, session, "CREATE TABLE users (id INT PRIMARY KEY, name TEXT);")
+
+	// Insert initial row
+	executeSQL(t, session, "INSERT INTO users VALUES (1, 'Alice');")
+
+	// INSERT OR REPLACE should update the existing row
+	result := executeSQL(t, session, "INSERT OR REPLACE INTO users VALUES (1, 'Bob');")
+	if result.Affected != 1 {
+		t.Errorf("expected 1 affected row, got %d", result.Affected)
+	}
+
+	// Verify the row was updated
+	result = executeSQL(t, session, "SELECT name FROM users WHERE id = 1;")
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "Bob" {
+		t.Errorf("expected name='Bob', got '%s'", result.Rows[0][0])
+	}
+}
+
+func TestInsertOrReplaceNewRow(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE DATABASE testdb;")
+	executeSQL(t, session, "USE testdb;")
+	executeSQL(t, session, "CREATE TABLE users (id INT PRIMARY KEY, name TEXT);")
+
+	// INSERT OR REPLACE with non-existing key should insert
+	result := executeSQL(t, session, "INSERT OR REPLACE INTO users VALUES (1, 'Alice');")
+	if result.Affected != 1 {
+		t.Errorf("expected 1 affected row, got %d", result.Affected)
+	}
+
+	// Verify the row was inserted
+	result = executeSQL(t, session, "SELECT name FROM users WHERE id = 1;")
+	if result.Rows[0][0] != "Alice" {
+		t.Errorf("expected name='Alice', got '%s'", result.Rows[0][0])
+	}
+}
+
+func TestInsertOrReplaceWithColumnList(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE DATABASE testdb;")
+	executeSQL(t, session, "USE testdb;")
+	executeSQL(t, session, "CREATE TABLE users (id INT PRIMARY KEY, name TEXT, age INT);")
+
+	// Insert initial row
+	executeSQL(t, session, "INSERT INTO users VALUES (1, 'Alice', 30);")
+
+	// INSERT OR REPLACE with column list
+	result := executeSQL(t, session, "INSERT OR REPLACE INTO users (id, name) VALUES (1, 'Bob');")
+	if result.Affected != 1 {
+		t.Errorf("expected 1 affected row, got %d", result.Affected)
+	}
+
+	// Verify the row was updated (name changed, age should be updated to default/nil)
+	result = executeSQL(t, session, "SELECT name FROM users WHERE id = 1;")
+	if result.Rows[0][0] != "Bob" {
+		t.Errorf("expected name='Bob', got '%s'", result.Rows[0][0])
+	}
+}
+
+func TestInsertOrReplaceMultipleRows(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE DATABASE testdb;")
+	executeSQL(t, session, "USE testdb;")
+	executeSQL(t, session, "CREATE TABLE users (id INT PRIMARY KEY, name TEXT);")
+
+	// Insert initial rows
+	executeSQL(t, session, "INSERT INTO users VALUES (1, 'Alice');")
+	executeSQL(t, session, "INSERT INTO users VALUES (2, 'Bob');")
+
+	// INSERT OR REPLACE with multiple rows (one new, one existing)
+	result := executeSQL(t, session, "INSERT OR REPLACE INTO users VALUES (1, 'Charlie'), (3, 'Dave');")
+	if result.Affected != 2 {
+		t.Errorf("expected 2 affected rows, got %d", result.Affected)
+	}
+
+	// Verify both rows
+	result = executeSQL(t, session, "SELECT id, name FROM users ORDER BY id;")
+	if len(result.Rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(result.Rows))
+	}
+	if result.Rows[0][1] != "Charlie" {
+		t.Errorf("expected name='Charlie' for id=1, got '%s'", result.Rows[0][1])
+	}
+	if result.Rows[2][1] != "Dave" {
+		t.Errorf("expected name='Dave' for id=3, got '%s'", result.Rows[2][1])
+	}
+}

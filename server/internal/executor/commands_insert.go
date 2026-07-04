@@ -75,6 +75,11 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
 
+	// Convert INSERT OR REPLACE to ON CONFLICT DO UPDATE SET all columns
+	if c.stmt.OrReplace && c.stmt.OnConflict == nil {
+		c.stmt.OnConflict = &parser.OnConflictClause{Action: "UPDATE"}
+	}
+
 	schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
 	if err != nil {
 		return nil, err
@@ -294,12 +299,21 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 			}
 			if c.stmt.OnConflict.Action == "UPDATE" {
 				updates := make(map[string]storage.Value)
-				for _, assign := range c.stmt.OnConflict.Assignments {
-					val, err := evalOperand(assign.Value, row, schema, ctx)
-					if err != nil {
-						return nil, err
+				if len(c.stmt.OnConflict.Assignments) == 0 {
+					// INSERT OR REPLACE: update ALL columns
+					for i, col := range schema.Columns {
+						if i < len(row) && row[i] != nil {
+							updates[col.Name] = row[i]
+						}
 					}
-					updates[assign.Column] = val
+				} else {
+					for _, assign := range c.stmt.OnConflict.Assignments {
+						val, err := evalOperand(assign.Value, row, schema, ctx)
+						if err != nil {
+							return nil, err
+						}
+						updates[assign.Column] = val
+					}
 				}
 				_, err := ctx.Storage.UpdateRows(dbName, c.stmt.TableName, []int{conflictIdx}, updates)
 				if err != nil {

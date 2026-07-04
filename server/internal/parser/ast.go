@@ -241,6 +241,7 @@ type InsertStatement struct {
 	SelectQuery Statement         // INSERT ... SELECT (SelectStatement or SetOperationStatement)
 	OnConflict  *OnConflictClause // INSERT ... ON CONFLICT DO ...
 	Returning   []SelectColumn    // RETURNING clause
+	OrReplace   bool              // INSERT OR REPLACE (SQLite compatibility)
 }
 
 // OnConflictClause — ON CONFLICT clause для UPSERT.

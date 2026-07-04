@@ -3507,3 +3507,61 @@ func TestParseShowEncryptionStatus(t *testing.T) {
 		t.Fatalf("expected StatementType SHOW_ENCRYPTION_STATUS, got %s", stmt.StatementType())
 	}
 }
+
+func TestParseInsertOrReplace(t *testing.T) {
+	stmt, err := Parse("INSERT OR REPLACE INTO users (id, name) VALUES (1, 'Alice');")
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	ins, ok := stmt.(*InsertStatement)
+	if !ok {
+		t.Fatalf("expected *InsertStatement, got %T", stmt)
+	}
+	if !ins.OrReplace {
+		t.Error("expected OrReplace=true")
+	}
+	if ins.TableName != "users" {
+		t.Errorf("expected table 'users', got '%s'", ins.TableName)
+	}
+	if len(ins.Columns) != 2 || ins.Columns[0] != "id" || ins.Columns[1] != "name" {
+		t.Errorf("expected columns [id, name], got %v", ins.Columns)
+	}
+	if len(ins.Rows) != 1 || len(ins.Rows[0]) != 2 {
+		t.Errorf("expected 1 row with 2 values, got %d rows with %d values", len(ins.Rows), len(ins.Rows[0]))
+	}
+}
+
+func TestParseInsertWithoutOrReplace(t *testing.T) {
+	stmt, err := Parse("INSERT INTO users (id, name) VALUES (1, 'Alice');")
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	ins, ok := stmt.(*InsertStatement)
+	if !ok {
+		t.Fatalf("expected *InsertStatement, got %T", stmt)
+	}
+	if ins.OrReplace {
+		t.Error("expected OrReplace=false")
+	}
+}
+
+func TestParseInsertOrReplaceWithoutColumns(t *testing.T) {
+	stmt, err := Parse("INSERT OR REPLACE INTO users VALUES (1, 'Alice');")
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	ins := stmt.(*InsertStatement)
+	if !ins.OrReplace {
+		t.Error("expected OrReplace=true")
+	}
+	if len(ins.Columns) != 0 {
+		t.Errorf("expected no columns, got %v", ins.Columns)
+	}
+}
+
+func TestParseInsertOrReplaceError(t *testing.T) {
+	_, err := Parse("INSERT OR INTO users VALUES (1, 'Alice');")
+	if err == nil {
+		t.Fatal("expected error for 'INSERT OR INTO'")
+	}
+}
