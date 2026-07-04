@@ -2,8 +2,11 @@ package txmanager
 
 import (
 	"errors"
+	"fmt"
+	"runtime"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestCommitConflictDetected(t *testing.T) {
@@ -192,5 +195,156 @@ func TestSavepointTruncation(t *testing.T) {
 	// Неизвестный savepoint.
 	if err := tx.RollbackToSavepoint("nope"); err == nil {
 		t.Fatalf("expected error for unknown savepoint")
+	}
+}
+
+// --- OCC Retry Tests ---
+
+func TestCommitWithRetrySuccess(t *testing.T) {
+	m := NewManager()
+	m.RetryDelay = time.Millisecond // fast tests
+
+	// Two transactions on the same table. tx2 will conflict on first attempt,
+	// but the applyFn bumps the version so a retry sees the new version.
+	tx1 := m.Begin()
+	tx2 := m.Begin()
+	m.AddOp(tx1, PendingOp{Type: "update", DB: "db", Table: "t"})
+	m.AddOp(tx2, PendingOp{Type: "update", DB: "db", Table: "t"})
+
+	// tx1 commits first (manually, to bump version).
+	if err := m.Commit(tx1, func(ops []PendingOp) error {
+		m.BumpTableVersion("db", "t")
+		return nil
+	}); err != nil {
+		t.Fatalf("tx1 commit: %v", err)
+	}
+
+	// tx2 uses CommitWithRetry. It will conflict, then retry.
+	// The applyFn bumps version on success, so subsequent attempts also succeed.
+	err := m.CommitWithRetry(tx2, func(ops []PendingOp) error {
+		m.BumpTableVersion("db", "t")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("CommitWithRetry should succeed: %v", err)
+	}
+}
+
+func TestCommitWithRetryExhaustion(t *testing.T) {
+	m := NewManager()
+	m.MaxRetries = 3
+	m.RetryDelay = 10 * time.Millisecond
+
+	tx := m.Begin()
+	m.AddOp(tx, PendingOp{Type: "update", DB: "db", Table: "t"})
+
+	// Ensure first attempt conflicts.
+	m.BumpTableVersion("db", "t")
+
+	// Bump the version in a goroutine that runs for the duration of the test.
+	// This ensures the version changes between snapshot refresh and the next
+	// Commit check.
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				m.BumpTableVersion("db", "t")
+				runtime.Gosched()
+			}
+		}
+	}()
+
+	err := m.CommitWithRetry(tx, func(ops []PendingOp) error {
+		t.Fatal("applyFn must not run when conflict persists")
+		return nil
+	})
+	close(done)
+
+	if err == nil {
+		t.Fatal("expected error after retries exhausted")
+	}
+	if !errors.Is(err, ErrTxConflict) {
+		t.Fatalf("expected ErrTxConflict wrapped, got: %v", err)
+	}
+}
+
+func TestNonConflictErrorNotRetried(t *testing.T) {
+	m := NewManager()
+	m.MaxRetries = 3
+	m.RetryDelay = time.Millisecond
+
+	tx := m.Begin()
+	m.AddOp(tx, PendingOp{Type: "insert", DB: "db", Table: "t"})
+
+	customErr := fmt.Errorf("disk full")
+	attempts := 0
+
+	err := m.CommitWithRetry(tx, func(ops []PendingOp) error {
+		attempts++
+		return customErr
+	})
+	if !errors.Is(err, customErr) {
+		t.Fatalf("expected customErr, got: %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("non-conflict error should not be retried, got %d attempts", attempts)
+	}
+}
+
+func TestIsConflictError(t *testing.T) {
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{fmt.Errorf("table \"t\" was modified: conflict detected"), true},
+		{fmt.Errorf("OCC version mismatch"), true},
+		{fmt.Errorf("version mismatch for table x"), true},
+		{fmt.Errorf("disk full"), false},
+		{fmt.Errorf("table not found"), false},
+		{nil, false},
+	}
+	for _, tt := range tests {
+		got := IsConflictError(tt.err)
+		if got != tt.want {
+			t.Errorf("IsConflictError(%v) = %v, want %v", tt.err, got, tt.want)
+		}
+	}
+}
+
+func TestParallelCommitsWithRetryAllSucceed(t *testing.T) {
+	m := NewManager()
+	m.MaxRetries = 5
+	m.RetryDelay = time.Millisecond
+
+	const n = 10
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	succeeded := 0
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tx := m.Begin()
+			m.AddOp(tx, PendingOp{Type: "update", DB: "db", Table: "t"})
+			err := m.CommitWithRetry(tx, func(ops []PendingOp) error {
+				m.BumpTableVersion("db", "t")
+				return nil
+			})
+			mu.Lock()
+			defer mu.Unlock()
+			if err == nil {
+				succeeded++
+			}
+		}()
+	}
+	wg.Wait()
+
+	// With retry, all 10 should eventually succeed (serialized by retry).
+	if succeeded != n {
+		t.Fatalf("expected all %d transactions to succeed with retry, got %d", n, succeeded)
 	}
 }

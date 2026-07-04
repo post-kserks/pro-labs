@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -81,6 +83,9 @@ type Manager struct {
 
 	commitLocksMu sync.Mutex
 	commitLocks   map[string]*sync.Mutex
+
+	MaxRetries int           // max retries on OCC conflict (default: 3)
+	RetryDelay time.Duration // base delay between retries (default: 10ms)
 }
 
 func NewManager() *Manager {
@@ -88,6 +93,8 @@ func NewManager() *Manager {
 		tableVersions:  make(map[string]*atomic.Uint64),
 		commitLocks:    make(map[string]*sync.Mutex),
 		SpillThreshold: defaultSpillThreshold,
+		MaxRetries:     3,
+		RetryDelay:     10 * time.Millisecond,
 	}
 }
 
@@ -453,6 +460,52 @@ func (m *Manager) Commit(tx *Transaction, applyFn func([]PendingOp) error) error
 		return err
 	}
 	return nil
+}
+
+// IsConflictError reports whether err is an OCC conflict that may be retried.
+func IsConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "conflict") ||
+		strings.Contains(s, "OCC") ||
+		strings.Contains(s, "version mismatch")
+}
+
+// CommitWithRetry attempts Commit with exponential backoff on OCC conflicts.
+// Non-conflict errors are returned immediately. On conflict the table snapshots
+// in tx are refreshed to the current versions before the next attempt, so the
+// transaction re-validates against up-to-date state.
+func (m *Manager) CommitWithRetry(tx *Transaction, applyFn func([]PendingOp) error) error {
+	var lastErr error
+
+	for attempt := 0; attempt <= m.MaxRetries; attempt++ {
+		err := m.Commit(tx, applyFn)
+		if err == nil {
+			return nil
+		}
+
+		if !IsConflictError(err) {
+			return err
+		}
+
+		lastErr = err
+		if attempt < m.MaxRetries {
+			// Refresh table snapshots to current versions before next attempt.
+			for t := range tx.TableSnapshots {
+				parts := strings.SplitN(t, "/", 2)
+				if len(parts) == 2 {
+					tx.TableSnapshots[t] = m.TableVersion(parts[0], parts[1])
+				}
+			}
+			delay := m.RetryDelay * time.Duration(1<<uint(attempt))
+			jitter := time.Duration(rand.Int63n(int64(delay/2) + 1))
+			time.Sleep(delay + jitter)
+		}
+	}
+
+	return fmt.Errorf("transaction conflict after %d retries: %w", m.MaxRetries, lastErr)
 }
 
 // Rollback очищает буфер и удаляет spill файл.
