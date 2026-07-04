@@ -202,7 +202,7 @@ func TestSavepointTruncation(t *testing.T) {
 
 func TestCommitWithRetrySuccess(t *testing.T) {
 	m := NewManager()
-	m.RetryDelay = time.Millisecond // fast tests
+	m.OCCConfig.BaseDelay = time.Millisecond // fast tests
 
 	// Two transactions on the same table. tx2 will conflict on first attempt,
 	// but the applyFn bumps the version so a retry sees the new version.
@@ -232,8 +232,8 @@ func TestCommitWithRetrySuccess(t *testing.T) {
 
 func TestCommitWithRetryExhaustion(t *testing.T) {
 	m := NewManager()
-	m.MaxRetries = 3
-	m.RetryDelay = 10 * time.Millisecond
+	m.OCCConfig.MaxRetries = 3
+	m.OCCConfig.BaseDelay = 10 * time.Millisecond
 
 	tx := m.Begin()
 	m.AddOp(tx, PendingOp{Type: "update", DB: "db", Table: "t"})
@@ -273,8 +273,8 @@ func TestCommitWithRetryExhaustion(t *testing.T) {
 
 func TestNonConflictErrorNotRetried(t *testing.T) {
 	m := NewManager()
-	m.MaxRetries = 3
-	m.RetryDelay = time.Millisecond
+	m.OCCConfig.MaxRetries = 3
+	m.OCCConfig.BaseDelay = time.Millisecond
 
 	tx := m.Begin()
 	m.AddOp(tx, PendingOp{Type: "insert", DB: "db", Table: "t"})
@@ -316,8 +316,8 @@ func TestIsConflictError(t *testing.T) {
 
 func TestParallelCommitsWithRetryAllSucceed(t *testing.T) {
 	m := NewManager()
-	m.MaxRetries = 5
-	m.RetryDelay = time.Millisecond
+	m.OCCConfig.MaxRetries = 5
+	m.OCCConfig.BaseDelay = time.Millisecond
 
 	const n = 10
 	var wg sync.WaitGroup
@@ -346,5 +346,55 @@ func TestParallelCommitsWithRetryAllSucceed(t *testing.T) {
 	// With retry, all 10 should eventually succeed (serialized by retry).
 	if succeeded != n {
 		t.Fatalf("expected all %d transactions to succeed with retry, got %d", n, succeeded)
+	}
+}
+
+func TestOCCBackoffTiming(t *testing.T) {
+	m := NewManager()
+	m.OCCConfig = OCCConfig{
+		MaxRetries:    3,
+		BaseDelay:     10 * time.Millisecond,
+		MaxDelay:      100 * time.Millisecond,
+		BackoffFactor: 2.0,
+	}
+
+	tx := m.Begin()
+	m.AddOp(tx, PendingOp{Type: "update", DB: "db", Table: "t"})
+
+	// Pre-bump so first attempt conflicts. Then a goroutine keeps bumping
+	// to ensure every retry also conflicts.
+	m.BumpTableVersion("db", "t")
+
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				m.BumpTableVersion("db", "t")
+				runtime.Gosched()
+			}
+		}
+	}()
+
+	start := time.Now()
+	err := m.CommitWithRetry(tx, func(ops []PendingOp) error {
+		t.Fatal("applyFn must not run when conflict persists")
+		return nil
+	})
+	elapsed := time.Since(start)
+	close(done)
+
+	if err == nil {
+		t.Fatal("expected error after retries exhausted")
+	}
+
+	// Expected total backoff delay (without jitter) for 3 retries:
+	// attempt 0: 10ms, attempt 1: 20ms, attempt 2: 40ms = 70ms minimum
+	// With jitter added, expect at least 70ms total.
+	minExpected := 70 * time.Millisecond
+	if elapsed < minExpected {
+		t.Fatalf("backoff too fast: elapsed %v, expected at least %v", elapsed, minExpected)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -29,6 +30,23 @@ const (
 var ErrTxConflict = errors.New("transaction conflict")
 
 const defaultSpillThreshold = 10000
+
+// OCCConfig — настройки optimistic concurrency control: retry и backoff.
+type OCCConfig struct {
+	MaxRetries    int           // default: 3
+	BaseDelay     time.Duration // default: 10ms
+	MaxDelay      time.Duration // default: 100ms
+	BackoffFactor float64       // default: 2.0
+}
+
+func DefaultOCCConfig() OCCConfig {
+	return OCCConfig{
+		MaxRetries:    3,
+		BaseDelay:     10 * time.Millisecond,
+		MaxDelay:      100 * time.Millisecond,
+		BackoffFactor: 2.0,
+	}
+}
 
 // PendingOp — одна буферизованная операция внутри транзакции.
 type PendingOp struct {
@@ -84,8 +102,7 @@ type Manager struct {
 	commitLocksMu sync.Mutex
 	commitLocks   map[string]*sync.Mutex
 
-	MaxRetries int           // max retries on OCC conflict (default: 3)
-	RetryDelay time.Duration // base delay between retries (default: 10ms)
+	OCCConfig OCCConfig
 }
 
 func NewManager() *Manager {
@@ -93,8 +110,7 @@ func NewManager() *Manager {
 		tableVersions:  make(map[string]*atomic.Uint64),
 		commitLocks:    make(map[string]*sync.Mutex),
 		SpillThreshold: defaultSpillThreshold,
-		MaxRetries:     3,
-		RetryDelay:     10 * time.Millisecond,
+		OCCConfig:      DefaultOCCConfig(),
 	}
 }
 
@@ -473,14 +489,15 @@ func IsConflictError(err error) bool {
 		strings.Contains(s, "version mismatch")
 }
 
-// CommitWithRetry attempts Commit with exponential backoff on OCC conflicts.
-// Non-conflict errors are returned immediately. On conflict the table snapshots
-// in tx are refreshed to the current versions before the next attempt, so the
-// transaction re-validates against up-to-date state.
+// CommitWithRetry attempts Commit with configurable exponential backoff on OCC
+// conflicts. Non-conflict errors are returned immediately. On conflict the
+// table snapshots in tx are refreshed to the current versions before the next
+// attempt, so the transaction re-validates against up-to-date state.
 func (m *Manager) CommitWithRetry(tx *Transaction, applyFn func([]PendingOp) error) error {
+	config := m.OCCConfig
 	var lastErr error
 
-	for attempt := 0; attempt <= m.MaxRetries; attempt++ {
+	for attempt := 0; attempt <= config.MaxRetries; attempt++ {
 		err := m.Commit(tx, applyFn)
 		if err == nil {
 			return nil
@@ -491,21 +508,28 @@ func (m *Manager) CommitWithRetry(tx *Transaction, applyFn func([]PendingOp) err
 		}
 
 		lastErr = err
-		if attempt < m.MaxRetries {
-			// Refresh table snapshots to current versions before next attempt.
-			for t := range tx.TableSnapshots {
-				parts := strings.SplitN(t, "/", 2)
-				if len(parts) == 2 {
-					tx.TableSnapshots[t] = m.TableVersion(parts[0], parts[1])
-				}
+		if attempt < config.MaxRetries {
+			m.refreshSnapshots(tx)
+			delay := config.BaseDelay * time.Duration(math.Pow(config.BackoffFactor, float64(attempt)))
+			if delay > config.MaxDelay {
+				delay = config.MaxDelay
 			}
-			delay := m.RetryDelay * time.Duration(1<<uint(attempt))
 			jitter := time.Duration(rand.Int63n(int64(delay/2) + 1))
 			time.Sleep(delay + jitter)
 		}
 	}
 
-	return fmt.Errorf("transaction conflict after %d retries: %w", m.MaxRetries, lastErr)
+	return fmt.Errorf("transaction conflict after %d retries: %w", config.MaxRetries, lastErr)
+}
+
+// refreshSnapshots обновляет снимки версий таблиц транзакции до текущих значений.
+func (m *Manager) refreshSnapshots(tx *Transaction) {
+	for table := range tx.TableSnapshots {
+		parts := strings.SplitN(table, "/", 2)
+		if len(parts) == 2 {
+			tx.TableSnapshots[table] = m.TableVersion(parts[0], parts[1])
+		}
+	}
 }
 
 // Rollback очищает буфер и удаляет spill файл.
