@@ -26,6 +26,18 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 	}
 
+	// Fast path: simple SELECT — no joins, no aggregation, no subqueries, no CTEs
+	if c.isSimpleSelect() && !ctx.Session.IsInTx() && ctx.SnapshotTxID == 0 {
+		if ctx.Ctx != nil {
+			select {
+			case <-ctx.Ctx.Done():
+				return nil, fmt.Errorf("query timeout: %w", ctx.Ctx.Err())
+			default:
+			}
+		}
+		return c.fastPathSelect(ctx)
+	}
+
 	// Check result cache (only for simple SELECT, not CTEs or subqueries).
 	// В транзакции кэш пропускаем: он не учитывает tx-overlay (Bug #1).
 	if ctx.Session.resultCache != nil && !ctx.Session.IsInTx() && c.stmt.TableName != "" && c.stmt.FromSubquery == nil && len(c.stmt.CTEs) == 0 {
@@ -66,6 +78,143 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	return result, err
+}
+
+// isSimpleSelect returns true when the query can use the fast path:
+// single table, no joins, no aggregation, no CTEs, no subqueries, no window functions.
+func (c *SelectCommand) isSimpleSelect() bool {
+	if c.stmt.TableName == "" || c.stmt.FromSubquery != nil || len(c.stmt.CTEs) > 0 {
+		return false
+	}
+	if len(c.stmt.Joins) > 0 || len(c.stmt.GroupBy) > 0 || c.stmt.Having != nil {
+		return false
+	}
+	if c.stmt.Distinct || c.stmt.AsOf != nil || len(c.stmt.Columns) == 0 {
+		return false
+	}
+	if c.hasAggregates() || len(c.extractWindowFunctions()) > 0 {
+		return false
+	}
+	return true
+}
+
+// fastPathSelect reads rows directly without index lookup, view resolution,
+// parallel execution, or window function handling.
+func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
+	}
+
+	schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, err
+	}
+	if c.stmt.Alias != "" {
+		schema.Name = c.stmt.Alias
+	}
+
+	rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply RLS
+	rows, err = filterRowsWithRLS(rows, schema, ctx, dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build column index for O(1) lookups during expression evaluation
+	ensureColumnIndex(ctx, schema)
+
+	// Filter with WHERE
+	var filtered []storage.Row
+	if c.stmt.Where != nil {
+		filtered = make([]storage.Row, 0, len(rows))
+		for _, row := range rows {
+			ok, err := evalExpr(c.stmt.Where, row, schema, ctx)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				filtered = append(filtered, row)
+			}
+		}
+	} else {
+		filtered = rows
+	}
+
+	// Sort rows (ORDER BY)
+	if len(c.stmt.OrderBy) > 0 {
+		c.applyOrderBy(filtered, schema, ctx)
+	}
+
+	// Project columns
+	projectColumns := make([]string, len(c.stmt.Columns))
+	for i, col := range c.stmt.Columns {
+		if col.Alias != "" {
+			projectColumns[i] = col.Alias
+		} else if colRef, ok := col.Expr.(*parser.ColumnRef); ok {
+			projectColumns[i] = colRef.Name
+		} else {
+			projectColumns[i] = fmt.Sprintf("col%d", i)
+		}
+	}
+
+	resultRows := make([][]string, 0, len(filtered))
+	for _, row := range filtered {
+		projected := make([]string, len(c.stmt.Columns))
+		for i, col := range c.stmt.Columns {
+			val, err := evalOperand(col.Expr, row, schema, ctx)
+			if err != nil {
+				projected[i] = "ERR"
+			} else {
+				projected[i] = valueToString(val)
+			}
+		}
+		resultRows = append(resultRows, projected)
+	}
+
+	// Pagination
+	start := 0
+	limit, hasLimit, offset, hasOffset := c.resolveLimitOffset(ctx)
+	if hasOffset {
+		start = offset
+		if start > len(resultRows) {
+			start = len(resultRows)
+		}
+	}
+	end := len(resultRows)
+	if hasLimit {
+		end = start + limit
+		if end > len(resultRows) {
+			end = len(resultRows)
+		}
+	}
+
+	resultSchema := &storage.TableSchema{
+		Name:    c.stmt.TableName,
+		Columns: make([]storage.ColumnSchema, len(c.stmt.Columns)),
+	}
+	for i, col := range c.stmt.Columns {
+		colType := inferTypeFromExpr(col.Expr, schema)
+		resultSchema.Columns[i] = storage.ColumnSchema{
+			Name: projectColumns[i],
+			Type: colType,
+		}
+	}
+
+	return &Result{
+		Type:    "rows",
+		Columns: projectColumns,
+		Rows:    resultRows[start:end],
+		Schema:  resultSchema,
+	}, nil
 }
 
 func (c *SelectCommand) executeWithCTE(ctx *ExecutionContext, dbName string) (*Result, error) {

@@ -17,6 +17,13 @@ type InsertCommand struct {
 }
 
 func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	// Fast path: single row, no conflicts, no returning, no tx active
+	if len(c.stmt.Rows) == 1 && c.stmt.OnConflict == nil && c.stmt.Returning == nil &&
+		c.stmt.SelectQuery == nil && !c.stmt.OrReplace &&
+		ctx.Session.GetActiveTx() == nil {
+		return c.fastPathInsert(ctx)
+	}
+
 	dbName, _ := requireCurrentDB(ctx)
 	if dbName != "" {
 		if err := enforceRLSPolicies(ctx, dbName, c.stmt.TableName); err != nil {
@@ -41,6 +48,99 @@ func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}, nil
 	}
 	return c.executeImmediate(ctx)
+}
+
+// fastPathInsert handles single-row inserts without table lock overhead.
+func (c *InsertCommand) fastPathInsert(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := enforceRLSPolicies(ctx, dbName, c.stmt.TableName); err != nil {
+		return nil, err
+	}
+
+	schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle INFER SCHEMA
+	if len(schema.Columns) == 0 && len(c.stmt.Rows) > 0 {
+		inferredCols := make([]storage.ColumnSchema, 0, len(c.stmt.Rows[0]))
+		for i, expr := range c.stmt.Rows[0] {
+			val, _ := evalOperand(expr, nil, nil, ctx)
+			colType := inferType(val)
+			name := fmt.Sprintf("col%d", i)
+			if len(c.stmt.Columns) > i {
+				name = c.stmt.Columns[i]
+			}
+			inferredCols = append(inferredCols, storage.ColumnSchema{Name: name, Type: colType})
+		}
+		for _, col := range inferredCols {
+			if err := ctx.Storage.AlterTableAddColumn(dbName, c.stmt.TableName, col, nil); err != nil {
+				return nil, fmt.Errorf("infer schema failed: %w", err)
+			}
+		}
+		schema, err = ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	rowsToInsert, err := c.buildRows(schema, ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := fillAutoIncrementColumns(ctx, dbName, c.stmt.TableName, schema, rowsToInsert); err != nil {
+		return nil, err
+	}
+
+	if err := enforceForeignKeysOnInsert(ctx, dbName, c.stmt.TableName, rowsToInsert); err != nil {
+		return nil, err
+	}
+
+	// Validate NOT NULL and ENUM constraints
+	for j, col := range schema.Columns {
+		if col.NotNull && j < len(rowsToInsert[0]) && rowsToInsert[0][j] == nil {
+			return nil, fmt.Errorf("NOT NULL constraint failed for column '%s'", col.Name)
+		}
+		if col.Type == "ENUM" && len(col.EnumValues) > 0 && j < len(rowsToInsert[0]) && rowsToInsert[0][j] != nil {
+			val := valueToString(rowsToInsert[0][j])
+			valid := false
+			for _, ev := range col.EnumValues {
+				if val == ev {
+					valid = true
+					break
+				}
+			}
+			if !valid {
+				return nil, fmt.Errorf("invalid ENUM value '%s' for column '%s' (valid: %v)", val, col.Name, col.EnumValues)
+			}
+		}
+	}
+
+	// Validate CHECK constraints
+	for i, row := range rowsToInsert {
+		if err := enforceCheckConstraints(schema, row); err != nil {
+			return nil, fmt.Errorf("row %d: %w", i, err)
+		}
+	}
+
+	affected, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, rowsToInsert)
+	if err != nil {
+		return nil, err
+	}
+
+	notifyMutation(ctx, dbName, c.stmt.TableName)
+	if ctx.Session.planCache != nil {
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	}
+	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
+
+	return &Result{Type: "affected", Affected: affected}, nil
 }
 
 func (c *InsertCommand) executeImmediate(ctx *ExecutionContext) (*Result, error) {
