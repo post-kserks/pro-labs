@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vaultdb/internal/index"
@@ -58,6 +59,10 @@ type PageStorageEngine struct {
 
 	// schemas maps "db/table" → loaded TableSchema (kept in sync with disk).
 	schemas map[string]*TableSchema
+
+	// txCounter is an atomic counter for txID allocation, replacing the
+	// e.mu-protected catalog.CurrentTxID for DML hot paths.
+	txCounter atomic.Uint64
 }
 
 type pageTable struct {
@@ -65,6 +70,11 @@ type pageTable struct {
 	schema  *TableSchema
 	tableID uint32
 	mu      sync.RWMutex // per-table lock
+
+	// Per-table atomic counters. Updated by DML operations without e.mu,
+	// then synced to the catalog under e.mu for persistence.
+	rowCount atomic.Int64  // replaces catalog.RowCounts[key]
+	lastTxID atomic.Uint64 // replaces catalog.LastModified[key]
 }
 
 type pageTxStamp struct {
@@ -144,6 +154,11 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) 
 	if txMgr != nil && e.catalog.CurrentTxID > 0 {
 		txMgr.EnsureCounterAtLeast(e.catalog.CurrentTxID + 1)
 	}
+
+	// Initialize atomic tx counter from catalog state so new txIDs
+	// continue from where the last session left off.
+	e.txCounter.Store(e.catalog.CurrentTxID)
+
 	return e, nil
 }
 
@@ -267,6 +282,10 @@ func (e *PageStorageEngine) recalculateCatalog() {
 			continue
 		}
 		e.catalog.RowCounts[key] = count
+		t.rowCount.Store(int64(count))
+		if lm, ok := e.catalog.LastModified[key]; ok {
+			t.lastTxID.Store(lm)
+		}
 	}
 
 	if err := e.saveCatalogLocked(); err != nil {
@@ -531,6 +550,12 @@ func (e *PageStorageEngine) replayFullPageImage(p wal.FullPageImagePayload) erro
 		}
 		tid := tableIDFromPath(path)
 		t = &pageTable{heap: hf, schema: &schema, tableID: tid}
+		if rc, ok := e.catalog.RowCounts[key]; ok {
+			t.rowCount.Store(int64(rc))
+		}
+		if lm, ok := e.catalog.LastModified[key]; ok {
+			t.lastTxID.Store(lm)
+		}
 		e.tables[key] = t
 	}
 
@@ -789,20 +814,31 @@ func (e *PageStorageEngine) markCatalogDirty() {
 	}
 }
 
+// nextTxID atomically allocates a new transaction ID without holding e.mu.
+// This replaces the mu-protected path for DML hot paths.
+func (e *PageStorageEngine) nextTxID() uint64 {
+	txID := e.txCounter.Add(1)
+	if e.txMgr != nil {
+		e.txMgr.EnsureCounterAtLeast(txID + 1)
+	}
+	return txID
+}
+
 // nextTxLocked выделяет новый txID и фиксирует его время (для AS OF).
 func (e *PageStorageEngine) nextTxLocked() uint64 {
-	e.catalog.CurrentTxID++
+	txID := e.txCounter.Add(1)
+	e.catalog.CurrentTxID = txID
 	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
-		TxID:      e.catalog.CurrentTxID,
+		TxID:      txID,
 		Timestamp: time.Now(),
 	})
 	if len(e.catalog.TxTimes) > maxTxTimesEntries {
 		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
 	}
 	if e.txMgr != nil {
-		e.txMgr.EnsureCounterAtLeast(e.catalog.CurrentTxID + 1)
+		e.txMgr.EnsureCounterAtLeast(txID + 1)
 	}
-	return e.catalog.CurrentTxID
+	return txID
 }
 
 // ── Кодирование кортежей ──────────────────────────────────────────────────
@@ -927,7 +963,10 @@ func (e *PageStorageEngine) CreateTable(dbName string, schema TableSchema) error
 	key := dbName + "/" + schema.Name
 	tid := tableIDFromPath(path)
 	e.bufPool.InvalidateTable(tid)
-	e.tables[key] = &pageTable{heap: hf, schema: &schema, tableID: tid}
+	pt := &pageTable{heap: hf, schema: &schema, tableID: tid}
+	pt.rowCount.Store(0)
+	pt.lastTxID.Store(0)
+	e.tables[key] = pt
 	e.schemas[key] = &schema
 	e.catalog.RowCounts[key] = 0
 
@@ -1033,6 +1072,12 @@ func (e *PageStorageEngine) getOrCreateTable(db, table string) (*pageTable, erro
 		}
 		tid := tableIDFromPath(path)
 		t = &pageTable{heap: hf, schema: &schema, tableID: tid}
+		if rc, ok := e.catalog.RowCounts[key]; ok {
+			t.rowCount.Store(int64(rc))
+		}
+		if lm, ok := e.catalog.LastModified[key]; ok {
+			t.lastTxID.Store(lm)
+		}
 		e.tables[key] = t
 		e.schemas[key] = t.schema
 	}
@@ -1071,6 +1116,12 @@ func (e *PageStorageEngine) getTableLocked(db, table string, cache bool) (*pageT
 
 	tid := tableIDFromPath(path)
 	t := &pageTable{heap: hf, schema: &schema, tableID: tid}
+	if rc, ok := e.catalog.RowCounts[key]; ok {
+		t.rowCount.Store(int64(rc))
+	}
+	if lm, ok := e.catalog.LastModified[key]; ok {
+		t.lastTxID.Store(lm)
+	}
 	if cache {
 		e.tables[key] = t
 		e.schemas[key] = t.schema
@@ -1132,7 +1183,14 @@ func (e *PageStorageEngine) ListTables(dbName string) ([]TableInfo, error) {
 			continue
 		}
 		name := entry.Name()
-		info := TableInfo{Name: name, RowCount: e.catalog.RowCounts[dbName+"/"+name]}
+		key := dbName + "/" + name
+		var info TableInfo
+		if t, ok := e.tables[key]; ok {
+			// Read from per-table atomic counters (lock-free).
+			info = TableInfo{Name: name, RowCount: int(t.rowCount.Load())}
+		} else {
+			info = TableInfo{Name: name, RowCount: e.catalog.RowCounts[key]}
+		}
 		if data, err := os.ReadFile(e.schemaPathFor(dbName, name)); err == nil {
 			var schema TableSchema
 			if json.Unmarshal(data, &schema) == nil {

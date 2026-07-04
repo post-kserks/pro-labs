@@ -1172,3 +1172,182 @@ func BenchmarkInsertBatchWithoutIndex(b *testing.B) {
 		_, _ = e.InsertRows("benchdb", "items_nopk", rows)
 	}
 }
+
+func TestAtomicTxIDAllocation(t *testing.T) {
+	e := newPageEngine(t)
+	if err := e.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("testdb", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Allocate txIDs concurrently and verify they are unique.
+	const numGoroutines = 20
+	const perGoroutine = 50
+	seen := make(map[uint64]bool)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perGoroutine; i++ {
+				txID := e.nextTxID()
+				mu.Lock()
+				if seen[txID] {
+					t.Errorf("duplicate txID %d", txID)
+				}
+				seen[txID] = true
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	expected := uint64(numGoroutines * perGoroutine)
+	if uint64(len(seen)) != expected {
+		t.Errorf("expected %d unique txIDs, got %d", expected, len(seen))
+	}
+
+	// Verify counter is at least as high as what we allocated.
+	if got := e.txCounter.Load(); got < expected {
+		t.Errorf("txCounter = %d, want >= %d", got, expected)
+	}
+}
+
+func TestPerTableCounters(t *testing.T) {
+	e := newPageEngine(t)
+	if err := e.CreateDatabase("shop"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("shop", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows.
+	n, err := e.InsertRows("shop", "users", []Row{
+		{int64(1), "alice", 9.0},
+		{int64(2), "bob", 7.0},
+	})
+	if err != nil || n != 2 {
+		t.Fatalf("insert: n=%d err=%v", n, err)
+	}
+
+	// Verify per-table atomic counters.
+	key := "shop/users"
+	e.mu.RLock()
+	tbl := e.tables[key]
+	e.mu.RUnlock()
+	if tbl == nil {
+		t.Fatal("table not found")
+	}
+	if got := tbl.rowCount.Load(); got != 2 {
+		t.Errorf("rowCount = %d, want 2", got)
+	}
+	if got := tbl.lastTxID.Load(); got == 0 {
+		t.Error("lastTxID should be non-zero after insert")
+	}
+
+	// Delete one row.
+	if _, err := e.DeleteRows("shop", "users", []int{0}); err != nil {
+		t.Fatal(err)
+	}
+	if got := tbl.rowCount.Load(); got != 1 {
+		t.Errorf("rowCount after delete = %d, want 1", got)
+	}
+
+	// Verify catalog is in sync.
+	e.mu.RLock()
+	catalogCount := e.catalog.RowCounts[key]
+	catalogLM := e.catalog.LastModified[key]
+	e.mu.RUnlock()
+	if catalogCount != 1 {
+		t.Errorf("catalog RowCount = %d, want 1", catalogCount)
+	}
+	if catalogLM != tbl.lastTxID.Load() {
+		t.Errorf("catalog LastModified = %d, want %d", catalogLM, tbl.lastTxID.Load())
+	}
+}
+
+func TestAtomicCounterAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("testdb", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert a row to generate txIDs.
+	_, err = e.InsertRows("testdb", "users", []Row{{int64(1), "alice", 9.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	txBefore := e.txCounter.Load()
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopen and verify counter is restored.
+	e2, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e2.Close()
+
+	txAfter := e2.txCounter.Load()
+	if txAfter != txBefore {
+		t.Errorf("txCounter after reopen = %d, want %d", txAfter, txBefore)
+	}
+
+	// New inserts should continue from where we left off.
+	_, err = e2.InsertRows("testdb", "users", []Row{{int64(2), "bob", 7.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e2.txCounter.Load(); got <= txBefore {
+		t.Errorf("txCounter after second insert = %d, want > %d", got, txBefore)
+	}
+}
+
+func BenchmarkConcurrentInsertsDifferentTables(b *testing.B) {
+	dir := b.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.CreateDatabase("benchdb"); err != nil {
+		b.Fatal(err)
+	}
+
+	numTables := 4
+	for i := 0; i < numTables; i++ {
+		schema := TableSchema{
+			Name:    fmt.Sprintf("table_%d", i),
+			Columns: []ColumnSchema{{Name: "id", Type: "INT"}, {Name: "val", Type: "TEXT"}},
+		}
+		if err := e.CreateTable("benchdb", schema); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			tableName := fmt.Sprintf("table_%d", i%numTables)
+			_, _ = e.InsertRows("benchdb", tableName, []Row{
+				{int64(i), "val"},
+			})
+			i++
+		}
+	})
+}

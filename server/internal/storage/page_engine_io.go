@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"vaultdb/internal/index"
 	"vaultdb/internal/storage/heap"
@@ -134,10 +135,8 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 }
 
 func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (int, error) {
-	// Получаем txID под e.mu (быстро)
-	e.mu.Lock()
-	txID := e.nextTxLocked()
-	e.mu.Unlock()
+	// Get txID without global lock — atomic counter.
+	txID := e.nextTxID()
 
 	// Получаем ссылку на таблицу (освобождает e.mu)
 	t, err := e.getTableForWrite(dbName, tableName)
@@ -310,10 +309,24 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	}
 
 	key := dbName + "/" + tableName
+
+	// Update per-table atomic counters (no lock needed).
+	t.rowCount.Add(int64(len(rows)))
+	t.lastTxID.Store(txID)
+
+	// Sync catalog under e.mu for persistence.
 	e.mu.Lock()
+	e.catalog.CurrentTxID = txID
 	e.catalog.LastModified[key] = txID
-	e.catalog.RowCounts[key] += len(rows)
+	e.catalog.RowCounts[key] = int(t.rowCount.Load())
 	startPos := e.catalog.RowCounts[key] - len(rows)
+	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
+		TxID:      txID,
+		Timestamp: time.Now(),
+	})
+	if len(e.catalog.TxTimes) > maxTxTimesEntries {
+		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
+	}
 	e.markCatalogDirty()
 	e.mu.Unlock()
 
@@ -331,10 +344,8 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 
 // mutateRows помечает версии удалёнными и (для UPDATE) добавляет новые версии.
 func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, updates map[string]Value, isDelete bool) (int, error) {
-	// Получаем txID под e.mu
-	e.mu.Lock()
-	txID := e.nextTxLocked()
-	e.mu.Unlock()
+	// Get txID without global lock — atomic counter.
+	txID := e.nextTxID()
 
 	useRowLocks := len(indices) <= 10
 
@@ -522,13 +533,27 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	}
 
 	key := dbName + "/" + tableName
-	e.mu.Lock()
-	e.catalog.LastModified[key] = txID
+
+	// Update per-table atomic counters.
+	t.lastTxID.Store(txID)
 	if isDelete {
-		e.catalog.RowCounts[key] -= affected
-		if e.catalog.RowCounts[key] < 0 {
-			e.catalog.RowCounts[key] = 0
+		t.rowCount.Add(-int64(affected))
+		if t.rowCount.Load() < 0 {
+			t.rowCount.Store(0)
 		}
+	}
+
+	// Sync catalog under e.mu for persistence.
+	e.mu.Lock()
+	e.catalog.CurrentTxID = txID
+	e.catalog.LastModified[key] = txID
+	e.catalog.RowCounts[key] = int(t.rowCount.Load())
+	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
+		TxID:      txID,
+		Timestamp: time.Now(),
+	})
+	if len(e.catalog.TxTimes) > maxTxTimesEntries {
+		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
 	}
 	e.markCatalogDirty()
 	e.mu.Unlock()
@@ -550,9 +575,8 @@ func (e *PageStorageEngine) UpdateRows(dbName, tableName string, indices []int, 
 // UpdateRowsDirect replaces rows at given indices with pre-computed new values.
 // Used when assignment expressions reference columns (e.g., SET amount = amount - 100).
 func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices []int, newValues []Row) (int, error) {
-	e.mu.Lock()
-	txID := e.nextTxLocked()
-	e.mu.Unlock()
+	// Get txID without global lock — atomic counter.
+	txID := e.nextTxID()
 
 	t, err := e.getTableForWrite(dbName, tableName)
 	if err != nil {
@@ -685,8 +709,21 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	t.mu.Unlock()
 
 	key := dbName + "/" + tableName
+
+	// Update per-table atomic counter.
+	t.lastTxID.Store(txID)
+
+	// Sync catalog under e.mu for persistence.
 	e.mu.Lock()
+	e.catalog.CurrentTxID = txID
 	e.catalog.LastModified[key] = txID
+	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
+		TxID:      txID,
+		Timestamp: time.Now(),
+	})
+	if len(e.catalog.TxTimes) > maxTxTimesEntries {
+		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
+	}
 	e.markCatalogDirty()
 	e.mu.Unlock()
 
@@ -766,9 +803,20 @@ func (e *PageStorageEngine) TruncateTable(dbName, tableName string) error {
 
 	// Update catalog
 	key := dbName + "/" + tableName
+	txID := e.nextTxID()
+	t.rowCount.Store(0)
+	t.lastTxID.Store(txID)
 	e.mu.Lock()
+	e.catalog.CurrentTxID = txID
 	e.catalog.RowCounts[key] = 0
-	e.catalog.LastModified[key] = e.nextTxLocked()
+	e.catalog.LastModified[key] = txID
+	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
+		TxID:      txID,
+		Timestamp: time.Now(),
+	})
+	if len(e.catalog.TxTimes) > maxTxTimesEntries {
+		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
+	}
 	if err := e.saveCatalogLocked(); err != nil {
 		e.mu.Unlock()
 		return fmt.Errorf("truncate: save catalog: %w", err)
@@ -919,11 +967,20 @@ func (e *PageStorageEngine) ReadRowsByPositions(dbName, tableName string, positi
 }
 
 func (e *PageStorageEngine) CountRows(dbName, tableName string) (int, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
 	key := dbName + "/" + tableName
+
+	// Try per-table atomic counter first (lock-free).
+	e.mu.RLock()
+	t, ok := e.tables[key]
+	e.mu.RUnlock()
+	if ok {
+		return int(t.rowCount.Load()), nil
+	}
+
+	// Fallback to catalog.
+	e.mu.RLock()
 	count, ok := e.catalog.RowCounts[key]
+	e.mu.RUnlock()
 	if !ok {
 		return 0, fmt.Errorf("table '%s' not found in database '%s'", tableName, dbName)
 	}
