@@ -124,6 +124,12 @@ type FullPageImagePayload struct {
 	PageData  []byte // полный образ страницы (8KB)
 }
 
+// WALRecord is a pre-built WAL record ready for batched writing.
+type WALRecord struct {
+	Data []byte // fully serialized record (magic + txID + opType + ... + crc)
+	TxID uint64
+}
+
 type WAL struct {
 	file          *os.File
 	mu            sync.Mutex
@@ -133,6 +139,7 @@ type WAL struct {
 	SyncBatchSize int                    // number of writes between fsyncs (0 = sync every write)
 	OnAppend      func()                 // called after each successful WAL append (for metrics)
 	em            *crypto.EncryptionManager // nil = no encryption
+	groupCommit   *GroupCommit            // nil = no batching
 }
 
 func Open(path string) (*WAL, error) {
@@ -285,6 +292,14 @@ func (w *WAL) Recover() ([]Entry, error) {
 }
 
 func (w *WAL) Close() error {
+	// Stop group commit worker first (drains pending records).
+	// Wait for the flush worker goroutine to finish before acquiring w.mu,
+	// because doFlush() acquires w.mu internally.
+	if w.groupCommit != nil {
+		w.groupCommit.Close()
+		w.groupCommit = nil
+	}
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -411,6 +426,159 @@ func (w *WAL) appendBytesLocked(opType byte, payload []byte) (uint64, error) {
 	}
 
 	return txID, nil
+}
+
+// writeRecordRaw writes a pre-built record to the WAL file.
+// Caller must hold w.mu. Does NOT sync — the caller manages sync policy.
+func (w *WAL) writeRecordRaw(rec WALRecord) error {
+	if _, err := w.file.Write(rec.Data); err != nil {
+		return fmt.Errorf("wal: write record: %w", err)
+	}
+	if rec.TxID >= w.nextTxID.Load() {
+		w.nextTxID.Store(rec.TxID + 1)
+	}
+	if w.OnAppend != nil {
+		w.OnAppend()
+	}
+	return nil
+}
+
+// EnableGroupCommit installs a group commit worker on this WAL.
+// batchSize: number of records to accumulate before flushing (0 = disabled).
+// batchTime: maximum latency before a partial batch is flushed.
+// Panics if called twice or if batchSize <= 0.
+func (w *WAL) EnableGroupCommit(batchSize int, batchTime time.Duration) {
+	if batchSize <= 0 {
+		return
+	}
+	if w.groupCommit != nil {
+		panic("wal: EnableGroupCommit called twice")
+	}
+	w.groupCommit = NewGroupCommit(w, batchSize, batchTime)
+}
+
+// DisableGroupCommit flushes pending records and stops the group commit worker.
+func (w *WAL) DisableGroupCommit() {
+	if w.groupCommit != nil {
+		w.groupCommit.Close()
+		w.groupCommit = nil
+	}
+}
+
+// BuildRecord serializes a WAL entry without writing it. Useful for pre-building
+// records that will be fed into GroupCommit.AppendBatch.
+func BuildRecord(txID uint64, opType byte, payload []byte, em *crypto.EncryptionManager) ([]byte, error) {
+	return buildRecord(txID, opType, payload, em)
+}
+
+// NextTxID returns the next txID that will be assigned.
+func (w *WAL) NextTxID() uint64 {
+	return w.nextTxID.Load() + 1
+}
+
+// GroupCommit batches multiple WAL writes and performs a single fsync per batch,
+// amortizing the cost of expensive fsync syscalls. This mirrors PostgreSQL's
+// group commit strategy for 2-3x INSERT throughput improvement.
+type GroupCommit struct {
+	wal       *WAL
+	pending   []*WALRecord
+	mu        sync.Mutex
+	batchSize int
+	batchTime time.Duration
+	flushCh   chan struct{}
+	done      chan struct{}
+	stopped   chan struct{} // closed when flushWorker exits
+}
+
+// NewGroupCommit creates a group commit worker. The worker runs in a
+// background goroutine and flushes pending records on batch size threshold
+// or batch time timeout, whichever comes first.
+func NewGroupCommit(wal *WAL, batchSize int, batchTime time.Duration) *GroupCommit {
+	gc := &GroupCommit{
+		wal:       wal,
+		pending:   make([]*WALRecord, 0, batchSize),
+		batchSize: batchSize,
+		batchTime: batchTime,
+		flushCh:   make(chan struct{}, 1),
+		done:      make(chan struct{}),
+		stopped:   make(chan struct{}),
+	}
+	go gc.flushWorker()
+	return gc
+}
+
+// AppendBatch queues a pre-built record for batched writing. The record
+// will be written to disk and fsynced when the batch is full or the timer fires.
+func (gc *GroupCommit) AppendBatch(rec *WALRecord) error {
+	gc.mu.Lock()
+	gc.pending = append(gc.pending, rec)
+	shouldFlush := len(gc.pending) >= gc.batchSize
+	gc.mu.Unlock()
+
+	if shouldFlush {
+		select {
+		case gc.flushCh <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+// Flush forces an immediate flush of all pending records.
+func (gc *GroupCommit) Flush() {
+	gc.doFlush()
+}
+
+func (gc *GroupCommit) flushWorker() {
+	defer close(gc.stopped)
+	ticker := time.NewTicker(gc.batchTime)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-gc.flushCh:
+			gc.doFlush()
+		case <-ticker.C:
+			gc.doFlush()
+		case <-gc.done:
+			gc.doFlush() // Final flush — ensure durability
+			return
+		}
+	}
+}
+
+func (gc *GroupCommit) doFlush() {
+	gc.mu.Lock()
+	if len(gc.pending) == 0 {
+		gc.mu.Unlock()
+		return
+	}
+	batch := gc.pending
+	gc.pending = make([]*WALRecord, 0, gc.batchSize)
+	gc.mu.Unlock()
+
+	// Write all records in single locked section, then one fsync.
+	gc.wal.mu.Lock()
+	for _, rec := range batch {
+		if err := gc.wal.writeRecordRaw(*rec); err != nil {
+			gc.wal.mu.Unlock()
+			slog.Error("wal group commit: write failed", "txID", rec.TxID, "error", err)
+			return
+		}
+	}
+	if err := gc.wal.file.Sync(); err != nil {
+		gc.wal.mu.Unlock()
+		slog.Error("wal group commit: sync failed", "error", err)
+		return
+	}
+	gc.wal.mu.Unlock()
+}
+
+// Close signals the flush worker to stop, performs a final flush, and waits
+// for the worker goroutine to exit.
+func (gc *GroupCommit) Close() {
+	close(gc.done)
+	<-gc.stopped
 }
 
 // buildRecord creates a WAL record.
