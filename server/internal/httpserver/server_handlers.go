@@ -134,6 +134,10 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 				"session pool exhausted, try again later")
 			return
 		}
+		// Apply config settings to pooled session
+		if s.cfg.MaxRows > 0 {
+			session.SetMaxRows(s.cfg.MaxRows)
+		}
 		if req.Database != "" {
 			session.SetCurrentDatabase(req.Database)
 		}

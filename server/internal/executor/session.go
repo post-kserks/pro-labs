@@ -252,4 +252,9 @@ func (s *Session) Reset() {
 	s.currentDB = ""
 	s.snapshotTxID = 0
 	s.PreparedStatements = make(map[string]*PreparedStatement)
+	// Reset executor settings for pooled sessions
+	if s.executor != nil {
+		s.executor.SetMaxRows(0)
+		s.executor.SetQueryTimeout(0)
+	}
 }
