@@ -139,7 +139,8 @@ type WAL struct {
 	SyncBatchSize int                    // number of writes between fsyncs (0 = sync every write)
 	OnAppend      func()                 // called after each successful WAL append (for metrics)
 	em            *crypto.EncryptionManager // nil = no encryption
-	groupCommit   *GroupCommit            // nil = no batching
+	groupCommit   *GroupCommit            // nil = no grouping
+	writeBehind   *WriteBehindBuffer      // nil = no write-behind batching
 }
 
 func Open(path string) (*WAL, error) {
@@ -292,7 +293,13 @@ func (w *WAL) Recover() ([]Entry, error) {
 }
 
 func (w *WAL) Close() error {
-	// Stop group commit worker first (drains pending records).
+	// Stop write-behind worker first (drains pending records).
+	if w.writeBehind != nil {
+		w.writeBehind.Close()
+		w.writeBehind = nil
+	}
+
+	// Stop group commit worker (drains pending records).
 	// Wait for the flush worker goroutine to finish before acquiring w.mu,
 	// because doFlush() acquires w.mu internally.
 	if w.groupCommit != nil {
@@ -463,6 +470,55 @@ func (w *WAL) DisableGroupCommit() {
 		w.groupCommit.Close()
 		w.groupCommit = nil
 	}
+}
+
+// EnableWriteBehind installs a write-behind buffer on this WAL.
+// maxBuffer: number of records to accumulate before triggering a flush.
+// flushInterval: maximum time between flushes.
+// Panics if called twice or if maxBuffer <= 0.
+func (w *WAL) EnableWriteBehind(maxBuffer int, flushInterval time.Duration) {
+	if maxBuffer <= 0 {
+		return
+	}
+	if w.writeBehind != nil {
+		panic("wal: EnableWriteBehind called twice")
+	}
+	w.writeBehind = NewWriteBehindBuffer(w, maxBuffer, flushInterval)
+}
+
+// DisableWriteBehind flushes pending records and stops the write-behind worker.
+func (w *WAL) DisableWriteBehind() {
+	if w.writeBehind != nil {
+		w.writeBehind.Close()
+		w.writeBehind = nil
+	}
+}
+
+// AppendWithWriteBehind queues a WAL record for batched writing via the
+// write-behind buffer. If write-behind is not enabled, falls back to
+// AppendWithTx (synchronous write).
+func (w *WAL) AppendWithWriteBehind(xid uint64, opType byte, payload interface{}) (uint64, error) {
+	if w.writeBehind == nil {
+		return w.AppendWithTx(xid, opType, payload)
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("wal: marshal payload: %w", err)
+	}
+
+	data, err := buildRecord(xid, opType, payloadBytes, w.em)
+	if err != nil {
+		return 0, err
+	}
+
+	rec := &WALRecord{
+		TxID: xid,
+		Data: data,
+	}
+
+	w.writeBehind.Append(rec)
+	return xid, nil
 }
 
 // BuildRecord serializes a WAL entry without writing it. Useful for pre-building
