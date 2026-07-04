@@ -134,11 +134,22 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	// Try index lookup (only for single table for now)
 	// Внутри транзакции индекс пропускаем — он обошёл бы tx-overlay (Bug #1).
 	usedIndex := false
+	indexOnlyResult := false
 	if len(c.stmt.Joins) == 0 && c.stmt.Where != nil && c.stmt.AsOf == nil && !ctx.Session.IsInTx() {
 		if positions, ok := tryIndexLookup(ctx, dbName, c.stmt.TableName, c.stmt.Where); ok {
-			rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
-			if err == nil {
-				usedIndex = true
+			// Check if we can use index-only scan
+			if storedCols, ok := tryIndexOnlyScan(ctx, dbName, c.stmt.TableName, c.stmt.Where, positions); ok {
+				rows, err = buildRowsFromStoredColumns(storedCols, c.stmt.Columns, mainSchema)
+				if err == nil {
+					usedIndex = true
+					indexOnlyResult = true
+				}
+			}
+			if !indexOnlyResult {
+				rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
+				if err == nil {
+					usedIndex = true
+				}
 			}
 		}
 	}
@@ -172,15 +183,21 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	// Build column index for O(1) lookups during expression evaluation.
 	ensureColumnIndex(ctx, combinedSchema)
 
-	// Filter rows (WHERE)
-	filtered := make([]storage.Row, 0, len(combinedRows))
-	for _, row := range combinedRows {
-		ok, err := evalExpr(c.stmt.Where, row, combinedSchema, ctx)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			filtered = append(filtered, row)
+	// Filter rows (WHERE) — use parallel execution for large tables
+	var filtered []storage.Row
+	if ShouldUseParallel(ctx.Parallel, len(combinedRows), len(c.stmt.Joins) > 0, len(c.stmt.OrderBy) > 0) && c.stmt.Where != nil {
+		pc := NewParallelCoordinator(ctx.Parallel.NumWorkers)
+		filtered = pc.ParallelFilter(combinedRows, combinedSchema, c.stmt.Where, ctx)
+	} else {
+		filtered = make([]storage.Row, 0, len(combinedRows))
+		for _, row := range combinedRows {
+			ok, err := evalExpr(c.stmt.Where, row, combinedSchema, ctx)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				filtered = append(filtered, row)
+			}
 		}
 	}
 
@@ -241,17 +258,22 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	}
 
 	resultRows := make([][]string, 0, len(filtered))
-	for _, row := range filtered {
-		projected := make([]string, len(effectiveColumns))
-		for i, col := range effectiveColumns {
-			val, err := evalOperand(col.Expr, row, combinedSchema, ctx)
-			if err != nil {
-				projected[i] = "ERR"
-			} else {
-				projected[i] = valueToString(val)
+	if ShouldUseParallel(ctx.Parallel, len(filtered), false, false) {
+		pc := NewParallelCoordinator(ctx.Parallel.NumWorkers)
+		resultRows = pc.ParallelProject(filtered, effectiveColumns, combinedSchema, ctx)
+	} else {
+		for _, row := range filtered {
+			projected := make([]string, len(effectiveColumns))
+			for i, col := range effectiveColumns {
+				val, err := evalOperand(col.Expr, row, combinedSchema, ctx)
+				if err != nil {
+					projected[i] = "ERR"
+				} else {
+					projected[i] = valueToString(val)
+				}
 			}
+			resultRows = append(resultRows, projected)
 		}
-		resultRows = append(resultRows, projected)
 	}
 
 	// Apply DISTINCT after projection
@@ -394,6 +416,83 @@ func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parse
 		}
 		return positions, true
 	}
+}
+
+// tryIndexOnlyScan attempts to retrieve stored columns from an index for index-only scan.
+// Returns the stored columns map if the index has stored data for the given positions.
+func tryIndexOnlyScan(ctx *ExecutionContext, dbName, tableName string, where parser.Expression, positions []int) (map[int]map[string]interface{}, bool) {
+	cmp, ok := where.(*parser.BinaryExpr)
+	if !ok {
+		return nil, false
+	}
+	if !indexOperators[cmp.Operator] {
+		return nil, false
+	}
+	col, ok := cmp.Left.(*parser.ColumnRef)
+	if !ok {
+		return nil, false
+	}
+
+	// Try to find a btree index with stored columns for this column
+	indexName, ok := ctx.Storage.FindIndexForColumn(dbName, tableName, col.Name)
+	if !ok {
+		return nil, false
+	}
+
+	// Get the index and check if it has stored columns
+	idx, ok := ctx.Storage.GetIndex(dbName, tableName, indexName)
+	if !ok {
+		return nil, false
+	}
+
+	if !idx.HasStoredColumns() {
+		return nil, false
+	}
+
+	// Collect stored columns for all positions
+	resultCols := make(map[int]map[string]interface{}, len(positions))
+	for _, pos := range positions {
+		if cols, ok := idx.GetStoredColumns(pos); ok {
+			resultCols[pos] = cols
+		}
+	}
+
+	if len(resultCols) == 0 {
+		return nil, false
+	}
+
+	return resultCols, true
+}
+
+// buildRowsFromStoredColumns constructs storage.Row slices from index stored columns.
+func buildRowsFromStoredColumns(storedCols map[int]map[string]interface{}, selectCols []parser.SelectColumn, schema *storage.TableSchema) ([]storage.Row, error) {
+	// Build column name to index mapping
+	colIndex := make(map[string]int)
+	for i, col := range schema.Columns {
+		colIndex[col.Name] = i
+	}
+
+	// Determine which columns we need
+	neededCols := make(map[string]bool)
+	for _, col := range selectCols {
+		if colRef, ok := col.Expr.(*parser.ColumnRef); ok {
+			neededCols[colRef.Name] = true
+		}
+	}
+
+	// Build rows
+	rows := make([]storage.Row, 0, len(storedCols))
+	for _, cols := range storedCols {
+		row := make(storage.Row, len(schema.Columns))
+		for colName, val := range cols {
+			if idx, ok := colIndex[colName]; ok {
+				row[idx] = val
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	return rows, nil
 }
 
 func (c *SelectCommand) executeDual(ctx *ExecutionContext) (*Result, error) {

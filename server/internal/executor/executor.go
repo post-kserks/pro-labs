@@ -149,18 +149,22 @@ type ExecutionContext struct {
 	// поэтому autocommit-обёртка mutateUnderTableLock НЕ должна брать их повторно
 	// — иначе self-deadlock (Bug #2, deadlock guard).
 	InCommitApply bool
+
+	// Parallel holds the parallel execution configuration for this query.
+	Parallel ParallelConfig
 }
 
 type Executor struct {
-	storage      storage.StorageEngine
-	metrics      *metrics.Collector
-	txm          *txmanager.Manager
-	broadcaster  *Broadcaster
-	embedder     ai.Embedder
-	wal          *wal.WAL
-	queryTimeout time.Duration
-	maxRows      int
-	mu           sync.RWMutex
+	storage       storage.StorageEngine
+	metrics       *metrics.Collector
+	txm           *txmanager.Manager
+	broadcaster   *Broadcaster
+	embedder      ai.Embedder
+	wal           *wal.WAL
+	queryTimeout  time.Duration
+	maxRows       int
+	parallel      ParallelConfig
+	mu            sync.RWMutex
 }
 
 func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Executor {
@@ -201,6 +205,20 @@ func (e *Executor) SetMaxRows(n int) {
 	}
 }
 
+// SetParallelConfig настраивает параллельное выполнение запросов.
+func (e *Executor) SetParallelConfig(cfg ParallelConfig) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.parallel = cfg
+}
+
+// ParallelConfig возвращает текущую конфигурацию параллельного выполнения.
+func (e *Executor) ParallelConfig() ParallelConfig {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.parallel
+}
+
 func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	start := time.Now()
 	cmd, err := CommandFactory(stmt)
@@ -212,6 +230,7 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	queryTimeout := e.queryTimeout
 	embedder := e.embedder
 	wal := e.wal
+	parallelCfg := e.parallel
 	e.mu.RUnlock()
 
 	queryCtx := sess.ServerContext()
@@ -231,6 +250,7 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 		WAL:          wal,
 		Ctx:          queryCtx,
 		SnapshotTxID: sess.SnapshotTxID(),
+		Parallel:     parallelCfg,
 	}
 	result, err := cmd.Execute(ctx)
 
