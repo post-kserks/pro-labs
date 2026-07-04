@@ -70,10 +70,10 @@ func (e *PageStorageEngine) rowsToIndexable(rows []Row) []index.IndexableRow {
 }
 
 func (e *PageStorageEngine) CreateIndex(dbName, tableName, indexName, column string) error {
-	e.mu.Lock()
+	e.mu.RLock()
 	t, err := e.getTableLocked(dbName, tableName, false)
 	if err != nil {
-		e.mu.Unlock()
+		e.mu.RUnlock()
 		return err
 	}
 
@@ -85,7 +85,7 @@ func (e *PageStorageEngine) CreateIndex(dbName, tableName, indexName, column str
 		}
 	}
 	if colIdx == -1 {
-		e.mu.Unlock()
+		e.mu.RUnlock()
 		return fmt.Errorf("column '%s' not found in table '%s'", column, tableName)
 	}
 
@@ -97,7 +97,7 @@ func (e *PageStorageEngine) CreateIndex(dbName, tableName, indexName, column str
 		}
 		return false, nil
 	})
-	e.mu.Unlock()
+	e.mu.RUnlock()
 
 	mgr := e.getOrCreateIndexManager(dbName, tableName)
 	if _, ok := mgr.FindForColumn(column); ok {
@@ -122,10 +122,10 @@ func (e *PageStorageEngine) CreateIndex(dbName, tableName, indexName, column str
 }
 
 func (e *PageStorageEngine) CreateIndexMulti(dbName, tableName, indexName string, columns []string) error {
-	e.mu.Lock()
+	e.mu.RLock()
 	t, err := e.getTableLocked(dbName, tableName, false)
 	if err != nil {
-		e.mu.Unlock()
+		e.mu.RUnlock()
 		return err
 	}
 
@@ -139,7 +139,7 @@ func (e *PageStorageEngine) CreateIndexMulti(dbName, tableName, indexName string
 			}
 		}
 		if colIdx == -1 {
-			e.mu.Unlock()
+			e.mu.RUnlock()
 			return fmt.Errorf("column '%s' not found in table '%s'", column, tableName)
 		}
 		colIndices = append(colIndices, colIdx)
@@ -152,7 +152,7 @@ func (e *PageStorageEngine) CreateIndexMulti(dbName, tableName, indexName string
 		}
 		return false, nil
 	})
-	e.mu.Unlock()
+	e.mu.RUnlock()
 
 	mgr := e.getOrCreateIndexManager(dbName, tableName)
 	idx := index.NewCompositeIndex(indexName, columns, colIndices)
