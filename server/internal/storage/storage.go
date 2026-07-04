@@ -104,6 +104,7 @@ type ReadOnlyEngine interface {
 	TableVersionStats(dbName, tableName string) (*TableVersionStats, error)
 	TableModifiedSince(db, table string, txID uint64) (bool, error)
 	CurrentTxID() uint64
+	SchemaVersion() uint64
 	ListIndexes(dbName, tableName string) ([]string, error)
 	FindIndexForColumn(dbName, tableName, column string) (string, bool)
 	IndexLookup(dbName, tableName, column, value string) ([]int, bool)

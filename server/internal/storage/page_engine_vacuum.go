@@ -243,6 +243,17 @@ func (e *PageStorageEngine) CurrentTxID() uint64 {
 	return e.catalog.CurrentTxID
 }
 
+// SchemaVersion returns a version number that changes when any table schema is modified.
+func (e *PageStorageEngine) SchemaVersion() uint64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	var ver uint64
+	for _, txID := range e.catalog.LastModified {
+		ver += txID
+	}
+	return ver
+}
+
 // FinalCheckpoint сбрасывает все dirty pages на диск.
 func (e *PageStorageEngine) FinalCheckpoint() error {
 	e.mu.Lock()
