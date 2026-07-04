@@ -51,6 +51,12 @@ type PageStorageEngine struct {
 	// mutations as a safety net.
 	catalogDirty         bool
 	catalogMutationCount uint32
+
+	// Binary catalog cache — provides fast schema lookups without JSON parsing.
+	cachedCatalog *CachedCatalog
+
+	// schemas maps "db/table" → loaded TableSchema (kept in sync with disk).
+	schemas map[string]*TableSchema
 }
 
 type pageTable struct {
@@ -105,22 +111,36 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) 
 		bufPool:  bufPool,
 		pageLock: NewPageLockManager(),
 		indexes:  make(map[string]*index.IndexManager),
+		schemas:  make(map[string]*TableSchema),
 	}
 
 	catalogPath := e.catalogPath()
+	binPath := e.catalogBinaryPath()
+
+	// Always load JSON catalog for transaction state (CurrentTxID, TxTimes, etc.)
 	if data, err := os.ReadFile(catalogPath); err == nil {
 		if err := json.Unmarshal(data, &e.catalog); err != nil {
 			return nil, fmt.Errorf("page engine: corrupt catalog %s: %w", catalogPath, err)
 		}
-		if e.catalog.LastModified == nil {
-			e.catalog.LastModified = make(map[string]uint64)
+	}
+
+	// Load binary catalog for fast schema metadata lookups.
+	if data, err := os.ReadFile(binPath); err == nil {
+		if bc, err := UnmarshalBinaryCatalog(data); err == nil {
+			_, schemas := UnmarshalToPageCatalog(bc)
+			e.schemas = schemas
+			e.cachedCatalog, _ = NewCachedCatalog(data)
 		}
-		if e.catalog.RowCounts == nil {
-			e.catalog.RowCounts = make(map[string]int)
-		}
-		if txMgr != nil && e.catalog.CurrentTxID > 0 {
-			txMgr.EnsureCounterAtLeast(e.catalog.CurrentTxID + 1)
-		}
+	}
+
+	if e.catalog.LastModified == nil {
+		e.catalog.LastModified = make(map[string]uint64)
+	}
+	if e.catalog.RowCounts == nil {
+		e.catalog.RowCounts = make(map[string]int)
+	}
+	if txMgr != nil && e.catalog.CurrentTxID > 0 {
+		txMgr.EnsureCounterAtLeast(e.catalog.CurrentTxID + 1)
 	}
 	return e, nil
 }
@@ -691,6 +711,10 @@ func (e *PageStorageEngine) catalogPath() string {
 	return filepath.Join(e.rootDir, "_catalog.json")
 }
 
+func (e *PageStorageEngine) catalogBinaryPath() string {
+	return filepath.Join(e.rootDir, "_catalog.bin")
+}
+
 func (e *PageStorageEngine) dbPath(db string) string {
 	return filepath.Join(e.rootDir, db)
 }
@@ -722,6 +746,7 @@ func (e *PageStorageEngine) unpinPage(pid page.PageID, dirty bool) {
 }
 
 // saveCatalogLocked сохраняет каталог; вызывается под write-локом.
+// Saves both JSON (backward compat) and binary (fast read) formats.
 func (e *PageStorageEngine) saveCatalogLocked() error {
 	data, err := json.MarshalIndent(&e.catalog, "", "  ")
 	if err != nil {
@@ -731,7 +756,18 @@ func (e *PageStorageEngine) saveCatalogLocked() error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, e.catalogPath())
+	if err := os.Rename(tmp, e.catalogPath()); err != nil {
+		return err
+	}
+
+	// Save binary catalog alongside JSON.
+	if binData, err := MarshalCatalog(&e.catalog, e.schemas); err == nil {
+		binTmp := e.catalogBinaryPath() + ".tmp"
+		if err := os.WriteFile(binTmp, binData, 0o644); err == nil {
+			_ = os.Rename(binTmp, e.catalogBinaryPath())
+		}
+	}
+	return nil
 }
 
 // markCatalogDirty marks the catalog as needing a disk flush. Called under e.mu
@@ -809,6 +845,7 @@ func (e *PageStorageEngine) DropDatabase(name string) error {
 				slog.Warn("failed to close heap during drop database", "key", key, "error", err)
 			}
 			delete(e.tables, key)
+			delete(e.schemas, key)
 			delete(e.catalog.LastModified, key)
 			delete(e.catalog.RowCounts, key)
 		}
@@ -889,6 +926,7 @@ func (e *PageStorageEngine) CreateTable(dbName string, schema TableSchema) error
 	tid := tableIDFromPath(path)
 	e.bufPool.InvalidateTable(tid)
 	e.tables[key] = &pageTable{heap: hf, schema: &schema, tableID: tid}
+	e.schemas[key] = &schema
 	e.catalog.RowCounts[key] = 0
 
 	// Auto-create BTree index on PRIMARY KEY columns
@@ -994,6 +1032,7 @@ func (e *PageStorageEngine) getOrCreateTable(db, table string) (*pageTable, erro
 		tid := tableIDFromPath(path)
 		t = &pageTable{heap: hf, schema: &schema, tableID: tid}
 		e.tables[key] = t
+		e.schemas[key] = t.schema
 	}
 	e.mu.Unlock()
 	return t, nil
@@ -1032,6 +1071,7 @@ func (e *PageStorageEngine) getTableLocked(db, table string, cache bool) (*pageT
 	t := &pageTable{heap: hf, schema: &schema, tableID: tid}
 	if cache {
 		e.tables[key] = t
+		e.schemas[key] = t.schema
 	}
 	return t, nil
 }
@@ -1052,6 +1092,7 @@ func (e *PageStorageEngine) DropTable(dbName, tableName string) error {
 			slog.Warn("failed to close heap during drop table", "key", key, "error", err)
 		}
 		delete(e.tables, key)
+		delete(e.schemas, key)
 	}
 	path := e.tablePath(dbName, tableName)
 	if _, err := os.Stat(path); err != nil {
