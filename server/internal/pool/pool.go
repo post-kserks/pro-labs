@@ -7,7 +7,10 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"vaultdb/internal/executor"
 )
 
 // Pool — пул соединений с автоматическим управлением.
@@ -303,4 +306,179 @@ func (p *Pool) cleanup() {
 	}
 
 	p.connections = remaining
+}
+
+// SessionPool — пул сессий для повторного использования executor.Session.
+// Аналогично тому, как PostgreSQL переиспользует соединения через пул,
+// SessionPool позволяет HTTP-хендлерам переиспользовать сессии между запросами.
+type SessionPool struct {
+	sessions    chan *sessionEntry
+	factory     func() *executor.Session
+	idleTimeout time.Duration
+	stopCh      chan struct{}
+	closed      bool
+	mu          sync.Mutex
+	wg          sync.WaitGroup
+	active      int32
+	maxOpen     int
+}
+
+type sessionEntry struct {
+	session  *executor.Session
+	lastUsed time.Time
+}
+
+// NewSessionPool создаёт новый пул сессий.
+// factory — функция создания новой сессии.
+// maxIdle — максимальное количество безделовых сессий в пуле.
+// maxOpen — максимальное количество одновременно активных сессий.
+// idleTimeout — максимальное время простоя сессии перед закрытием.
+func NewSessionPool(factory func() *executor.Session, maxIdle, maxOpen int, idleTimeout time.Duration) *SessionPool {
+	if maxIdle <= 0 {
+		maxIdle = 10
+	}
+	if maxOpen <= 0 {
+		maxOpen = 100
+	}
+	if idleTimeout <= 0 {
+		idleTimeout = 5 * time.Minute
+	}
+
+	p := &SessionPool{
+		sessions:    make(chan *sessionEntry, maxIdle),
+		factory:     factory,
+		idleTimeout: idleTimeout,
+		stopCh:      make(chan struct{}),
+		maxOpen:     maxOpen,
+	}
+
+	p.wg.Add(1)
+	go p.cleanupLoop()
+
+	return p
+}
+
+// Get получает сессию из пула или создаёт новую.
+func (p *SessionPool) Get() (*executor.Session, error) {
+	// Попытка взять из пула (non-blocking)
+	select {
+	case entry := <-p.sessions:
+		if entry != nil {
+			atomic.AddInt32(&p.active, 1)
+			entry.session.Reset()
+			return entry.session, nil
+		}
+	default:
+	}
+
+	// Проверяем лимит
+	if atomic.LoadInt32(&p.active) >= int32(p.maxOpen) {
+		return nil, fmt.Errorf("session pool exhausted: %d/%d active", atomic.LoadInt32(&p.active), p.maxOpen)
+	}
+
+	// Создаём новую сессию
+	sess := p.factory()
+	atomic.AddInt32(&p.active, 1)
+	return sess, nil
+}
+
+// Put возвращает сессию в пул для повторного использования.
+func (p *SessionPool) Put(sess *executor.Session) {
+	if sess == nil {
+		return
+	}
+
+	atomic.AddInt32(&p.active, -1)
+
+	// Попытка вернуть в пул (non-blocking)
+	select {
+	case p.sessions <- &sessionEntry{
+		session:  sess,
+		lastUsed: time.Now(),
+	}:
+	default:
+		// Пул полон — закрываем сессию
+		sess.Close()
+	}
+}
+
+// Close закрывает пул и все сессии в нём.
+func (p *SessionPool) Close() {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.closed = true
+	p.mu.Unlock()
+
+	close(p.stopCh)
+	p.wg.Wait()
+
+	// Закрываем все оставшиеся сессии
+	for {
+		select {
+		case entry := <-p.sessions:
+			if entry != nil {
+				entry.session.Close()
+			}
+		default:
+			return
+		}
+	}
+}
+
+// Stats возвращает статистику пула сессий.
+func (p *SessionPool) Stats() SessionPoolStats {
+	return SessionPoolStats{
+		Active: int(atomic.LoadInt32(&p.active)),
+		Idle:   len(p.sessions),
+		Max:    p.maxOpen,
+	}
+}
+
+// SessionPoolStats статистика пула сессий.
+type SessionPoolStats struct {
+	Active int
+	Idle   int
+	Max    int
+}
+
+func (p *SessionPool) cleanupLoop() {
+	defer p.wg.Done()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-p.stopCh:
+			return
+		case <-ticker.C:
+			p.cleanIdleSessions()
+		}
+	}
+}
+
+func (p *SessionPool) cleanIdleSessions() {
+	now := time.Now()
+	for {
+		select {
+		case entry := <-p.sessions:
+			if entry == nil {
+				continue
+			}
+			if now.Sub(entry.lastUsed) >= p.idleTimeout {
+				entry.session.Close()
+			} else {
+				// Сессия ещё жива — возвращаем в пул
+				select {
+				case p.sessions <- entry:
+				default:
+					entry.session.Close()
+				}
+			}
+		default:
+			return
+		}
+	}
 }

@@ -15,6 +15,7 @@ import (
 	"vaultdb/internal/config"
 	"vaultdb/internal/executor"
 	"vaultdb/internal/metrics"
+	"vaultdb/internal/pool"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
 )
@@ -44,6 +45,9 @@ type Config struct {
 	TLSKeyFile                string
 	MaxLiveQuerySubscriptions int
 	MaxLiveQueryDurationSec   int
+	SessionPoolMaxIdle        int
+	SessionPoolMaxOpen        int
+	SessionPoolIdleTimeoutSec int
 }
 
 type Server struct {
@@ -55,6 +59,7 @@ type Server struct {
 	activeSubscriptions atomic.Int64
 	nextSubID           atomic.Int64
 	sessions            *sessionStore
+	sessionPool         *pool.SessionPool
 }
 
 // sessionStore manages HTTP transaction sessions keyed by session ID.
@@ -181,6 +186,14 @@ func New(cfg Config) *Server {
 		txm:       txm,
 		br:        br,
 		sessions:  newSessionStore(),
+		sessionPool: pool.NewSessionPool(
+			func() *executor.Session {
+				return newSessionWithConfig(cfg)
+			},
+			cfg.SessionPoolMaxIdle,
+			cfg.SessionPoolMaxOpen,
+			time.Duration(cfg.SessionPoolIdleTimeoutSec)*time.Second,
+		),
 	}
 }
 
@@ -257,7 +270,8 @@ func (s *Server) Start(ctx context.Context) error {
 	_ = apiServer.Shutdown(shutdownCtx)
 	_ = monitorServer.Shutdown(shutdownCtx)
 
-	s.sessions.stop()
+	s.	sessions.stop()
+	s.sessionPool.Close()
 
 	return nil
 }

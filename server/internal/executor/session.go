@@ -238,3 +238,18 @@ func (s *Session) Close() {
 	s.PreparedStatements = make(map[string]*PreparedStatement)
 	s.ActiveTx = nil
 }
+
+// Reset сбрасывает состояние сессии для повторного использования в пуле.
+// Откатывает активную транзакцию, очищает prepared statements,
+// сбрасывает текущую БД и snapshot.
+func (s *Session) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ActiveTx != nil && s.ActiveTx.State == txmanager.TxActive {
+		s.ActiveTx.Rollback()
+	}
+	s.ActiveTx = nil
+	s.currentDB = ""
+	s.snapshotTxID = 0
+	s.PreparedStatements = make(map[string]*PreparedStatement)
+}

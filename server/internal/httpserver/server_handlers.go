@@ -45,21 +45,25 @@ type BatchResponseResult struct {
 }
 
 func (s *Server) newSession() *executor.Session {
-	sess := executor.NewSession(s.cfg.Storage, s.metrics, s.txm, s.br)
-	if s.cfg.Embedder != nil {
-		sess.SetEmbedder(s.cfg.Embedder)
+	return newSessionWithConfig(s.cfg)
+}
+
+func newSessionWithConfig(cfg Config) *executor.Session {
+	sess := executor.NewSession(cfg.Storage, cfg.Metrics, cfg.TxManager, cfg.Broadcaster)
+	if cfg.Embedder != nil {
+		sess.SetEmbedder(cfg.Embedder)
 	}
-	if s.cfg.QueryTimeoutSec > 0 {
-		sess.SetQueryTimeout(time.Duration(s.cfg.QueryTimeoutSec) * time.Second)
+	if cfg.QueryTimeoutSec > 0 {
+		sess.SetQueryTimeout(time.Duration(cfg.QueryTimeoutSec) * time.Second)
 	}
-	if s.cfg.MaxRows > 0 {
-		sess.SetMaxRows(s.cfg.MaxRows)
+	if cfg.MaxRows > 0 {
+		sess.SetMaxRows(cfg.MaxRows)
 	}
-	if s.cfg.MaxPreparedStmts > 0 {
-		sess.SetMaxPreparedStatements(s.cfg.MaxPreparedStmts)
+	if cfg.MaxPreparedStmts > 0 {
+		sess.SetMaxPreparedStatements(cfg.MaxPreparedStmts)
 	}
-	if s.cfg.ResultCacheSize > 0 {
-		sess.SetResultCacheConfig(s.cfg.ResultCacheSize, s.cfg.ResultCacheTTLSec)
+	if cfg.ResultCacheSize > 0 {
+		sess.SetResultCacheConfig(cfg.ResultCacheSize, cfg.ResultCacheTTLSec)
 	}
 	return sess
 }
@@ -123,7 +127,13 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 				"session_id is required for COMMIT/ROLLBACK")
 			return
 		}
-		session = s.newSession()
+		var poolErr error
+		session, poolErr = s.sessionPool.Get()
+		if poolErr != nil {
+			writeError(w, http.StatusServiceUnavailable, errCodeInternal,
+				"session pool exhausted, try again later")
+			return
+		}
 		if req.Database != "" {
 			session.SetCurrentDatabase(req.Database)
 		}
@@ -138,7 +148,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if !ephemeral {
 			s.sessions.remove(sessionID)
 		} else {
-			session.Close()
+			s.sessionPool.Put(session)
 		}
 		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
@@ -157,7 +167,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	} else if isCommit || isRollback {
 		s.sessions.remove(sessionID)
 	} else if ephemeral {
-		session.Close()
+		s.sessionPool.Put(session)
 	}
 
 	response := map[string]interface{}{
@@ -292,7 +302,14 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		session := s.newSession()
+		session, poolErr := s.sessionPool.Get()
+		if poolErr != nil {
+			results = append(results, BatchResponseResult{
+				Status: "error",
+				Error:  "session pool exhausted",
+			})
+			continue
+		}
 		if req.Database != "" {
 			session.SetCurrentDatabase(req.Database)
 		}
@@ -300,7 +317,7 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		result, err := session.Execute(stmt)
 		duration := time.Since(start).Milliseconds()
-		session.Close()
+		s.sessionPool.Put(session)
 
 		if err != nil {
 			results = append(results, BatchResponseResult{
@@ -456,23 +473,31 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	checks["wal"] = map[string]interface{}{
-		"status": "pass",
-	}
+		checks["wal"] = map[string]interface{}{
+			"status": "pass",
+		}
 
-	if s.cfg.Auth == nil || !s.cfg.Auth.Enabled() || s.cfg.Auth.ValidateToken(extractHealthToken(r)) {
-		uptime := int(time.Since(s.startedAt).Seconds())
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"status":      status,
-			"version":     s.cfg.Version,
-			"uptime_s":    uptime,
-			"connections": s.cfg.ActiveConnections(),
-			"wal_enabled": true,
-			"time_travel": true,
-			"checks":      checks,
-		})
-		return
-	}
+		poolStats := s.sessionPool.Stats()
+		checks["session_pool"] = map[string]interface{}{
+			"status": "pass",
+			"active": poolStats.Active,
+			"idle":   poolStats.Idle,
+			"max":    poolStats.Max,
+		}
+
+		if s.cfg.Auth == nil || !s.cfg.Auth.Enabled() || s.cfg.Auth.ValidateToken(extractHealthToken(r)) {
+			uptime := int(time.Since(s.startedAt).Seconds())
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"status":      status,
+				"version":     s.cfg.Version,
+				"uptime_s":    uptime,
+				"connections": s.cfg.ActiveConnections(),
+				"wal_enabled": true,
+				"time_travel": true,
+				"checks":      checks,
+			})
+			return
+		}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status": status,
@@ -595,8 +620,12 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), maxDuration)
 	defer cancel()
 
-	sess := s.newSession()
-	defer sess.Close()
+	sess, poolErr := s.sessionPool.Get()
+	if poolErr != nil {
+		http.Error(w, "session pool exhausted", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.sessionPool.Put(sess)
 	if db != "" {
 		sess.SetCurrentDatabase(db)
 	}
@@ -730,8 +759,12 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 	}
 
 	stmt := &parser.SelectStatement{TableName: tableName, Where: where}
-	sess := s.newSession()
-	defer sess.Close()
+	sess, poolErr := s.sessionPool.Get()
+	if poolErr != nil {
+		writeError(w, http.StatusServiceUnavailable, errCodeInternal, "session pool exhausted")
+		return
+	}
+	defer s.sessionPool.Put(sess)
 	sess.SetCurrentDatabase(dbName)
 	res, err := sess.Execute(stmt)
 	if err != nil {
@@ -860,7 +893,13 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 				"session_id is required for COMMIT/ROLLBACK")
 			return
 		}
-		session = s.newSession()
+		var poolErr error
+		session, poolErr = s.sessionPool.Get()
+		if poolErr != nil {
+			writeError(w, http.StatusServiceUnavailable, errCodeInternal,
+				"session pool exhausted, try again later")
+			return
+		}
 		if req.Database != "" {
 			session.SetCurrentDatabase(req.Database)
 		}
@@ -882,7 +921,7 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 		if !ephemeral {
 			s.sessions.remove(sessionID)
 		} else {
-			session.Close()
+			s.sessionPool.Put(session)
 		}
 		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
@@ -901,7 +940,7 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 	} else if isCommit || isRollback {
 		s.sessions.remove(sessionID)
 	} else if ephemeral {
-		session.Close()
+		s.sessionPool.Put(session)
 	}
 
 	type sseMsg struct {
