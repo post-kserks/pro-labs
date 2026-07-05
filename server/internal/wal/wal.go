@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -130,6 +131,333 @@ type WALRecord struct {
 	TxID uint64
 }
 
+// ---------------------------------------------------------------------------
+// Binary payload encoding
+// ---------------------------------------------------------------------------
+
+// Binary payload marker byte. All binary-encoded WAL payloads start with this
+// byte so we can distinguish them from legacy JSON payloads (which start with '{').
+const binaryPayloadMarker byte = 0x01
+
+// EncodeWALPayloadBinary encodes a typed WAL payload to compact binary format.
+// Falls back to JSON for unknown types.
+func EncodeWALPayloadBinary(payload interface{}) ([]byte, error) {
+	switch p := payload.(type) {
+	case WALPageInsertPayload:
+		return encodePageInsertBinary(p)
+	case WALPageDeletePayload:
+		return encodePageDeleteBinary(p)
+	case WALSchemaWritePayload:
+		return encodeSchemaWriteBinary(p)
+	case WALVacuumPayload:
+		return encodeVacuumBinary(p)
+	case WALRewritePayload:
+		return encodeRewriteBinary(p)
+	case WALTruncateTablePayload:
+		return encodeTruncateTableBinary(p)
+	case CheckpointPayload:
+		return encodeCheckpointBinary(p)
+	case FullPageImagePayload:
+		return encodeFullPageImageBinary(p)
+	default:
+		return json.Marshal(payload)
+	}
+}
+
+// DecodeWALPayload decodes a WAL payload from bytes, auto-detecting binary vs JSON.
+func DecodeWALPayload(data []byte, opType byte) (interface{}, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	if data[0] == binaryPayloadMarker {
+		return decodeBinaryPayload(data[1:], opType)
+	}
+	return decodeLegacyJSONPayload(data, opType)
+}
+
+func decodeLegacyJSONPayload(data []byte, opType byte) (interface{}, error) {
+	switch opType {
+	case OpPageInsert:
+		var p WALPageInsertPayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, err
+		}
+		return p, nil
+	case OpPageDelete, OpPageUpdateXMax:
+		var p WALPageDeletePayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, err
+		}
+		return p, nil
+	case OpSchemaWrite:
+		var p WALSchemaWritePayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, err
+		}
+		return p, nil
+	case OpVacuumBegin, OpVacuumCommit:
+		var p WALVacuumPayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, err
+		}
+		return p, nil
+	case OpRewriteBegin, OpRewriteCommit, OpRewriteData:
+		var p WALRewritePayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, err
+		}
+		return p, nil
+	case OpTruncateTable:
+		var p WALTruncateTablePayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, err
+		}
+		return p, nil
+	case OpCheckpoint:
+		var p CheckpointPayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, err
+		}
+		return p, nil
+	case OpFullPageImage:
+		var p FullPageImagePayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, err
+		}
+		return p, nil
+	default:
+		// Unknown op type — return raw JSON bytes
+		var v interface{}
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, err
+		}
+		return v, nil
+	}
+}
+
+func decodeBinaryPayload(data []byte, opType byte) (interface{}, error) {
+	switch opType {
+	case OpPageInsert:
+		return decodePageInsertBinary(data)
+	case OpPageDelete, OpPageUpdateXMax:
+		return decodePageDeleteBinary(data)
+	case OpSchemaWrite:
+		return decodeSchemaWriteBinary(data)
+	case OpVacuumBegin, OpVacuumCommit:
+		return decodeVacuumBinary(data)
+	case OpRewriteBegin, OpRewriteCommit, OpRewriteData:
+		return decodeRewriteBinary(data)
+	case OpTruncateTable:
+		return decodeTruncateTableBinary(data)
+	case OpCheckpoint:
+		return decodeCheckpointBinary(data)
+	case OpFullPageImage:
+		return decodeFullPageImageBinary(data)
+	default:
+		return nil, fmt.Errorf("wal: unknown op type 0x%02x for binary payload", opType)
+	}
+}
+
+// --- Page Insert ---
+
+func encodePageInsertBinary(p WALPageInsertPayload) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte(binaryPayloadMarker)
+	writeLPString(&buf, p.DB)
+	writeLPString(&buf, p.Table)
+	binary.Write(&buf, binary.LittleEndian, p.SegmentNo)
+	binary.Write(&buf, binary.LittleEndian, p.PageNo)
+	binary.Write(&buf, binary.LittleEndian, p.SlotNo)
+	binary.Write(&buf, binary.LittleEndian, p.XID)
+	binary.Write(&buf, binary.LittleEndian, uint32(len(p.TupleData)))
+	buf.Write(p.TupleData)
+	return buf.Bytes(), nil
+}
+
+func decodePageInsertBinary(data []byte) (WALPageInsertPayload, error) {
+	var p WALPageInsertPayload
+	r := bytes.NewReader(data)
+	p.DB = readLPString(r)
+	p.Table = readLPString(r)
+	binary.Read(r, binary.LittleEndian, &p.SegmentNo)
+	binary.Read(r, binary.LittleEndian, &p.PageNo)
+	binary.Read(r, binary.LittleEndian, &p.SlotNo)
+	binary.Read(r, binary.LittleEndian, &p.XID)
+	var tupleLen uint32
+	binary.Read(r, binary.LittleEndian, &tupleLen)
+	if tupleLen > 0 {
+		p.TupleData = make([]byte, tupleLen)
+		io.ReadFull(r, p.TupleData)
+	}
+	return p, nil
+}
+
+// --- Page Delete ---
+
+func encodePageDeleteBinary(p WALPageDeletePayload) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte(binaryPayloadMarker)
+	writeLPString(&buf, p.DB)
+	writeLPString(&buf, p.Table)
+	binary.Write(&buf, binary.LittleEndian, p.SegmentNo)
+	binary.Write(&buf, binary.LittleEndian, p.PageNo)
+	binary.Write(&buf, binary.LittleEndian, p.SlotNo)
+	binary.Write(&buf, binary.LittleEndian, p.XMax)
+	return buf.Bytes(), nil
+}
+
+func decodePageDeleteBinary(data []byte) (WALPageDeletePayload, error) {
+	var p WALPageDeletePayload
+	r := bytes.NewReader(data)
+	p.DB = readLPString(r)
+	p.Table = readLPString(r)
+	binary.Read(r, binary.LittleEndian, &p.SegmentNo)
+	binary.Read(r, binary.LittleEndian, &p.PageNo)
+	binary.Read(r, binary.LittleEndian, &p.SlotNo)
+	binary.Read(r, binary.LittleEndian, &p.XMax)
+	return p, nil
+}
+
+// --- Schema Write ---
+
+func encodeSchemaWriteBinary(p WALSchemaWritePayload) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte(binaryPayloadMarker)
+	writeLPString(&buf, p.DB)
+	writeLPString(&buf, p.Table)
+	writeLPString(&buf, p.Schema)
+	return buf.Bytes(), nil
+}
+
+func decodeSchemaWriteBinary(data []byte) (WALSchemaWritePayload, error) {
+	var p WALSchemaWritePayload
+	r := bytes.NewReader(data)
+	p.DB = readLPString(r)
+	p.Table = readLPString(r)
+	p.Schema = readLPString(r)
+	return p, nil
+}
+
+// --- Vacuum ---
+
+func encodeVacuumBinary(p WALVacuumPayload) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte(binaryPayloadMarker)
+	writeLPString(&buf, p.DB)
+	writeLPString(&buf, p.Table)
+	writeLPString(&buf, p.ShadowPath)
+	return buf.Bytes(), nil
+}
+
+func decodeVacuumBinary(data []byte) (WALVacuumPayload, error) {
+	var p WALVacuumPayload
+	r := bytes.NewReader(data)
+	p.DB = readLPString(r)
+	p.Table = readLPString(r)
+	p.ShadowPath = readLPString(r)
+	return p, nil
+}
+
+// --- Rewrite ---
+
+func encodeRewriteBinary(p WALRewritePayload) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte(binaryPayloadMarker)
+	writeLPString(&buf, p.DB)
+	writeLPString(&buf, p.Table)
+	return buf.Bytes(), nil
+}
+
+func decodeRewriteBinary(data []byte) (WALRewritePayload, error) {
+	var p WALRewritePayload
+	r := bytes.NewReader(data)
+	p.DB = readLPString(r)
+	p.Table = readLPString(r)
+	return p, nil
+}
+
+// --- Truncate Table ---
+
+func encodeTruncateTableBinary(p WALTruncateTablePayload) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte(binaryPayloadMarker)
+	writeLPString(&buf, p.DB)
+	writeLPString(&buf, p.Table)
+	return buf.Bytes(), nil
+}
+
+func decodeTruncateTableBinary(data []byte) (WALTruncateTablePayload, error) {
+	var p WALTruncateTablePayload
+	r := bytes.NewReader(data)
+	p.DB = readLPString(r)
+	p.Table = readLPString(r)
+	return p, nil
+}
+
+// --- Checkpoint ---
+
+func encodeCheckpointBinary(p CheckpointPayload) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte(binaryPayloadMarker)
+	binary.Write(&buf, binary.LittleEndian, p.LSN)
+	return buf.Bytes(), nil
+}
+
+func decodeCheckpointBinary(data []byte) (CheckpointPayload, error) {
+	var p CheckpointPayload
+	r := bytes.NewReader(data)
+	binary.Read(r, binary.LittleEndian, &p.LSN)
+	return p, nil
+}
+
+// --- Full Page Image ---
+
+func encodeFullPageImageBinary(p FullPageImagePayload) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte(binaryPayloadMarker)
+	writeLPString(&buf, p.DB)
+	writeLPString(&buf, p.Table)
+	binary.Write(&buf, binary.LittleEndian, p.SegmentNo)
+	binary.Write(&buf, binary.LittleEndian, p.PageNo)
+	binary.Write(&buf, binary.LittleEndian, uint32(len(p.PageData)))
+	buf.Write(p.PageData)
+	return buf.Bytes(), nil
+}
+
+func decodeFullPageImageBinary(data []byte) (FullPageImagePayload, error) {
+	var p FullPageImagePayload
+	r := bytes.NewReader(data)
+	p.DB = readLPString(r)
+	p.Table = readLPString(r)
+	binary.Read(r, binary.LittleEndian, &p.SegmentNo)
+	binary.Read(r, binary.LittleEndian, &p.PageNo)
+	var pageLen uint32
+	binary.Read(r, binary.LittleEndian, &pageLen)
+	if pageLen > 0 {
+		p.PageData = make([]byte, pageLen)
+		io.ReadFull(r, p.PageData)
+	}
+	return p, nil
+}
+
+// --- Helpers: length-prefixed string ---
+
+func writeLPString(w *bytes.Buffer, s string) {
+	binary.Write(w, binary.LittleEndian, uint16(len(s)))
+	w.WriteString(s)
+}
+
+func readLPString(r *bytes.Reader) string {
+	var l uint16
+	binary.Read(r, binary.LittleEndian, &l)
+	if l == 0 {
+		return ""
+	}
+	buf := make([]byte, l)
+	io.ReadFull(r, buf)
+	return string(buf)
+}
+
 type WAL struct {
 	file          *os.File
 	mu            sync.Mutex
@@ -172,7 +500,7 @@ func (w *WAL) Append(opType byte, payload interface{}) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	payloadBytes, err := json.Marshal(payload)
+	payloadBytes, err := EncodeWALPayloadBinary(payload)
 	if err != nil {
 		return 0, fmt.Errorf("wal: marshal payload: %w", err)
 	}
@@ -189,7 +517,7 @@ func (w *WAL) Checkpoint() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	payload, err := json.Marshal(CheckpointPayload{LSN: w.nextTxID.Load()})
+	payload, err := EncodeWALPayloadBinary(CheckpointPayload{LSN: w.nextTxID.Load()})
 	if err != nil {
 		return fmt.Errorf("wal: marshal checkpoint payload: %w", err)
 	}
@@ -220,7 +548,7 @@ func (w *WAL) WriteCheckpointRecord() (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	payload, err := json.Marshal(CheckpointPayload{LSN: w.nextTxID.Load()})
+	payload, err := EncodeWALPayloadBinary(CheckpointPayload{LSN: w.nextTxID.Load()})
 	if err != nil {
 		return 0, fmt.Errorf("wal: marshal checkpoint payload: %w", err)
 	}
@@ -335,7 +663,7 @@ func (w *WAL) AppendWithTx(txID uint64, opType byte, payload interface{}) (uint6
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	payloadBytes, err := json.Marshal(payload)
+	payloadBytes, err := EncodeWALPayloadBinary(payload)
 	if err != nil {
 		return 0, fmt.Errorf("wal: marshal payload: %w", err)
 	}
@@ -355,7 +683,7 @@ func (w *WAL) WriteFullPageImage(txID uint64, db, table string, segmentNo uint16
 		PageNo:    pageNo,
 		PageData:  pageData,
 	}
-	payloadBytes, err := json.Marshal(payload)
+	payloadBytes, err := EncodeWALPayloadBinary(payload)
 	if err != nil {
 		return fmt.Errorf("wal: marshal full page image: %w", err)
 	}
@@ -502,7 +830,7 @@ func (w *WAL) AppendWithWriteBehind(xid uint64, opType byte, payload interface{}
 		return w.AppendWithTx(xid, opType, payload)
 	}
 
-	payloadBytes, err := json.Marshal(payload)
+	payloadBytes, err := EncodeWALPayloadBinary(payload)
 	if err != nil {
 		return 0, fmt.Errorf("wal: marshal payload: %w", err)
 	}
@@ -1002,8 +1330,12 @@ func (w *WAL) FindLastVacuumCommit(db, table string) (bool, uint64, error) {
 			break
 		}
 		if entry.OpType == OpVacuumCommit || entry.OpType == OpVacuumBegin {
-			var payload WALVacuumPayload
-			if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			decoded, err := DecodeWALPayload(entry.Payload, entry.OpType)
+			if err != nil {
+				continue
+			}
+			payload, ok := decoded.(WALVacuumPayload)
+			if !ok {
 				continue
 			}
 			if payload.DB == db && payload.Table == table {

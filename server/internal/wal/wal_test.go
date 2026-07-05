@@ -465,9 +465,13 @@ func TestWriteFullPageImageBasic(t *testing.T) {
 		t.Fatalf("expected txID 1, got %d", entries[0].TxID)
 	}
 
-	var payload FullPageImagePayload
-	if err := jsonUnmarshal(t, entries[0].Payload, &payload); err != nil {
+	decoded, err := DecodeWALPayload(entries[0].Payload, entries[0].OpType)
+	if err != nil {
 		t.Fatal(err)
+	}
+	payload, ok := decoded.(FullPageImagePayload)
+	if !ok {
+		t.Fatalf("expected FullPageImagePayload, got %T", decoded)
 	}
 	if payload.DB != "mydb" {
 		t.Errorf("DB = %q, want %q", payload.DB, "mydb")
@@ -526,9 +530,13 @@ func TestWriteFullPageImageRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var payload FullPageImagePayload
-	if err := jsonUnmarshal(t, entries[0].Payload, &payload); err != nil {
+	decoded, err := DecodeWALPayload(entries[0].Payload, entries[0].OpType)
+	if err != nil {
 		t.Fatal(err)
+	}
+	payload, ok := decoded.(FullPageImagePayload)
+	if !ok {
+		t.Fatalf("expected FullPageImagePayload, got %T", decoded)
 	}
 	if !bytes.Equal(payload.PageData, original) {
 		t.Fatal("page data round-trip mismatch")
@@ -1035,11 +1043,6 @@ func mustMarshal(t *testing.T, v interface{}) []byte {
 		t.Fatalf("json.Marshal failed: %v", err)
 	}
 	return b
-}
-
-func jsonUnmarshal(t *testing.T, data []byte, v interface{}) error {
-	t.Helper()
-	return json.Unmarshal(data, v)
 }
 
 // ---------------------------------------------------------------------------
