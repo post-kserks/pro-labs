@@ -3,6 +3,7 @@ package heap
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -269,4 +270,230 @@ func TestReadEncryptedWithoutKeyFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("ReadPageEncrypted with wrong key succeeded, want error")
 	}
+}
+
+func TestReadAheadSequential(t *testing.T) {
+	dir := t.TempDir()
+	hf, err := CreateHeapFile(filepath.Join(dir, "ra"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hf.Close()
+
+	// Allocate 10 pages with distinct data.
+	for i := uint32(0); i < 10; i++ {
+		pid, pg, err := hf.AllocatePage(page.PageTypeHeap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pg.InsertTuple([]byte(fmt.Sprintf("row-%d", i))); err != nil {
+			t.Fatal(err)
+		}
+		if err := hf.WritePage(pid, pg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Read ahead 5 pages from page 2 → expect pages 2..6.
+	start := page.PageID{TableID: 1, SegmentNo: 0, PageNo: 2}
+	pages, err := hf.ReadPageAhead(start, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 5 {
+		t.Fatalf("got %d pages, want 5", len(pages))
+	}
+	for i, pg := range pages {
+		data := pg.GetTuple(0)
+		want := fmt.Sprintf("row-%d", uint32(i)+2)
+		if !bytes.Equal(data, []byte(want)) {
+			t.Errorf("page %d: got %q, want %q", i, data, want)
+		}
+	}
+}
+
+func TestReadAheadBounds(t *testing.T) {
+	dir := t.TempDir()
+	hf, err := CreateHeapFile(filepath.Join(dir, "ra"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hf.Close()
+
+	// Allocate 3 pages.
+	for i := 0; i < 3; i++ {
+		pid, pg, err := hf.AllocatePage(page.PageTypeHeap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pg.InsertTuple([]byte(fmt.Sprintf("row-%d", i))); err != nil {
+			t.Fatal(err)
+		}
+		if err := hf.WritePage(pid, pg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Request 10 ahead from page 1 — should only return 2 pages (1 and 2).
+	start := page.PageID{TableID: 1, SegmentNo: 0, PageNo: 1}
+	pages, err := hf.ReadPageAhead(start, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("got %d pages, want 2 (clamped to boundary)", len(pages))
+	}
+	for i, pg := range pages {
+		data := pg.GetTuple(0)
+		want := fmt.Sprintf("row-%d", i+1)
+		if !bytes.Equal(data, []byte(want)) {
+			t.Errorf("page %d: got %q, want %q", i, data, want)
+		}
+	}
+}
+
+func TestReadAheadBeyondEnd(t *testing.T) {
+	dir := t.TempDir()
+	hf, err := CreateHeapFile(filepath.Join(dir, "ra"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hf.Close()
+
+	// Allocate 2 pages.
+	for i := 0; i < 2; i++ {
+		pid, _, err := hf.AllocatePage(page.PageTypeHeap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = pid
+	}
+
+	// Request ahead starting at the last page — should return 1 page.
+	start := page.PageID{TableID: 1, SegmentNo: 0, PageNo: 1}
+	pages, err := hf.ReadPageAhead(start, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("got %d pages, want 1", len(pages))
+	}
+}
+
+func TestReadAheadZeroOrNegative(t *testing.T) {
+	dir := t.TempDir()
+	hf, err := CreateHeapFile(filepath.Join(dir, "ra"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hf.Close()
+
+	start := page.PageID{TableID: 1, SegmentNo: 0, PageNo: 0}
+	pages, err := hf.ReadPageAhead(start, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages != nil {
+		t.Fatalf("expected nil for ahead=0, got %d pages", len(pages))
+	}
+}
+
+func TestReadAheadCorruptPage(t *testing.T) {
+	dir := t.TempDir()
+	hf, err := CreateHeapFile(filepath.Join(dir, "ra"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hf.Close()
+
+	// Allocate 5 pages with data.
+	for i := uint32(0); i < 5; i++ {
+		pid, pg, err := hf.AllocatePage(page.PageTypeHeap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pg.InsertTuple([]byte(fmt.Sprintf("row-%d", i))); err != nil {
+			t.Fatal(err)
+		}
+		if err := hf.WritePage(pid, pg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Corrupt page 2 on disk so its checksum becomes invalid.
+	f, err := os.OpenFile(filepath.Join(dir, "ra", "0000.heap"), os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corruptPid := page.PageID{TableID: 1, SegmentNo: 0, PageNo: 2}
+	if _, err := f.WriteAt([]byte{0xFF}, corruptPid.FileOffset()+4000); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// Read ahead 5 from page 0 — page 2 should fail checksum.
+	start := page.PageID{TableID: 1, SegmentNo: 0, PageNo: 0}
+	_, err = hf.ReadPageAhead(start, 5)
+	if err == nil {
+		t.Fatal("expected checksum error for corrupted page")
+	}
+}
+
+func BenchmarkReadAhead(b *testing.B) {
+	dir := b.TempDir()
+	hf, err := CreateHeapFile(filepath.Join(dir, "bench"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer hf.Close()
+
+	// Allocate 256 pages.
+	for i := uint32(0); i < 256; i++ {
+		pid, pg, err := hf.AllocatePage(page.PageTypeHeap)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := pg.InsertTuple([]byte("bench-row")); err != nil {
+			b.Fatal(err)
+		}
+		if err := hf.WritePage(pid, pg); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.Run("sequential_no_ahead", func(b *testing.B) {
+		for b.Loop() {
+			for g := uint32(0); g < 256; g++ {
+				pid := page.PageID{TableID: 1, SegmentNo: 0, PageNo: g}
+				var pg page.Page
+				if err := hf.ReadPage(pid, &pg); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
+
+	b.Run("sequential_readahead_16", func(b *testing.B) {
+		for b.Loop() {
+			for g := uint32(0); g < 256; g += 16 {
+				start := page.PageID{TableID: 1, SegmentNo: 0, PageNo: g}
+				_, err := hf.ReadPageAhead(start, 16)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
+
+	b.Run("sequential_readahead_32", func(b *testing.B) {
+		for b.Loop() {
+			for g := uint32(0); g < 256; g += 32 {
+				start := page.PageID{TableID: 1, SegmentNo: 0, PageNo: g}
+				_, err := hf.ReadPageAhead(start, 32)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
 }

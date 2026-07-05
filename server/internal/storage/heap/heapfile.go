@@ -89,6 +89,55 @@ func (hf *HeapFile) Close() error {
 	return firstErr
 }
 
+// ReadPageAhead reads `ahead` consecutive pages starting at pid in parallel.
+// Pages beyond the heap boundary are silently dropped. Returns the pages that
+// were successfully read (length ≤ ahead) and the first error encountered.
+func (hf *HeapFile) ReadPageAhead(pid page.PageID, ahead int) ([]*page.Page, error) {
+	if ahead <= 0 {
+		return nil, nil
+	}
+
+	total, err := hf.PageCount()
+	if err != nil {
+		return nil, err
+	}
+
+	// Clamp `ahead` to what actually exists starting from pid.
+	if int(pid.PageNo)+ahead > int(total) {
+		ahead = int(total) - int(pid.PageNo)
+	}
+	if ahead <= 0 {
+		return nil, nil
+	}
+
+	pages := make([]*page.Page, ahead)
+	errs := make([]error, ahead)
+	var wg sync.WaitGroup
+
+	for i := 0; i < ahead; i++ {
+		nextPid := page.PageID{
+			TableID:   pid.TableID,
+			SegmentNo: pid.SegmentNo,
+			PageNo:    pid.PageNo + uint32(i),
+		}
+		pages[i] = &page.Page{}
+		wg.Add(1)
+		go func(p *page.Page, idx int) {
+			defer wg.Done()
+			errs[idx] = hf.ReadPage(nextPid, p)
+		}(pages[i], i)
+	}
+	wg.Wait()
+
+	// Return partial results up to the first error.
+	for i, e := range errs {
+		if e != nil {
+			return pages[:i], e
+		}
+	}
+	return pages, nil
+}
+
 // ReadPage reads a page from disk into buf and verifies its checksum.
 func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
 	hf.mu.RLock()
