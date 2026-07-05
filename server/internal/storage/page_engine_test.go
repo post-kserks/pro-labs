@@ -1501,3 +1501,77 @@ func TestSinglePassThenVacuum(t *testing.T) {
 		t.Fatalf("after vacuum: %d rows, want 3", len(rows))
 	}
 }
+
+func TestReadAheadScanReturnsCorrectData(t *testing.T) {
+	e := newPageEngine(t)
+	if err := e.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("db", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert enough rows to span multiple pages (each page holds ~100 small rows)
+	total := 500
+	batch := make([]Row, total)
+	for i := 0; i < total; i++ {
+		batch[i] = Row{int64(i), fmt.Sprintf("user_%d", i), float64(i) * 0.1}
+	}
+	if _, err := e.InsertRows("db", "users", batch); err != nil {
+		t.Fatal(err)
+	}
+
+	// Full scan — read-ahead should kick in automatically
+	rows, err := e.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != total {
+		t.Fatalf("expected %d rows, got %d", total, len(rows))
+	}
+
+	// Verify all rows are present and correct
+	seen := make(map[int64]bool)
+	for _, r := range rows {
+		id := r[0].(int64)
+		seen[id] = true
+	}
+	for i := 0; i < total; i++ {
+		if !seen[int64(i)] {
+			t.Fatalf("missing row id=%d", i)
+		}
+	}
+}
+
+func TestReadAheadScanWithDeletes(t *testing.T) {
+	e := newPageEngine(t)
+	if err := e.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("db", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows spanning multiple pages, then delete half via UPDATE + vacuum
+	total := 200
+	batch := make([]Row, total)
+	for i := 0; i < total; i++ {
+		batch[i] = Row{int64(i), fmt.Sprintf("u%d", i), float64(i)}
+	}
+	if _, err := e.InsertRows("db", "users", batch); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use vacuum after some mutations to test scan reads cleaned pages
+	if _, err := e.Vacuum("db", "users"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := e.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != total {
+		t.Fatalf("expected %d rows, got %d", total, len(rows))
+	}
+}

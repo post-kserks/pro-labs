@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"vaultdb/internal/index"
@@ -13,6 +14,10 @@ import (
 	"vaultdb/internal/storage/page"
 	"vaultdb/internal/wal"
 )
+
+// readAheadPages is the number of pages to prefetch during sequential scans.
+// 16 pages = 128 KB — amortizes syscall overhead without excessive memory pressure.
+const readAheadPages = 16
 
 // ── Сканирование ──────────────────────────────────────────────────────────
 
@@ -42,11 +47,38 @@ func tableIDFromPath(path string) uint32 {
 type tupleVisitor func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (stop bool, err error)
 
 // scanTuples обходит все кортежи таблицы в порядке страниц/слотов.
+// При последовательном сканировании страницы prefetchаются заранее (read-ahead).
 func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 	total, err := t.heap.PageCount()
 	if err != nil {
 		return err
 	}
+	if total == 0 {
+		return nil
+	}
+
+	// Kick off initial read-ahead for the first batch of pages.
+	var prefetchWg sync.WaitGroup
+	startPrefetch := func(from uint32) {
+		count := readAheadPages
+		if int(from)+count > int(total) {
+			count = int(total) - int(from)
+		}
+		if count <= 0 {
+			return
+		}
+		pids := make([]page.PageID, count)
+		for i := 0; i < count; i++ {
+			pids[i] = pageIDAt(t.tableID, from+uint32(i))
+		}
+		prefetchWg.Add(1)
+		go func() {
+			defer prefetchWg.Done()
+			e.bufPool.PrefetchPages(pids, t.heap)
+		}()
+	}
+	startPrefetch(0)
+
 	for g := uint32(0); g < total; g++ {
 		pid := pageIDAt(t.tableID, g)
 		pg, err := e.getPage(pid, t.heap, t.schema.Database, t.schema.Name)
@@ -75,7 +107,15 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 			}
 		}
 		e.unpinPage(pid, false)
+
+		// Trigger read-ahead for the next batch when we approach the edge
+		// of the currently prefetched window.
+		nextGlobal := g + 1
+		if nextGlobal < total && nextGlobal%readAheadPages == 0 {
+			startPrefetch(nextGlobal)
+		}
 	}
+	prefetchWg.Wait()
 	return nil
 }
 

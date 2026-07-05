@@ -404,6 +404,52 @@ func (bp *BufferPool) Close() {
 	}
 }
 
+// PrefetchPages загружает страницы в кэш асинхронно для read-ahead при
+// последовательном сканировании. Страницы, уже находящиеся в кэше, пропускаются.
+// Ошибки чтения логируются, но не прерывают вызывающий код — это best-effort.
+func (bp *BufferPool) PrefetchPages(pids []page.PageID, hf *heap.HeapFile) {
+	for _, pid := range pids {
+		// Skip pages already in cache
+		bp.mu.RLock()
+		_, cached := bp.cache[pid]
+		bp.mu.RUnlock()
+		if cached {
+			continue
+		}
+
+		// Read from disk (no lock held)
+		pg := &page.Page{}
+		if err := hf.ReadPage(pid, pg); err != nil {
+			// Page might be beyond EOF or corrupt — silently skip
+			continue
+		}
+
+		// Insert into cache (acquires lock)
+		bp.mu.Lock()
+		if _, already := bp.cache[pid]; already {
+			bp.mu.Unlock()
+			continue
+		}
+		for bp.count >= bp.capacity {
+			if err := bp.evict(); err != nil {
+				bp.mu.Unlock()
+				return
+			}
+		}
+		idx := bp.findEmptySlot()
+		bp.buffers[idx] = &bufferEntry{
+			pid:       pid,
+			page:      pg,
+			hf:        hf,
+			pinCnt:    0,
+			usageCount: 1,
+		}
+		bp.cache[pid] = idx
+		bp.count++
+		bp.mu.Unlock()
+	}
+}
+
 // Stats возвращает статистику кэша.
 func (bp *BufferPool) Stats() BufferPoolStats {
 	bp.mu.RLock()

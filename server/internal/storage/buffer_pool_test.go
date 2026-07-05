@@ -638,3 +638,89 @@ func TestPageCountCache(t *testing.T) {
 		t.Fatalf("expected 6 pages after invalidation, got %d", count)
 	}
 }
+
+func TestPrefetchPagesLoadsIntoCache(t *testing.T) {
+	bp := NewBufferPool(16)
+	hf := setupHeapFile(t)
+
+	// Allocate 5 pages
+	pids := make([]page.PageID, 5)
+	for i := range pids {
+		pid, _, err := hf.AllocatePage(page.PageTypeHeap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pids[i] = pid
+	}
+
+	// Prefetch all 5
+	bp.PrefetchPages(pids, hf)
+
+	stats := bp.Stats()
+	if stats.Used != 5 {
+		t.Fatalf("expected 5 pages in cache after prefetch, got %d", stats.Used)
+	}
+
+	// Fetching prefetched pages should be cache hits (no disk read)
+	for _, pid := range pids {
+		pg, _, err := bp.FetchPage(pid, hf)
+		if err != nil {
+			t.Fatalf("FetchPage: %v", err)
+		}
+		if pg == nil {
+			t.Fatal("expected non-nil page")
+		}
+		bp.UnpinPage(pid, false)
+	}
+}
+
+func TestPrefetchPagesSkipsCached(t *testing.T) {
+	bp := NewBufferPool(16)
+	hf := setupHeapFile(t)
+
+	// Allocate 3 pages
+	pids := make([]page.PageID, 3)
+	for i := range pids {
+		pid, _, err := hf.AllocatePage(page.PageTypeHeap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pids[i] = pid
+	}
+
+	// Manually fetch first page into cache
+	bp.FetchPage(pids[0], hf)
+	bp.UnpinPage(pids[0], false)
+
+	// Prefetch all 3 — should skip the already-cached one
+	bp.PrefetchPages(pids, hf)
+
+	stats := bp.Stats()
+	if stats.Used != 3 {
+		t.Fatalf("expected 3 pages in cache, got %d", stats.Used)
+	}
+}
+
+func TestPrefetchPagesBeyondEOF(t *testing.T) {
+	bp := NewBufferPool(16)
+	hf := setupHeapFile(t)
+
+	// Allocate 2 pages
+	pid1, _, _ := hf.AllocatePage(page.PageTypeHeap)
+	pid2, _, _ := hf.AllocatePage(page.PageTypeHeap)
+
+	// Create a PageID that doesn't exist (beyond EOF)
+	beyondPid := page.PageID{
+		TableID:   pid1.TableID,
+		SegmentNo: pid1.SegmentNo,
+		PageNo:    99999,
+	}
+
+	// Prefetch with a mix of valid and invalid PIDs — should not panic
+	bp.PrefetchPages([]page.PageID{pid1, beyondPid, pid2}, hf)
+
+	stats := bp.Stats()
+	if stats.Used != 2 {
+		t.Fatalf("expected 2 valid pages in cache, got %d", stats.Used)
+	}
+}
