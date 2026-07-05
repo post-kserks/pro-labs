@@ -333,42 +333,43 @@ func (e *PageStorageEngine) redoPhase() error {
 	return e.wal.Replay(func(entry wal.Entry) error {
 		switch entry.OpType {
 		case wal.OpPageInsert:
-			var p wal.WALPageInsertPayload
-			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if err != nil {
 				return err
 			}
-			return e.redoInsert(p)
+			return e.redoInsert(decoded.(wal.WALPageInsertPayload))
 		case wal.OpPageDelete, wal.OpPageUpdateXMax:
-			var p wal.WALPageDeletePayload
-			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if err != nil {
 				return err
 			}
-			return e.redoDelete(p)
+			return e.redoDelete(decoded.(wal.WALPageDeletePayload))
 		case wal.OpSchemaWrite:
-			var p wal.WALSchemaWritePayload
-			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if err != nil {
 				return err
 			}
-			return e.redoSchemaWrite(p)
+			return e.redoSchemaWrite(decoded.(wal.WALSchemaWritePayload))
 		case wal.OpRewriteBegin:
-			slog.Warn("WAL recovery: incomplete table rewrite detected (OpRewriteBegin without OpRewriteCommit)",
-				"db", extractFieldFromPayload(entry.Payload, "db"),
-				"table", extractFieldFromPayload(entry.Payload, "table"),
-				"txid", entry.TxID)
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if db, table := extractRewriteFields(decoded, err); db != "" {
+				slog.Warn("WAL recovery: incomplete table rewrite detected (OpRewriteBegin without OpRewriteCommit)",
+					"db", db, "table", table, "txid", entry.TxID)
+			}
 		case wal.OpRewriteCommit, wal.OpRewriteData:
 			// Rewrite already completed — nothing to redo (data was written to heap)
 		case wal.OpTruncateTable:
-			var p wal.WALTruncateTablePayload
-			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if err != nil {
 				return err
 			}
-			return e.redoTruncateTable(p)
+			return e.redoTruncateTable(decoded.(wal.WALTruncateTablePayload))
 		case wal.OpFullPageImage:
-			var p wal.FullPageImagePayload
-			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if err != nil {
 				return err
 			}
-			return e.replayFullPageImage(p)
+			return e.replayFullPageImage(decoded.(wal.FullPageImagePayload))
 		}
 		return nil // другие типы — пропускаем
 	})
@@ -379,17 +380,17 @@ func (e *PageStorageEngine) undoPhase(inProgress map[uint64]bool) error {
 		if err := e.wal.ReplayTransaction(xid, func(entry wal.Entry) error {
 			switch entry.OpType {
 			case wal.OpPageInsert:
-				var p wal.WALPageInsertPayload
-				if err := json.Unmarshal(entry.Payload, &p); err != nil {
+				decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+				if err != nil {
 					return err
 				}
-				return e.undoInsert(p, xid)
+				return e.undoInsert(decoded.(wal.WALPageInsertPayload), xid)
 			case wal.OpPageDelete:
-				var p wal.WALPageDeletePayload
-				if err := json.Unmarshal(entry.Payload, &p); err != nil {
+				decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+				if err != nil {
 					return err
 				}
-				return e.undoDelete(p)
+				return e.undoDelete(decoded.(wal.WALPageDeletePayload))
 			}
 			return nil
 		}); err != nil {
@@ -591,6 +592,17 @@ func extractFieldFromPayload(payload []byte, field string) string {
 		}
 	}
 	return ""
+}
+
+// extractRewriteFields extracts db/table from a decoded WALRewritePayload.
+func extractRewriteFields(decoded interface{}, err error) (string, string) {
+	if err != nil {
+		return "", ""
+	}
+	if p, ok := decoded.(wal.WALRewritePayload); ok {
+		return p.DB, p.Table
+	}
+	return "", ""
 }
 
 func (e *PageStorageEngine) undoInsert(p wal.WALPageInsertPayload, xid uint64) error {

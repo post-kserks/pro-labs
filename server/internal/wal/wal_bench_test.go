@@ -1,6 +1,8 @@
 package wal
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -340,5 +342,98 @@ func BenchmarkWALReplay_100K(b *testing.B) {
 		w, _ := Open(path)
 		w.Replay(func(e Entry) error { return nil })
 		w.Close()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Binary vs JSON encoding benchmarks
+// ---------------------------------------------------------------------------
+
+func BenchmarkBinaryEncodePageInsert(b *testing.B) {
+	payload := WALPageInsertPayload{
+		DB:        "benchdb",
+		Table:     "benchtable",
+		SegmentNo: 1,
+		PageNo:    1234,
+		SlotNo:    56,
+		XID:       999999,
+		TupleData: bytes.Repeat([]byte{0xAB}, 200),
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		EncodeWALPayloadBinary(payload)
+	}
+}
+
+func BenchmarkJSONEncodePageInsert(b *testing.B) {
+	payload := WALPageInsertPayload{
+		DB:        "benchdb",
+		Table:     "benchtable",
+		SegmentNo: 1,
+		PageNo:    1234,
+		SlotNo:    56,
+		XID:       999999,
+		TupleData: bytes.Repeat([]byte{0xAB}, 200),
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		json.Marshal(payload)
+	}
+}
+
+func BenchmarkBinaryDecodePageInsert(b *testing.B) {
+	payload := WALPageInsertPayload{
+		DB:        "benchdb",
+		Table:     "benchtable",
+		SegmentNo: 1,
+		PageNo:    1234,
+		SlotNo:    56,
+		XID:       999999,
+		TupleData: bytes.Repeat([]byte{0xAB}, 200),
+	}
+	data, _ := EncodeWALPayloadBinary(payload)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		DecodeWALPayload(data, OpPageInsert)
+	}
+}
+
+func BenchmarkJSONDecodePageInsert(b *testing.B) {
+	payload := WALPageInsertPayload{
+		DB:        "benchdb",
+		Table:     "benchtable",
+		SegmentNo: 1,
+		PageNo:    1234,
+		SlotNo:    56,
+		XID:       999999,
+		TupleData: bytes.Repeat([]byte{0xAB}, 200),
+	}
+	data, _ := json.Marshal(payload)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var p WALPageInsertPayload
+		json.Unmarshal(data, &p)
+	}
+}
+
+func BenchmarkBinaryEncodePageDelete(b *testing.B) {
+	payload := WALPageDeletePayload{
+		DB: "benchdb", Table: "benchtable",
+		SegmentNo: 1, PageNo: 1234, SlotNo: 56, XMax: 999999,
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		EncodeWALPayloadBinary(payload)
+	}
+}
+
+func BenchmarkJSONEncodePageDelete(b *testing.B) {
+	payload := WALPageDeletePayload{
+		DB: "benchdb", Table: "benchtable",
+		SegmentNo: 1, PageNo: 1234, SlotNo: 56, XMax: 999999,
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		json.Marshal(payload)
 	}
 }
