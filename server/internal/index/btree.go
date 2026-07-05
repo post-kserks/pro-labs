@@ -5,21 +5,26 @@ import (
 	"os"
 	"sort"
 	"sync"
+
+	gbtree "github.com/google/btree"
 )
 
-// BTreeIndex — B-tree индекс для range queries и ordering.
-// Реализация на основе отсортированного slice (постепенно будет заменена
-// на полный B-tree с disk persistence).
-type BTreeIndex struct {
-	mu       sync.RWMutex
-	name     string
-	column   string
-	colIndex int
+type btreeEntry struct {
+	key       string
+	positions []int
+}
 
-	// Отсортированные ключи
-	keys []string
-	// Позиции строк для каждого ключа
-	values [][]int
+func (e *btreeEntry) Less(than gbtree.Item) bool {
+	return e.key < than.(*btreeEntry).key
+}
+
+// BTreeIndex — B-tree индекс для range queries и ordering.
+type BTreeIndex struct {
+	tree    *gbtree.BTree
+	mu      sync.RWMutex
+	name    string
+	column  string
+	colIndex int
 
 	// Обратный маппинг: позиция строки → ключ
 	reverse map[int]string
@@ -31,11 +36,10 @@ type BTreeIndex struct {
 // NewBTreeIndex создаёт новый B-tree индекс.
 func NewBTreeIndex(name, column string, colIndex int) *BTreeIndex {
 	return &BTreeIndex{
+		tree:       gbtree.New(128),
 		name:       name,
 		column:     column,
 		colIndex:   colIndex,
-		keys:       make([]string, 0),
-		values:     make([][]int, 0),
 		reverse:    make(map[int]string),
 		storedCols: make(map[int]map[string]interface{}),
 	}
@@ -46,6 +50,12 @@ func (idx *BTreeIndex) Name() string   { return idx.name }
 func (idx *BTreeIndex) Column() string { return idx.column }
 func (idx *BTreeIndex) ColIndex() int  { return idx.colIndex }
 
+func (idx *BTreeIndex) Len() int {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.tree.Len()
+}
+
 // Columns returns the column names this index covers (for index-only scan).
 func (idx *BTreeIndex) Columns() []string {
 	idx.mu.RLock()
@@ -53,13 +63,12 @@ func (idx *BTreeIndex) Columns() []string {
 	if len(idx.storedCols) == 0 {
 		return nil
 	}
-	// Collect all column names from stored data
 	colSet := make(map[string]bool)
 	for _, cols := range idx.storedCols {
 		for col := range cols {
 			colSet[col] = true
 		}
-		break // one sample is enough for column names
+		break
 	}
 	cols := make([]string, 0, len(colSet))
 	for col := range colSet {
@@ -104,20 +113,21 @@ func (idx *BTreeIndex) LookupWithColumns(value string) ([]int, map[int]map[strin
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	i := sort.SearchStrings(idx.keys, value)
-	if i < len(idx.keys) && idx.keys[i] == value {
-		rowPositions := make([]int, len(idx.values[i]))
-		copy(rowPositions, idx.values[i])
-
-		resultCols := make(map[int]map[string]interface{}, len(rowPositions))
-		for _, pos := range rowPositions {
-			if cols, ok := idx.storedCols[pos]; ok {
-				resultCols[pos] = cols
-			}
-		}
-		return rowPositions, resultCols, true
+	entry := idx.tree.Get(&btreeEntry{key: value})
+	if entry == nil {
+		return nil, nil, false
 	}
-	return nil, nil, false
+	e := entry.(*btreeEntry)
+	rowPositions := make([]int, len(e.positions))
+	copy(rowPositions, e.positions)
+
+	resultCols := make(map[int]map[string]interface{}, len(rowPositions))
+	for _, pos := range rowPositions {
+		if cols, ok := idx.storedCols[pos]; ok {
+			resultCols[pos] = cols
+		}
+	}
+	return rowPositions, resultCols, true
 }
 
 // RangeWithColumns returns positions and stored columns in [low, high] range.
@@ -125,28 +135,22 @@ func (idx *BTreeIndex) RangeWithColumns(low, high string) ([]int, map[int]map[st
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	start := 0
-	if low != "" {
-		start = sort.SearchStrings(idx.keys, low)
-	}
-	end := len(idx.keys)
-	if high != "" {
-		end = sort.SearchStrings(idx.keys, high)
-		if end < len(idx.keys) && idx.keys[end] <= high {
-			end++
-		}
-	}
-
 	var result []int
 	resultCols := make(map[int]map[string]interface{})
-	for i := start; i < end; i++ {
-		for _, pos := range idx.values[i] {
+
+	idx.tree.AscendGreaterOrEqual(&btreeEntry{key: low}, func(item gbtree.Item) bool {
+		e := item.(*btreeEntry)
+		if e.key > high {
+			return false
+		}
+		for _, pos := range e.positions {
 			result = append(result, pos)
 			if cols, ok := idx.storedCols[pos]; ok {
 				resultCols[pos] = cols
 			}
 		}
-	}
+		return true
+	})
 	return result, resultCols
 }
 
@@ -162,13 +166,14 @@ func (idx *BTreeIndex) Lookup(value string) ([]int, bool) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	i := sort.SearchStrings(idx.keys, value)
-	if i < len(idx.keys) && idx.keys[i] == value {
-		result := make([]int, len(idx.values[i]))
-		copy(result, idx.values[i])
-		return result, true
+	entry := idx.tree.Get(&btreeEntry{key: value})
+	if entry == nil {
+		return nil, false
 	}
-	return nil, false
+	e := entry.(*btreeEntry)
+	result := make([]int, len(e.positions))
+	copy(result, e.positions)
+	return result, true
 }
 
 // Range ищет все ключи в диапазоне [low, high].
@@ -176,22 +181,15 @@ func (idx *BTreeIndex) Range(low, high string) []int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	start := 0
-	if low != "" {
-		start = sort.SearchStrings(idx.keys, low)
-	}
-	end := len(idx.keys)
-	if high != "" {
-		end = sort.SearchStrings(idx.keys, high)
-		if end < len(idx.keys) && idx.keys[end] <= high {
-			end++
-		}
-	}
-
 	var result []int
-	for i := start; i < end; i++ {
-		result = append(result, idx.values[i]...)
-	}
+	idx.tree.AscendGreaterOrEqual(&btreeEntry{key: low}, func(item gbtree.Item) bool {
+		e := item.(*btreeEntry)
+		if e.key > high {
+			return false
+		}
+		result = append(result, e.positions...)
+		return true
+	})
 	return result
 }
 
@@ -200,17 +198,11 @@ func (idx *BTreeIndex) Insert(value string, rowPos int) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	i := sort.SearchStrings(idx.keys, value)
-	if i < len(idx.keys) && idx.keys[i] == value {
-		idx.values[i] = append(idx.values[i], rowPos)
+	entry := idx.tree.Get(&btreeEntry{key: value})
+	if entry != nil {
+		entry.(*btreeEntry).positions = append(entry.(*btreeEntry).positions, rowPos)
 	} else {
-		idx.keys = append(idx.keys, "")
-		copy(idx.keys[i+1:], idx.keys[i:])
-		idx.keys[i] = value
-
-		idx.values = append(idx.values, nil)
-		copy(idx.values[i+1:], idx.values[i:])
-		idx.values[i] = []int{rowPos}
+		idx.tree.ReplaceOrInsert(&btreeEntry{key: value, positions: []int{rowPos}})
 	}
 	idx.reverse[rowPos] = value
 }
@@ -220,17 +212,11 @@ func (idx *BTreeIndex) InsertWithColumns(value string, rowPos int, columns map[s
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	i := sort.SearchStrings(idx.keys, value)
-	if i < len(idx.keys) && idx.keys[i] == value {
-		idx.values[i] = append(idx.values[i], rowPos)
+	entry := idx.tree.Get(&btreeEntry{key: value})
+	if entry != nil {
+		entry.(*btreeEntry).positions = append(entry.(*btreeEntry).positions, rowPos)
 	} else {
-		idx.keys = append(idx.keys, "")
-		copy(idx.keys[i+1:], idx.keys[i:])
-		idx.keys[i] = value
-
-		idx.values = append(idx.values, nil)
-		copy(idx.values[i+1:], idx.values[i:])
-		idx.values[i] = []int{rowPos}
+		idx.tree.ReplaceOrInsert(&btreeEntry{key: value, positions: []int{rowPos}})
 	}
 	idx.reverse[rowPos] = value
 	if columns != nil {
@@ -250,21 +236,19 @@ func (idx *BTreeIndex) Delete(rowPos int) {
 	delete(idx.reverse, rowPos)
 	delete(idx.storedCols, rowPos)
 
-	i := sort.SearchStrings(idx.keys, key)
-	if i >= len(idx.keys) || idx.keys[i] != key {
+	entry := idx.tree.Get(&btreeEntry{key: key})
+	if entry == nil {
 		return
 	}
-
-	for j, pos := range idx.values[i] {
+	e := entry.(*btreeEntry)
+	for j, pos := range e.positions {
 		if pos == rowPos {
-			idx.values[i] = append(idx.values[i][:j], idx.values[i][j+1:]...)
+			e.positions = append(e.positions[:j], e.positions[j+1:]...)
 			break
 		}
 	}
-
-	if len(idx.values[i]) == 0 {
-		idx.keys = append(idx.keys[:i], idx.keys[i+1:]...)
-		idx.values = append(idx.values[:i], idx.values[i+1:]...)
+	if len(e.positions) == 0 {
+		idx.tree.Delete(entry)
 	}
 }
 
@@ -273,8 +257,7 @@ func (idx *BTreeIndex) Rebuild(rows []IndexableRow) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	idx.keys = make([]string, 0)
-	idx.values = make([][]int, 0)
+	idx.tree = gbtree.New(128)
 	idx.reverse = make(map[int]string)
 
 	type entry struct {
@@ -299,11 +282,11 @@ func (idx *BTreeIndex) Rebuild(rows []IndexableRow) {
 	})
 
 	for _, e := range entries {
-		if len(idx.keys) > 0 && idx.keys[len(idx.keys)-1] == e.key {
-			idx.values[len(idx.values)-1] = append(idx.values[len(idx.values)-1], e.pos)
+		existing := idx.tree.Get(&btreeEntry{key: e.key})
+		if existing != nil {
+			existing.(*btreeEntry).positions = append(existing.(*btreeEntry).positions, e.pos)
 		} else {
-			idx.keys = append(idx.keys, e.key)
-			idx.values = append(idx.values, []int{e.pos})
+			idx.tree.ReplaceOrInsert(&btreeEntry{key: e.key, positions: []int{e.pos}})
 		}
 		idx.reverse[e.pos] = e.key
 	}
@@ -311,24 +294,36 @@ func (idx *BTreeIndex) Rebuild(rows []IndexableRow) {
 
 // btreeIndexData — структура для сериализации B-tree индекса.
 type btreeIndexData struct {
-	Name       string                           `json:"name"`
-	Column     string                           `json:"column"`
-	ColIndex   int                              `json:"col_index"`
-	Keys       []string                         `json:"keys"`
-	Values     [][]int                          `json:"values"`
-	Reverse    map[int]string                   `json:"reverse"`
-	StoredCols map[int]map[string]interface{}   `json:"stored_cols,omitempty"`
+	Name       string                         `json:"name"`
+	Column     string                         `json:"column"`
+	ColIndex   int                            `json:"col_index"`
+	Keys       []string                       `json:"keys"`
+	Values     [][]int                        `json:"values"`
+	Reverse    map[int]string                 `json:"reverse"`
+	StoredCols map[int]map[string]interface{} `json:"stored_cols,omitempty"`
 }
 
 // Save сохраняет B-tree индекс в JSON файл.
 func (idx *BTreeIndex) Save(path string) error {
 	idx.mu.RLock()
+
+	var keys []string
+	var values [][]int
+	idx.tree.Ascend(func(item gbtree.Item) bool {
+		e := item.(*btreeEntry)
+		keys = append(keys, e.key)
+		posCopy := make([]int, len(e.positions))
+		copy(posCopy, e.positions)
+		values = append(values, posCopy)
+		return true
+	})
+
 	data := btreeIndexData{
 		Name:       idx.name,
 		Column:     idx.column,
 		ColIndex:   idx.colIndex,
-		Keys:       idx.keys,
-		Values:     idx.values,
+		Keys:       keys,
+		Values:     values,
 		Reverse:    idx.reverse,
 		StoredCols: idx.storedCols,
 	}
@@ -359,12 +354,18 @@ func LoadBTreeIndex(path string) (*BTreeIndex, error) {
 		storedCols = make(map[int]map[string]interface{})
 	}
 
+	tree := gbtree.New(128)
+	for i, key := range data.Keys {
+		if i < len(data.Values) {
+			tree.ReplaceOrInsert(&btreeEntry{key: key, positions: data.Values[i]})
+		}
+	}
+
 	return &BTreeIndex{
+		tree:       tree,
 		name:       data.Name,
 		column:     data.Column,
 		colIndex:   data.ColIndex,
-		keys:       data.Keys,
-		values:     data.Values,
 		reverse:    data.Reverse,
 		storedCols: storedCols,
 	}, nil

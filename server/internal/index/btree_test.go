@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -130,6 +131,24 @@ func TestBTreeMultipleValuesPerKey(t *testing.T) {
 	}
 }
 
+func TestBTreeConcurrent(t *testing.T) {
+	idx := NewBTreeIndex("test_idx", "id", 0)
+	var wg sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			idx.Insert(fmt.Sprintf("%d", n), n)
+		}(i)
+	}
+	wg.Wait()
+
+	if idx.Len() != 100 {
+		t.Errorf("expected 100 entries, got %d", idx.Len())
+	}
+}
+
 func TestBTreeLargeDataset(t *testing.T) {
 	idx := NewBTreeIndex("test_idx", "id", 0)
 
@@ -151,5 +170,46 @@ func TestBTreeLargeDataset(t *testing.T) {
 	positions := idx.Range("0100", "0200")
 	if len(positions) != 101 { // 0100, 0101, ..., 0200 = 101 значений
 		t.Errorf("Range(0100, 0200) returned %d positions, want 101", len(positions))
+	}
+}
+
+func BenchmarkBTreeInsert(b *testing.B) {
+	idx := NewBTreeIndex("bench_idx", "id", 0)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		idx.Insert(fmt.Sprintf("%d", i), i)
+	}
+}
+
+func BenchmarkBTreeLookup(b *testing.B) {
+	idx := NewBTreeIndex("bench_idx", "id", 0)
+	for i := 0; i < 100000; i++ {
+		idx.Insert(fmt.Sprintf("%d", i), i)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		idx.Lookup(fmt.Sprintf("%d", i%100000))
+	}
+}
+
+func BenchmarkBTreeDelete(b *testing.B) {
+	idx := NewBTreeIndex("bench_idx", "id", 0)
+	for i := 0; i < 100000; i++ {
+		idx.Insert(fmt.Sprintf("%d", i), i)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		idx.Delete(i % 100000)
+	}
+}
+
+func BenchmarkBTreeRangeLarge(b *testing.B) {
+	idx := NewBTreeIndex("bench_idx", "id", 0)
+	for i := 0; i < 100000; i++ {
+		idx.Insert(fmt.Sprintf("%06d", i), i)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		idx.Range("010000", "010099")
 	}
 }
