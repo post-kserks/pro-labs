@@ -1351,3 +1351,153 @@ func BenchmarkConcurrentInsertsDifferentTables(b *testing.B) {
 		}
 	})
 }
+
+func TestSinglePassUpdate(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "alice", 9.5},
+		{int64(2), "bob", 7.0},
+	})
+
+	n, err := e.UpdateRows("db", "users", []int{0}, map[string]Value{"name": "ALICE"})
+	if err != nil || n != 1 {
+		t.Fatalf("update: n=%d err=%v", n, err)
+	}
+
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 2 {
+		t.Fatalf("row count: %d, want 2", len(rows))
+	}
+
+	// Find the updated row by id
+	var updated bool
+	for _, r := range rows {
+		if r[0] == int64(1) {
+			if r[1] != "ALICE" {
+				t.Fatalf("alice name: %v, want ALICE", r[1])
+			}
+			if r[2] != 9.5 {
+				t.Fatalf("alice score changed: %v", r[2])
+			}
+			updated = true
+		}
+	}
+	if !updated {
+		t.Fatal("alice row not found")
+	}
+}
+
+func TestSinglePassDelete(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "alice", 9.5},
+		{int64(2), "bob", 7.0},
+		{int64(3), "carol", 8.2},
+	})
+
+	n, err := e.DeleteRows("db", "users", []int{1})
+	if err != nil || n != 1 {
+		t.Fatalf("delete: n=%d err=%v", n, err)
+	}
+
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 2 {
+		t.Fatalf("after delete: %d rows, want 2", len(rows))
+	}
+	// Remaining rows: alice (index 0) and carol (index 2)
+	if rows[0][0] != int64(1) || rows[1][0] != int64(3) {
+		t.Fatalf("wrong rows remain: %#v", rows)
+	}
+}
+
+func TestSinglePassMultipleRows(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "alice", 1.0},
+		{int64(2), "bob", 2.0},
+		{int64(3), "carol", 3.0},
+		{int64(4), "dave", 4.0},
+		{int64(5), "eve", 5.0},
+	})
+
+	// Update multiple rows at once
+	n, err := e.UpdateRows("db", "users", []int{0, 2, 4}, map[string]Value{"score": 99.0})
+	if err != nil || n != 3 {
+		t.Fatalf("multi-update: n=%d err=%v", n, err)
+	}
+
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 5 {
+		t.Fatalf("row count: %d, want 5", len(rows))
+	}
+
+	// Count updated vs non-updated rows
+	var updated, untouched int
+	for _, r := range rows {
+		if r[2] == 99.0 {
+			updated++
+		}
+	}
+	if updated != 3 {
+		t.Fatalf("updated rows: %d, want 3", updated)
+	}
+	_ = untouched
+
+	// Delete multiple rows
+	n, err = e.DeleteRows("db", "users", []int{1, 3})
+	if err != nil || n != 2 {
+		t.Fatalf("multi-delete: n=%d err=%v", n, err)
+	}
+	rows, _ = e.ReadCurrentRows("db", "users")
+	if len(rows) != 3 {
+		t.Fatalf("after multi-delete: %d rows, want 3", len(rows))
+	}
+}
+
+func TestSinglePassThenVacuum(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "a", 1.0},
+		{int64(2), "b", 2.0},
+		{int64(3), "c", 3.0},
+		{int64(4), "d", 4.0},
+	})
+
+	// Single-pass update: marks old version as dead + appends new version
+	_, _ = e.UpdateRows("db", "users", []int{0}, map[string]Value{"name": "A2"})
+
+	// Single-pass delete: marks row 2 as dead
+	_, _ = e.DeleteRows("db", "users", []int{2})
+
+	// Vacuum should reclaim dead rows from both update (1) and delete (1)
+	stats, err := e.Vacuum("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReclaimedRows != 2 {
+		t.Fatalf("vacuum reclaimed: %d, want 2", stats.ReclaimedRows)
+	}
+
+	vstats, _ := e.TableVersionStats("db", "users")
+	if vstats.DeadRows != 0 {
+		t.Fatalf("after vacuum: dead=%d, want 0", vstats.DeadRows)
+	}
+
+	// 4 inserted - 1 deleted = 3 live rows
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 3 {
+		t.Fatalf("after vacuum: %d rows, want 3", len(rows))
+	}
+}

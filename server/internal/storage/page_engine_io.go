@@ -394,106 +394,86 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	affected := 0
 	pos := 0
 
-	var dirtyPid page.PageID
-	dirty := false
-	flushDirty := func() error {
-		if dirty {
-			e.bufPool.UnpinPage(dirtyPid, true)
-			dirty = false
-		}
-		return nil
+	type locatedTuple struct {
+		pid       page.PageID
+		slot      uint16
+		createdTx uint64
+		row       Row
 	}
+	var located []locatedTuple
 
-	// WAL: записываем каждую операцию ПЕРЕД изменением heap
-	// Важно: SlotNo должен быть физическим слотом, а не логической позицией
-	if e.wal != nil {
-		// Сначала сканируем чтобы найти физические слоты
-		var physicalSlots []struct {
-			pid  page.PageID
-			slot uint16
-		}
-		e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
-			if deletedTx != 0 {
-				return false, nil
-			}
-			matched := wanted[pos]
-			pos++
-			if matched {
-				physicalSlots = append(physicalSlots, struct {
-					pid  page.PageID
-					slot uint16
-				}{pid, slot})
-			}
+	// Single scan: collect physical slots AND row data simultaneously.
+	e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+		if deletedTx != 0 {
 			return false, nil
-		})
+		}
+		matched := wanted[pos]
+		pos++
+		if matched {
+			located = append(located, locatedTuple{
+				pid:       pid,
+				slot:      slot,
+				createdTx: createdTx,
+				row:       append(Row(nil), row...), // copy row data
+			})
+		}
+		return false, nil
+	})
 
-		// Записываем WAL с реальными физическими слотами
-		for _, ps := range physicalSlots {
+	// WAL recording using collected data.
+	if e.wal != nil {
+		for _, loc := range located {
 			payload := wal.WALPageDeletePayload{
 				DB:        dbName,
 				Table:     tableName,
-				SegmentNo: ps.pid.SegmentNo,
-				PageNo:    ps.pid.PageNo,
-				SlotNo:    ps.slot,
+				SegmentNo: loc.pid.SegmentNo,
+				PageNo:    loc.pid.PageNo,
+				SlotNo:    loc.slot,
 				XMax:      txID,
 			}
 			if _, err := e.wal.AppendWithTx(txID, wal.OpPageDelete, payload); err != nil {
 				return 0, fmt.Errorf("wal delete: %w", err)
 			}
 		}
-		pos = 0 // Сбрасываем позицию для следующего сканирования
 	}
 
-	err = e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
-		if deletedTx != 0 {
-			return false, nil
-		}
-		matched := wanted[pos]
-		pos++
-		if !matched {
-			return false, nil
+	// Apply mutations using collected data.
+	for _, loc := range located {
+		pg, err := e.getPage(loc.pid, t.heap, dbName, tableName)
+		if err != nil {
+			return 0, err
 		}
 
-		// Сбрасываем предыдущую грязную страницу, если перешли на новую
-		if dirty && dirtyPid != pid {
-			if err := flushDirty(); err != nil {
-				return true, err
-			}
-		}
-
-		// Помечаем текущую версию удалённой: in-place запись deleted_tx
-		tuple := pg.GetTuple(slot)
+		// Mark old tuple as deleted.
+		tuple := pg.GetTuple(loc.slot)
 		binary.LittleEndian.PutUint64(tuple[8:16], txID)
-		dirtyPid, dirty = pid, true
 
 		if !isDelete {
-			newRow := append(Row(nil), row...)
+			newRow := append(Row(nil), loc.row...)
 			for name, val := range updates {
 				idx, ok := colIndex[strings.ToLower(name)]
 				if !ok {
-					return true, fmt.Errorf("column '%s' does not exist", name)
+					e.bufPool.UnpinPageDirty(loc.pid, 0)
+					return 0, fmt.Errorf("column '%s' does not exist", name)
 				}
 				n, err := normalizeValue(val, t.schema.Columns[idx])
 				if err != nil {
-					return true, fmt.Errorf("column '%s': %w", name, err)
+					e.bufPool.UnpinPageDirty(loc.pid, 0)
+					return 0, fmt.Errorf("column '%s': %w", name, err)
 				}
 				newRow[idx] = n
 			}
 			encoded, err := encodePageTuple(txID, 0, newRow)
 			if err != nil {
-				return true, err
+				e.bufPool.UnpinPageDirty(loc.pid, 0)
+				return 0, err
 			}
 			newVersions = append(newVersions, encoded)
 			newRows = append(newRows, newRow)
 		}
+
 		affected++
-		return false, nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	if err := flushDirty(); err != nil {
-		return 0, err
+		e.bufPool.UnpinPageDirty(loc.pid, 0)
 	}
 
 	if len(newVersions) > 0 {
