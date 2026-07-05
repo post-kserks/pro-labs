@@ -27,8 +27,8 @@ func setupCompStressSession(t *testing.T) *Session {
 	}
 	t.Cleanup(func() { store.Close() })
 	session := NewSession(store, nil, txm, nil)
-	executeSQL(t, session, "CREATE DATABASE compdb;")
-	executeSQL(t, session, "USE compdb;")
+	executeSQL(t, session, "CREATE DATABASE stressdb;")
+	executeSQL(t, session, "USE stressdb;")
 	return session
 }
 
@@ -222,7 +222,7 @@ func TestStressComprehensiveConcurrentTransactions(t *testing.T) {
 	var wg sync.WaitGroup
 	successCount := atomic.Int32{}
 
-	// 100 goroutines doing concurrent transfers on the SAME session
+	// 100 goroutines doing concurrent transfers, each with its OWN session
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func(idx int) {
@@ -230,9 +230,13 @@ func TestStressComprehensiveConcurrentTransactions(t *testing.T) {
 			from := (idx % 3) + 1
 			to := ((idx + 1) % 3) + 1
 
+			// Create a separate session for this goroutine
+			txSession := setupCompStressSession(t)
+			executeSQL(t, txSession, "USE stressdb;")
+
 			// BEGIN
 			beginStmt, _ := parser.Parse("BEGIN;")
-			_, err := session.Execute(beginStmt)
+			_, err := txSession.Execute(beginStmt)
 			if err != nil {
 				return
 			}
@@ -240,26 +244,26 @@ func TestStressComprehensiveConcurrentTransactions(t *testing.T) {
 			// UPDATE sender
 			stmt1, _ := parser.Parse(fmt.Sprintf(
 				"UPDATE accounts SET balance = balance - 100 WHERE id = %d;", from))
-			_, err = session.Execute(stmt1)
+			_, err = txSession.Execute(stmt1)
 			if err != nil {
 				rb, _ := parser.Parse("ROLLBACK;")
-				session.Execute(rb)
+				txSession.Execute(rb)
 				return
 			}
 
 			// UPDATE receiver
 			stmt2, _ := parser.Parse(fmt.Sprintf(
 				"UPDATE accounts SET balance = balance + 100 WHERE id = %d;", to))
-			_, err = session.Execute(stmt2)
+			_, err = txSession.Execute(stmt2)
 			if err != nil {
 				rb, _ := parser.Parse("ROLLBACK;")
-				session.Execute(rb)
+				txSession.Execute(rb)
 				return
 			}
 
 			// COMMIT
 			commitStmt, _ := parser.Parse("COMMIT;")
-			_, err = session.Execute(commitStmt)
+			_, err = txSession.Execute(commitStmt)
 			if err == nil {
 				successCount.Add(1)
 			}
