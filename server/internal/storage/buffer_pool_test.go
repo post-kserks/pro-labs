@@ -523,3 +523,118 @@ func setupBenchHeapFile(b *testing.B, _ int) *heap.HeapFile {
 	b.Cleanup(func() { hf.Close() })
 	return hf
 }
+
+// ── Configurable buffer pool tests ──────────────────────────────────────────
+
+func TestConfigurableBufferPool(t *testing.T) {
+	tests := []struct {
+		name     string
+		capacity int
+	}{
+		{"small pool", 8},
+		{"default fallback", 0},
+		{"custom large", 512},
+		{"minimum valid", 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bp := NewBufferPool(tt.capacity)
+			defer bp.Close()
+
+			want := tt.capacity
+			if want <= 0 {
+				want = defaultBufferPoolCapacity
+			}
+			stats := bp.Stats()
+			if stats.Capacity != want {
+				t.Fatalf("expected capacity %d, got %d", want, stats.Capacity)
+			}
+		})
+	}
+}
+
+func TestConfigurableBufferPoolWithEngine(t *testing.T) {
+	e, err := NewPageStorageEngine(t.TempDir(), nil, nil, &StorageOptions{BufferPoolPages: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	stats := e.bufPool.Stats()
+	if stats.Capacity != 32 {
+		t.Fatalf("expected buffer pool capacity 32, got %d", stats.Capacity)
+	}
+}
+
+func TestConfigurableBufferPoolDefault(t *testing.T) {
+	e, err := NewPageStorageEngine(t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	stats := e.bufPool.Stats()
+	if stats.Capacity != defaultBufferPoolCapacity {
+		t.Fatalf("expected default capacity %d, got %d", defaultBufferPoolCapacity, stats.Capacity)
+	}
+}
+
+func TestPageCountCache(t *testing.T) {
+	dir := t.TempDir()
+	hf, err := heap.CreateHeapFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hf.Close()
+
+	// New heap file has 0 pages
+	count, err := hf.PageCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 pages, got %d", count)
+	}
+
+	// Allocate a page
+	pid, _, err := hf.AllocatePage(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = pid
+
+	// Cache should be invalidated, count should be 1
+	count, err = hf.PageCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 page, got %d", count)
+	}
+
+	// Allocate more pages
+	for i := 0; i < 5; i++ {
+		if _, _, err := hf.AllocatePage(0); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	count, err = hf.PageCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 6 {
+		t.Fatalf("expected 6 pages, got %d", count)
+	}
+
+	// Direct invalidation
+	hf.InvalidatePageCount()
+	count, err = hf.PageCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 6 {
+		t.Fatalf("expected 6 pages after invalidation, got %d", count)
+	}
+}

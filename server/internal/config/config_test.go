@@ -20,6 +20,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Server.LiveQueries.DropPolicy != "drop" {
 		t.Fatalf("default drop policy = %q", cfg.Server.LiveQueries.DropPolicy)
 	}
+	if cfg.Storage.BufferPoolPages != DefaultBufferPoolPages {
+		t.Fatalf("default buffer_pool_pages = %d, want %d", cfg.Storage.BufferPoolPages, DefaultBufferPoolPages)
+	}
 }
 
 func TestLoadFullConfig(t *testing.T) {
@@ -38,6 +41,7 @@ server:
 storage:
   engine: page
   data_dir: /data
+  buffer_pool_pages: 8192
 
 auth:
   enabled: false
@@ -70,6 +74,9 @@ ai:
 	}
 	if cfg.Storage.Engine != "page" || cfg.Storage.DataDir != "/data" {
 		t.Fatalf("storage section: %+v", cfg.Storage)
+	}
+	if cfg.Storage.BufferPoolPages != 8192 {
+		t.Fatalf("storage.buffer_pool_pages = %d, want 8192", cfg.Storage.BufferPoolPages)
 	}
 	if cfg.Auth.Enabled {
 		t.Fatal("auth.enabled should be false")
@@ -229,6 +236,35 @@ func TestApplyEnvOverrides_AIKey(t *testing.T) {
 	ApplyEnvOverrides(cfg)
 	if cfg.AI.APIKey != "secret-key-123" {
 		t.Fatalf("ai_api_key = %q", cfg.AI.APIKey)
+	}
+}
+
+func TestApplyEnvOverrides_BufferPoolPages(t *testing.T) {
+	cfg := Default()
+	t.Setenv("VAULTDB_BUFFER_POOL_PAGES", "32768")
+	ApplyEnvOverrides(cfg)
+	if cfg.Storage.BufferPoolPages != 32768 {
+		t.Fatalf("buffer_pool_pages = %d, want 32768", cfg.Storage.BufferPoolPages)
+	}
+}
+
+func TestApplyEnvOverrides_BufferPoolPagesInvalid(t *testing.T) {
+	cfg := Default()
+	cfg.Storage.BufferPoolPages = 16384
+	t.Setenv("VAULTDB_BUFFER_POOL_PAGES", "not-a-number")
+	ApplyEnvOverrides(cfg)
+	if cfg.Storage.BufferPoolPages != 16384 {
+		t.Fatalf("buffer_pool_pages should remain 16384 on invalid env, got %d", cfg.Storage.BufferPoolPages)
+	}
+}
+
+func TestApplyEnvOverrides_BufferPoolPagesTooSmall(t *testing.T) {
+	cfg := Default()
+	cfg.Storage.BufferPoolPages = 16384
+	t.Setenv("VAULTDB_BUFFER_POOL_PAGES", "10")
+	ApplyEnvOverrides(cfg)
+	if cfg.Storage.BufferPoolPages != 16384 {
+		t.Fatalf("buffer_pool_pages should remain 16384 when too small, got %d", cfg.Storage.BufferPoolPages)
 	}
 }
 

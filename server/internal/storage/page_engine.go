@@ -99,13 +99,17 @@ const (
 
 // NewPageStorageEngine открывает (или создаёт) страничное хранилище в
 // <dataDir>/pagedb.
-func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) (*PageStorageEngine, error) {
+func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager, opts ...*StorageOptions) (*PageStorageEngine, error) {
 	root := filepath.Join(dataDir, "pagedb")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
 
-	bufPool := NewBufferPool(defaultBufferPoolCapacity)
+	bufPoolSize := defaultBufferPoolCapacity
+	if len(opts) > 0 && opts[0] != nil && opts[0].BufferPoolPages > 0 {
+		bufPoolSize = opts[0].BufferPoolPages
+	}
+	bufPool := NewBufferPool(bufPoolSize)
 	if w != nil {
 		bufPool.SetWAL(w)
 	}

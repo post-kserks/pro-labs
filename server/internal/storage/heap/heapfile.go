@@ -25,6 +25,10 @@ type HeapFile struct {
 	mu       sync.RWMutex
 	segments []*os.File
 	closed   bool
+
+	// Cached page count — avoids repeated Stat() calls on every segment.
+	cachedPageCount uint32
+	pageCountValid  bool
 }
 
 func segmentName(segNo uint16) string {
@@ -41,7 +45,7 @@ func CreateHeapFile(dir string) (*HeapFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &HeapFile{dir: dir, segments: []*os.File{f}}, nil
+	return &HeapFile{dir: dir, segments: []*os.File{f}, cachedPageCount: 0, pageCountValid: true}, nil
 }
 
 // OpenHeapFile opens an existing heap file (all consecutive segments).
@@ -265,13 +269,30 @@ func (hf *HeapFile) AllocatePage(pageType uint8) (page.PageID, *page.Page, error
 	if _, err := seg.WriteAt(buf[:], pid.FileOffset()); err != nil {
 		return page.PageID{}, nil, err
 	}
+
+	// Invalidate cached page count since we just added a page.
+	hf.pageCountValid = false
+
 	return pid, buf, nil
 }
 
 // PageCount returns the total number of pages across all segments.
 func (hf *HeapFile) PageCount() (uint32, error) {
 	hf.mu.RLock()
-	defer hf.mu.RUnlock()
+	if hf.pageCountValid {
+		count := hf.cachedPageCount
+		hf.mu.RUnlock()
+		return count, nil
+	}
+	hf.mu.RUnlock()
+
+	hf.mu.Lock()
+	defer hf.mu.Unlock()
+
+	// Double-check after acquiring write lock
+	if hf.pageCountValid {
+		return hf.cachedPageCount, nil
+	}
 	if hf.closed {
 		return 0, errors.New("heap file is closed")
 	}
@@ -286,7 +307,18 @@ func (hf *HeapFile) PageCount() (uint32, error) {
 	if total > 0xFFFFFFFF {
 		return 0, fmt.Errorf("total page count exceeds uint32 range: %d", total)
 	}
-	return uint32(total), nil
+	hf.cachedPageCount = uint32(total)
+	hf.pageCountValid = true
+	return hf.cachedPageCount, nil
+}
+
+// InvalidatePageCount marks the cached page count as stale so the next
+// PageCount() call recomputes from disk. Must be called after AllocatePage
+// or any operation that changes the on-disk page count.
+func (hf *HeapFile) InvalidatePageCount() {
+	hf.mu.Lock()
+	defer hf.mu.Unlock()
+	hf.pageCountValid = false
 }
 
 // SegmentCount returns the number of segment files.

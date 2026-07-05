@@ -12,7 +12,7 @@ import (
 	"vaultdb/internal/wal"
 )
 
-const defaultBufferPoolCapacity = 1024
+const defaultBufferPoolCapacity = 16384 // 128MB with 8KB pages
 
 // maxUsageCount is the maximum usage count for clock-sweep (like PostgreSQL's BM_MAX_USAGE = 5).
 const maxUsageCount uint8 = 5
@@ -440,4 +440,10 @@ type BufferPoolStats struct {
 	Capacity   int
 	Used       int
 	DirtyCount int
+}
+
+// StorageOptions содержит параметры конфигурации хранилища,
+// передаваемые из config.StorageConfig без создания циклических импортов.
+type StorageOptions struct {
+	BufferPoolPages int
 }

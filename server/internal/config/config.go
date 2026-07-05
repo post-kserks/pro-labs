@@ -44,6 +44,7 @@ type StorageConfig struct {
 	DataDir          string `yaml:"data_dir"`
 	ResultCacheSize  int    `yaml:"result_cache_size"`
 	ResultCacheTTL_s int    `yaml:"result_cache_ttl_seconds"`
+	BufferPoolPages  int    `yaml:"buffer_pool_pages"`
 }
 
 // AuthConfig — параметры аутентификации.
@@ -100,6 +101,7 @@ const (
 	DefaultResultCacheTTL        = 30
 	DefaultRateLimitRPS          = 100
 	DefaultRateLimitBurst        = 200
+	DefaultBufferPoolPages       = 16384 // 128MB with 8KB pages
 	DefaultAuthRateWindowSec     = 60
 	DefaultAuthMaxFails          = 10
 	DefaultAuthBlockForSec       = 300
@@ -134,6 +136,7 @@ func Default() *Config {
 			DataDir:          "./data",
 			ResultCacheSize:  DefaultResultCacheSize,
 			ResultCacheTTL_s: DefaultResultCacheTTL,
+			BufferPoolPages:  DefaultBufferPoolPages,
 		},
 		Auth: AuthConfig{
 			Enabled:       true,
@@ -216,6 +219,9 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Storage.ResultCacheTTL_s == 0 {
 		cfg.Storage.ResultCacheTTL_s = DefaultResultCacheTTL
+	}
+	if cfg.Storage.BufferPoolPages == 0 {
+		cfg.Storage.BufferPoolPages = DefaultBufferPoolPages
 	}
 	if cfg.Server.TCPKeepAliveSec == 0 {
 		cfg.Server.TCPKeepAliveSec = DefaultTCPKeepAliveSec
@@ -335,6 +341,15 @@ func ApplyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("VAULTDB_DATA_DIR"); v != "" {
 		cfg.Storage.DataDir = v
+	}
+	if v := os.Getenv("VAULTDB_BUFFER_POOL_PAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			slog.Warn("invalid VAULTDB_BUFFER_POOL_PAGES, ignoring", "value", v, "error", err)
+		} else if n < 64 {
+			slog.Warn("VAULTDB_BUFFER_POOL_PAGES too small (min 64), ignoring", "value", v)
+		} else {
+			cfg.Storage.BufferPoolPages = n
+		}
 	}
 	if v := os.Getenv("VAULTDB_MTLS_ENABLED"); v != "" {
 		cfg.Auth.MTLSEnabled = envBoolValue(v)

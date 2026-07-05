@@ -86,7 +86,7 @@ func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *
 
 	w.OnAppend = func() { metricsCollector.IncWALEntries() }
 
-	pageStore, err := storage.NewPageStorageEngine(dataDir, w, txm)
+	pageStore, err := storage.NewPageStorageEngine(dataDir, w, txm, &storage.StorageOptions{BufferPoolPages: cfg.Storage.BufferPoolPages})
 	if err != nil {
 		logger.Error("failed to open page storage engine", "error", err)
 		os.Exit(1)
