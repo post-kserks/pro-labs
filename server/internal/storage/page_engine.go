@@ -63,6 +63,11 @@ type PageStorageEngine struct {
 	// txCounter is an atomic counter for txID allocation, replacing the
 	// e.mu-protected catalog.CurrentTxID for DML hot paths.
 	txCounter atomic.Uint64
+
+	// Subsystems — focused subsystems extracted for maintainability.
+	catalogMgr *CatalogManager
+	dml        *DMLExecutor
+	ddl        *DDLExecutor
 }
 
 type pageTable struct {
@@ -162,6 +167,11 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager, 
 	// Initialize atomic tx counter from catalog state so new txIDs
 	// continue from where the last session left off.
 	e.txCounter.Store(e.catalog.CurrentTxID)
+
+	// Initialize subsystems.
+	e.catalogMgr = NewCatalogManager()
+	e.dml = NewDMLExecutor(e)
+	e.ddl = NewDDLExecutor(e)
 
 	return e, nil
 }
@@ -1229,4 +1239,21 @@ func (e *PageStorageEngine) GetTableSchema(dbName, tableName string) (*TableSche
 	copied := *t.schema
 	copied.Columns = append([]ColumnSchema(nil), t.schema.Columns...)
 	return &copied, nil
+}
+
+// ── Subsystem accessors ──────────────────────────────────────────────────
+
+// CatalogManager returns the catalog manager subsystem for schema lookups.
+func (e *PageStorageEngine) CatalogManager() *CatalogManager {
+	return e.catalogMgr
+}
+
+// DML returns the DML executor subsystem for INSERT/UPDATE/DELETE operations.
+func (e *PageStorageEngine) DML() *DMLExecutor {
+	return e.dml
+}
+
+// DDL returns the DDL executor subsystem for CREATE/DROP TABLE operations.
+func (e *PageStorageEngine) DDL() *DDLExecutor {
+	return e.ddl
 }
