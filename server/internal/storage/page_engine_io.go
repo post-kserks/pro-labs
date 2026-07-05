@@ -294,19 +294,12 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 			if havePage {
 				e.bufPool.UnpinPage(pid, false)
 			}
-			if err := t.heap.Sync(); err != nil {
-				return 0, err
-			}
 			havePage = false
 		}
 	}
 
 	insertLockReleased = true
 	t.mu.Unlock()
-
-	if err := t.heap.Sync(); err != nil {
-		return 0, err
-	}
 
 	key := dbName + "/" + tableName
 
@@ -508,9 +501,6 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 			return 0, err
 		}
 	}
-	if err := t.heap.Sync(); err != nil {
-		return 0, err
-	}
 
 	// Обновляем индексы до освобождения t.mu (они не требуют e.mu)
 	if affected > 0 {
@@ -692,9 +682,6 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 		if err := e.appendTuplesLocked(t, newVersions); err != nil {
 			return 0, err
 		}
-	}
-	if err := t.heap.Sync(); err != nil {
-		return 0, err
 	}
 
 	// Обновляем индексы до освобождения t.mu (они не требуют e.mu)

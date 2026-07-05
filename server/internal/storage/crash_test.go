@@ -1241,3 +1241,153 @@ func TestCatalogRecalculationAfterWALRecovery(t *testing.T) {
 		t.Fatalf("expected 2 readable rows, got %d", len(rows))
 	}
 }
+
+func TestNoPerBatchSync(t *testing.T) {
+	// Inserts and updates succeed without per-batch heap.Sync().
+	// Durability is provided by WAL, not by sync-after-each-DML.
+	dir := t.TempDir()
+
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := engine.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "t",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "val", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("db", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Bulk insert
+	for i := int64(1); i <= 500; i++ {
+		_, err := engine.InsertRows("db", "t", []Row{{i, "v"}})
+		if err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+
+	count, err := engine.CountRows("db", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 500 {
+		t.Fatalf("expected 500 rows, got %d", count)
+	}
+
+	// Update all rows
+	idx := make([]int, 500)
+	for i := range idx {
+		idx[i] = i
+	}
+	_, err = engine.UpdateRows("db", "t", idx, map[string]Value{"val": "updated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := engine.ReadCurrentRows("db", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r[1] != "updated" {
+			t.Fatalf("row not updated: %v", r)
+		}
+	}
+}
+
+func TestDurabilityAfterCrash(t *testing.T) {
+	// Data survives simulated crash via WAL replay.
+	dir := t.TempDir()
+
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := engine.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "t",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("db", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert committed data
+	_, err = engine.InsertRows("db", "t", []Row{
+		{int64(1), "alpha"},
+		{int64(2), "beta"},
+		{int64(3), "gamma"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate crash: close WAL without checkpoint
+	w.Close()
+
+	// Reopen
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := engine2.RecoverFromWAL(); err != nil {
+		t.Fatal(err)
+	}
+
+	// All committed rows must survive crash recovery
+	rows, err := engine2.ReadCurrentRows("db", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows after crash recovery, got %d", len(rows))
+	}
+
+	// Verify content
+	names := map[interface{}]bool{}
+	for _, r := range rows {
+		names[r[1]] = true
+	}
+	for _, want := range []string{"alpha", "beta", "gamma"} {
+		if !names[want] {
+			t.Fatalf("missing row with name %q after recovery", want)
+		}
+	}
+}
