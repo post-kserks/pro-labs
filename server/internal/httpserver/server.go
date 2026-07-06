@@ -304,6 +304,7 @@ func (s *Server) apiMux() *http.ServeMux {
 	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
 	mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics))))
 	mux.HandleFunc("/dashboard", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleDashboard)))
+	mux.HandleFunc("/admin/security-status", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleSecurityStatus)))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" || r.URL.Path == "/ready" || r.URL.Path == "/metrics" {
