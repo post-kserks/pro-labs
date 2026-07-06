@@ -44,6 +44,8 @@ type Config struct {
 	RateLimiter               *RateLimiter
 	TLSCertFile               string
 	TLSKeyFile                string
+	TLSMinVersion             string // "1.2" or "1.3"
+	TLSEnforce                bool
 	MaxLiveQuerySubscriptions int
 	MaxLiveQueryDurationSec   int
 	SessionPoolMaxIdle        int
@@ -210,6 +212,10 @@ func New(cfg Config) *Server {
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	if s.cfg.TLSEnforce && (s.cfg.TLSCertFile == "" || s.cfg.TLSKeyFile == "") {
+		return fmt.Errorf("TLS enforcement is enabled but TLS is not configured (cert_file=%q, key_file=%q)", s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+	}
+
 	apiServer := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port),
 		Handler:           s.corsMiddleware(s.apiMux()),
@@ -230,8 +236,12 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	if s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != "" {
+		minVer := uint16(tls.VersionTLS12)
+		if s.cfg.TLSMinVersion == "1.3" {
+			minVer = tls.VersionTLS13
+		}
 		tlsCfg := &tls.Config{
-			MinVersion: tls.VersionTLS12,
+			MinVersion: minVer,
 			CipherSuites: []uint16{
 				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
 				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
@@ -305,6 +315,7 @@ func (s *Server) apiMux() *http.ServeMux {
 	mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics))))
 	mux.HandleFunc("/dashboard", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleDashboard)))
 	mux.HandleFunc("/admin/security-status", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleSecurityStatus)))
+	mux.HandleFunc("/admin/revoke-token", s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleRevokeToken)))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" || r.URL.Path == "/ready" || r.URL.Path == "/metrics" {

@@ -8,6 +8,7 @@ import (
 
 	"vaultdb/internal/ai"
 	"vaultdb/internal/audit"
+	"vaultdb/internal/auth"
 	"vaultdb/internal/logging"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
@@ -35,6 +36,10 @@ type Session struct {
 	snapshotTxID       uint64
 	maxPreparedStmts   int
 	serverCtx          context.Context
+
+	// RBAC: token and role for permission checks.
+	token string
+	role  string
 }
 
 type PreparedStatement struct {
@@ -50,6 +55,7 @@ type SessionConfig struct {
 	Broadcaster      *Broadcaster
 	Embedder         ai.Embedder
 	WAL              *wal.WAL
+	AuthManager      *auth.Manager
 	QueryTimeout     time.Duration
 	MaxRows          int
 	MaxPreparedStmts int
@@ -95,6 +101,9 @@ func NewSessionWithConfig(cfg SessionConfig) *Session {
 	if cfg.ResultCacheSize > 0 {
 		s.SetResultCacheConfig(cfg.ResultCacheSize, int(cfg.ResultCacheTTL.Seconds()))
 	}
+	if cfg.AuthManager != nil {
+		s.SetAuthManager(cfg.AuthManager)
+	}
 	return s
 }
 
@@ -115,6 +124,11 @@ func (s *Session) SetResultCacheConfig(size int, ttlSec int) {
 // SetEmbedder подключает embedding-провайдер для SEMANTIC_MATCH/AI_EMBED.
 func (s *Session) SetEmbedder(emb ai.Embedder) {
 	s.executor.SetEmbedder(emb)
+}
+
+// SetAuthManager подключает менеджер аутентификации для RBAC проверок.
+func (s *Session) SetAuthManager(m *auth.Manager) {
+	s.executor.SetAuthManager(m)
 }
 
 // SetWAL подключает WAL для записи операций транзакций.
@@ -228,6 +242,34 @@ func (s *Session) ServerContext() context.Context {
 	return context.Background()
 }
 
+// SetToken stores the bearer token for RBAC permission checks.
+func (s *Session) SetToken(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.token = token
+}
+
+// GetToken returns the stored bearer token.
+func (s *Session) GetToken() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.token
+}
+
+// SetRole stores the user role (e.g. "admin", "writer", "reader").
+func (s *Session) SetRole(role string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.role = role
+}
+
+// GetRole returns the stored role.
+func (s *Session) GetRole() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.role
+}
+
 // Close очищает ресурсы сессии.
 // Если есть активная транзакция — откатывает её, чтобы не терять данные
 // и не утекать ресурсы (spill-файлы и т.д.).
@@ -242,8 +284,6 @@ func (s *Session) Close() {
 }
 
 // Reset сбрасывает состояние сессии для повторного использования в пуле.
-// Откатывает активную транзакцию, очищает prepared statements,
-// сбрасывает текущую БД и snapshot.
 func (s *Session) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -253,6 +293,8 @@ func (s *Session) Reset() {
 	s.ActiveTx = nil
 	s.currentDB = ""
 	s.snapshotTxID = 0
+	s.token = ""
+	s.role = ""
 	s.PreparedStatements = make(map[string]*PreparedStatement)
 	// Reset executor settings for pooled sessions
 	if s.executor != nil {

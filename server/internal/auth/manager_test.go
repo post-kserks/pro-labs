@@ -88,7 +88,7 @@ func TestTokensStoredHashed(t *testing.T) {
 		t.Fatal("label lookup by original token failed")
 	}
 
-	m.AddToken("another-token", "ops")
+	m.AddToken("another-token", "ops", "admin")
 	if _, ok := m.tokens["another-token"]; ok {
 		t.Fatal("AddToken stored plaintext")
 	}

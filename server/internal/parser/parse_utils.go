@@ -74,20 +74,28 @@ func (p *sqlParser) parseComparison() (Expression, error) {
 		if p.current().Type == lexer.TOKEN_ALL || p.current().Type == lexer.TOKEN_ANY || p.current().Type == lexer.TOKEN_SOME {
 			quantifier := strings.ToUpper(p.current().Literal)
 			p.advance()
+			if err := p.checkDepth(); err != nil {
+				return nil, err
+			}
 			if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+				p.exitDepth()
 				return nil, err
 			}
 			stmt, err := p.parseSelect()
 			if err != nil {
+				p.exitDepth()
 				return nil, err
 			}
 			stmt, err = p.parseSetOperation(stmt)
 			if err != nil {
+				p.exitDepth()
 				return nil, err
 			}
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				p.exitDepth()
 				return nil, err
 			}
+			p.exitDepth()
 			return &ComparisonSubqueryExpr{Left: left, Operator: op, Quantifier: quantifier, Subquery: stmt}, nil
 		}
 
@@ -118,14 +126,20 @@ func (p *sqlParser) parseComparison() (Expression, error) {
 
 		var list []Expression
 		if p.current().Type == lexer.TOKEN_SELECT {
+			if err := p.checkDepth(); err != nil {
+				return nil, err
+			}
 			stmt, err := p.parseSelect()
 			if err != nil {
+				p.exitDepth()
 				return nil, err
 			}
 			stmt, err = p.parseSetOperation(stmt)
 			if err != nil {
+				p.exitDepth()
 				return nil, err
 			}
+			p.exitDepth()
 			list = []Expression{&SubqueryExpr{Query: stmt}}
 		} else {
 			var err error
@@ -164,14 +178,20 @@ func (p *sqlParser) parseComparison() (Expression, error) {
 			}
 			var list []Expression
 			if p.current().Type == lexer.TOKEN_SELECT {
+				if err := p.checkDepth(); err != nil {
+					return nil, err
+				}
 				stmt, err := p.parseSelect()
 				if err != nil {
+					p.exitDepth()
 					return nil, err
 				}
 				stmt, err = p.parseSetOperation(stmt)
 				if err != nil {
+					p.exitDepth()
 					return nil, err
 				}
+				p.exitDepth()
 				list = []Expression{&SubqueryExpr{Query: stmt}}
 			} else {
 				list, err = p.parseValueListUntilRParen()
@@ -211,17 +231,24 @@ func (p *sqlParser) parseComparison() (Expression, error) {
 			if p.current().Type != lexer.TOKEN_SELECT {
 				return nil, fmt.Errorf("expected SELECT after NOT EXISTS (")
 			}
+			if err := p.checkDepth(); err != nil {
+				return nil, err
+			}
 			stmt, err := p.parseSelect()
 			if err != nil {
+				p.exitDepth()
 				return nil, err
 			}
 			stmt, err = p.parseSetOperation(stmt)
 			if err != nil {
+				p.exitDepth()
 				return nil, err
 			}
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				p.exitDepth()
 				return nil, err
 			}
+			p.exitDepth()
 			return &ExistsExpr{Select: stmt, Not: true}, nil
 		}
 		return left, nil
@@ -297,50 +324,69 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 	tok := p.current()
 	switch tok.Type {
 	case lexer.TOKEN_LPAREN:
+		if err := p.checkDepth(); err != nil {
+			return nil, err
+		}
 		p.advance()
 		if p.current().Type == lexer.TOKEN_SELECT {
 			stmt, err := p.parseSelect()
 			if err != nil {
+				p.exitDepth()
 				return nil, err
 			}
 			// Handle UNION/INTERSECT/EXCEPT in subqueries
 			stmt, err = p.parseSetOperation(stmt)
 			if err != nil {
+				p.exitDepth()
 				return nil, err
 			}
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				p.exitDepth()
 				return nil, err
 			}
+			p.exitDepth()
 			return &SubqueryExpr{Query: stmt}, nil
 		}
 		expr, err := p.parseExpression()
 		if err != nil {
+			p.exitDepth()
 			return nil, err
 		}
 		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+			p.exitDepth()
 			return nil, err
 		}
+		p.exitDepth()
 		return expr, nil
 	case lexer.TOKEN_EXISTS:
 		// EXISTS (SELECT ...)
+		if err := p.checkDepth(); err != nil {
+			return nil, err
+		}
 		p.advance()
 		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+			p.exitDepth()
 			return nil, err
 		}
 		if p.current().Type != lexer.TOKEN_SELECT {
+			p.exitDepth()
 			return nil, fmt.Errorf("expected SELECT after EXISTS (")
 		}
 		stmt, err := p.parseSelect()
 		if err != nil {
+			p.exitDepth()
 			return nil, err
 		}
 		stmt, err = p.parseSetOperation(stmt)
 		if err != nil {
+			p.exitDepth()
 			return nil, err
 		}
 		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+			p.exitDepth()
 			return nil, err
 		}
+		p.exitDepth()
 		return &ExistsExpr{Select: stmt, Not: false}, nil
 	case lexer.TOKEN_CAST:
 		return p.parseCast()
@@ -514,6 +560,9 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 			return p.parsePrimaryPost(&ColumnRef{Name: parts[1], Table: parts[0]}), nil
 		}
 		if p.current().Type == lexer.TOKEN_LPAREN {
+			if err := p.checkDepth(); err != nil {
+				return nil, err
+			}
 			p.advance()
 			args := make([]Expression, 0)
 			distinct := false
@@ -528,11 +577,13 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 			if len(args) == 0 && p.current().Type != lexer.TOKEN_RPAREN {
 				list, err := p.parseValueListUntilRParen()
 				if err != nil {
+					p.exitDepth()
 					return nil, err
 				}
 				args = list
 			}
 			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				p.exitDepth()
 				return nil, err
 			}
 
@@ -547,21 +598,26 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 			if p.current().Type == lexer.TOKEN_OVER {
 				p.advance()
 				if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+					p.exitDepth()
 					return nil, err
 				}
 				spec, err := p.parseWindowSpec()
 				if err != nil {
+					p.exitDepth()
 					return nil, err
 				}
 				if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+					p.exitDepth()
 					return nil, err
 				}
+				p.exitDepth()
 				return &WindowFunctionExpr{
 					FuncName: funcExprName(funcExpr),
 					Args:     funcExprArgs(funcExpr),
 					Over:     *spec,
 				}, nil
 			}
+			p.exitDepth()
 			return p.parsePrimaryPost(funcExpr), nil
 		}
 		// Check for old/new prefix: old.col or new.col

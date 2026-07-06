@@ -13,6 +13,10 @@ import (
 	"vaultdb/internal/storage"
 )
 
+// MaxCopyRows is the default maximum number of rows that COPY FROM will import.
+// This prevents loading unbounded data into memory.
+const MaxCopyRows = 1_000_000
+
 // validateCopyPath checks that the COPY filename is safe.
 // It rejects absolute paths, path traversal, and paths outside the data directory.
 func validateCopyPath(filename string, dataDir string) (string, error) {
@@ -81,6 +85,10 @@ func (c *CopyFromCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	if len(rows) == 0 {
 		return &Result{Type: "affected", Affected: 0, Message: "COPY: 0 rows imported"}, nil
+	}
+
+	if len(rows) > MaxCopyRows {
+		return nil, fmt.Errorf("COPY FROM exceeds maximum row limit (%d rows, max %d)", len(rows), MaxCopyRows)
 	}
 
 	affected, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, rows)

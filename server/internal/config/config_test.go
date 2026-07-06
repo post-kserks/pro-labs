@@ -647,4 +647,121 @@ func TestLoad_DefaultsWithEmptyPath(t *testing.T) {
 	if cfg.Auth.BlockForSec != DefaultAuthBlockForSec {
 		t.Fatalf("default block_for_seconds = %d", cfg.Auth.BlockForSec)
 	}
+	if cfg.Server.TLS.Enforce {
+		t.Fatal("default tls.enforce should be false")
+	}
+	if cfg.Server.TLS.Enabled {
+		t.Fatal("default tls.enabled should be false")
+	}
+}
+
+// --- TLS validation tests ---
+
+func TestValidation_TLSEnforceWithoutEnabled(t *testing.T) {
+	yaml := `
+server:
+  tls:
+    enforce: true
+    enabled: false
+storage:
+  data_dir: /d
+`
+	path := filepath.Join(t.TempDir(), "tls.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error: tls.enforce=true without tls.enabled")
+	}
+}
+
+func TestValidation_TLSEnabledWithoutCertFile(t *testing.T) {
+	yaml := `
+server:
+  tls:
+    enabled: true
+    key_file: /path/to/key.pem
+storage:
+  data_dir: /d
+`
+	path := filepath.Join(t.TempDir(), "tls.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error: tls.enabled without cert_file")
+	}
+}
+
+func TestValidation_TLSEnabledWithoutKeyFile(t *testing.T) {
+	yaml := `
+server:
+  tls:
+    enabled: true
+    cert_file: /path/to/cert.pem
+storage:
+  data_dir: /d
+`
+	path := filepath.Join(t.TempDir(), "tls.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error: tls.enabled without key_file")
+	}
+}
+
+func TestValidation_TLSBadMinVersion(t *testing.T) {
+	yaml := `
+server:
+  tls:
+    enabled: true
+    cert_file: /path/to/cert.pem
+    key_file: /path/to/key.pem
+    min_version: "1.1"
+storage:
+  data_dir: /d
+`
+	path := filepath.Join(t.TempDir(), "tls.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error: invalid tls.min_version")
+	}
+}
+
+func TestValidation_TLSValidConfig(t *testing.T) {
+	yaml := `
+server:
+  tls:
+    enabled: true
+    cert_file: /path/to/cert.pem
+    key_file: /path/to/key.pem
+    min_version: "1.3"
+    enforce: true
+storage:
+  data_dir: /d
+`
+	path := filepath.Join(t.TempDir(), "tls.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("valid TLS config should load: %v", err)
+	}
+	if !cfg.Server.TLS.Enabled {
+		t.Fatal("tls.enabled should be true")
+	}
+	if !cfg.Server.TLS.Enforce {
+		t.Fatal("tls.enforce should be true")
+	}
+	if cfg.Server.TLS.MinVersion != "1.3" {
+		t.Fatalf("tls.min_version = %q, want 1.3", cfg.Server.TLS.MinVersion)
+	}
 }

@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -156,5 +157,74 @@ func TestFileKMSClientEncryptEmptyData(t *testing.T) {
 	}
 	if len(decrypted) != 0 {
 		t.Errorf("expected empty data, got %d bytes", len(decrypted))
+	}
+}
+
+func TestFileKMSClientEncryptDecryptRoundtripWithEncryption(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "encrypted-kms.enc")
+	c := NewFileKMSClient(path)
+
+	plaintext := []byte("secret-data-encryption-key-12345")
+	_, err := c.Encrypt(context.Background(), "key-id", plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	decrypted, err := c.Decrypt(context.Background(), "key-id", nil)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	if string(decrypted) != string(plaintext) {
+		t.Errorf("decrypted = %q, want %q", decrypted, plaintext)
+	}
+}
+
+func TestFileKMSClientPlaintextNotStoredOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "no-plaintext.enc")
+	c := NewFileKMSClient(path)
+
+	plaintext := []byte("this-should-not-be-readable-as-plaintext")
+	_, err := c.Encrypt(context.Background(), "key-id", plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	if string(raw) == string(plaintext) {
+		t.Error("plaintext was stored directly on disk — expected encrypted content")
+	}
+	if len(raw) == 0 {
+		t.Error("file is empty after encrypt")
+	}
+}
+
+func TestEncryptWithMachineKeyRoundtrip(t *testing.T) {
+	plaintext := []byte("roundtrip test data for machine key encryption")
+	encrypted, err := encryptWithMachineKey(plaintext)
+	if err != nil {
+		t.Fatalf("encryptWithMachineKey: %v", err)
+	}
+	if string(encrypted) == string(plaintext) {
+		t.Error("encrypted data should differ from plaintext")
+	}
+	decrypted, err := decryptWithMachineKey(encrypted)
+	if err != nil {
+		t.Fatalf("decryptWithMachineKey: %v", err)
+	}
+	if string(decrypted) != string(plaintext) {
+		t.Errorf("decrypted = %q, want %q", decrypted, plaintext)
+	}
+}
+
+func TestDecryptWithMachineKeyTooShort(t *testing.T) {
+	_, err := decryptWithMachineKey([]byte("short"))
+	if err == nil {
+		t.Fatal("expected error for too-short ciphertext")
 	}
 }

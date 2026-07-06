@@ -18,6 +18,15 @@ type LiveQueriesConfig struct {
 	BlockTimeoutS int    `yaml:"block_timeout_s"`
 }
 
+// TLSConfig — параметры TLS.
+type TLSConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	CertFile   string `yaml:"cert_file"`
+	KeyFile    string `yaml:"key_file"`
+	MinVersion string `yaml:"min_version"` // "1.2" or "1.3"
+	Enforce    bool   `yaml:"enforce"`     // reject non-TLS connections
+}
+
 // ServerConfig — сетевые параметры сервера.
 type ServerConfig struct {
 	Host                string            `yaml:"host"`
@@ -36,6 +45,7 @@ type ServerConfig struct {
 	MaxPreparedStmts    int               `yaml:"max_prepared_statements"`
 	RateLimitRPS        int               `yaml:"rate_limit_rps"`
 	RateLimitBurst      int               `yaml:"rate_limit_burst"`
+	TLS                 TLSConfig         `yaml:"tls"`
 }
 
 // StorageConfig — параметры хранилища.
@@ -237,6 +247,21 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Server.RateLimitBurst == 0 {
 		cfg.Server.RateLimitBurst = DefaultRateLimitBurst
+	}
+	// TLS validation
+	if cfg.Server.TLS.Enforce && !cfg.Server.TLS.Enabled {
+		return fmt.Errorf("tls.enforce is true but tls.enabled is false: TLS must be enabled to enforce it")
+	}
+	if cfg.Server.TLS.Enabled {
+		if cfg.Server.TLS.CertFile == "" {
+			return fmt.Errorf("tls.cert_file must not be empty when tls.enabled is true")
+		}
+		if cfg.Server.TLS.KeyFile == "" {
+			return fmt.Errorf("tls.key_file must not be empty when tls.enabled is true")
+		}
+	}
+	if cfg.Server.TLS.MinVersion != "" && cfg.Server.TLS.MinVersion != "1.2" && cfg.Server.TLS.MinVersion != "1.3" {
+		return fmt.Errorf("unknown tls.min_version %q (want 1.2 or 1.3)", cfg.Server.TLS.MinVersion)
 	}
 	if cfg.Auth.RateWindowSec == 0 {
 		cfg.Auth.RateWindowSec = DefaultAuthRateWindowSec

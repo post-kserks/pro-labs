@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/auth"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -175,6 +176,7 @@ type Executor struct {
 	broadcaster   *Broadcaster
 	embedder      ai.Embedder
 	wal           *wal.WAL
+	authMgr       *auth.Manager // RBAC: nil means permission checks disabled
 	queryTimeout  time.Duration
 	maxRows       int
 	parallel      ParallelConfig
@@ -233,6 +235,13 @@ func (e *Executor) ParallelConfig() ParallelConfig {
 	return e.parallel
 }
 
+// SetAuthManager подключает менеджер аутентификации для RBAC проверок.
+func (e *Executor) SetAuthManager(m *auth.Manager) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.authMgr = m
+}
+
 func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	start := time.Now()
 	cmd, err := CommandFactory(stmt)
@@ -245,7 +254,20 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	embedder := e.embedder
 	wal := e.wal
 	parallelCfg := e.parallel
+	authMgr := e.authMgr
 	e.mu.RUnlock()
+
+	// RBAC permission check: if auth is enabled and the session carries a token,
+	// verify the role is allowed to perform this operation.
+	if authMgr != nil && authMgr.Enabled() {
+		token := sess.GetToken()
+		if token != "" {
+			op := stmt.StatementType()
+			if !authMgr.CheckPermission(token, op) {
+				return nil, fmt.Errorf("permission denied: role %q cannot execute %s", sess.GetRole(), op)
+			}
+		}
+	}
 
 	queryCtx := sess.ServerContext()
 	if queryTimeout > 0 {

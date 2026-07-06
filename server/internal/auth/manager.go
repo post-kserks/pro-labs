@@ -24,12 +24,29 @@ type contextKey string
 
 const tokenLabelContextKey contextKey = "token_label"
 
+// TokenInfo stores metadata about an authenticated token.
+type TokenInfo struct {
+	Hash      string
+	Label     string
+	Role      string // "admin", "reader", "writer"
+	CreatedAt time.Time
+}
+
+// rolePermissions maps role names to the set of SQL operations they may perform.
+// A "*" wildcard means all operations are allowed.
+var rolePermissions = map[string][]string{
+	"admin":  {"*"},
+	"writer": {"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE TABLE", "DROP TABLE", "CREATE INDEX", "DROP INDEX", "COPY FROM", "COPY TO", "CREATE VIEW", "DROP VIEW", "CREATE TRIGGER", "DROP TRIGGER", "ALTER TABLE", "TRUNCATE", "MERGE"},
+	"reader": {"SELECT", "EXPLAIN"},
+}
+
 // Manager хранит HMAC-SHA256 хеши токенов с серверным секретом.
 // HMAC привязан к секрету — rainbow tables бесполезны.
 type Manager struct {
 	enabled    bool
 	mu         sync.RWMutex
-	tokens     map[string]string // HMAC-SHA256(token, secret) hex → label
+	tokens     map[string]*TokenInfo // HMAC-SHA256(token, secret) hex → token info
+	revoked    map[string]time.Time  // HMAC-SHA256(token, secret) hex → revocation time
 	secret     []byte
 	warnedOnce sync.Once
 	logger     *slog.Logger
@@ -160,24 +177,71 @@ func New(enabled bool, tokens map[string]string, logger *slog.Logger, rateWindow
 		}
 	}
 
-	hashed := make(map[string]string, len(tokens))
+	hashed := make(map[string]*TokenInfo, len(tokens))
+	now := time.Now()
 	for token, label := range tokens {
 		mac := hmac.New(sha256.New, secret)
 		mac.Write([]byte(token))
-		hashed[hex.EncodeToString(mac.Sum(nil))] = label
+		hashed[hex.EncodeToString(mac.Sum(nil))] = &TokenInfo{
+			Hash:      hex.EncodeToString(mac.Sum(nil)),
+			Label:     label,
+			Role:      "admin", // default: full access for pre-configured tokens
+			CreatedAt: now,
+		}
 	}
 
-	return &Manager{
+	m := &Manager{
 		enabled: enabled,
 		tokens:  hashed,
+		revoked: make(map[string]time.Time),
 		secret:  secret,
 		logger:  logger,
 		rateLim: newAuthRateLimiter(rateWindowSec, maxFails, blockForSec),
-	}, nil
+	}
+	go m.cleanupRevokedTokens()
+	return m, nil
 }
 
 func (m *Manager) Enabled() bool {
 	return m.enabled
+}
+
+// RevokeToken marks a token as revoked. Revoked tokens are rejected by ValidateToken.
+func (m *Manager) RevokeToken(token string) {
+	hash := m.hashToken(token)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.revoked[hash] = time.Now()
+	if m.logger != nil {
+		if info, ok := m.tokens[hash]; ok {
+			m.logger.Info("token revoked", "label", info.Label)
+		}
+	}
+}
+
+// IsRevoked checks whether a token has been revoked.
+func (m *Manager) IsRevoked(token string) bool {
+	hash := m.hashToken(token)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.revoked[hash]
+	return ok
+}
+
+// cleanupRevokedTokens periodically removes revoked token entries older than 24h.
+func (m *Manager) cleanupRevokedTokens() {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		m.mu.Lock()
+		now := time.Now()
+		for hash, revokedAt := range m.revoked {
+			if now.Sub(revokedAt) > 24*time.Hour {
+				delete(m.revoked, hash)
+			}
+		}
+		m.mu.Unlock()
+	}
 }
 
 // SetAuditFunc sets a callback function for audit logging.
@@ -192,12 +256,20 @@ func NewDisabled() (*Manager, error) {
 	return &Manager{enabled: false}, nil
 }
 
-// AddToken регистрирует новый токен (хранится только HMAC-хеш).
-func (m *Manager) AddToken(token, label string) {
+// AddToken registers a new token with the given role (stored as HMAC hash).
+func (m *Manager) AddToken(token, label, role string) {
+	if role == "" {
+		role = "admin"
+	}
 	hash := m.hashToken(token)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.tokens[hash] = label
+	m.tokens[hash] = &TokenInfo{
+		Hash:      hash,
+		Label:     label,
+		Role:      role,
+		CreatedAt: time.Now(),
+	}
 }
 
 func (m *Manager) ValidateToken(token string) bool {
@@ -210,15 +282,79 @@ func (m *Manager) ValidateToken(token string) bool {
 	hash := m.hashToken(token)
 	m.mu.RLock()
 	_, ok := m.tokens[hash]
+	if ok {
+		_, revoked := m.revoked[hash]
+		ok = !revoked
+	}
 	m.mu.RUnlock()
 	return ok
+}
+
+// GenerateToken creates a new bearer token with the given label and role,
+// registers it, and returns the plaintext token string.
+func (m *Manager) GenerateToken(label, role string) string {
+	if role == "" {
+		role = "admin"
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		// Fallback — should never happen
+		panic("auth: failed to generate random token: " + err.Error())
+	}
+	token := hex.EncodeToString(buf)
+	hash := m.hashToken(token)
+
+	m.mu.Lock()
+	m.tokens[hash] = &TokenInfo{
+		Hash:      hash,
+		Label:     label,
+		Role:      role,
+		CreatedAt: time.Now(),
+	}
+	m.mu.Unlock()
+
+	return token
+}
+
+// GetTokenRole returns the role assigned to the given token.
+func (m *Manager) GetTokenRole(token string) string {
+	if !m.enabled {
+		return "admin"
+	}
+	hash := m.hashToken(token)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if info, ok := m.tokens[hash]; ok {
+		return info.Role
+	}
+	return ""
+}
+
+// CheckPermission returns true when the token is allowed to perform the given
+// SQL operation. The operation string should be the uppercased first keyword of
+// the statement (e.g. "SELECT", "INSERT", "CREATE TABLE").
+func (m *Manager) CheckPermission(token, operation string) bool {
+	if !m.enabled {
+		return true
+	}
+	role := m.GetTokenRole(token)
+	perms, ok := rolePermissions[role]
+	if !ok {
+		return false
+	}
+	for _, p := range perms {
+		if p == "*" || strings.EqualFold(p, operation) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) GetLabel(token string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if label, ok := m.tokens[m.hashToken(token)]; ok {
-		return label
+	if info, ok := m.tokens[m.hashToken(token)]; ok {
+		return info.Label
 	}
 	return "unknown"
 }

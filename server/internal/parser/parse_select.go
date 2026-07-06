@@ -234,22 +234,29 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 			isLateral = true
 		}
 		if p.current().Type == lexer.TOKEN_LPAREN || isLateral {
+			if err := p.checkDepth(); err != nil {
+				return nil, err
+			}
 			if p.current().Type == lexer.TOKEN_LPAREN {
 				p.advance() // consume '('
 			}
 			stmt, err := p.parseSelect()
 			if err != nil {
+				p.exitDepth()
 				return nil, fmt.Errorf("derived table: %w", err)
 			}
 			sub, ok := stmt.(*SelectStatement)
 			if !ok {
+				p.exitDepth()
 				return nil, fmt.Errorf("derived table: expected SELECT statement")
 			}
 			if !isLateral {
 				if err := p.consume(lexer.TOKEN_RPAREN, ")"); err != nil {
+					p.exitDepth()
 					return nil, err
 				}
 			}
+			p.exitDepth()
 			fromSubquery = sub
 			if isLateral {
 				sub.IsLateral = true

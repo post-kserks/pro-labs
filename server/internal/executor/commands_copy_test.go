@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -329,4 +330,47 @@ func TestDelimiterValidationAcceptsValidDelimiter(t *testing.T) {
 	// Multi-char up to 20 should work
 	validDelim := strings.Repeat("ab", 10) // 20 chars
 	executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (DELIMITER '"+validDelim+"');")
+}
+
+// --- COPY Row Limit Tests ---
+
+func TestCopyFromCSVRowLimitExceeded(t *testing.T) {
+	_, dataDir, relPath := setupCopyTable(t)
+
+	// Generate a CSV file with more rows than MaxCopyRows
+	var sb strings.Builder
+	for i := 0; i <= MaxCopyRows; i++ {
+		sb.WriteString(fmt.Sprintf("%d,User%d,%d,8.0,TRUE,Bio\n", i, i, 20+i%50))
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, relPath), []byte(sb.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := parser.Parse("COPY people FROM '" + relPath + "' WITH (FORMAT CSV);")
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	// The limit is checked at execution time, not parse time.
+	// Execute directly with a fresh session that has no MAX_COPY_ROWS override.
+	session2 := setupSession(t)
+	executeSQL(t, session2, "CREATE TABLE people (id INT, name VARCHAR(100), age INT, score FLOAT, active BOOL, bio TEXT);")
+	executeSQLExpectError(t, session2, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
+}
+
+func TestCopyFromCSVWithinLimit(t *testing.T) {
+	session, dataDir, relPath := setupCopyTable(t)
+
+	// Generate a CSV file with fewer rows than MaxCopyRows
+	var sb strings.Builder
+	for i := 0; i < 100; i++ {
+		sb.WriteString(fmt.Sprintf("%d,User%d,%d,8.0,TRUE,Bio\n", i, i, 20+i%50))
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, relPath), []byte(sb.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
+	if result.Affected != 100 {
+		t.Fatalf("expected 100 rows imported, got %d", result.Affected)
+	}
 }

@@ -99,7 +99,7 @@ func TestAddToken(t *testing.T) {
 		t.Fatal("newtoken should not validate before AddToken")
 	}
 
-	m.AddToken("newtoken", "newlabel")
+	m.AddToken("newtoken", "newlabel", "reader")
 
 	if !m.ValidateToken("newtoken") {
 		t.Fatal("newtoken should validate after AddToken")
@@ -158,5 +158,131 @@ func TestRateLimiterSweepBoundsMemory(t *testing.T) {
 	// Все старые записи (последняя попытка вне окна, не заблокированы) должны уйти.
 	if got := len(rl.attempts); got > 5 {
 		t.Fatalf("expected stale attempt entries to be swept, got %d", got)
+	}
+}
+
+// --- RBAC Tests ---
+
+func TestGenerateToken(t *testing.T) {
+	m, err := New(true, nil, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	token := m.GenerateToken("testuser", "reader")
+	if token == "" {
+		t.Fatal("GenerateToken returned empty token")
+	}
+	if !m.ValidateToken(token) {
+		t.Fatal("generated token should validate")
+	}
+	if label := m.GetLabel(token); label != "testuser" {
+		t.Fatalf("GetLabel = %q, want %q", label, "testuser")
+	}
+	if role := m.GetTokenRole(token); role != "reader" {
+		t.Fatalf("GetTokenRole = %q, want %q", role, "reader")
+	}
+}
+
+func TestCheckPermissionAdmin(t *testing.T) {
+	m, err := New(true, nil, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	token := m.GenerateToken("admin", "admin")
+
+	for _, op := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE TABLE", "DROP TABLE", "ALTER TABLE"} {
+		if !m.CheckPermission(token, op) {
+			t.Fatalf("admin should be allowed %s", op)
+		}
+	}
+}
+
+func TestCheckPermissionReader(t *testing.T) {
+	m, err := New(true, nil, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	token := m.GenerateToken("reader", "reader")
+
+	if !m.CheckPermission(token, "SELECT") {
+		t.Fatal("reader should be allowed SELECT")
+	}
+	if !m.CheckPermission(token, "EXPLAIN") {
+		t.Fatal("reader should be allowed EXPLAIN")
+	}
+	if m.CheckPermission(token, "INSERT") {
+		t.Fatal("reader should NOT be allowed INSERT")
+	}
+	if m.CheckPermission(token, "DELETE") {
+		t.Fatal("reader should NOT be allowed DELETE")
+	}
+	if m.CheckPermission(token, "CREATE TABLE") {
+		t.Fatal("reader should NOT be allowed CREATE TABLE")
+	}
+}
+
+func TestCheckPermissionWriter(t *testing.T) {
+	m, err := New(true, nil, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	token := m.GenerateToken("writer", "writer")
+
+	for _, op := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE TABLE", "DROP TABLE"} {
+		if !m.CheckPermission(token, op) {
+			t.Fatalf("writer should be allowed %s", op)
+		}
+	}
+}
+
+func TestCheckPermissionUnknownRole(t *testing.T) {
+	m, err := New(true, nil, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Manually inject a token with an invalid role
+	hash := m.hashToken("badrole")
+	m.mu.Lock()
+	m.tokens[hash] = &TokenInfo{Hash: hash, Label: "bad", Role: "superuser", CreatedAt: time.Now()}
+	m.mu.Unlock()
+
+	if m.CheckPermission("badrole", "SELECT") {
+		t.Fatal("unknown role should not have any permissions")
+	}
+}
+
+func TestCheckPermissionDisabledAuth(t *testing.T) {
+	m, err := New(false, nil, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// When auth is disabled, everything should be allowed
+	if !m.CheckPermission("anything", "DROP TABLE") {
+		t.Fatal("disabled auth should allow all operations")
+	}
+}
+
+func TestGetTokenRoleUnknown(t *testing.T) {
+	m, err := New(true, nil, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if role := m.GetTokenRole("nonexistent"); role != "" {
+		t.Fatalf("GetTokenRole for unknown token = %q, want empty", role)
+	}
+}
+
+func TestDefaultRoleIsAdmin(t *testing.T) {
+	m, err := New(true, map[string]string{"mytoken": "admin"}, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Pre-configured tokens should default to admin role
+	if role := m.GetTokenRole("mytoken"); role != "admin" {
+		t.Fatalf("default role = %q, want %q", role, "admin")
+	}
+	if !m.CheckPermission("mytoken", "DELETE") {
+		t.Fatal("default admin should be allowed DELETE")
 	}
 }

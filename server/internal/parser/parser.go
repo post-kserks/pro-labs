@@ -271,9 +271,30 @@ func parse(sql string) (Statement, error) {
 	return stmt, nil
 }
 
+const defaultMaxParserDepth = 32
+
 type sqlParser struct {
-	tokens []lexer.Token
-	pos    int
+	tokens   []lexer.Token
+	pos      int
+	depth    int
+	maxDepth int
+}
+
+func (p *sqlParser) checkDepth() error {
+	p.depth++
+	if p.maxDepth <= 0 {
+		p.maxDepth = defaultMaxParserDepth
+	}
+	if p.depth > p.maxDepth {
+		return fmt.Errorf("query too deeply nested (max depth %d)", p.maxDepth)
+	}
+	return nil
+}
+
+func (p *sqlParser) exitDepth() {
+	if p.depth > 0 {
+		p.depth--
+	}
 }
 
 func (p *sqlParser) parseStatement() (Statement, error) {

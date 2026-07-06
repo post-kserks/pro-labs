@@ -1,6 +1,9 @@
 package parser
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseValidStatements(t *testing.T) {
 	queries := []string{
@@ -3882,5 +3885,67 @@ func TestParseCreateTableNoPartition(t *testing.T) {
 	}
 	if create.PartitionBy != nil {
 		t.Error("expected PartitionBy to be nil for non-partitioned table")
+	}
+}
+
+// --- Parser Recursion Depth Limit Tests ---
+
+func TestParserDepthLimitSubquery(t *testing.T) {
+	// Build a deeply nested subquery: SELECT (SELECT (SELECT ... 1 ...))
+	depth := defaultMaxParserDepth + 5
+	query := ""
+	for i := 0; i < depth; i++ {
+		query += "SELECT ("
+	}
+	query += "1"
+	for i := 0; i < depth; i++ {
+		query += ")"
+	}
+	query += ";"
+
+	_, err := parse(query)
+	if err == nil {
+		t.Fatalf("expected depth limit error for %d nested subqueries", depth)
+	}
+	if !strings.Contains(err.Error(), "too deeply nested") {
+		t.Fatalf("expected 'too deeply nested' error, got: %v", err)
+	}
+}
+
+func TestParserDepthLimitExists(t *testing.T) {
+	// Build deeply nested EXISTS: SELECT * FROM t WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 ...))
+	depth := defaultMaxParserDepth + 5
+	query := "SELECT * FROM t WHERE "
+	for i := 0; i < depth; i++ {
+		query += "EXISTS (SELECT 1 WHERE "
+	}
+	query += "1=1"
+	for i := 0; i < depth; i++ {
+		query += ")"
+	}
+	query += ";"
+
+	_, err := parse(query)
+	if err == nil {
+		t.Fatalf("expected depth limit error for %d nested EXISTS", depth)
+	}
+	if !strings.Contains(err.Error(), "too deeply nested") {
+		t.Fatalf("expected 'too deeply nested' error, got: %v", err)
+	}
+}
+
+func TestParserDepthLimitWithinBounds(t *testing.T) {
+	// Queries within the depth limit should parse fine
+	query := "SELECT * FROM t WHERE x IN (SELECT id FROM t2 WHERE y IN (SELECT z FROM t3));"
+	_, err := Parse(query)
+	if err != nil {
+		t.Fatalf("Parse returned unexpected error: %v", err)
+	}
+}
+
+func TestParserDepthLimitDefault(t *testing.T) {
+	// Verify the default max depth is 32
+	if defaultMaxParserDepth != 32 {
+		t.Fatalf("defaultMaxParserDepth = %d, want 32", defaultMaxParserDepth)
 	}
 }
