@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"vaultdb/internal/index"
@@ -1391,3 +1392,89 @@ func TestDurabilityAfterCrash(t *testing.T) {
 		}
 	}
 }
+
+func TestConcurrentCrashMixedWorkload(t *testing.T) {
+	dir := t.TempDir()
+
+	walPath := dir + "/test.wal"
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txm := txmanager.NewManager()
+	store, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "concurrent_test",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "value", Type: "TEXT"},
+		},
+	}
+	if err := store.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start concurrent inserts
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				row := Row{int64(id*1000 + j), fmt.Sprintf("value-%d-%d", id, j)}
+				if _, err := store.InsertRows("testdb", "concurrent_test", []Row{row}); err != nil {
+					t.Errorf("insert failed: %v", err)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// Verify data survived before crash
+	count, err := store.CountRows("testdb", "concurrent_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 500 {
+		t.Fatalf("expected 500 rows, got %d", count)
+	}
+
+	// Simulate crash: close WAL without checkpoint
+	w.Close()
+
+	// Reopen and verify
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	store2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store2.RecoverFromWAL(); err != nil {
+		t.Fatal(err)
+	}
+
+	count2, err := store2.CountRows("testdb", "concurrent_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count2 != 500 {
+		t.Fatalf("after crash recovery: expected 500 rows, got %d", count2)
+	}
+}
+
+// Note: WASM crash testing is covered in internal/wasmudf/runtime_test.go
+// (TestWASMExecutionAndCleanup), since the storage package does not depend on wasmudf.

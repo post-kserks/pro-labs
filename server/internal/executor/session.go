@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/audit"
 	"vaultdb/internal/logging"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
@@ -26,6 +27,7 @@ type Session struct {
 	TxManager   *txmanager.Manager
 	Broadcaster *Broadcaster
 	AuditLog    *logging.AuditLogger
+	AuditTable  *audit.TableLog
 
 	PreparedStatements map[string]*PreparedStatement
 	planCache          *PlanCache
@@ -256,5 +258,17 @@ func (s *Session) Reset() {
 	if s.executor != nil {
 		s.executor.SetMaxRows(0)
 		s.executor.SetQueryTimeout(0)
+	}
+}
+
+// LogAudit appends an entry to the table-based audit log.
+func (s *Session) LogAudit(actor, action, target, detail string) {
+	if s.AuditTable != nil {
+		s.AuditTable.Append(audit.Entry{
+			Actor:  actor,
+			Action: action,
+			Target: target,
+			Detail: detail,
+		})
 	}
 }

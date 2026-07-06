@@ -65,6 +65,9 @@ func newSessionWithConfig(cfg Config) *executor.Session {
 	if cfg.ResultCacheSize > 0 {
 		sess.SetResultCacheConfig(cfg.ResultCacheSize, cfg.ResultCacheTTLSec)
 	}
+	if cfg.AuditTable != nil {
+		sess.AuditTable = cfg.AuditTable
+	}
 	return sess
 }
 
@@ -91,14 +94,18 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Params) > 0 {
-		query = applyParams(query, req.Params)
-	}
-
 	stmt, err := parser.Parse(query)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, errCodeParseError, err.Error())
 		return
+	}
+
+	if len(req.Params) > 0 {
+		stmt, err = bindHTTPParams(stmt, req.Params)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errCodeBadRequest, err.Error())
+			return
+		}
 	}
 
 	_, isTx := stmt.(*parser.BeginStatement)
@@ -284,10 +291,6 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if len(q.Params) > 0 {
-			query = applyParams(query, q.Params)
-		}
-
 		stmt, err := parser.Parse(query)
 		if err != nil {
 			results = append(results, BatchResponseResult{
@@ -295,6 +298,17 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 				Error:  err.Error(),
 			})
 			continue
+		}
+
+		if len(q.Params) > 0 {
+			stmt, err = bindHTTPParams(stmt, q.Params)
+			if err != nil {
+				results = append(results, BatchResponseResult{
+					Status: "error",
+					Error:  err.Error(),
+				})
+				continue
+			}
 		}
 
 		switch stmt.(type) {
@@ -1009,16 +1023,28 @@ func parseHTTPRowValue(v interface{}) storage.Value {
 	}
 }
 
-func isNumeric(s string) bool {
-	if len(s) == 0 {
-		return false
+func convertHTTPParam(val string) parser.Value {
+	if i, err := strconv.ParseInt(val, 10, 64); err == nil {
+		return parser.Value{Type: "int", IntVal: i}
 	}
-	// Don't treat +7999 as numeric — SQL doesn't accept +prefix literals
-	if s[0] == '+' {
-		return false
+	if f, err := strconv.ParseFloat(val, 64); err == nil {
+		return parser.Value{Type: "float", FltVal: f}
 	}
-	_, err := strconv.ParseFloat(s, 64)
-	return err == nil
+	if val == "true" {
+		return parser.Value{Type: "bool", BoolVal: true}
+	}
+	if val == "false" {
+		return parser.Value{Type: "bool", BoolVal: false}
+	}
+	return parser.Value{Type: "string", StrVal: val}
+}
+
+func bindHTTPParams(stmt parser.Statement, params []string) (parser.Statement, error) {
+	values := make([]parser.Value, len(params))
+	for i, p := range params {
+		values[i] = convertHTTPParam(p)
+	}
+	return executor.BindParams(stmt, values)
 }
 
 func convertRowValue(value string, colType string) interface{} {
@@ -1073,71 +1099,4 @@ func generateSessionID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%x", b)
-}
-
-func applyParams(query string, params []string) string {
-	var buf strings.Builder
-	inString := false
-	quoteChar := byte(0)
-	escaped := false
-
-	for i := 0; i < len(query); i++ {
-		c := query[i]
-
-		if escaped {
-			buf.WriteByte(c)
-			escaped = false
-			continue
-		}
-
-		if c == '\\' && inString {
-			buf.WriteByte(c)
-			escaped = true
-			continue
-		}
-
-		if inString {
-			buf.WriteByte(c)
-			if c == quoteChar {
-				inString = false
-			}
-			continue
-		}
-
-		if c == '\'' || c == '"' {
-			inString = true
-			quoteChar = c
-			buf.WriteByte(c)
-			continue
-		}
-
-		if c == '$' && i+1 < len(query) {
-			j := i + 1
-			for j < len(query) && query[j] >= '0' && query[j] <= '9' {
-				j++
-			}
-			if j > i+1 {
-				numStr := query[i+1 : j]
-				idx, err := strconv.Atoi(numStr)
-				if err == nil && idx >= 1 && idx <= len(params) {
-					val := params[idx-1]
-					if isNumeric(val) {
-						buf.WriteString(val)
-					} else {
-						val = strings.ReplaceAll(val, `\`, `\\`)
-						val = strings.ReplaceAll(val, "'", "\\'")
-						buf.WriteByte('\'')
-						buf.WriteString(val)
-						buf.WriteByte('\'')
-					}
-					i = j - 1
-					continue
-				}
-			}
-		}
-
-		buf.WriteByte(c)
-	}
-
-	return buf.String()
 }

@@ -1017,3 +1017,142 @@ func TestInsertOrReplaceMultipleRows(t *testing.T) {
 		t.Errorf("expected name='Dave' for id=3, got '%s'", result.Rows[2][1])
 	}
 }
+
+func TestDistinctOn(t *testing.T) {
+	session := setupSession(t)
+
+	// Create table with duplicate names
+	executeSQL(t, session, "CREATE TABLE people (id INT, name VARCHAR(50), city VARCHAR(50));")
+	executeSQL(t, session, "INSERT INTO people VALUES (1, 'Alice', 'NYC');")
+	executeSQL(t, session, "INSERT INTO people VALUES (2, 'Alice', 'LA');")
+	executeSQL(t, session, "INSERT INTO people VALUES (3, 'Bob', 'NYC');")
+	executeSQL(t, session, "INSERT INTO people VALUES (4, 'Bob', 'Chicago');")
+	executeSQL(t, session, "INSERT INTO people VALUES (5, 'Charlie', 'NYC');")
+
+	// DISTINCT ON (name) should return 3 rows (one per name)
+	result := executeSQL(t, session, "SELECT DISTINCT ON (name) name, city FROM people ORDER BY name, id;")
+	if len(result.Rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "Alice" || result.Rows[0][1] != "NYC" {
+		t.Errorf("expected (Alice, NYC), got (%s, %s)", result.Rows[0][0], result.Rows[0][1])
+	}
+	if result.Rows[1][0] != "Bob" || result.Rows[1][1] != "NYC" {
+		t.Errorf("expected (Bob, NYC), got (%s, %s)", result.Rows[1][0], result.Rows[1][1])
+	}
+	if result.Rows[2][0] != "Charlie" || result.Rows[2][1] != "NYC" {
+		t.Errorf("expected (Charlie, NYC), got (%s, %s)", result.Rows[2][0], result.Rows[2][1])
+	}
+}
+
+func TestDistinctOnMultipleColumns(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE items (id INT, category VARCHAR(50), status VARCHAR(50));")
+	executeSQL(t, session, "INSERT INTO items VALUES (1, 'A', 'active');")
+	executeSQL(t, session, "INSERT INTO items VALUES (2, 'A', 'active');")
+	executeSQL(t, session, "INSERT INTO items VALUES (3, 'A', 'inactive');")
+	executeSQL(t, session, "INSERT INTO items VALUES (4, 'B', 'active');")
+
+	// DISTINCT ON (category, status) should return 3 rows
+	result := executeSQL(t, session, "SELECT DISTINCT ON (category, status) category, status FROM items ORDER BY category, status;")
+	if len(result.Rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(result.Rows))
+	}
+}
+
+func TestJSONBContainsOperatorInWhere(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE events (id INT, data JSONB);")
+	executeSQL(t, session, `INSERT INTO events VALUES (1, '{"type": "click", "page": "home"}');`)
+	executeSQL(t, session, `INSERT INTO events VALUES (2, '{"type": "scroll", "page": "home"}');`)
+	executeSQL(t, session, `INSERT INTO events VALUES (3, '{"type": "click", "page": "about"}');`)
+
+	// @> operator in WHERE
+	result := executeSQL(t, session, `SELECT * FROM events WHERE data @> '{"type": "click"}';`)
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.Rows))
+	}
+}
+
+func TestJSONBHasKeyOperatorInWhere(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE configs (id INT, settings JSONB);")
+	executeSQL(t, session, `INSERT INTO configs VALUES (1, '{"theme": "dark", "lang": "en"}');`)
+	executeSQL(t, session, `INSERT INTO configs VALUES (2, '{"lang": "fr"}');`)
+	executeSQL(t, session, `INSERT INTO configs VALUES (3, '{"theme": "light"}');`)
+
+	// ? operator in WHERE
+	result := executeSQL(t, session, `SELECT * FROM configs WHERE settings ? 'theme';`)
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.Rows))
+	}
+}
+
+func TestJSONBArrowOperators(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE docs (id INT, data JSONB);")
+	executeSQL(t, session, `INSERT INTO docs VALUES (1, '{"name": "Alice", "age": 30}');`)
+	executeSQL(t, session, `INSERT INTO docs VALUES (2, '{"name": "Bob", "age": 25}');`)
+
+	// -> operator (returns JSON value)
+	result := executeSQL(t, session, `SELECT data->'name' FROM docs ORDER BY id;`)
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.Rows))
+	}
+
+	// ->> operator (returns text)
+	result = executeSQL(t, session, `SELECT data->>'name' FROM docs ORDER BY id;`)
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "Alice" {
+		t.Errorf("expected 'Alice', got '%s'", result.Rows[0][0])
+	}
+	if result.Rows[1][0] != "Bob" {
+		t.Errorf("expected 'Bob', got '%s'", result.Rows[1][0])
+	}
+}
+
+func TestJSONBContainsInSelect(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE records (id INT, data JSONB);")
+	executeSQL(t, session, `INSERT INTO records VALUES (1, '{"active": true}');`)
+	executeSQL(t, session, `INSERT INTO records VALUES (2, '{"active": false}');`)
+
+	// @> operator in SELECT expression
+	result := executeSQL(t, session, `SELECT data @> '{"active": true}' FROM records ORDER BY id;`)
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "true" {
+		t.Errorf("expected 'true', got '%s'", result.Rows[0][0])
+	}
+	if result.Rows[1][0] != "false" {
+		t.Errorf("expected 'false', got '%s'", result.Rows[1][0])
+	}
+}
+
+func TestJSONBHasKeyInSelect(t *testing.T) {
+	session := setupSession(t)
+
+	executeSQL(t, session, "CREATE TABLE records (id INT, data JSONB);")
+	executeSQL(t, session, `INSERT INTO records VALUES (1, '{"name": "Alice"}');`)
+	executeSQL(t, session, `INSERT INTO records VALUES (2, '{"age": 30}');`)
+
+	// ? operator in SELECT expression
+	result := executeSQL(t, session, `SELECT data ? 'name' FROM records ORDER BY id;`)
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "true" {
+		t.Errorf("expected 'true', got '%s'", result.Rows[0][0])
+	}
+	if result.Rows[1][0] != "false" {
+		t.Errorf("expected 'false', got '%s'", result.Rows[1][0])
+	}
+}

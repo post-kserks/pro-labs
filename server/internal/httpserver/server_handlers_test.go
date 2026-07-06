@@ -1440,68 +1440,167 @@ func (f *flushResponseWriter) Flush() {}
 
 func TestApplyParamsMixedTypes(t *testing.T) {
 	tests := []struct {
-		name   string
-		query  string
-		params []string
-		want   string
+		name      string
+		query     string
+		params    []string
+		wantType  string
+		wantValue interface{}
 	}{
 		{
-			name:   "string param is quoted",
-			query:  "SELECT * FROM t WHERE name = $1;",
-			params: []string{"Alice"},
-			want:   "SELECT * FROM t WHERE name = 'Alice';",
+			name:      "string param",
+			query:     "SELECT * FROM t WHERE name = $1;",
+			params:    []string{"Alice"},
+			wantType:  "string",
+			wantValue: "Alice",
 		},
 		{
-			name:   "integer param is not quoted",
-			query:  "SELECT * FROM t WHERE id = $1;",
-			params: []string{"42"},
-			want:   "SELECT * FROM t WHERE id = 42;",
+			name:      "integer param",
+			query:     "SELECT * FROM t WHERE id = $1;",
+			params:    []string{"42"},
+			wantType:  "int",
+			wantValue: int64(42),
 		},
 		{
-			name:   "float param is not quoted",
-			query:  "SELECT * FROM t WHERE val = $1;",
-			params: []string{"3.14"},
-			want:   "SELECT * FROM t WHERE val = 3.14;",
+			name:      "float param",
+			query:     "SELECT * FROM t WHERE val = $1;",
+			params:    []string{"3.14"},
+			wantType:  "float",
+			wantValue: 3.14,
 		},
 		{
-			name:   "negative integer is not quoted",
-			query:  "SELECT * FROM t WHERE id = $1;",
-			params: []string{"-5"},
-			want:   "SELECT * FROM t WHERE id = -5;",
+			name:      "negative integer",
+			query:     "SELECT * FROM t WHERE id = $1;",
+			params:    []string{"-5"},
+			wantType:  "int",
+			wantValue: int64(-5),
 		},
 		{
-			name:   "mixed types",
-			query:  "SELECT * FROM t WHERE id = $1 AND name = $2 AND val = $3;",
-			params: []string{"7", "Bob", "2.5"},
-			want:   "SELECT * FROM t WHERE id = 7 AND name = 'Bob' AND val = 2.5;",
+			name:      "zero",
+			query:     "SELECT * FROM t WHERE id = $1;",
+			params:    []string{"0"},
+			wantType:  "int",
+			wantValue: int64(0),
 		},
 		{
-			name:   "string with special chars stays quoted",
-			query:  "SELECT * FROM t WHERE name = $1;",
-			params: []string{"it's a test"},
-			want:   "SELECT * FROM t WHERE name = 'it\\'s a test';",
+			name:      "negative float",
+			query:     "SELECT * FROM t WHERE val = $1;",
+			params:    []string{"-1.5"},
+			wantType:  "float",
+			wantValue: -1.5,
 		},
 		{
-			name:   "zero is not quoted",
-			query:  "SELECT * FROM t WHERE id = $1;",
-			params: []string{"0"},
-			want:   "SELECT * FROM t WHERE id = 0;",
+			name:      "boolean true",
+			query:     "SELECT * FROM t WHERE active = $1;",
+			params:    []string{"true"},
+			wantType:  "bool",
+			wantValue: true,
 		},
 		{
-			name:   "negative float is not quoted",
-			query:  "SELECT * FROM t WHERE val = $1;",
-			params: []string{"-1.5"},
-			want:   "SELECT * FROM t WHERE val = -1.5;",
+			name:      "boolean false",
+			query:     "SELECT * FROM t WHERE active = $1;",
+			params:    []string{"false"},
+			wantType:  "bool",
+			wantValue: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := applyParams(tt.query, tt.params)
-			if got != tt.want {
-				t.Errorf("applyParams(%q, %v) = %q, want %q", tt.query, tt.params, got, tt.want)
+			stmt, err := parser.Parse(tt.query)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			bound, err := bindHTTPParams(stmt, tt.params)
+			if err != nil {
+				t.Fatalf("bindHTTPParams: %v", err)
+			}
+
+			// Extract the bound value from the WHERE clause
+			sel, ok := bound.(*parser.SelectStatement)
+			if !ok {
+				t.Fatalf("expected SelectStatement, got %T", bound)
+			}
+			bin, ok := sel.Where.(*parser.BinaryExpr)
+			if !ok {
+				t.Fatalf("expected BinaryExpr in WHERE, got %T", sel.Where)
+			}
+			val, ok := bin.Right.(*parser.Value)
+			if !ok {
+				t.Fatalf("expected Value on right side, got %T", bin.Right)
+			}
+			if val.Type != tt.wantType {
+				t.Errorf("type = %q, want %q", val.Type, tt.wantType)
+			}
+			switch tt.wantType {
+			case "int":
+				if val.IntVal != tt.wantValue.(int64) {
+					t.Errorf("IntVal = %v, want %v", val.IntVal, tt.wantValue)
+				}
+			case "float":
+				if val.FltVal != tt.wantValue.(float64) {
+					t.Errorf("FltVal = %v, want %v", val.FltVal, tt.wantValue)
+				}
+			case "string":
+				if val.StrVal != tt.wantValue.(string) {
+					t.Errorf("StrVal = %q, want %q", val.StrVal, tt.wantValue)
+				}
+			case "bool":
+				if val.BoolVal != tt.wantValue.(bool) {
+					t.Errorf("BoolVal = %v, want %v", val.BoolVal, tt.wantValue)
+				}
 			}
 		})
+	}
+}
+
+func TestBindHTTPParamsMixedTypes(t *testing.T) {
+	query := "SELECT * FROM t WHERE id = $1 AND name = $2 AND val = $3;"
+	params := []string{"7", "Bob", "2.5"}
+
+	stmt, err := parser.Parse(query)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	bound, err := bindHTTPParams(stmt, params)
+	if err != nil {
+		t.Fatalf("bindHTTPParams: %v", err)
+	}
+
+	sel, ok := bound.(*parser.SelectStatement)
+	if !ok {
+		t.Fatalf("expected SelectStatement, got %T", bound)
+	}
+	// WHERE is (id = $1 AND name = $2) AND val = $3
+	// The AND is left-associative, so outer AND has val=$3 on right
+	outerAnd, ok := sel.Where.(*parser.AndExpr)
+	if !ok {
+		t.Fatalf("expected AndExpr at top, got %T", sel.Where)
+	}
+	rightVal, ok := outerAnd.Right.(*parser.BinaryExpr)
+	if !ok {
+		t.Fatalf("expected BinaryExpr on right, got %T", outerAnd.Right)
+	}
+	val3, ok := rightVal.Right.(*parser.Value)
+	if !ok {
+		t.Fatalf("expected Value for $3, got %T", rightVal.Right)
+	}
+	if val3.Type != "float" || val3.FltVal != 2.5 {
+		t.Errorf("$3 = %v %v, want float 2.5", val3.Type, val3.FltVal)
+	}
+}
+
+func TestBindHTTPParamsEmptyParams(t *testing.T) {
+	query := "SELECT * FROM t WHERE id = 1;"
+	stmt, err := parser.Parse(query)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	bound, err := bindHTTPParams(stmt, nil)
+	if err != nil {
+		t.Fatalf("bindHTTPParams: %v", err)
+	}
+	if bound == nil {
+		t.Fatal("expected non-nil statement")
 	}
 }
 

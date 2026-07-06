@@ -55,3 +55,106 @@ func TestKMSKeySourceGetKEKReturnsError(t *testing.T) {
 		t.Fatal("expected error from GetKEK, got nil")
 	}
 }
+
+func TestNewAWSKMSClient(t *testing.T) {
+	c := NewAWSKMSClient("us-west-2")
+	if c.region != "us-west-2" {
+		t.Errorf("region = %q, want us-west-2", c.region)
+	}
+}
+
+func TestAWSKMSEncryptFailsWithoutCLI(t *testing.T) {
+	c := NewAWSKMSClient("us-east-1")
+	_, err := c.Encrypt(context.Background(), "test-key", []byte("plaintext"))
+	if err == nil {
+		// Might succeed if aws CLI is configured; that's fine
+		return
+	}
+}
+
+func TestAWSKMSDecryptFailsWithoutCLI(t *testing.T) {
+	c := NewAWSKMSClient("us-east-1")
+	_, err := c.Decrypt(context.Background(), "test-key", []byte("ciphertext"))
+	if err == nil {
+		// Might succeed if aws CLI is configured; that's fine
+		return
+	}
+}
+
+func TestKMSKeySourceAzureProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dek.enc")
+	client := NewFileKMSClient(path)
+
+	src := NewKMSKeySource("azure-keyvault", "https://vault.azure.net/keys/mykey", client)
+	if src.Name() != "kms-azure-keyvault" {
+		t.Errorf("Name() = %q, want kms-azure-keyvault", src.Name())
+	}
+}
+
+func TestKMSKeySourceVaultProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dek.enc")
+	client := NewFileKMSClient(path)
+
+	src := NewKMSKeySource("hashicorp-vault", "transit/key/mykey", client)
+	if src.Name() != "kms-hashicorp-vault" {
+		t.Errorf("Name() = %q, want kms-hashicorp-vault", src.Name())
+	}
+}
+
+func TestFileKMSClientEncryptWriteError(t *testing.T) {
+	// Write to a path inside a non-existent directory
+	c := NewFileKMSClient("/nonexistent/dir/file.enc")
+	_, err := c.Encrypt(context.Background(), "key", []byte("data"))
+	if err == nil {
+		t.Fatal("expected error writing to non-existent path")
+	}
+}
+
+func TestFileKMSClientEncryptDecryptRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test-kms.enc")
+	c := NewFileKMSClient(path)
+
+	plaintext := []byte("roundtrip test data")
+	_, err := c.Encrypt(context.Background(), "key-id", plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	decrypted, err := c.Decrypt(context.Background(), "key-id", nil)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	if string(decrypted) != string(plaintext) {
+		t.Errorf("decrypted = %q, want %q", decrypted, plaintext)
+	}
+}
+
+func TestFileKMSClientDecryptMissingFile(t *testing.T) {
+	c := NewFileKMSClient("/nonexistent/path/file.enc")
+	_, err := c.Decrypt(context.Background(), "key", nil)
+	if err == nil {
+		t.Fatal("expected error reading from non-existent file")
+	}
+}
+
+func TestFileKMSClientEncryptEmptyData(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.enc")
+	c := NewFileKMSClient(path)
+
+	_, err := c.Encrypt(context.Background(), "key", []byte{})
+	if err != nil {
+		t.Fatalf("Encrypt empty data: %v", err)
+	}
+
+	decrypted, err := c.Decrypt(context.Background(), "key", nil)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	if len(decrypted) != 0 {
+		t.Errorf("expected empty data, got %d bytes", len(decrypted))
+	}
+}

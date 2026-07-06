@@ -133,6 +133,8 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 		return evalCase(e, row, schema, ctx)
 	case *parser.JsonPathExpr:
 		return evalJsonPath(e, row, schema, ctx)
+	case *parser.JSONAccess:
+		return evalJSONAccess(e, row, schema, ctx)
 	case *parser.BetweenExpr:
 		return evalBetweenExpr(e, row, schema, ctx)
 	case *parser.ExistsExpr:

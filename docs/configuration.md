@@ -33,6 +33,9 @@ storage:
   data_dir: "./data"
   result_cache_size: 256
   result_cache_ttl_seconds: 30
+  buffer_pool_pages: 16384  # 128 MB (default)
+  # For large deployments:
+  # buffer_pool_pages: 65536  # 512 MB
 
 auth:
   enabled: true
@@ -48,6 +51,9 @@ encryption:
   default_scope: "all"           # all | tables_only | off
   encrypt_catalog: false
   encrypt_wal: true
+
+# WASM UDF functions are configured via SQL, not YAML.
+# Memory limits and timeouts are per-function.
 
 ai:
   provider: ""
@@ -198,6 +204,12 @@ ai:
 - **Type**: integer
 - **Default**: `30`
 - **Description**: Time-to-live for cached query results in seconds.
+
+### `storage.buffer_pool_pages`
+
+- **Type**: integer
+- **Default**: `16384` (128 MB)
+- **Description**: Number of 8KB pages in the buffer pool. Increase for large datasets (e.g., `65536` for 512 MB).
 
 ## Authentication Options
 

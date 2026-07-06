@@ -6,6 +6,29 @@ import (
 	"strings"
 )
 
+// CommandRunner executes shell commands. Default uses real exec.Command.
+type CommandRunner interface {
+	Output(name string, args ...string) ([]byte, error)
+}
+
+type realCommandRunner struct{}
+
+func (r *realCommandRunner) Output(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
+
+var defaultRunner CommandRunner = &realCommandRunner{}
+
+// SetCommandRunner overrides the command runner for testing.
+func SetCommandRunner(r CommandRunner) {
+	defaultRunner = r
+}
+
+// ResetCommandRunner restores the default command runner.
+func ResetCommandRunner() {
+	defaultRunner = &realCommandRunner{}
+}
+
 type EncryptionStatus struct {
 	Encrypted  bool
 	Mechanism  string // "LUKS" | "FileVault" | "BitLocker" | "none"
@@ -13,34 +36,35 @@ type EncryptionStatus struct {
 }
 
 func DetectDiskEncryption(path string) (*EncryptionStatus, error) {
-	switch runtime.GOOS {
+	return detectDiskEncryptionForOS(path, runtime.GOOS, defaultRunner)
+}
+
+func detectDiskEncryptionForOS(path, goos string, runner CommandRunner) (*EncryptionStatus, error) {
+	switch goos {
 	case "linux":
-		return detectLUKS(path)
+		return detectLUKS(runner)
 	case "darwin":
-		return detectFileVault()
+		return detectFileVault(runner)
 	case "windows":
-		return detectBitLocker(path)
+		return detectBitLocker(runner)
 	default:
 		return &EncryptionStatus{Encrypted: false, Mechanism: "none"}, nil
 	}
 }
 
-func detectLUKS(path string) (*EncryptionStatus, error) {
-	cmd := exec.Command("lsblk", "-no", "FSTYPE", "-J")
-	out, err := cmd.Output()
+func detectLUKS(runner CommandRunner) (*EncryptionStatus, error) {
+	out, err := runner.Output("lsblk", "-no", "FSTYPE", "-J")
 	if err != nil {
 		return &EncryptionStatus{Encrypted: false, Mechanism: "none"}, nil
 	}
-	output := string(out)
-	if strings.Contains(output, "crypto_LUKS") {
+	if strings.Contains(string(out), "crypto_LUKS") {
 		return &EncryptionStatus{Encrypted: true, Mechanism: "LUKS"}, nil
 	}
 	return &EncryptionStatus{Encrypted: false, Mechanism: "none"}, nil
 }
 
-func detectFileVault() (*EncryptionStatus, error) {
-	cmd := exec.Command("fdesetup", "status")
-	out, err := cmd.Output()
+func detectFileVault(runner CommandRunner) (*EncryptionStatus, error) {
+	out, err := runner.Output("fdesetup", "status")
 	if err != nil {
 		return &EncryptionStatus{Encrypted: false, Mechanism: "none"}, nil
 	}
@@ -50,9 +74,8 @@ func detectFileVault() (*EncryptionStatus, error) {
 	return &EncryptionStatus{Encrypted: false, Mechanism: "none"}, nil
 }
 
-func detectBitLocker(path string) (*EncryptionStatus, error) {
-	cmd := exec.Command("manage-bde", "-status")
-	out, err := cmd.Output()
+func detectBitLocker(runner CommandRunner) (*EncryptionStatus, error) {
+	out, err := runner.Output("manage-bde", "-status")
 	if err != nil {
 		return &EncryptionStatus{Encrypted: false, Mechanism: "none"}, nil
 	}

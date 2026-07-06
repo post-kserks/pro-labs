@@ -1,0 +1,155 @@
+VaultDB Benchmark Baseline
+==========================
+Date: 2026-07-05
+Go version: go1.25.7 darwin/arm64
+OS: macOS (darwin/arm64)
+CPU: Apple M4 (10 cores)
+Benchmarks: -count=5 -benchmem
+
+=== REGULAR BENCHMARK SUITE (benchmarks/) ===
+
+BenchmarkInsertSingle-10:
+  Run 1:  240819 ns/op    69533 B/op     144 allocs/op
+  Run 2:  259682 ns/op    65348 B/op     132 allocs/op
+  Run 3:  269225 ns/op    65190 B/op     131 allocs/op
+  Run 4:  260736 ns/op    65391 B/op     130 allocs/op
+  Run 5:  258216 ns/op    64821 B/op     130 allocs/op
+  Median: 258216 ns/op    65348 B/op     131 allocs/op
+
+BenchmarkInsertBatch100-10:
+  Run 1: 10232031 ns/op   388151 B/op    4779 allocs/op
+  Run 2: 10036992 ns/op   387414 B/op    4777 allocs/op
+  Run 3: 12079805 ns/op   387584 B/op    4777 allocs/op
+  Run 4: 11463537 ns/op   387486 B/op    4777 allocs/op
+  Run 5: 11637344 ns/op   387511 B/op    4777 allocs/op
+  Median: 11463537 ns/op  387511 B/op    4777 allocs/op
+
+BenchmarkInsertBatch1000-10:
+  Run 1: 118716602 ns/op 4010595 B/op   47816 allocs/op
+  Run 2: 112240380 ns/op 3998262 B/op   47814 allocs/op
+  Run 3:  94456729 ns/op 3979309 B/op   47836 allocs/op
+  Run 4:  91773260 ns/op 3981742 B/op   47843 allocs/op
+  Run 5:  93423731 ns/op 3979179 B/op   47843 allocs/op
+  Median: 94456729 ns/op 3979309 B/op   47836 allocs/op
+
+BenchmarkSelectScan-10:
+  Run 1:  212055 ns/op   305439 B/op     7717 allocs/op
+  Run 2:  203718 ns/op   305435 B/op     7717 allocs/op
+  Run 3:  211053 ns/op   305438 B/op     7717 allocs/op
+  Run 4:  208612 ns/op   305434 B/op     7717 allocs/op
+  Run 5:  202025 ns/op   305436 B/op     7717 allocs/op
+  Median: 208612 ns/op   305436 B/op     7717 allocs/op
+
+BenchmarkSelectWhere-10:
+  Run 1:   42507 ns/op    98076 B/op     2357 allocs/op
+  Run 2:   39922 ns/op    97965 B/op     2352 allocs/op
+  Run 3:   39616 ns/op    98110 B/op     2360 allocs/op
+  Run 4:   63609 ns/op    98066 B/op     2357 allocs/op
+  Run 5:   42867 ns/op    98040 B/op     2356 allocs/op
+  Median:  42507 ns/op    98076 B/op     2357 allocs/op
+
+BenchmarkSelectJoin-10:
+  Run 1:  237765 ns/op   418346 B/op     8602 allocs/op
+  Run 2:  227015 ns/op   418346 B/op     8602 allocs/op
+  Run 3:  210148 ns/op   418346 B/op     8602 allocs/op
+  Run 4:  227966 ns/op   418347 B/op     8602 allocs/op
+  Run 5:  216839 ns/op   418346 B/op     8602 allocs/op
+  Median: 227015 ns/op   418346 B/op     8602 allocs/op
+
+BenchmarkUpdateSingle-10:
+  Run 1: 1495484 ns/op   874666 B/op    40314 allocs/op
+  Run 2:  986817 ns/op   570673 B/op    24615 allocs/op
+  Run 3: 1230059 ns/op   918587 B/op    42582 allocs/op
+  Run 4: 1233526 ns/op   566334 B/op    24392 allocs/op
+  Run 5: 1153436 ns/op   571604 B/op    24663 allocs/op
+  Median: 1230059 ns/op  571604 B/op    24663 allocs/op
+
+BenchmarkDeleteSingle-10:
+  Run 1: 1182267 ns/op   543423 B/op    20728 allocs/op
+  Run 2:  522677 ns/op   511927 B/op    20481 allocs/op
+  Run 3: 1347573 ns/op   510470 B/op    20469 allocs/op
+  Run 4: 1353017 ns/op   564172 B/op    20785 allocs/op
+  Run 5: 1478935 ns/op   573125 B/op    20721 allocs/op
+  Median: 1347573 ns/op  543423 B/op    20728 allocs/op
+
+BenchmarkTransaction10-10:
+  Run 1:  5065560 ns/op  5206962 B/op  229335 allocs/op
+  Run 2: 11057876 ns/op  7525459 B/op  348681 allocs/op
+  Run 3:  7013118 ns/op  3449424 B/op  139245 allocs/op
+  Run 4:  8116449 ns/op  3232251 B/op  127993 allocs/op
+  Run 5:  8850793 ns/op  7482739 B/op  346432 allocs/op
+  Median: 8116449 ns/op  5206962 B/op  229335 allocs/op
+
+BenchmarkConcurrentInserts-10:
+  Run 1:  2606929 ns/op  662019 B/op     1316 allocs/op
+  Run 2:  2610820 ns/op  657298 B/op     1305 allocs/op
+  Run 3:  2645076 ns/op  661983 B/op     1313 allocs/op
+  Run 4:  2306123 ns/op  657698 B/op     1310 allocs/op
+  Run 5:  2716089 ns/op  663519 B/op     1321 allocs/op
+  Median: 2610820 ns/op  661983 B/op     1313 allocs/op
+
+=== STRESS BENCHMARK SUITE (benchmark/) ===
+
+BenchmarkInsertSingle-10:
+  Run 1:  263354 ns/op    65761 B/op     130 allocs/op
+  Run 2:  276096 ns/op    65321 B/op     129 allocs/op
+  Run 3:  291273 ns/op    64968 B/op     129 allocs/op
+  Run 4:  276311 ns/op    65552 B/op     128 allocs/op
+  Run 5:  361766 ns/op    63485 B/op     123 allocs/op
+  Median: 276096 ns/op    65321 B/op     129 allocs/op
+
+BenchmarkInsertBatch-10:
+  Run 1: 12326472 ns/op  389268 B/op     4782 allocs/op
+  Run 2: 12130648 ns/op  389899 B/op     4777 allocs/op
+  Run 3: 12753795 ns/op  389794 B/op     4778 allocs/op
+  Run 4: 13021871 ns/op  389564 B/op     4778 allocs/op
+  Run 5: 12604798 ns/op  389845 B/op     4778 allocs/op
+  Median: 12604798 ns/op  389845 B/op    4778 allocs/op
+
+BenchmarkSelectFullScan-10:
+  Run 1: 2189949 ns/op 3025294 B/op    79741 allocs/op
+  Run 2: 2187518 ns/op 3025885 B/op    79743 allocs/op
+  Run 3: 2353245 ns/op 3025282 B/op    79741 allocs/op
+  Run 4: 2196455 ns/op 3025633 B/op    79742 allocs/op
+  Run 5: 2212329 ns/op 3025262 B/op    79741 allocs/op
+  Median: 2196455 ns/op 3025294 B/op   79741 allocs/op
+
+BenchmarkSelectIndexed-10:
+  Run 1:  302428 ns/op  419387 B/op    20551 allocs/op
+  Run 2:  305396 ns/op  468835 B/op    23361 allocs/op
+  Run 3:  309010 ns/op  461481 B/op    22944 allocs/op
+  Run 4:  296851 ns/op  432239 B/op    21281 allocs/op
+  Run 5:  273056 ns/op  420926 B/op    20646 allocs/op
+  Median: 302428 ns/op  432239 B/op    21281 allocs/op
+
+BenchmarkUpdateSingle-10:
+  Run 1: 2530223 ns/op 3803264 B/op   157380 allocs/op
+  Run 2: 2508757 ns/op 3802834 B/op   157338 allocs/op
+  Run 3: 2504186 ns/op 3803866 B/op   157442 allocs/op
+  Run 4: 2507306 ns/op 3796829 B/op   156734 allocs/op
+  Run 5: 2518720 ns/op 3800718 B/op   157128 allocs/op
+  Median: 2508757 ns/op 3800718 B/op  157128 allocs/op
+
+BenchmarkMixedWorkload-10:
+  Run 1:  319796 ns/op  356108 B/op    14064 allocs/op
+  Run 2:  319338 ns/op  355682 B/op    14040 allocs/op
+  Run 3:  306435 ns/op  338138 B/op    13227 allocs/op
+  Run 4:  333735 ns/op  361517 B/op    14341 allocs/op
+  Run 5:  299538 ns/op  326491 B/op    12648 allocs/op
+  Median: 319338 ns/op  355682 B/op    14040 allocs/op
+
+BenchmarkTransactionThroughput-10:
+  Run 1:  584615 ns/op  747715 B/op     29813 allocs/op
+  Run 2:  535862 ns/op  679487 B/op     26293 allocs/op
+  Run 3:  573813 ns/op  727297 B/op     28755 allocs/op
+  Run 4:  584164 ns/op  749797 B/op     29904 allocs/op
+  Run 5:  564997 ns/op  724298 B/op     28598 allocs/op
+  Median: 573813 ns/op  727297 B/op     28755 allocs/op
+
+BenchmarkConcurrentReads-10:
+  Run 1:   45308 ns/op   97920 B/op     2347 allocs/op
+  Run 2:   44847 ns/op   97911 B/op     2346 allocs/op
+  Run 3:   45181 ns/op   98083 B/op     2356 allocs/op
+  Run 4:   48145 ns/op   97961 B/op     2349 allocs/op
+  Run 5:   45528 ns/op   98275 B/op     2366 allocs/op
+  Median:  45181 ns/op   97961 B/op     2349 allocs/op

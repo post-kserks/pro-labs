@@ -86,7 +86,8 @@ func (wbb *WriteBehindBuffer) doFlush() {
 		wbb.mu.Unlock()
 		return
 	}
-	batch := wbb.buffer
+	batch := make([]*WALRecord, len(wbb.buffer))
+	copy(batch, wbb.buffer)
 	wbb.buffer = wbb.buffer[:0]
 	wbb.dirty = false
 	wbb.mu.Unlock()

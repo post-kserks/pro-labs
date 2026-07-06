@@ -17,6 +17,9 @@ import (
 	"time"
 )
 
+// AuditFunc is a callback function for audit logging.
+type AuditFunc func(actor, action, target, detail string)
+
 type contextKey string
 
 const tokenLabelContextKey contextKey = "token_label"
@@ -31,6 +34,7 @@ type Manager struct {
 	warnedOnce sync.Once
 	logger     *slog.Logger
 	rateLim    *authRateLimiter
+	auditFunc  AuditFunc
 }
 
 // authRateLimiter отслеживает неудачные попытки аутентификации по IP.
@@ -176,6 +180,13 @@ func (m *Manager) Enabled() bool {
 	return m.enabled
 }
 
+// SetAuditFunc sets a callback function for audit logging.
+func (m *Manager) SetAuditFunc(fn AuditFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.auditFunc = fn
+}
+
 // NewDisabled creates a disabled auth manager that allows all requests.
 func NewDisabled() (*Manager, error) {
 	return &Manager{enabled: false}, nil
@@ -243,6 +254,7 @@ func (m *Manager) Middleware(next http.HandlerFunc) http.HandlerFunc {
 		token := tokenFromRequest(r)
 		if token == "" || !m.ValidateToken(token) {
 			m.rateLim.recordFailure(ip)
+			m.logAuthEvent(ip, "AUTH_LOGIN", "failed: invalid token")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -253,8 +265,18 @@ func (m *Manager) Middleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		m.logAuthEvent(m.GetLabel(token), "AUTH_LOGIN", "success")
 		ctx := context.WithValue(r.Context(), tokenLabelContextKey, m.GetLabel(token))
 		next(w, r.WithContext(ctx))
+	}
+}
+
+func (m *Manager) logAuthEvent(actor, action, detail string) {
+	m.mu.RLock()
+	fn := m.auditFunc
+	m.mu.RUnlock()
+	if fn != nil {
+		fn(actor, action, "", detail)
 	}
 }
 

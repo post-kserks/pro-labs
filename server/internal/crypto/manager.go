@@ -8,6 +8,9 @@ import (
 	"io"
 )
 
+// AuditFunc is a callback function for audit logging.
+type AuditFunc func(actor, action, target, detail string)
+
 type EncryptionManager struct {
 	activeDEK []byte                // 32 bytes for AES-256
 	activeVer uint32                // current version
@@ -15,6 +18,7 @@ type EncryptionManager struct {
 	aeads     map[uint32]cipher.AEAD // AEAD for each version
 	keyID     string
 	closed    bool
+	auditFunc AuditFunc
 }
 
 func NewEncryptionManager(dek []byte, keyID string) (*EncryptionManager, error) {
@@ -85,6 +89,11 @@ func (em *EncryptionManager) KeyVersion() uint32 {
 	return em.activeVer
 }
 
+// SetAuditFunc sets a callback function for audit logging.
+func (em *EncryptionManager) SetAuditFunc(fn AuditFunc) {
+	em.auditFunc = fn
+}
+
 // RotateDEK rotates to a new DEK, moving the current one to oldDEKs.
 func (em *EncryptionManager) RotateDEK(newDEK []byte) error {
 	if len(newDEK) != 32 {
@@ -103,6 +112,11 @@ func (em *EncryptionManager) RotateDEK(newDEK []byte) error {
 	em.aeads[newVer] = aead
 	em.activeDEK = newDEK
 	em.activeVer = newVer
+
+	if em.auditFunc != nil {
+		em.auditFunc("system", "KEY_ROTATION", fmt.Sprintf("key_version=%d", newVer), "")
+	}
+
 	return nil
 }
 

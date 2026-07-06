@@ -229,6 +229,58 @@ HTTP responses include:
 - `X-Frame-Options: DENY`
 - `Content-Security-Policy: default-src 'self'`
 
+## Audit Logging
+
+VaultDB includes a built-in audit log with hash-chain integrity verification.
+
+### System Table
+
+The audit log is stored in the `vaultdb_audit_log` system table:
+
+```sql
+SELECT * FROM vaultdb_audit_log
+WHERE actor = 'admin@company.com'
+  AND action = 'ALTER TABLE'
+ORDER BY occurred_at DESC
+LIMIT 50;
+```
+
+### Hash-Chain Integrity
+
+Each audit entry contains a SHA-256 hash of the previous entry, forming an immutable chain:
+
+```sql
+VERIFY AUDIT LOG;
+-- Output: "Audit chain intact: 48392 entries verified, no tampering detected."
+```
+
+### What Gets Logged
+- All DDL operations (CREATE/ALTER/DROP)
+- Authentication events (success and failure)
+- Encryption key rotation
+- RLS policy changes
+
+### RLS on Audit Log
+
+Row-level security can be applied to the audit log table itself:
+
+```sql
+ALTER TABLE vaultdb_audit_log ENABLE ROW LEVEL SECURITY;
+CREATE POLICY audit_admin ON vaultdb_audit_log
+    FOR ALL TO admin_role
+    USING (true);
+```
+
+## SQL Injection Protection
+
+VaultDB validates SQL at multiple layers to prevent injection:
+
+- **Migrations validated at CREATE time** — structural analysis before any execution
+- **Function bodies validated** — stored function bodies must be pure `SELECT` expressions
+- **Procedure bodies validated** — procedure bodies may only contain DML statements
+- **Trigger re-entrant guard** — triggers are limited to a maximum recursion depth of 3
+- **HTTP API parameter binding** — the HTTP API uses AST-level parameter binding, not string interpolation
+
 ## Error Message Sanitization
 
 TCP protocol error messages are sanitized before transmission:

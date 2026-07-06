@@ -62,6 +62,21 @@ type CreateTableStatement struct {
 	InferSchema bool
 	IfNotExists bool
 	Encrypted   bool
+	PartitionBy *PartitionSpec // nil = no partitioning
+}
+
+// PartitionSpec describes how a table is partitioned.
+type PartitionSpec struct {
+	Type       string          // "RANGE", "HASH"
+	Columns    []string        // partition key columns
+	Partitions []PartitionDef  // RANGE: explicit partition definitions
+	NumParts   int             // HASH: number of partitions
+}
+
+// PartitionDef defines a single partition in a RANGE-partitioned table.
+type PartitionDef struct {
+	Name   string      // partition name (e.g., "p2023")
+	Bound  interface{} // upper bound value for RANGE (nil = MAXVALUE)
 }
 
 type DropTableStatement struct {
@@ -109,6 +124,7 @@ type SelectStatement struct {
 	AsOf         *AsOfClause
 	CTEs         []CTEDefinition // WITH clause definitions
 	Distinct     bool            // SELECT DISTINCT
+	DistinctOn   []Expression    // DISTINCT ON (expr1, expr2, ...) — nil means no DISTINCT ON
 }
 
 // CTEDefinition — определение CTE в WITH clause.
@@ -277,6 +293,19 @@ type VacuumStatement struct {
 	Analyze   bool   // true = VACUUM ANALYZE: show statistics
 }
 
+type CopyStatement struct {
+	TableName string
+	Filename  string // file path, "STDIN", or "STDOUT"
+	IsFrom    bool   // true = COPY FROM, false = COPY TO
+	Options   CopyOptions
+}
+
+type CopyOptions struct {
+	Format    string // "CSV" or "JSON"
+	Header    bool   // CSV only: has header row
+	Delimiter string // CSV delimiter (default ",")
+}
+
 // Index statements
 type CreateIndexStatement struct {
 	IndexName string
@@ -322,8 +351,9 @@ type CreateFunctionStatement struct {
 	Name       string
 	Params     []string
 	ReturnType string
-	Body       string // SQL expression body
-	Language   string // "SQL" by default
+	Body       string            // SQL expression body or WASM file path
+	Language   string            // "SQL" by default
+	Options    map[string]string // WASM options: memory_limit, timeout
 }
 
 type DropFunctionStatement struct {
@@ -334,8 +364,9 @@ type DropFunctionStatement struct {
 type CreateProcedureStatement struct {
 	Name     string
 	Params   []string
-	Body     string // SQL body
-	Language string // "SQL" by default
+	Body     string            // SQL body or WASM file path
+	Language string            // "SQL" by default
+	Options  map[string]string // WASM options: memory_limit, timeout
 }
 
 type DropProcedureStatement struct {
@@ -390,6 +421,9 @@ type EnableRlsStatement struct {
 	TableName string
 }
 
+// VerifyAuditLogStatement represents "VERIFY AUDIT LOG".
+type VerifyAuditLogStatement struct{}
+
 func (*CreateDatabaseStatement) statementNode()  {}
 func (*DropDatabaseStatement) statementNode()    {}
 func (*UseDatabaseStatement) statementNode()     {}
@@ -407,6 +441,7 @@ func (*InsertStatement) statementNode()          {}
 func (*UpdateStatement) statementNode()          {}
 func (*DeleteStatement) statementNode()          {}
 func (*VacuumStatement) statementNode()          {}
+func (*CopyStatement) statementNode()            {}
 func (*CreateIndexStatement) statementNode()     {}
 func (*DropIndexStatement) statementNode()       {}
 func (*ShowIndexesStatement) statementNode()     {}
@@ -420,6 +455,7 @@ func (*SetOperationStatement) statementNode()    {}
 func (*MigrationStatement) statementNode()       {}
 func (*CreatePolicyStatement) statementNode()    {}
 func (*EnableRlsStatement) statementNode()       {}
+func (*VerifyAuditLogStatement) statementNode() {}
 func (*CTEStatement) statementNode()             {}
 func (*CreateViewStatement) statementNode()      {}
 func (*DropViewStatement) statementNode()        {}
@@ -449,6 +485,7 @@ func (*InsertStatement) StatementType() string          { return "INSERT" }
 func (*UpdateStatement) StatementType() string          { return "UPDATE" }
 func (*DeleteStatement) StatementType() string          { return "DELETE" }
 func (*VacuumStatement) StatementType() string          { return "VACUUM" }
+func (*CopyStatement) StatementType() string            { return "COPY" }
 func (*CreateIndexStatement) StatementType() string     { return "CREATE_INDEX" }
 func (*DropIndexStatement) StatementType() string       { return "DROP_INDEX" }
 func (*ShowIndexesStatement) StatementType() string     { return "SHOW_INDEXES" }
@@ -462,6 +499,7 @@ func (*SetOperationStatement) StatementType() string    { return "SET_OPERATION"
 func (*MigrationStatement) StatementType() string       { return "MIGRATION" }
 func (*CreatePolicyStatement) StatementType() string    { return "CREATE_POLICY" }
 func (*EnableRlsStatement) StatementType() string       { return "ENABLE_RLS" }
+func (*VerifyAuditLogStatement) StatementType() string  { return "VERIFY_AUDIT_LOG" }
 func (*CTEStatement) StatementType() string             { return "CTE" }
 func (*CreateViewStatement) StatementType() string      { return "CREATE_VIEW" }
 func (*DropViewStatement) StatementType() string        { return "DROP_VIEW" }
@@ -593,6 +631,16 @@ type JsonPathExpr struct {
 	Op   string // -> or ->>
 	Path string
 }
+
+// JSONAccess represents JSONB operators: @>, ?.
+// Unlike JsonPathExpr (->, ->>), these use an Expression argument.
+type JSONAccess struct {
+	Expr     Expression
+	Operator string // "@>", "?"
+	Argument Expression
+}
+
+func (*JSONAccess) expressionNode() {}
 
 // ComparisonSubqueryExpr handles: x > ALL (SELECT ...), x = ANY (SELECT ...), etc.
 type ComparisonSubqueryExpr struct {

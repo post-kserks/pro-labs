@@ -1,5 +1,8 @@
 # VaultDB Storage Engine Rewrite Plan
 
+> **Status: COMPLETED** — All storage engine rewrite phases have been implemented.
+> See `VaultDB_Strategic_Roadmap.md` for current status.
+
 > **Goal:** Rewrite storage engine to match PostgreSQL-level performance and reliability.
 
 **Reference:** PostgreSQL 16 source code (heapam, smgr, bufmgr, wal).
@@ -385,13 +388,13 @@ func (d *DMLExecutor) InsertRows(dbName, tableName string, rows []Row) (int, err
 
 | Phase | Duration | Milestone |
 |-------|----------|-----------|
-| Phase 1 | 1 week | No global lock contention |
-| Phase 2 | 3 days | Single-pass UPDATE/DELETE |
-| Phase 4 | 3 days | No per-batch sync |
-| Phase 5 | 3 days | Configurable buffer pool |
-| Phase 6 | 1 week | Binary WAL payloads |
-| Phase 3 | 2 weeks | Real B-Tree index |
-| Phase 7 | 1 week | Sequential scan read-ahead |
-| Phase 8 | 1 week | Decomposed architecture |
+| Phase 1 | 1 week | No global lock contention ✅ DONE |
+| Phase 2 | 3 days | Single-pass UPDATE/DELETE ✅ DONE |
+| Phase 4 | 3 days | No per-batch sync ✅ DONE |
+| Phase 5 | 3 days | Configurable buffer pool ✅ DONE |
+| Phase 6 | 1 week | Binary WAL payloads ✅ DONE |
+| Phase 3 | 2 weeks | Real B-Tree index ✅ DONE |
+| Phase 7 | 1 week | Sequential scan read-ahead ✅ DONE |
+| Phase 8 | 1 week | Decomposed architecture ✅ DONE |
 
 **Total: ~7 weeks for complete rewrite**

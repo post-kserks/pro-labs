@@ -832,7 +832,7 @@ func tokenDescription(tok lexer.Token) string {
 func isReservedKeyword(s string) bool {
 	upper := strings.ToUpper(s)
 	switch upper {
-	case "FROM", "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS":
+	case "FROM", "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "ON", "DISTINCT":
 		return true
 	}
 	return false
@@ -841,20 +841,30 @@ func isReservedKeyword(s string) bool {
 func (p *sqlParser) parsePrimaryPost(left Expression) Expression {
 	for {
 		tok := p.current()
-		if tok.Type != lexer.TOKEN_ARROW && tok.Type != lexer.TOKEN_DBL_ARROW {
-			break
-		}
-		op := tok.Literal
-		p.advance()
+		switch tok.Type {
+		case lexer.TOKEN_ARROW, lexer.TOKEN_DBL_ARROW:
+			op := tok.Literal
+			p.advance()
 
-		pathTok := p.current()
-		if pathTok.Type != lexer.TOKEN_STRING_LIT {
+			pathTok := p.current()
+			if pathTok.Type != lexer.TOKEN_STRING_LIT {
+				return left
+			}
+			path := pathTok.Literal
+			p.advance()
+
+			left = &JsonPathExpr{Left: left, Op: op, Path: path}
+		case lexer.TOKEN_JSON_CONTAINS, lexer.TOKEN_JSON_HAS_KEY:
+			op := tok.Literal
+			p.advance()
+
+			arg, err := p.parseExpression()
+			if err != nil {
+				return left
+			}
+			left = &JSONAccess{Expr: left, Operator: op, Argument: arg}
+		default:
 			return left
 		}
-		path := pathTok.Literal
-		p.advance()
-
-		left = &JsonPathExpr{Left: left, Op: op, Path: path}
 	}
-	return left
 }

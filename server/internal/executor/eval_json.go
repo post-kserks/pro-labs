@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/fts"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -26,15 +26,12 @@ func evalFtsMatch(left, right interface{}) (bool, error) {
 
 // evalFtsMatchScored вычисляет score полнотекстового совпадения.
 func evalFtsMatchScored(text, query string) float64 {
-	text = strings.ToLower(text)
-	query = strings.ToLower(query)
-
-	queryTerms := strings.Fields(query)
+	queryTerms := fts.Tokenize(query)
 	if len(queryTerms) == 0 {
 		return 1.0
 	}
 
-	textTerms := strings.Fields(text)
+	textTerms := fts.Tokenize(text)
 	if len(textTerms) == 0 {
 		return 0.0
 	}
@@ -335,4 +332,25 @@ func evalJsonPath(e *parser.JsonPathExpr, row storage.Row, schema *storage.Table
 		return valueToString(val), nil
 	}
 	return val, nil
+}
+
+// evalJSONAccess evaluates JSONB expression operators (@>, ?).
+func evalJSONAccess(e *parser.JSONAccess, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
+	left, err := evalOperand(e.Expr, row, schema, ctx)
+	if err != nil {
+		return nil, err
+	}
+	right, err := evalOperand(e.Argument, row, schema, ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	switch e.Operator {
+	case "@>":
+		return evalJsonContains(left, right)
+	case "?":
+		return evalJsonHasKey(left, right)
+	default:
+		return nil, fmt.Errorf("unsupported JSONB operator '%s'", e.Operator)
+	}
 }

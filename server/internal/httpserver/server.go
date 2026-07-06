@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/audit"
 	"vaultdb/internal/auth"
 	"vaultdb/internal/config"
 	"vaultdb/internal/executor"
@@ -48,6 +49,7 @@ type Config struct {
 	SessionPoolMaxIdle        int
 	SessionPoolMaxOpen        int
 	SessionPoolIdleTimeoutSec int
+	AuditTable                *audit.TableLog
 }
 
 type Server struct {
@@ -157,6 +159,16 @@ func New(cfg Config) *Server {
 			mgr, _ = auth.NewDisabled()
 		}
 		cfg.Auth = mgr
+	}
+	if cfg.AuditTable != nil {
+		cfg.Auth.SetAuditFunc(func(actor, action, target, detail string) {
+			cfg.AuditTable.Append(audit.Entry{
+				Actor:  actor,
+				Action: action,
+				Target: target,
+				Detail: detail,
+			})
+		})
 	}
 	if cfg.ActiveConnections == nil {
 		cfg.ActiveConnections = func() int64 { return 0 }

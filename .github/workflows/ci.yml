@@ -1,3 +1,7 @@
+# CI Strategy
+# - go-checks: fast gate (fmt, vet, test, security scans)
+# - race-stress: deep concurrency validation for PRs
+# - fuzz-nightly: overnight fuzzing for parser stability
 name: CI
 on:
   push:
@@ -150,3 +154,46 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker rm -f vaultdb-ci || true
+
+  race-stress:
+    name: Race stress test
+    runs-on: ubuntu-latest
+    needs: go-checks
+    if: github.event_name == 'pull_request'
+    defaults:
+      run:
+        working-directory: server
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: true
+
+      - name: Run race detector with high count
+        run: go test -race -count=100 ./internal/executor/... ./internal/storage/... ./internal/wal/...
+
+  fuzz-nightly:
+    name: Nightly fuzz
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    defaults:
+      run:
+        working-directory: server
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: true
+
+      - name: Run parser fuzz
+        run: go test -fuzz=FuzzParseSQL -fuzztime=30m ./internal/parser/

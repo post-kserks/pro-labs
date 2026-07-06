@@ -232,3 +232,27 @@ All operate on JSON arrays stored as text.
 | `AI_EMBED(text)` | Generate embedding vector | `SELECT AI_EMBED('hello world');` |
 | `NULLIF(a, b)` | Return NULL if equal | `NULLIF(1, 1)` → `NULL` |
 | `COALESCE(a, b, ...)` | First non-null value | `COALESCE(NULL, 2, 3)` → `2` |
+
+---
+
+## WASM User-Defined Functions
+
+Create custom SQL functions backed by WebAssembly modules.
+
+```sql
+-- Create a WASM function
+CREATE FUNCTION hash_pii(value TEXT) RETURNS TEXT
+LANGUAGE WASM
+AS 'file:///plugins/hash_pii.wasm'
+WITH (memory_limit = '16MB', timeout = '100ms');
+
+-- Call it like any SQL function
+SELECT hash_pii(email) FROM users;
+```
+
+### WASM Options
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `memory_limit` | Maximum memory (KB, MB, GB) | `'16MB'`, `'512KB'`, `'1GB'` |
+| `timeout` | Maximum execution time (Go duration format) | `'100ms'`, `'5s'`, `'1m'` |

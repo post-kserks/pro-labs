@@ -357,3 +357,196 @@ func TestZeroizeClearsAllVersions(t *testing.T) {
 		t.Error("aeads not cleared")
 	}
 }
+
+func TestNewEncryptionManagerWrongKeySize(t *testing.T) {
+	cases := []struct {
+		name string
+		size int
+	}{
+		{"too short", 16},
+		{"too long", 64},
+		{"empty", 0},
+		{"one byte", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dek := make([]byte, tc.size)
+			_, err := NewEncryptionManager(dek, "key")
+			if err == nil {
+				t.Fatalf("expected error for DEK size %d, got nil", tc.size)
+			}
+		})
+	}
+}
+
+func TestSetAuditFunc(t *testing.T) {
+	dek := make([]byte, 32)
+	if _, err := rand.Read(dek); err != nil {
+		t.Fatal(err)
+	}
+
+	em, err := NewEncryptionManager(dek, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var auditCalled bool
+	var auditAction string
+	em.SetAuditFunc(func(actor, action, target, detail string) {
+		auditCalled = true
+		auditAction = action
+	})
+
+	newDEK := make([]byte, 32)
+	if _, err := rand.Read(newDEK); err != nil {
+		t.Fatal(err)
+	}
+	if err := em.RotateDEK(newDEK); err != nil {
+		t.Fatal(err)
+	}
+
+	if !auditCalled {
+		t.Fatal("audit function was not called during rotation")
+	}
+	if auditAction != "KEY_ROTATION" {
+		t.Errorf("audit action = %q, want KEY_ROTATION", auditAction)
+	}
+}
+
+func TestSetAuditFuncNoCallback(t *testing.T) {
+	dek := make([]byte, 32)
+	if _, err := rand.Read(dek); err != nil {
+		t.Fatal(err)
+	}
+
+	em, err := NewEncryptionManager(dek, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Rotation without audit func should not panic
+	newDEK := make([]byte, 32)
+	if _, err := rand.Read(newDEK); err != nil {
+		t.Fatal(err)
+	}
+	if err := em.RotateDEK(newDEK); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestForKeyVersionClosed(t *testing.T) {
+	dek := make([]byte, 32)
+	if _, err := rand.Read(dek); err != nil {
+		t.Fatal(err)
+	}
+
+	em, err := NewEncryptionManager(dek, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	em.Zeroize()
+
+	if em.ForKeyVersion(1) != nil {
+		t.Error("ForKeyVersion should return nil for closed manager")
+	}
+}
+
+func TestRotateDEKWrongSize(t *testing.T) {
+	dek := make([]byte, 32)
+	if _, err := rand.Read(dek); err != nil {
+		t.Fatal(err)
+	}
+
+	em, err := NewEncryptionManager(dek, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = em.RotateDEK(make([]byte, 16))
+	if err == nil {
+		t.Fatal("expected error for wrong-size DEK during rotation")
+	}
+}
+
+func TestEncryptPageNilPageID(t *testing.T) {
+	dek := make([]byte, 32)
+	if _, err := rand.Read(dek); err != nil {
+		t.Fatal(err)
+	}
+
+	em, err := NewEncryptionManager(dek, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// nil pageID should still work (AEAD allows nil associated data)
+	plaintext := []byte("data without page ID")
+	nonce, ciphertext, err := em.EncryptPage(plaintext, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decrypted, err := em.DecryptPage(nonce, ciphertext, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(plaintext, decrypted) {
+		t.Error("nil pageID roundtrip failed")
+	}
+}
+
+func TestEncryptDecryptEmptyPlaintext(t *testing.T) {
+	dek := make([]byte, 32)
+	if _, err := rand.Read(dek); err != nil {
+		t.Fatal(err)
+	}
+
+	em, err := NewEncryptionManager(dek, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nonce, ciphertext, err := em.EncryptPage([]byte{}, []byte("page"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decrypted, err := em.DecryptPage(nonce, ciphertext, []byte("page"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decrypted) != 0 {
+		t.Errorf("expected empty plaintext, got %d bytes", len(decrypted))
+	}
+}
+
+func TestKeyVersionAfterMultipleRotations(t *testing.T) {
+	dek := make([]byte, 32)
+	if _, err := rand.Read(dek); err != nil {
+		t.Fatal(err)
+	}
+
+	em, err := NewEncryptionManager(dek, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	versions := []uint32{1}
+	for i := 0; i < 5; i++ {
+		newDEK := make([]byte, 32)
+		if _, err := rand.Read(newDEK); err != nil {
+			t.Fatal(err)
+		}
+		if err := em.RotateDEK(newDEK); err != nil {
+			t.Fatal(err)
+		}
+		versions = append(versions, em.KeyVersion())
+	}
+
+	for i, v := range versions {
+		if v != uint32(i+1) {
+			t.Errorf("version[%d] = %d, want %d", i, v, i+1)
+		}
+	}
+}

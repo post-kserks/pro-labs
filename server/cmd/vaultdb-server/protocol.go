@@ -107,7 +107,7 @@ func sendResult(conn net.Conn, id string, result *executor.Result) error {
 	return writeResponse(conn, resp)
 }
 
-func writeResponse(conn net.Conn, response protocol.Response) error {
+func writeResponse(conn net.Conn, response interface{}) error {
 	bytes, err := json.Marshal(response)
 	if err != nil {
 		return err

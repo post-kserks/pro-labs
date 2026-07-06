@@ -591,19 +591,6 @@ func (e *PageStorageEngine) replayFullPageImage(p wal.FullPageImagePayload) erro
 	return nil
 }
 
-func extractFieldFromPayload(payload []byte, field string) string {
-	var m map[string]interface{}
-	if err := json.Unmarshal(payload, &m); err != nil {
-		return ""
-	}
-	if v, ok := m[field]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
-}
-
 // extractRewriteFields extracts db/table from a decoded WALRewritePayload.
 func extractRewriteFields(decoded interface{}, err error) (string, string) {
 	if err != nil {

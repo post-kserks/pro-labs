@@ -47,6 +47,21 @@ type TableSchema struct {
 	RLSEnabled  bool              `json:"rls_enabled,omitempty"`
 	Policies    []RLSPolicy       `json:"policies,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`
+	PartitionBy *PartitionSpec    `json:"partition_by,omitempty"`
+}
+
+// PartitionSpec describes how a table is partitioned.
+type PartitionSpec struct {
+	Type       string          `json:"type"`        // "RANGE", "HASH"
+	Columns    []string        `json:"columns"`     // partition key columns
+	Partitions []PartitionDef  `json:"partitions"`  // RANGE: explicit partition definitions
+	NumParts   int             `json:"num_parts"`   // HASH: number of partitions
+}
+
+// PartitionDef defines a single partition.
+type PartitionDef struct {
+	Name  string      `json:"name"`
+	Bound interface{} `json:"bound,omitempty"` // upper bound for RANGE (nil = MAXVALUE)
 }
 
 // RLSPolicy stores a row-level security policy for a table.

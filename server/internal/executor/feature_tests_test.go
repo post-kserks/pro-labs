@@ -270,7 +270,7 @@ func TestProcedureCreateAndCall(t *testing.T) {
 
 	// Create procedure — parser expects empty parens and string body
 	result := executeSQL(t, session,
-		"CREATE PROCEDURE log_msg () AS 'INSERT INTO log VALUES (\"hello\")' LANGUAGE SQL;")
+		"CREATE PROCEDURE log_msg () AS 'INSERT INTO log VALUES (1)' LANGUAGE SQL;")
 	if result.Type != "message" {
 		t.Errorf("expected message, got %s", result.Type)
 	}

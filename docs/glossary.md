@@ -4,7 +4,7 @@
 |------|------------|
 | **ARIES** | Algorithm for Recovery and Isolation Exploiting Semantics — the WAL recovery algorithm used by VaultDB |
 | **B-tree** | Balanced tree data structure for sorted data, supporting O(log n) lookup, insert, and delete |
-| **Buffer Pool** | In-memory cache of disk pages with LRU eviction |
+| **Buffer Pool** | In-memory cache of disk pages with Clock-Sweep eviction |
 | **Catalog** | Metadata file tracking databases, tables, row counts, and transaction timestamps |
 | **Checkpoint** | Process of flushing dirty pages to disk and writing a checkpoint record to the WAL |
 | **Command Pattern** | Design pattern where each SQL statement type is a Command with an Execute() method |
@@ -19,7 +19,8 @@
 | **Heap File** | File storing table data as a sequence of pages |
 | **Item Pointer** | Reference to a tuple's location on a page (offset + length + flag) |
 | **LSN** | Log Sequence Number — identifies a position in the WAL |
-| **LRU** | Least Recently Used — buffer pool eviction policy |
+| **LRU** | Least Recently Used — former buffer pool eviction policy (now replaced by Clock-Sweep) |
+| **Clock-Sweep** | Clock-based page replacement algorithm used by the buffer pool — scans pages and evicts unpinned, clean pages with usage count decrement |
 | **MVCC** | Multi-Version Concurrency Control — enables concurrent reads/writes via tuple versioning |
 | **OCC** | Optimistic Concurrency Control — conflict detection at commit time |
 | **Page** | Fixed-size (8KB) unit of storage I/O |

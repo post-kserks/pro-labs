@@ -313,3 +313,15 @@ VaultDB has built-in WAL checksums and torn-page protection. If corruption is de
 6. **Enable encryption at rest** — use filesystem-level encryption (LUKS, FileVault)
 7. **Monitor auth failures** — check metrics for brute force attempts
 8. **Keep updated** — run `govulncheck` regularly
+
+---
+
+## Enterprise Deployment
+
+For production deployments with tuning recommendations, see [Enterprise Deployment Guide](deployment-enterprise.md).
+
+Key topics:
+- GOGC/GOMEMLIMIT tuning
+- Resource sizing
+- Kubernetes deployment
+- Security checklist

@@ -128,3 +128,140 @@ func TestGenerateKey(t *testing.T) {
 		t.Fatal("two consecutive keys are identical (extremely unlikely)")
 	}
 }
+
+func TestPassphraseKeySourceEmptyPassphrase(t *testing.T) {
+	salt, err := GenerateSalt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := NewPassphraseKeySource("", salt)
+	kek, err := src.GetKEK(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kek) != 32 {
+		t.Fatalf("KEK length = %d, want 32", len(kek))
+	}
+}
+
+func TestPassphraseKeySourceEmptySalt(t *testing.T) {
+	src := NewPassphraseKeySource("passphrase", []byte{})
+	kek, err := src.GetKEK(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kek) != 32 {
+		t.Fatalf("KEK length = %d, want 32", len(kek))
+	}
+}
+
+func TestPassphraseKeySourceLongPassphrase(t *testing.T) {
+	salt, err := GenerateSalt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	longPass := make([]byte, 10000)
+	for i := range longPass {
+		longPass[i] = 'a'
+	}
+	src := NewPassphraseKeySource(string(longPass), salt)
+	kek, err := src.GetKEK(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kek) != 32 {
+		t.Fatalf("KEK length = %d, want 32", len(kek))
+	}
+}
+
+func TestFileKeySourceEmptyFile(t *testing.T) {
+	salt, err := GenerateSalt()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "empty.key")
+	if err := os.WriteFile(keyFile, []byte{}, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	src := NewFileKeySource(keyFile, salt)
+	kek, err := src.GetKEK(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kek) != 32 {
+		t.Fatalf("KEK length = %d, want 32", len(kek))
+	}
+
+	// Empty file should derive same key as empty passphrase
+	expected, err := NewPassphraseKeySource("", salt).GetKEK(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(kek) != string(expected) {
+		t.Fatal("empty file KEK does not match empty passphrase KEK")
+	}
+}
+
+func TestFileKeySourceWhitespaceOnlyFile(t *testing.T) {
+	salt, err := GenerateSalt()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "ws.key")
+	if err := os.WriteFile(keyFile, []byte("  \n\t  \n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	src := NewFileKeySource(keyFile, salt)
+	kek, err := src.GetKEK(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kek) != 32 {
+		t.Fatalf("KEK length = %d, want 32", len(kek))
+	}
+
+	// After trimming whitespace, should match empty passphrase
+	expected, err := NewPassphraseKeySource("", salt).GetKEK(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(kek) != string(expected) {
+		t.Fatal("whitespace-only file KEK does not match empty passphrase KEK")
+	}
+}
+
+func TestGenerateKeyDifferentEachTime(t *testing.T) {
+	keys := make(map[string]bool)
+	for i := 0; i < 10; i++ {
+		key, err := GenerateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(key)
+		if keys[s] {
+			t.Fatalf("duplicate key generated on iteration %d", i)
+		}
+		keys[s] = true
+	}
+}
+
+func TestGenerateSaltDifferentEachTime(t *testing.T) {
+	salts := make(map[string]bool)
+	for i := 0; i < 10; i++ {
+		salt, err := GenerateSalt()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(salt)
+		if salts[s] {
+			t.Fatalf("duplicate salt generated on iteration %d", i)
+		}
+		salts[s] = true
+	}
+}

@@ -10,6 +10,7 @@ VaultDB is a monolithic SQL database engine with the following major components:
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐  │
 │  │ TCP:5432 │  │ HTTP:8080│  │ Monitor  │  │ Go API │  │
 │  │ Protocol │  │ REST API │  │  :5433   │  │Library │  │
+│  │ (v1+v2)  │  │          │  │          │  │        │  │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └───┬────┘  │
 │       │              │             │             │        │
 │  ┌────┴──────────────┴─────────────┴─────────────┴────┐  │
@@ -54,6 +55,11 @@ VaultDB is a monolithic SQL database engine with the following major components:
 │  │  │  (HMAC)  │  │(Prometheu│  │  (Live Queries│   │  │
 │  │  │          │  │   s)     │  │   SSE)        │   │  │
 │  │  └──────────┘  └──────────┘  └───────────────┘   │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌───────────────┐   │  │
+│  │  │  Audit   │  │  WASM    │  │  Full-Text    │   │  │
+│  │  │(Hash-    │  │  UDF     │  │  Search       │   │  │
+│  │  │ Chain)   │  │ Runtime  │  │  (Enterprise) │   │  │
+│  │  └──────────┘  └──────────┘  └───────────────┘   │  │
 │  └────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -64,7 +70,7 @@ VaultDB is a monolithic SQL database engine with the following major components:
 
 | Component | Port | Protocol | Purpose |
 |-----------|------|----------|---------|
-| TCP Server | 5432 | JSON over TCP | Native protocol for C++ and Go clients |
+| TCP Server | 5432 | JSON over TCP | Native protocol with v2 handshake (Go, Python, JS, C++ clients) |
 | HTTP Server | 8080 | REST/JSON | REST API, SSE streaming, web dashboard |
 | Monitor | 5433 | HTTP | Health checks, Prometheus metrics |
 | Go API | (in-process) | Go function calls | Embedded database access |
@@ -89,9 +95,13 @@ The executor uses the **Command Pattern** — each SQL statement type is a `Comm
 
 ### Storage Layer
 
+The storage layer is composed of several decomposed subsystems:
+
 - **Page Storage Engine**: Manages 8KB pages with PostgreSQL-style slotted layout
 - **Buffer Pool**: LRU page cache with dirty-page tracking and LSN-aware flushing
 - **WAL**: Write-ahead log with ARIES-style three-phase recovery
+- **Partition Manager**: Table partitioning (range, hash, list) with transparent query routing
+- **Free Space Map**: Tracks available space across heap pages for efficient allocation
 
 ### Disk Layer
 
@@ -166,6 +176,7 @@ Level 3: pageLock (per-page) — Individual page modifications
 | `internal/storage/heap` | Heap file management |
 | `internal/storage/page` | Page layout (headers, tuples, item pointers) |
 | `internal/storage/fsm` | Free Space Map |
+| `internal/storage/partition` | Table partitioning (range, hash, list) |
 | `internal/wal` | Write-ahead log with ARIES recovery |
 | `internal/txmanager` | Transaction manager with OCC |
 | `internal/index` | B-tree, Hash, GIN, GiST, Composite indexes |
@@ -175,8 +186,11 @@ Level 3: pageLock (per-page) — Individual page modifications
 | `internal/config` | YAML configuration loader |
 | `internal/tls` | TLS/mTLS support |
 | `internal/ai` | AI embedding providers |
+| `internal/audit` | Audit log with hash-chain integrity |
+| `internal/wasmudf` | WASM UDF runtime for user-defined functions |
+| `internal/fts` | Enterprise full-text search |
 | `internal/metrics` | Prometheus metrics collector |
 | `internal/logging` | Log rotation and audit logging |
 | `internal/pool` | TCP connection pool |
-| `internal/protocol` | Wire protocol definitions |
+| `internal/protocol` | Wire protocol definitions (v1 + v2 with handshake) |
 | `internal/backup` | Backup/restore implementation |

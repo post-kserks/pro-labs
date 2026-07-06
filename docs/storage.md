@@ -102,9 +102,52 @@ FreeSpace = Upper - Lower - (N * ItemPointerSize)
 If FreeSpace < tupleSize + ItemPointerSize → page is full
 ```
 
+## Table Partitioning
+
+VaultDB supports RANGE and HASH partitioning.
+
+### RANGE Partitioning
+
+```sql
+CREATE TABLE orders (
+    id INT,
+    order_date DATE,
+    amount FLOAT
+) PARTITION BY RANGE (order_date) (
+    PARTITION p2023 VALUES LESS THAN ('2024-01-01'),
+    PARTITION p2024 VALUES LESS THAN ('2025-01-01'),
+    PARTITION p2025 VALUES LESS THAN ('2026-01-01')
+);
+```
+
+Rows are automatically routed to the correct partition based on the partition key.
+
+### HASH Partitioning
+
+```sql
+CREATE TABLE sessions (
+    user_id INT,
+    data TEXT
+) PARTITION BY HASH (user_id) PARTITIONS 4;
+```
+
+Rows are distributed across partitions using FNV-32a hash.
+
+### Partition Pruning
+
+Queries with WHERE conditions on the partition key automatically skip irrelevant partitions.
+
+## Memory Pool (sync.Pool)
+
+VaultDB uses `sync.Pool` for hot `Row` allocations to reduce GC pressure. This is automatic — no configuration needed.
+
+- Pool warms up within seconds of startup
+- Works best with consistent query patterns
+- Rows with capacity > 256 are discarded to prevent pool bloat
+
 ## Buffer Pool
 
-The buffer pool is an in-memory LRU cache of 8KB pages.
+The buffer pool is an in-memory cache of 8KB pages using Clock-Sweep eviction. Default size is 16384 pages (128 MB), configurable via `buffer_pool_pages`.
 
 ### Key Operations
 
@@ -116,12 +159,12 @@ The buffer pool is an in-memory LRU cache of 8KB pages.
 | `UnpinPageDirty(pid, lsn)` | Unpin + mark dirty + record LSN |
 | `FlushPage(pid)` | Write a single page to disk |
 | `FlushAll()` | Write all dirty pages to disk |
-| `EvictOne()` | Evict least-recently-used unpinned page |
+| `EvictOne()` | Evict unpinned page using Clock-Sweep algorithm |
 
 ### Eviction Policy
 
 - Pages with `pinCount > 0` cannot be evicted
-- Among unpinned pages, the LRU page is evicted first
+- Clock-Sweep algorithm scans pages and evicts unpinned, clean pages
 - Dirty pages are flushed before eviction
 
 ## Free Space Map (FSM)

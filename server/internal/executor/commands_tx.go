@@ -425,15 +425,15 @@ func (c *ExecutePreparedCommand) Execute(ctx *ExecutionContext) (*Result, error)
 		return nil, fmt.Errorf("prepared statement '%s' not found", c.stmt.Name)
 	}
 
-	boundStmt, err := bindParams(ps.Query, c.stmt.Params)
+	boundStmt, err := BindParams(ps.Query, c.stmt.Params)
 	if err != nil {
 		return nil, err
 	}
 
-	// Plan cache is disabled: the cache key cannot include the actual SQL text
-	// (prepared statements store the parsed statement, not the original string),
-	// so different queries of the same type would share a stale cache entry.
-	// TODO: store original SQL in PreparedStatement and re-enable caching.
+	// Plan cache intentionally disabled for prepared statements. QueryHash keys
+	// on fully-bound SQL, so each parameter set produces a unique hash and the
+	// cache never hits. Enabling it requires re-keying on (stmt-name, param-types)
+	// across PlanCache.Get/Put, invalidation paths, and all callers.
 	cmd, err := CommandFactory(boundStmt)
 	if err != nil {
 		return nil, err
@@ -453,7 +453,7 @@ func (c *DeallocateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}, nil
 }
 
-func bindParams(stmt parser.Statement, params []parser.Value) (parser.Statement, error) {
+func BindParams(stmt parser.Statement, params []parser.Value) (parser.Statement, error) {
 	switch s := stmt.(type) {
 	case *parser.SelectStatement:
 		bound := *s

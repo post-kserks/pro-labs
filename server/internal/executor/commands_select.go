@@ -180,6 +180,13 @@ func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
 		resultRows = append(resultRows, projected)
 	}
 
+	// Apply DISTINCT ON after projection (fast path)
+	if len(c.stmt.DistinctOn) > 0 {
+		resultRows = distinctOnRows(resultRows, c.stmt.DistinctOn, c.stmt.Columns, filtered, schema, ctx)
+	} else if c.stmt.Distinct {
+		resultRows = distinctRows(resultRows)
+	}
+
 	// Pagination
 	start := 0
 	limit, hasLimit, offset, hasOffset := c.resolveLimitOffset(ctx)
@@ -275,6 +282,11 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	}
 	if c.stmt.Alias != "" {
 		mainSchema.Name = c.stmt.Alias
+	}
+
+	// If table is partitioned, read from all partitions and merge
+	if mainSchema.PartitionBy != nil {
+		return c.executePartitionedSelect(ctx, dbName, mainSchema)
 	}
 
 	var rows []storage.Row
@@ -426,7 +438,9 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	}
 
 	// Apply DISTINCT after projection
-	if c.stmt.Distinct {
+	if len(c.stmt.DistinctOn) > 0 {
+		resultRows = distinctOnRows(resultRows, c.stmt.DistinctOn, effectiveColumns, filtered, combinedSchema, ctx)
+	} else if c.stmt.Distinct {
 		resultRows = distinctRows(resultRows)
 	}
 
@@ -484,27 +498,44 @@ var indexOperators = map[string]bool{
 }
 
 func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parser.Expression) ([]int, bool) {
-	cmp, ok := where.(*parser.BinaryExpr)
-	if !ok {
+	// Handle both BinaryExpr and JSONAccess for index operators
+	var op string
+	var left parser.Expression
+	var right parser.Expression
+
+	switch e := where.(type) {
+	case *parser.BinaryExpr:
+		if !indexOperators[e.Operator] {
+			return nil, false
+		}
+		op = e.Operator
+		left = e.Left
+		right = e.Right
+	case *parser.JSONAccess:
+		if !indexOperators[e.Operator] {
+			return nil, false
+		}
+		op = e.Operator
+		left = e.Expr
+		right = e.Argument
+	default:
 		return nil, false
 	}
-	if !indexOperators[cmp.Operator] {
-		return nil, false
-	}
-	col, ok := cmp.Left.(*parser.ColumnRef)
+
+	col, ok := left.(*parser.ColumnRef)
 	if !ok {
 		return nil, false
 	}
 
 	// Range operators: > < >= <=
-	switch cmp.Operator {
+	switch op {
 	case ">", "<", ">=", "<=":
-		val := valueToString(evalOperandRaw(cmp.Right))
+		val := valueToString(evalOperandRaw(right))
 		if val == "" {
 			return nil, false
 		}
 		var low, high string
-		switch cmp.Operator {
+		switch op {
 		case ">":
 			low = val
 		case ">=":
@@ -522,10 +553,10 @@ func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parse
 	}
 
 	// Equality and other operators
-	switch cmp.Operator {
+	switch op {
 	case "LIKE":
 		// LIKE '%pattern%' can use GIN index
-		val := valueToString(evalOperandRaw(cmp.Right))
+		val := valueToString(evalOperandRaw(right))
 		if val == "" || !strings.HasPrefix(val, "%") || !strings.HasSuffix(val, "%") {
 			return nil, false
 		}
@@ -540,9 +571,9 @@ func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parse
 		return positions, true
 	default:
 		var queryVal string
-		if cmp.Operator == "=" {
+		if op == "=" {
 			var val parser.Value
-			switch v := cmp.Right.(type) {
+			switch v := right.(type) {
 			case parser.Value:
 				val = v
 			case *parser.Value:
@@ -552,7 +583,7 @@ func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parse
 			}
 			queryVal = valueToString(parserValueToRaw(val))
 		} else {
-			queryVal = valueToString(evalOperandRaw(cmp.Right))
+			queryVal = valueToString(evalOperandRaw(right))
 		}
 
 		if queryVal == "" {
@@ -570,14 +601,25 @@ func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parse
 // tryIndexOnlyScan attempts to retrieve stored columns from an index for index-only scan.
 // Returns the stored columns map if the index has stored data for the given positions.
 func tryIndexOnlyScan(ctx *ExecutionContext, dbName, tableName string, where parser.Expression, positions []int) (map[int]map[string]interface{}, bool) {
-	cmp, ok := where.(*parser.BinaryExpr)
-	if !ok {
+	// Handle both BinaryExpr and JSONAccess
+	var op string
+	var left parser.Expression
+
+	switch e := where.(type) {
+	case *parser.BinaryExpr:
+		op = e.Operator
+		left = e.Left
+	case *parser.JSONAccess:
+		op = e.Operator
+		left = e.Expr
+	default:
 		return nil, false
 	}
-	if !indexOperators[cmp.Operator] {
+
+	if !indexOperators[op] {
 		return nil, false
 	}
-	col, ok := cmp.Left.(*parser.ColumnRef)
+	col, ok := left.(*parser.ColumnRef)
 	if !ok {
 		return nil, false
 	}
@@ -706,6 +748,35 @@ func distinctRows(rows [][]string) [][]string {
 	return result
 }
 
+// distinctOnRows deduplicates projected rows by DISTINCT ON expressions.
+// It evaluates the DISTINCT ON expressions against raw rows to create a grouping key,
+// then keeps only the first projected row for each unique key.
+func distinctOnRows(projected [][]string, distinctOn []parser.Expression, columns []parser.SelectColumn, rawRows []storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) [][]string {
+	if len(rawRows) != len(projected) {
+		return projected
+	}
+	seen := make(map[string]bool)
+	result := make([][]string, 0, len(projected))
+	for i, rawRow := range rawRows {
+		// Build key from DISTINCT ON expression values
+		keyParts := make([]string, len(distinctOn))
+		for j, expr := range distinctOn {
+			val, err := evalOperand(expr, rawRow, schema, ctx)
+			if err != nil {
+				keyParts[j] = "ERR"
+			} else {
+				keyParts[j] = valueToString(val)
+			}
+		}
+		key := strings.Join(keyParts, "\x00")
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, projected[i])
+		}
+	}
+	return result
+}
+
 func loadViewQueryWithCtx(ctx *ExecutionContext, dbName, viewName string) (string, error) {
 	def, err := loadObject(ctx, dbName, objTypeView, viewName)
 	if err != nil {
@@ -718,4 +789,105 @@ func loadViewQueryWithCtx(ctx *ExecutionContext, dbName, viewName string) (strin
 		return query, nil
 	}
 	return "", fmt.Errorf("view query not found")
+}
+
+// executePartitionedSelect reads rows from all partitions of a partitioned table
+// and merges them before applying WHERE, ORDER BY, etc.
+func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName string, schema *storage.TableSchema) (*Result, error) {
+	pt := storage.NewPartitionedTable(schema)
+	if pt == nil {
+		return nil, fmt.Errorf("table '%s' has partition spec but could not initialize", c.stmt.TableName)
+	}
+
+	// Read from all partitions and merge
+	var allRows []storage.Row
+	for _, part := range pt.Partitions {
+		if !ctx.Storage.TableExists(dbName, part.TableName) {
+			continue
+		}
+		rows, err := ctx.Storage.ReadCurrentRows(dbName, part.TableName)
+		if err != nil {
+			return nil, fmt.Errorf("read partition '%s': %w", part.Name, err)
+		}
+		allRows = append(allRows, rows...)
+	}
+
+	// Apply tx overlay (read-your-wown-writes for transactions)
+	allRows, err := applyTxOverlay(ctx, dbName, c.stmt.TableName, allRows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply RLS
+	allRows, err = filterRowsWithRLS(allRows, schema, ctx, dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build column index for O(1) lookups
+	ensureColumnIndex(ctx, schema)
+
+	// Filter with WHERE
+	var filtered []storage.Row
+	if c.stmt.Where != nil {
+		filtered = make([]storage.Row, 0, len(allRows))
+		for _, row := range allRows {
+			ok, err := evalExpr(c.stmt.Where, row, schema, ctx)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				filtered = append(filtered, row)
+			}
+		}
+	} else {
+		filtered = allRows
+	}
+
+	// Apply ORDER BY
+	if len(c.stmt.OrderBy) > 0 {
+		c.applyOrderBy(filtered, schema, ctx)
+	}
+
+	// Project columns
+	resultRows := make([][]string, 0, len(filtered))
+	for _, row := range filtered {
+		projected := make([]string, len(c.stmt.Columns))
+		for i, col := range c.stmt.Columns {
+			val, err := evalOperand(col.Expr, row, schema, ctx)
+			if err != nil {
+				projected[i] = "ERR"
+			} else {
+				projected[i] = valueToString(val)
+			}
+		}
+		resultRows = append(resultRows, projected)
+	}
+
+	// Apply OFFSET and LIMIT
+	start := 0
+	if c.stmt.HasOffset {
+		start = c.stmt.Offset
+	}
+	if start > len(resultRows) {
+		resultRows = nil
+	} else {
+		resultRows = resultRows[start:]
+	}
+	if c.stmt.HasLimit && c.stmt.Limit < len(resultRows) {
+		resultRows = resultRows[:c.stmt.Limit]
+	}
+
+	columns := make([]string, len(c.stmt.Columns))
+	for i, col := range c.stmt.Columns {
+		if col.Alias != "" {
+			columns[i] = col.Alias
+		} else if colRef, ok := col.Expr.(*parser.ColumnRef); ok {
+			columns[i] = colRef.Name
+		} else {
+			columns[i] = fmt.Sprintf("col%d", i)
+		}
+	}
+
+	return &Result{Type: "rows", Columns: columns, Rows: resultRows}, nil
 }

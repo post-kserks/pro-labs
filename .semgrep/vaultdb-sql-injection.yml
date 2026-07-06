@@ -1,0 +1,37 @@
+rules:
+  - id: vaultdb-sql-string-concat-reparse
+    languages: [go]
+    severity: ERROR
+    message: User input concatenated into string passed to parser.Parse()
+    patterns:
+      - pattern: |
+          $STR := $A + $USERINPUT + $B
+          ...
+          parser.Parse($STR)
+      - pattern-not: |
+          parser.Parse($LITERAL_STRING)
+
+  - id: vaultdb-crypto-rand-required
+    languages: [go]
+    severity: ERROR
+    message: math/rand used in crypto context
+    patterns:
+      - pattern-either:
+          - pattern: math/rand.Read(...)
+      - pattern-inside: |
+          func $FUNC(...) { ... }
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: (?i)(nonce|dek|token|key|salt)
+
+  - id: vaultdb-dek-not-zeroized
+    languages: [go]
+    severity: WARNING
+    message: DEK/passphrase not zeroized before scope exit
+    patterns:
+      - pattern-inside: |
+          func $FUNC(...) { ... }
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: (?i)(decrypt|dek|passphrase)
+      - pattern-not-regex: Zeroize\(\)

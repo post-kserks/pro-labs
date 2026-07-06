@@ -257,6 +257,11 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		return c.executeUpsert(ctx, dbName, schema, rowsToInsert)
 	}
 
+	// Route to partition if table is partitioned
+	if schema.PartitionBy != nil {
+		return c.executePartitionedInsert(ctx, dbName, schema, rowsToInsert)
+	}
+
 	affected, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, rowsToInsert)
 	if err != nil {
 		return nil, err
@@ -574,4 +579,39 @@ func applyComputedColumns(row storage.Row, schema *storage.TableSchema, ctx *Exe
 		}
 	}
 	return nil
+}
+
+// executePartitionedInsert routes rows to the correct partition for a partitioned table.
+func (c *InsertCommand) executePartitionedInsert(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, rowsToInsert []storage.Row) (*Result, error) {
+	pt := storage.NewPartitionedTable(schema)
+	if pt == nil {
+		return nil, fmt.Errorf("table '%s' has partition spec but could not initialize partition routing", c.stmt.TableName)
+	}
+
+	// Group rows by target partition
+	routes := make(map[string][]storage.Row)
+	for _, row := range rowsToInsert {
+		targetTable, err := pt.InsertRoute(row)
+		if err != nil {
+			return nil, fmt.Errorf("partition routing: %w", err)
+		}
+		routes[targetTable] = append(routes[targetTable], row)
+	}
+
+	totalAffected := 0
+	for targetTable, rows := range routes {
+		affected, err := ctx.Storage.InsertRows(dbName, targetTable, rows)
+		if err != nil {
+			return nil, fmt.Errorf("insert into partition '%s': %w", targetTable, err)
+		}
+		totalAffected += affected
+	}
+
+	notifyMutation(ctx, dbName, c.stmt.TableName)
+	if ctx.Session.planCache != nil {
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	}
+	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
+
+	return &Result{Type: "affected", Affected: totalAffected}, nil
 }

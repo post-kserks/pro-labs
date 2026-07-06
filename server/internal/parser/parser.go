@@ -157,6 +157,8 @@ func FormatExpression(expr Expression) string {
 		return fmt.Sprintf("%s %sBETWEEN %s AND %s", FormatExpression(e.Expr), not, FormatExpression(e.Lower), FormatExpression(e.Upper))
 	case *JsonPathExpr:
 		return fmt.Sprintf("%s%s'%s'", FormatExpression(e.Left), e.Op, e.Path)
+	case *JSONAccess:
+		return fmt.Sprintf("%s %s %s", FormatExpression(e.Expr), e.Operator, FormatExpression(e.Argument))
 	case *WindowFunctionExpr:
 		args := make([]string, len(e.Args))
 		for i, a := range e.Args {
@@ -315,6 +317,8 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 		stmt, err = p.parseMerge()
 	case lexer.TOKEN_TRUNCATE:
 		stmt, err = p.parseTruncate()
+	case lexer.TOKEN_COPY:
+		stmt, err = p.parseCopy()
 	case lexer.TOKEN_VACUUM:
 		stmt, err = p.parseVacuum()
 	case lexer.TOKEN_BEGIN:
@@ -343,6 +347,8 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 		stmt, err = p.parseCall()
 	case lexer.TOKEN_ENABLE:
 		stmt, err = p.parseEnableRls()
+	case lexer.TOKEN_VERIFY:
+		stmt, err = p.parseVerifyAuditLog()
 	case lexer.TOKEN_APPLY:
 		stmt, err = p.parseMigration("APPLY")
 	case lexer.TOKEN_PREVIEW:

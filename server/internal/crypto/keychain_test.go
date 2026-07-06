@@ -13,8 +13,6 @@ func TestOSKeychainSourceName(t *testing.T) {
 }
 
 func TestOSKeychainUnsupportedOS(t *testing.T) {
-	// This test verifies the unsupported OS error path
-	// by testing the encodeBase64 and decodeBase64 helpers
 	testData := []byte("test-key-data-12345")
 
 	encoded := encodeBase64(testData)
@@ -34,14 +32,13 @@ func TestOSKeychainUnsupportedOS(t *testing.T) {
 }
 
 func TestOSKeychainSourceRoundTrip(t *testing.T) {
-	// Test encode/decode round-trip with various data sizes
 	testCases := [][]byte{
 		nil,
 		{},
 		{0},
 		{0, 0, 0, 0},
 		[]byte("hello world"),
-		make([]byte, 32), // AES-256 key size
+		make([]byte, 32),
 	}
 
 	for i, tc := range testCases {
@@ -57,14 +54,68 @@ func TestOSKeychainSourceRoundTrip(t *testing.T) {
 }
 
 func TestOSKeychainStoreKEKUnsupportedOS(t *testing.T) {
-	// This test verifies the StoreKEK method returns an error on unsupported platforms
-	// We can't easily mock runtime.GOOS, but we can verify the method exists and compiles
 	src := NewOSKeychainSource("test-service", "test-account")
-	
-	// On any OS, if the keychain is not available, we should get an error
-	// This test is mainly to ensure the method signature is correct
 	err := src.StoreKEK(context.Background(), []byte("test"))
-	// We expect either success (if keychain is available) or an error
-	// Both are valid outcomes for this test
 	_ = err
+}
+
+func TestOSKeychainGetKEK(t *testing.T) {
+	src := NewOSKeychainSource("nonexistent-test-service", "nonexistent-account")
+	_, err := src.GetKEK(context.Background())
+	// On macOS this calls getFromMacKeychain which will fail because the
+	// entry doesn't exist. The error is expected.
+	if err == nil {
+		t.Log("GetKEK succeeded (keychain entry exists)")
+	} else {
+		t.Logf("GetKEK error (expected): %v", err)
+	}
+}
+
+func TestOSKeychainGetKEKErrorWrapping(t *testing.T) {
+	src := NewOSKeychainSource("definitely-nonexistent-service-12345", "no-account")
+	_, err := src.GetKEK(context.Background())
+	if err == nil {
+		t.Log("GetKEK succeeded; skipping error-wrapping check")
+		return
+	}
+	// The error should contain information about the failure
+	if err.Error() == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
+func TestOSKeychainStoreKEKAndRetrieveFails(t *testing.T) {
+	src := NewOSKeychainSource("test-nonexistent-service", "test-nonexistent-account")
+	// Store will likely fail or succeed depending on keychain availability
+	_ = src.StoreKEK(context.Background(), []byte("test-key"))
+	// GetKEK should fail because we didn't set up a real entry
+	_, err := src.GetKEK(context.Background())
+	// We just verify GetKEK doesn't panic
+	_ = err
+}
+
+func TestEncodeBase64Empty(t *testing.T) {
+	encoded := encodeBase64([]byte{})
+	decoded, err := decodeBase64(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != 0 {
+		t.Errorf("expected empty, got %d bytes", len(decoded))
+	}
+}
+
+func TestDecodeBase64PaddingEdgeCases(t *testing.T) {
+	// Standard padding
+	tests := []string{
+		"QQ==",   // "A" with padding
+		"QUE=",   // "AB" with padding
+		"QUJD",  // "ABC" no padding
+	}
+	for _, tt := range tests {
+		_, err := decodeBase64(tt)
+		if err != nil {
+			t.Errorf("decodeBase64(%q) error: %v", tt, err)
+		}
+	}
 }

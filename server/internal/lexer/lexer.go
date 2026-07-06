@@ -144,6 +144,13 @@ const (
 	TOKEN_IF
 	TOKEN_ENCRYPTED
 	TOKEN_ENCRYPTION
+	TOKEN_VERIFY
+	TOKEN_COPY
+	TOKEN_HASH
+	TOKEN_LESS
+	TOKEN_THAN
+	TOKEN_PARTITIONS
+	TOKEN_MAXVALUE
 
 	// Data types
 	TOKEN_INT
@@ -670,6 +677,13 @@ var keywords = map[string]TokenType{
 	"BLOB":             TOKEN_BLOB,
 	"ENCRYPTED":        TOKEN_ENCRYPTED,
 	"ENCRYPTION":       TOKEN_ENCRYPTION,
+	"VERIFY":           TOKEN_VERIFY,
+	"COPY":             TOKEN_COPY,
+	"HASH":             TOKEN_HASH,
+	"LESS":             TOKEN_LESS,
+	"THAN":             TOKEN_THAN,
+	"PARTITIONS":       TOKEN_PARTITIONS,
+	"MAXVALUE":         TOKEN_MAXVALUE,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -826,6 +840,13 @@ var tokenNames = [...]string{
 	TOKEN_BLOB:              "BLOB",
 	TOKEN_ENCRYPTED:         "ENCRYPTED",
 	TOKEN_ENCRYPTION:        "ENCRYPTION",
+	TOKEN_VERIFY:            "VERIFY",
+	TOKEN_COPY:              "COPY",
+	TOKEN_HASH:              "HASH",
+	TOKEN_LESS:              "LESS",
+	TOKEN_THAN:              "THAN",
+	TOKEN_PARTITIONS:        "PARTITIONS",
+	TOKEN_MAXVALUE:          "MAXVALUE",
 	TOKEN_IDENT:             "IDENT",
 	TOKEN_INT_LIT:           "INT_LIT",
 	TOKEN_FLOAT_LIT:         "FLOAT_LIT",

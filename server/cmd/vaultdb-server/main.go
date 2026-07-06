@@ -239,6 +239,52 @@ func handleConnection(ctx context.Context, conn net.Conn, store storage.StorageE
 			continue
 		}
 
+		// Peek at message type to detect handshake
+		var rawMsg map[string]interface{}
+		if err := json.Unmarshal(line, &rawMsg); err != nil {
+			if !sendError(conn, "", "invalid JSON request", logger) {
+				return
+			}
+			continue
+		}
+
+		if msgType, _ := rawMsg["type"].(string); msgType == "handshake" {
+			var hs protocol.HandshakeRequest
+			if err := json.Unmarshal(line, &hs); err != nil {
+				if !sendError(conn, "", "invalid handshake", logger) {
+					return
+				}
+				continue
+			}
+
+			// Validate major version
+			if hs.ClientVersion != "" && len(hs.ClientVersion) > 0 && hs.ClientVersion[0] != '2' {
+				errResp := protocol.HandshakeResponse{
+					Type:            "handshake",
+					ProtocolVersion: "2.0",
+					Server:          "VaultDB",
+					ServerVersion:   version,
+				}
+				writeResponse(conn, errResp)
+				sendError(conn, "", "incompatible protocol version", logger)
+				return
+			}
+
+			resp := protocol.HandshakeResponse{
+				Type:            "handshake",
+				ProtocolVersion: "2.0",
+				Server:          "VaultDB",
+				ServerVersion:   version,
+				SupportedFeatures: []string{"time_travel", "transactions", "prepared_statements"},
+			}
+			if err := writeResponse(conn, resp); err != nil {
+				return
+			}
+			continue
+		}
+
+		// Non-handshake: process as regular request (v1 compatible)
+
 		var req protocol.Request
 		if err := json.Unmarshal(line, &req); err != nil {
 			if !sendError(conn, "", "invalid JSON request", logger) {

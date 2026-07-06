@@ -2,12 +2,14 @@ package executor
 
 import (
 	crypto_rand "crypto/rand"
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/wasmudf"
 )
 
 // builtinFunc — тип функции для builtin функций SQL.
@@ -268,11 +270,19 @@ func executeUserDefinedFunction(dbName, funcName string, args []interface{}, ctx
 	}
 	body, _ := fd["body"].(string)
 	params, _ := fd["params"].([]interface{})
+	language, _ := fd["language"].(string)
+	opts, _ := fd["options"].(map[string]string)
 
 	if body == "" {
 		return nil, fmt.Errorf("function '%s' has no body", funcName)
 	}
 
+	// WASM UDF path
+	if strings.EqualFold(language, "wasm") {
+		return executeWASMFunction(body, opts, args)
+	}
+
+	// SQL UDF path
 	bodyStmt, err := parser.Parse(body)
 	if err != nil {
 		return nil, fmt.Errorf("function '%s' body parse: %w", funcName, err)
@@ -313,6 +323,40 @@ func executeUserDefinedFunction(dbName, funcName string, args []interface{}, ctx
 		return f, nil
 	}
 	return val, nil
+}
+
+// executeWASMFunction runs a WASM user-defined function.
+func executeWASMFunction(wasmPath string, opts map[string]string, args []interface{}) (interface{}, error) {
+	// Strip file:// prefix if present
+	wasmPath = strings.TrimPrefix(wasmPath, "file://")
+
+	memLimit, timeout, err := wasmudf.ParseOptions(opts)
+	if err != nil {
+		return nil, fmt.Errorf("WASM options: %w", err)
+	}
+
+	// Convert memory limit from bytes to pages (64 KB each) for wazero.
+	var maxPages uint32
+	if memLimit > 0 {
+		maxPages = memLimit / (64 * 1024)
+		if maxPages == 0 {
+			maxPages = 1 // enforce at least 1 page if limit < 64 KB
+		}
+	}
+
+	rt, err := wasmudf.NewRuntimeWithLimits(maxPages, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("WASM runtime: %w", err)
+	}
+	defer rt.Close()
+
+	fn, err := rt.LoadModule(wasmPath)
+	if err != nil {
+		return nil, fmt.Errorf("WASM load: %w", err)
+	}
+	fn.Timeout = timeout
+
+	return fn.Call(context.Background(), args)
 }
 
 // substituteParam подставляет значение параметра в выражение.

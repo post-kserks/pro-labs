@@ -85,7 +85,7 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 			if join.Condition != nil && tryHashJoinLeft(&newRows, join.Condition, currentRows, rightRows, currentSchema, rightSchema, &combinedBuf) {
 				break
 			}
-			rightNulls := make(storage.Row, len(rightSchema.Columns))
+			rightNulls := storage.GetRowWithLen(len(rightSchema.Columns))
 			for i := range rightNulls {
 				rightNulls[i] = nil
 			}
@@ -103,12 +103,13 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 					newRows = append(newRows, append(append(storage.Row{}, lrow...), rightNulls...))
 				}
 			}
+			storage.PutRow(rightNulls)
 
 		case "RIGHT":
 			if join.Condition != nil && tryHashJoinRight(&newRows, join.Condition, currentRows, rightRows, currentSchema, rightSchema, &combinedBuf) {
 				break
 			}
-			leftNulls := make(storage.Row, len(currentSchema.Columns))
+			leftNulls := storage.GetRowWithLen(len(currentSchema.Columns))
 			for i := range leftNulls {
 				leftNulls[i] = nil
 			}
@@ -126,13 +127,14 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 					newRows = append(newRows, append(append(storage.Row{}, leftNulls...), rrow...))
 				}
 			}
+			storage.PutRow(leftNulls)
 
 		case "FULL":
-			leftNulls := make(storage.Row, len(currentSchema.Columns))
+			leftNulls := storage.GetRowWithLen(len(currentSchema.Columns))
 			for i := range leftNulls {
 				leftNulls[i] = nil
 			}
-			rightNulls := make(storage.Row, len(rightSchema.Columns))
+			rightNulls := storage.GetRowWithLen(len(rightSchema.Columns))
 			for i := range rightNulls {
 				rightNulls[i] = nil
 			}
@@ -159,6 +161,8 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 					newRows = append(newRows, append(append(storage.Row{}, leftNulls...), rrow...))
 				}
 			}
+			storage.PutRow(leftNulls)
+			storage.PutRow(rightNulls)
 		}
 
 		currentSchema = combinedSchema
@@ -196,7 +200,7 @@ func tryHashJoinLeft(result *[]storage.Row, cond parser.Expression, leftRows, ri
 	}
 
 	hash := buildHashTable(rightRows, rightIdx)
-	rightNulls := make(storage.Row, len(rightSchema.Columns))
+	rightNulls := storage.GetRowWithLen(len(rightSchema.Columns))
 
 	for _, lrow := range leftRows {
 		key := valueToString(lrow[leftIdx])
@@ -209,6 +213,7 @@ func tryHashJoinLeft(result *[]storage.Row, cond parser.Expression, leftRows, ri
 			*result = append(*result, append(append(storage.Row{}, lrow...), rightNulls...))
 		}
 	}
+	storage.PutRow(rightNulls)
 	return true
 }
 
@@ -220,7 +225,7 @@ func tryHashJoinRight(result *[]storage.Row, cond parser.Expression, leftRows, r
 	}
 
 	hash := buildHashTable(rightRows, rightIdx)
-	leftNulls := make(storage.Row, len(leftSchema.Columns))
+	leftNulls := storage.GetRowWithLen(len(leftSchema.Columns))
 	matched := make(map[int]bool)
 
 	for _, lrow := range leftRows {
@@ -239,6 +244,7 @@ func tryHashJoinRight(result *[]storage.Row, cond parser.Expression, leftRows, r
 			*result = append(*result, append(append(storage.Row{}, leftNulls...), rrow...))
 		}
 	}
+	storage.PutRow(leftNulls)
 	return true
 }
 

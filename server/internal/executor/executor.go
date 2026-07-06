@@ -96,6 +96,16 @@ func init() {
 	registerCommand(reflect.TypeOf((*parser.ShowEncryptionStatusStatement)(nil)), func(s parser.Statement) Command {
 		return &ShowEncryptionStatusCommand{stmt: s.(*parser.ShowEncryptionStatusStatement)}
 	})
+	registerCommand(reflect.TypeOf((*parser.VerifyAuditLogStatement)(nil)), func(s parser.Statement) Command {
+		return &VerifyAuditLogCommand{stmt: s.(*parser.VerifyAuditLogStatement)}
+	})
+	registerCommand(reflect.TypeOf((*parser.CopyStatement)(nil)), func(s parser.Statement) Command {
+		stmt := s.(*parser.CopyStatement)
+		if stmt.IsFrom {
+			return &CopyFromCommand{stmt: stmt}
+		}
+		return &CopyToCommand{stmt: stmt}
+	})
 }
 
 // Command is the Command pattern abstraction.
@@ -152,6 +162,10 @@ type ExecutionContext struct {
 
 	// Parallel holds the parallel execution configuration for this query.
 	Parallel ParallelConfig
+
+	// triggerDepth tracks recursive trigger invocation depth.
+	// Incremented before executeTriggerBody, decremented after.
+	triggerDepth int
 }
 
 type Executor struct {

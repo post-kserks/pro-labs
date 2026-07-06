@@ -71,6 +71,26 @@ CREATE INDEX idx_users_name_age ON users (name, age);  -- composite index
 DROP INDEX idx_users_email;
 ```
 
+### Table Partitioning
+
+```sql
+-- RANGE partitioning
+CREATE TABLE orders (
+    id INT,
+    order_date DATE,
+    amount FLOAT
+) PARTITION BY RANGE (order_date) (
+    PARTITION p2023 VALUES LESS THAN ('2024-01-01'),
+    PARTITION p2024 VALUES LESS THAN ('2025-01-01')
+);
+
+-- HASH partitioning
+CREATE TABLE sessions (
+    user_id INT,
+    data TEXT
+) PARTITION BY HASH (user_id) PARTITIONS 4;
+```
+
 ### DROP TABLE
 
 ```sql
@@ -134,6 +154,25 @@ DELETE FROM users WHERE id = 1;
 DELETE FROM users WHERE age < 18;
 ```
 
+### COPY
+
+Import and export data from/to files.
+
+```sql
+-- COPY FROM
+COPY users FROM '/path/to/users.csv' WITH (FORMAT CSV, HEADER true);
+COPY users FROM '/path/to/data.jsonl' WITH (FORMAT JSON);
+
+-- COPY TO
+COPY users TO '/path/to/output.csv' WITH (FORMAT CSV);
+COPY users TO '/path/to/output.jsonl' WITH (FORMAT JSON);
+```
+
+**Options:**
+- `FORMAT` — `CSV` or `JSON`
+- `HEADER` — `true` to skip header row on import (CSV only)
+- `DELIMITER` — field separator character (CSV only, default `,`)
+
 ---
 
 ## SELECT
@@ -146,6 +185,16 @@ SELECT id, name, email FROM users;
 SELECT DISTINCT age FROM users;
 ```
 
+### DISTINCT ON
+
+```sql
+SELECT DISTINCT ON (department) department, name, salary
+FROM employees
+ORDER BY department, salary DESC;
+```
+
+Returns the first row for each distinct value of the given expression(s), based on the ORDER BY clause.
+
 ### WHERE Clause
 
 ```sql
@@ -155,6 +204,22 @@ SELECT * FROM users WHERE name ILIKE '%alice%';  -- case-insensitive
 SELECT * FROM users WHERE id IN (1, 2, 3);
 SELECT * FROM users WHERE email IS NOT NULL;
 SELECT * FROM users WHERE age BETWEEN 20 AND 30;
+```
+
+### JSONB Operators in WHERE
+
+```sql
+-- -> operator (get JSON element)
+SELECT data->'name' FROM users;
+
+-- ->> operator (get text value)
+SELECT data->>'email' FROM users;
+
+-- @> operator (contains)
+SELECT * FROM users WHERE data @> '{"active": true}';
+
+-- ? operator (has key)
+SELECT * FROM users WHERE data ? 'name';
 ```
 
 ### ORDER BY
@@ -377,3 +442,16 @@ SHOW ENCRYPTION STATUS;
 - `encrypted` — yes/no
 - `algorithm` — encryption algorithm (e.g., AES-256-GCM)
 - `key_source` — key source type (passphrase, os_keychain, kms)
+
+---
+
+## VERIFY AUDIT LOG
+
+Verifies the integrity of the tamper-evident audit log chain.
+
+```sql
+VERIFY AUDIT LOG;
+-- Output: "Audit chain intact: 48392 entries verified, no tampering detected."
+```
+
+Checks that each audit log entry's hash chain is unbroken and no entries have been modified or removed.

@@ -3,9 +3,11 @@ package vaultdb
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/audit"
 	"vaultdb/internal/executor"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
@@ -21,7 +23,8 @@ type VaultDB struct {
 	TxManager   *txmanager.Manager
 	Broadcaster *executor.Broadcaster
 	// Embedder, if set, enables SEMANTIC_MATCH and AI_EMBED.
-	Embedder ai.Embedder
+	Embedder   ai.Embedder
+	AuditTable *audit.TableLog
 }
 
 // Open creates a new embedded database instance with WAL for durability.
@@ -47,11 +50,18 @@ func Open(dataDir string) (*VaultDB, error) {
 		return nil, fmt.Errorf("vaultdb WAL recovery: %w", err)
 	}
 
+	// Create audit log system table if not exists.
+	auditLog := audit.NewTableLog(s)
+	if err := auditLog.EnsureTable(); err != nil {
+		slog.Warn("failed to create audit log table", "error", err)
+	}
+
 	return &VaultDB{
 		Storage:     s,
 		Metrics:     m,
 		TxManager:   txm,
 		Broadcaster: executor.NewBroadcaster(),
+		AuditTable:  auditLog,
 	}, nil
 }
 
@@ -77,6 +87,9 @@ func (db *VaultDB) QueryContext(ctx context.Context, dbName, sql string) (*Resul
 	defer session.Close()
 	if db.Embedder != nil {
 		session.SetEmbedder(db.Embedder)
+	}
+	if db.AuditTable != nil {
+		session.AuditTable = db.AuditTable
 	}
 	if dbName != "" {
 		session.SetCurrentDatabase(dbName)
