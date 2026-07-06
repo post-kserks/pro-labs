@@ -62,3 +62,10 @@ docs/compose/
 dist/
 *.min.js
 *.min.css
+
+# Security tools binaries
+tools/sqlfuzz/sqlfuzz
+
+# Python cache
+__pycache__/
+*.pyc
