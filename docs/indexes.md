@@ -246,6 +246,32 @@ EXPLAIN SELECT * FROM users WHERE email = 'alice@example.com';
 
 Output shows the access method (SeqScan, IndexScan, or IndexOnlyScan) and estimated cost.
 
+### Index-Only Scans
+
+An index-only scan reads data directly from the index without accessing the heap (table data). This is faster when all required columns are present in the index.
+
+**When index-only scans are used:**
+- All columns in the SELECT are included in the index
+- The query uses equality or range conditions that can be satisfied by the index
+- The index is a B-tree or composite index
+
+**Example:**
+```sql
+-- Create a composite index that includes all needed columns
+CREATE INDEX idx_users_email_name ON users (email, name);
+
+-- This query can use an index-only scan
+SELECT email, name FROM users WHERE email = 'alice@example.com';
+
+-- EXPLAIN shows IndexOnlyScan
+EXPLAIN SELECT email, name FROM users WHERE email = 'alice@example.com';
+```
+
+**Limitations:**
+- Index-only scans are not possible if the query requires columns not in the index
+- The index must cover all columns referenced in the SELECT, WHERE, and ORDER BY clauses
+- NULL values may require heap access in some cases
+
 ---
 
 ## Index Constraints

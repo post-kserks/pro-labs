@@ -135,7 +135,7 @@ Rows are distributed across partitions using FNV-32a hash.
 
 ### Partition Pruning
 
-Queries with WHERE conditions on the partition key automatically skip irrelevant partitions.
+Queries with WHERE conditions on the partition key may skip irrelevant partitions. Currently, partition pruning is conservative and may return all partitions for complex predicates. Full predicate pushdown into partition pruning is planned for a future release.
 
 ## Memory Pool (sync.Pool)
 

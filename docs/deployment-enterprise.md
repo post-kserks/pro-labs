@@ -299,15 +299,56 @@ sysctl -w vm.max_map_count=262144
 ## Security Checklist
 
 - [ ] TLS enabled for all connections (see [deployment.md](deployment.md#tls-setup))
+- [ ] `tls.enforce: true` — reject non-TLS connections in production
+- [ ] `tls.min_version: "1.3"` for maximum security (requires compatible clients)
 - [ ] mTLS enabled for client authentication
+- [ ] RBAC configured: assign tokens with explicit roles (`admin`, `writer`, `reader`)
 - [ ] API tokens rotated regularly (minimum every 90 days)
 - [ ] Audit logging enabled (`vaultdb_audit_log`)
 - [ ] Network policies restrict access (Kubernetes NetworkPolicy or iptables)
-- [ ] RBAC configured for Kubernetes service accounts
 - [ ] Encryption at rest (LUKS, FileVault, or cloud KMS)
 - [ ] Run as non-root user
 - [ ] `VAULTDB_AUTH_SECRET` set with cryptographically random value
 - [ ] Monitoring alerts configured for auth failures
+
+### RBAC Deployment Notes
+
+Assign tokens with the least-privilege role required:
+
+```bash
+# Production: separate admin, application, and read-only tokens
+export VAULTDB_API_TOKENS="admin-token:ops:admin,app-token:myapp:writer,reader-token:monitoring:reader"
+```
+
+| Role | Use Case |
+|------|----------|
+| `admin` | Operations team, schema migrations, key rotation |
+| `writer` | Application servers (INSERT/UPDATE/DELETE) |
+| `reader` | Monitoring, reporting, dashboards |
+
+> **Note:** Role definitions are currently hardcoded (`admin`, `writer`, `reader`). Custom roles are planned for a future release.
+
+### TLS Enforcement Notes
+
+For production, enable TLS enforcement to prevent accidental plaintext connections:
+
+```yaml
+tls:
+  enabled: true
+  cert_file: /etc/vaultdb/tls/server.crt
+  key_file: /etc/vaultdb/tls/server.key
+  min_version: "1.3"
+  enforce: true
+```
+
+```bash
+# Environment variable equivalent
+export VAULTDB_TLS_ENABLED=true
+export VAULTDB_TLS_CERT_FILE=/etc/vaultdb/tls/server.crt
+export VAULTDB_TLS_KEY_FILE=/etc/vaultdb/tls/server.key
+```
+
+> **Warning:** Clients must support TLS 1.3 when `min_version` is set to `"1.3"`. Test client compatibility before enforcing.
 
 ---
 

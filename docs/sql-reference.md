@@ -455,3 +455,20 @@ VERIFY AUDIT LOG;
 ```
 
 Checks that each audit log entry's hash chain is unbroken and no entries have been modified or removed.
+
+---
+
+## REVOKE TOKEN
+
+Revokes an authentication token, preventing it from being used for future requests.
+
+```sql
+REVOKE TOKEN 'vdb_sk_your_token_here';
+-- Output: "Token revoked successfully."
+```
+
+**Notes:**
+- Revoked tokens are rejected by the authentication manager
+- Token revocation is immediate and permanent
+- Revoked tokens are cleaned up after 24 hours
+- Requires admin privileges to execute

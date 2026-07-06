@@ -375,3 +375,102 @@ Prometheus metrics endpoint. See [Monitoring](monitoring.md) for details.
 ## GET /dashboard
 
 Inline HTML dashboard (single-file SPA). Requires authentication.
+
+---
+
+## Admin Endpoints
+
+Admin endpoints require admin privileges and are used for security and management operations.
+
+### POST /admin/revoke-token
+
+Revokes an authentication token, preventing it from being used for future requests.
+
+#### Request
+
+```json
+{
+  "token": "vdb_sk_token_to_revoke"
+}
+```
+
+#### Response
+
+```json
+{
+  "status": "ok",
+  "message": "Token revoked successfully"
+}
+```
+
+**Notes:**
+- Requires admin privileges
+- Revoked tokens are immediately rejected
+- Token revocation is permanent
+- Revoked tokens are cleaned up after 24 hours
+
+### GET /admin/security-status
+
+Returns security-related metrics and status information.
+
+#### Response
+
+```json
+{
+  "status": "ok",
+  "encryption": {
+    "enabled": true,
+    "algorithm": "AES-256-GCM",
+    "key_source": "passphrase",
+    "databases_encrypted": 3
+  },
+  "authentication": {
+    "enabled": true,
+    "active_tokens": 5,
+    "revoked_tokens": 2
+  },
+  "audit_log": {
+    "enabled": true,
+    "total_entries": 15000,
+    "chain_intact": true
+  }
+}
+```
+
+**Notes:**
+- Requires admin privileges
+- Provides encryption status across databases
+- Shows authentication token metrics
+- Verifies audit log integrity
+
+---
+
+## Protocol v2
+
+VaultDB supports Protocol v2 with enhanced features. See [TCP Protocol](tcp-protocol.md) for details.
+
+### Key Features
+
+- **Handshake negotiation**: Client and server negotiate protocol version
+- **Typed parameters**: Support for parameterized queries with type information
+- **Time travel queries**: Read data as of a specific timestamp or snapshot
+- **Isolation levels**: Specify transaction isolation level per request
+- **Prepared statements**: Server-side prepared statement support
+
+### Handshake
+
+After TCP connect, send a handshake message:
+
+```json
+{"type": "handshake", "client_version": "2.0", "client_name": "my-app", "supported_features": ["time_travel", "transactions"]}
+```
+
+Server responds:
+
+```json
+{"type": "handshake", "protocol_version": "2.0", "server": "VaultDB", "server_version": "2.0.0", "supported_features": ["time_travel", "transactions", "prepared_statements"]}
+```
+
+### Backward Compatibility
+
+If no handshake is sent, the server operates in v1 compatibility mode.

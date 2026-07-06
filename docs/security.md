@@ -44,6 +44,42 @@ auth:
   block_for_seconds: 300  # Block duration (5 minutes)
 ```
 
+### Token Revocation
+
+Tokens can be revoked at runtime via the HTTP admin endpoint:
+
+```bash
+curl -X POST http://localhost:8080/admin/revoke-token \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{"token": "vdb_sk_token_to_revoke"}'
+```
+
+**Behavior:**
+- Revoked tokens are rejected immediately on all subsequent requests
+- Revocation entries are cleaned up after 24 hours (revoked token data expires)
+- Revocation is checked on every request (both TCP and HTTP)
+- Revoked entries are tracked by HMAC hash, not raw token
+
+### RBAC Roles
+
+VaultDB includes built-in role-based access control:
+
+| Role | Permissions |
+|------|-------------|
+| `admin` | All operations (`*`) |
+| `writer` | SELECT, INSERT, UPDATE, DELETE, CREATE/DROP TABLE, CREATE/DROP INDEX, COPY FROM/TO, CREATE/DROP VIEW, CREATE/DROP TRIGGER, ALTER TABLE, TRUNCATE, MERGE |
+| `reader` | SELECT, EXPLAIN |
+
+Tokens are assigned roles at registration:
+
+```bash
+# Format: token:label:role
+export VAULTDB_API_TOKENS="admin-token:ops:admin,app-token:myapp:writer,reader-token:mon:reader"
+```
+
+> **Note:** Roles are currently hardcoded and cannot be customized via configuration.
+
 ### Bypass Rules
 
 - When `auth.enabled: false`, all requests pass through
@@ -65,10 +101,21 @@ vaultdb-server \
   --tls-key server.key
 ```
 
+Or via configuration:
+
+```yaml
+tls:
+  enabled: true
+  cert_file: /path/to/server.crt
+  key_file: /path/to/server.key
+  min_version: "1.2"   # "1.2" or "1.3"
+  enforce: true         # reject non-TLS connections
+```
+
 **Enforced settings**:
-- Minimum TLS 1.2
+- Minimum TLS 1.2 (configurable to 1.3 via `min_version`)
 - Curve preferences: X25519, P-256
-- Cipher suites: ECDHE+AES-GCM only
+- Cipher suites: ECDHE+AES-GCM only (TLS_ECDHE_ECDSA/RSA_WITH_AES_128/256_GCM_SHA256/384)
 
 ### Mutual TLS (mTLS)
 
@@ -255,10 +302,19 @@ VERIFY AUDIT LOG;
 ```
 
 ### What Gets Logged
-- All DDL operations (CREATE/ALTER/DROP)
-- Authentication events (success and failure)
-- Encryption key rotation
-- RLS policy changes
+
+| Event | Logged |
+|-------|--------|
+| CREATE/DROP DATABASE | Yes |
+| CREATE/ALTER/DROP TABLE | Yes |
+| CREATE/DROP INDEX | Yes |
+| CREATE/DROP VIEW | Yes |
+| CREATE/DROP TRIGGER | Yes |
+| RLS policy changes | Yes |
+| Encryption key rotation | Yes |
+| Authentication success/failure | Yes |
+| Token revocation | Yes |
+| SELECT/INSERT/UPDATE/DELETE | Optional (configurable per table) |
 
 ### RLS on Audit Log
 
@@ -280,6 +336,46 @@ VaultDB validates SQL at multiple layers to prevent injection:
 - **Procedure bodies validated** — procedure bodies may only contain DML statements
 - **Trigger re-entrant guard** — triggers are limited to a maximum recursion depth of 3
 - **HTTP API parameter binding** — the HTTP API uses AST-level parameter binding, not string interpolation
+
+## WASM UDF Security
+
+WASM user-defined functions run in an isolated sandbox with the following protections:
+
+### Memory Limits
+
+- Default maximum memory: 256 pages (16 MB)
+- Configurable per-function via `WITH (MEMORY_LIMIT '256MB')`
+- `wazero` enforces memory limits at the WASM runtime level — modules cannot allocate beyond the limit
+
+### Export Validation
+
+Only whitelisted function exports are allowed:
+
+| Export | Purpose |
+|--------|---------|
+| `execute` | Main entry point (required) |
+| `alloc` | Memory allocation for arguments |
+| `execute_args` | Argument marshaling |
+| `result_len` | Query result length |
+| `result_copy` | Copy result to host memory |
+
+Any module exporting unknown functions is **rejected** during loading.
+
+### Additional Protections
+
+- **No WASI**: WASI is intentionally not instantiated — modules must be self-contained
+- **Timeout enforcement**: Default 30 seconds, configurable per-function via `WITH (TIMEOUT '5s')`
+- **Per-call isolation**: Each `execute` call instantiates a fresh module instance
+- **No host function access**: WASM modules cannot call host functions or access the filesystem
+
+## COPY Path Sandboxing
+
+`COPY FROM` enforces object name validation to prevent path traversal:
+
+- Database and table names must match `[a-zA-Z_][a-zA-Z0-9_]*`
+- Names cannot contain path separators (`/`, `\`), `..`, or null bytes
+- Maximum name length: 128 characters
+- Maximum rows per import: 1,000,000 (prevents memory exhaustion)
 
 ## Error Message Sanitization
 

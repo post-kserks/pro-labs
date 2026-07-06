@@ -120,6 +120,7 @@ encryption:
 | `passphrase` | Key derived via Argon2id (64MB memory, 3 iterations). Passphrase provided via `VAULTDB_ENCRYPTION_PASSPHRASE` env var |
 | `os_keychain` | Stored in system keychain (macOS Keychain, Linux libsecret, Windows DPAPI) |
 | `kms` | External KMS (AWS KMS, HashiCorp Vault, Azure Key Vault) |
+| `file_kms` | File-based KMS for testing and development. Stores encrypted DEK in a local file |
 
 > **All features are fully implemented:**
 > - `vaultdb-encrypt migrate` — online re-encryption without downtime
@@ -127,6 +128,7 @@ encryption:
 > - `vaultdb-encrypt rotate-dek` — online DEK rotation with multi-version support
 > - `os_keychain` — macOS Keychain, Linux libsecret, Windows DPAPI
 > - `kms` — AWS KMS, HashiCorp Vault, Azure Key Vault
+> - `file_kms` — File-based KMS for testing and development
 
 ### Key Management
 
@@ -136,6 +138,37 @@ VaultDB uses envelope encryption:
 - **DEK (Data Encryption Key)**: Stored inside the database in encrypted form (`{db}/.dek.enc`)
 
 KEK rotation is instant (< 1 second) — only the small `.dek.enc` file is re-encrypted. DEK rotation is performed online without downtime.
+
+### FileKMS Encryption
+
+FileKMS is a file-based Key Management Service designed for testing and development environments. It stores the encrypted DEK in a local file rather than using external KMS providers.
+
+**Use Cases:**
+- Development and testing environments
+- Local development without cloud dependencies
+- Integration testing with encryption enabled
+
+**Configuration:**
+
+```yaml
+encryption:
+  enabled: true
+  key_source: "file_kms"
+  kms:
+    provider: "file"
+    key_id: "/path/to/kms.enc"
+```
+
+**Security Properties:**
+- DEK is encrypted with a randomly generated KEK
+- KEK is stored in the same file as the encrypted DEK
+- File is encrypted using AES-256-GCM
+- Suitable for development but NOT for production use
+
+**Limitations:**
+- Not suitable for production (no key recovery mechanism)
+- KEK is stored alongside encrypted data
+- No external key management or audit trail
 
 ## Encryption Levels
 

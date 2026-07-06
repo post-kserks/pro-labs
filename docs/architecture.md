@@ -36,7 +36,8 @@ VaultDB is a monolithic SQL database engine with the following major components:
 │  │  ┌──────────┐  ┌──────────┐  ┌───────────────┐   │  │
 │  │  │  Page    │  │  Buffer  │  │     WAL       │   │  │
 │  │  │ Storage  │  │  Pool    │  │  (ARIES)      │   │  │
-│  │  │ Engine   │  │  (LRU)   │  │               │   │  │
+│  │  │ Engine   │  │  (Clock- │  │               │   │  │
+│  │  │          │  │  Sweep)  │  │               │   │  │
 │  │  └────┬─────┘  └──────────┘  └───────────────┘   │  │
 │  │       │                                            │  │
 │  │  ┌────┴────────────────────────────────────────┐   │  │
@@ -98,7 +99,7 @@ The executor uses the **Command Pattern** — each SQL statement type is a `Comm
 The storage layer is composed of several decomposed subsystems:
 
 - **Page Storage Engine**: Manages 8KB pages with PostgreSQL-style slotted layout
-- **Buffer Pool**: LRU page cache with dirty-page tracking and LSN-aware flushing
+- **Buffer Pool**: Clock-Sweep page cache (PostgreSQL-style) with dirty-page tracking and LSN-aware flushing
 - **WAL**: Write-ahead log with ARIES-style three-phase recovery
 - **Partition Manager**: Table partitioning (range, hash, list) with transparent query routing
 - **Free Space Map**: Tracks available space across heap pages for efficient allocation

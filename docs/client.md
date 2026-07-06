@@ -45,6 +45,8 @@ client.Commit()
 - Connection pooling
 - Automatic reconnection
 
+> **Note:** Token revocation is not available through the Go client library. Use the HTTP admin endpoint (`POST /admin/revoke-token`) directly.
+
 ## Python TCP Client
 
 ### Installation
@@ -78,6 +80,8 @@ with Client("localhost", 5432, "vdb_sk_...") as client:
 - Parameterized queries
 - Transaction support
 - Async support (coming soon)
+
+> **Note:** Token revocation is not available through the Python client library. Use the HTTP admin endpoint (`POST /admin/revoke-token`) directly.
 
 ## JavaScript/TypeScript TCP Client
 
@@ -114,6 +118,8 @@ await client.close();
 - Protocol v2 handshake
 - Parameterized queries
 - Transaction support
+
+> **Note:** Token revocation is not available through the JS/TS client library. Use the HTTP admin endpoint (`POST /admin/revoke-token`) directly.
 
 ## C++ Client
 
@@ -174,3 +180,5 @@ target_link_libraries(your_target PRIVATE vaultdb_client)
 - Connection pooling
 - Automatic reconnection
 - Error handling
+
+> **Note:** Token revocation is not available through the C++ client library. Use the HTTP admin endpoint (`POST /admin/revoke-token`) directly.

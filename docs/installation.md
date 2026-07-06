@@ -30,6 +30,12 @@ cd server
 go build -o vaultdb-backup ./cmd/vaultdb-backup
 ```
 
+## Go Install
+
+```bash
+go install github.com/vaultdb/vaultdb/server/cmd/vaultdb-server@latest
+```
+
 ## Docker
 
 ### Build Image

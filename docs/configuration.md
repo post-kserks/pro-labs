@@ -37,6 +37,13 @@ storage:
   # For large deployments:
   # buffer_pool_pages: 65536  # 512 MB
 
+tls:
+  enabled: false
+  cert_file: ""
+  key_file: ""
+  min_version: "1.2"             # "1.2" or "1.3"
+  enforce: false                 # reject non-TLS connections when true
+
 auth:
   enabled: true
   mtls_enabled: false
@@ -211,6 +218,39 @@ ai:
 - **Default**: `16384` (128 MB)
 - **Description**: Number of 8KB pages in the buffer pool. Increase for large datasets (e.g., `65536` for 512 MB).
 
+## TLS Options
+
+### `tls.enabled`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable TLS encryption for TCP and HTTP connections. Requires `cert_file` and `key_file`.
+
+### `tls.cert_file`
+
+- **Type**: string
+- **Default**: `""`
+- **Description**: Path to the TLS certificate file (PEM format).
+
+### `tls.key_file`
+
+- **Type**: string
+- **Default**: `""`
+- **Description**: Path to the TLS private key file (PEM format).
+
+### `tls.min_version`
+
+- **Type**: string
+- **Default**: `"1.2"`
+- **Options**: `"1.2"`, `"1.3"`
+- **Description**: Minimum TLS protocol version. `"1.2"` allows TLS 1.2+; `"1.3"` requires TLS 1.3 only. Cipher suites are restricted to ECDHE+AES-GCM regardless of version.
+
+### `tls.enforce`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: When `true`, the server rejects all non-TLS connections. Produces an error at startup if TLS is not configured (`tls.enabled: false`).
+
 ## Authentication Options
 
 ### `auth.enabled`
@@ -283,6 +323,25 @@ ai:
 - **Default**: `true`
 - **Description**: Whether to encrypt WAL records. Should be `true` when `encryption.enabled` is `true`.
 
+## RBAC Roles
+
+VaultDB includes built-in role-based access control. Tokens are assigned roles at registration time.
+
+| Role | Permissions |
+|------|-------------|
+| `admin` | All operations (`*`) |
+| `writer` | SELECT, INSERT, UPDATE, DELETE, CREATE/DROP TABLE, CREATE/DROP INDEX, COPY FROM/TO, CREATE/DROP VIEW, CREATE/DROP TRIGGER, ALTER TABLE, TRUNCATE, MERGE |
+| `reader` | SELECT, EXPLAIN |
+
+Roles are assigned when tokens are registered:
+
+```bash
+# Token format: token:label:role (role defaults to "admin" if omitted)
+export VAULTDB_API_TOKENS="token1:label1:admin,token2:label2:writer,token3:label3:reader"
+```
+
+> **Note:** Roles are currently defined in code and cannot be customized via configuration. Custom role definitions are planned for a future release.
+
 ## AI Options
 
 ### `ai.provider`
@@ -336,6 +395,7 @@ ai:
 | `-tls-cert` | (none) | — | TLS certificate file |
 | `-tls-key` | (none) | — | TLS private key file |
 | `-tls-ca` | (none) | `auth.mtls_ca_file` | CA file for mTLS |
+| `-tls-enforce` | `false` | `tls.enforce` | Reject non-TLS connections |
 
 ## Environment Variables
 
@@ -355,6 +415,15 @@ ai:
 | `VAULTDB_AI_API_KEY` | `ai.api_key` | AI embedding API key |
 | `VAULTDB_ENCRYPTION_PASSPHRASE` | `encryption.key_source` | Passphrase for TDE encryption (when using `passphrase` key source) |
 
+## Hard Limits (Not Configurable)
+
+| Limit | Value | Description |
+|-------|-------|-------------|
+| COPY row limit | 1,000,000 | Maximum rows per `COPY FROM` import |
+| Parser depth | 32 | Maximum nested subquery/EXISTS depth |
+| Segment size | 65,536 pages | Pages per heap file segment (512 MB) |
+| Object name length | 128 chars | Max length for database/table names |
+
 ## Validation Rules
 
 - All three ports must be in range 1–65535.
@@ -364,3 +433,5 @@ ai:
 - `engine` must be `page` or `json`.
 - `storage.data_dir` must not be empty.
 - When `auth.enabled` is `true`, `VAULTDB_AUTH_SECRET` must be set.
+- When `tls.enforce` is `true`, `tls.enabled` must also be `true`.
+- `tls.min_version` must be `"1.2"` or `"1.3"` (or empty).

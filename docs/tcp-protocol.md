@@ -132,6 +132,29 @@ TCP error messages are sanitized for security:
 - Unknown errors become `"internal error"`
 - Messages truncated at 200 characters
 
+## Admin Commands
+
+Administrative operations are available via HTTP endpoints, not the TCP protocol:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/admin/revoke-token` | POST | Revoke a token (body: `{"token": "..."}`) |
+| `/admin/security-status` | GET | Security status overview |
+| `/health` | GET | Health check (no auth required on monitor port) |
+| `/ready` | GET | Readiness check (no auth required on monitor port) |
+| `/metrics` | GET | Prometheus metrics |
+| `/dashboard` | GET | Web dashboard |
+
+All admin endpoints (except `/health` and `/ready` on port 5433) require authentication.
+
+```bash
+# Token revocation example
+curl -X POST http://localhost:8080/admin/revoke-token \
+  -H "Authorization: Bearer vdb_sk_admin_token" \
+  -H "Content-Type: application/json" \
+  -d '{"token": "vdb_sk_token_to_revoke"}'
+```
+
 ## Client Examples
 
 ### Go (Official Client)

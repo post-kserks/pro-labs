@@ -176,3 +176,75 @@ DDL operations are logged as structured JSON:
   "detail": "CREATE TABLE users (id INT, name TEXT)"
 }
 ```
+
+## Security Dashboard
+
+VaultDB provides a security dashboard endpoint for monitoring security-related metrics.
+
+### Endpoint
+
+```bash
+GET /admin/security-status
+```
+
+### Authentication
+
+Requires admin privileges. Include authentication token:
+
+```
+Authorization: Bearer vdb_sk_your_token_here
+```
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "encryption": {
+    "enabled": true,
+    "algorithm": "AES-256-GCM",
+    "key_source": "passphrase",
+    "databases_encrypted": 3
+  },
+  "authentication": {
+    "enabled": true,
+    "active_tokens": 5,
+    "revoked_tokens": 2
+  },
+  "audit_log": {
+    "enabled": true,
+    "total_entries": 15000,
+    "chain_intact": true
+  },
+  "recent_security_events": [
+    {
+      "timestamp": "2026-07-01T14:30:00Z",
+      "type": "token_revoked",
+      "detail": "Token vdb_sk_*** revoked"
+    }
+  ]
+}
+```
+
+### Security Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `encryption.enabled` | Whether encryption is enabled |
+| `encryption.algorithm` | Encryption algorithm used |
+| `encryption.key_source` | Key management source |
+| `encryption.databases_encrypted` | Number of encrypted databases |
+| `authentication.enabled` | Whether authentication is enabled |
+| `authentication.active_tokens` | Number of active tokens |
+| `authentication.revoked_tokens` | Number of revoked tokens |
+| `audit_log.enabled` | Whether audit logging is enabled |
+| `audit_log.total_entries` | Total audit log entries |
+| `audit_log.chain_intact` | Whether audit log chain is intact |
+
+### Use Cases
+
+- Monitor encryption status across databases
+- Track authentication token usage
+- Verify audit log integrity
+- Detect security anomalies
+- Compliance reporting

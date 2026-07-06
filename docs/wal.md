@@ -47,6 +47,36 @@ WAL appends are batched for performance:
 - **Behavior**: Records are buffered in memory; `fsync` is called every 64 appends
 - **Trade-off**: At most 64 unwritten records may be lost on crash, but throughput is significantly improved
 
+## Group Commit
+
+Group commit batches multiple transaction commits into a single fsync operation for improved throughput.
+
+### How It Works
+
+1. Multiple transactions request commit simultaneously
+2. Their commit records are buffered in memory
+3. A single fsync operation writes all buffered commits to disk
+4. All transactions are considered durable after the fsync
+
+### Benefits
+
+- **Reduced I/O**: Multiple commits share a single disk write
+- **Higher throughput**: Especially under concurrent load
+- **Lower latency**: Batching reduces per-commit overhead
+
+### Configuration
+
+```yaml
+server:
+  wal_sync_batch_size: 64  # Records between fsync calls
+```
+
+### Trade-offs
+
+- **Durability**: At most `wal_sync_batch_size` commits may be lost on crash
+- **Latency**: Individual commits may wait for batching
+- **Throughput**: Significantly improved under concurrent load
+
 ## Corruption Recovery
 
 On startup, `scanAndTruncate()` validates the WAL:
