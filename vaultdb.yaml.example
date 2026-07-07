@@ -24,6 +24,9 @@ storage:
 
 auth:
   enabled: true
+  # Allow localhost requests without authentication (default: true).
+  # Set to false in production to require tokens for all connections.
+  localhost_bypass: true
 
 # Внешний embedding-провайдер для SEMANTIC_MATCH и AI_EMBED.
 # Если секция не заполнена, SEMANTIC_MATCH возвращает понятную ошибку.

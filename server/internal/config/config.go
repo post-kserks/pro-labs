@@ -59,12 +59,13 @@ type StorageConfig struct {
 
 // AuthConfig — параметры аутентификации.
 type AuthConfig struct {
-	Enabled       bool   `yaml:"enabled"`
-	MTLSEnabled   bool   `yaml:"mtls_enabled"`
-	MTLScaFile    string `yaml:"mtls_ca_file"`
-	RateWindowSec int    `yaml:"rate_window_seconds"`
-	MaxFails      int    `yaml:"max_fails"`
-	BlockForSec   int    `yaml:"block_for_seconds"`
+	Enabled        bool   `yaml:"enabled"`
+	MTLSEnabled    bool   `yaml:"mtls_enabled"`
+	MTLScaFile     string `yaml:"mtls_ca_file"`
+	RateWindowSec  int    `yaml:"rate_window_seconds"`
+	MaxFails       int    `yaml:"max_fails"`
+	BlockForSec    int    `yaml:"block_for_seconds"`
+	LocalhostBypass bool  `yaml:"localhost_bypass"`
 }
 
 // AIConfig — параметры внешнего embedding-провайдера для SEMANTIC_MATCH/AI_EMBED.
@@ -149,10 +150,11 @@ func Default() *Config {
 			BufferPoolPages:  DefaultBufferPoolPages,
 		},
 		Auth: AuthConfig{
-			Enabled:       true,
-			RateWindowSec: DefaultAuthRateWindowSec,
-			MaxFails:      DefaultAuthMaxFails,
-			BlockForSec:   DefaultAuthBlockForSec,
+			Enabled:         true,
+			RateWindowSec:   DefaultAuthRateWindowSec,
+			MaxFails:        DefaultAuthMaxFails,
+			BlockForSec:     DefaultAuthBlockForSec,
+			LocalhostBypass: true,
 		},
 	}
 }
@@ -287,6 +289,11 @@ func validateConfig(cfg *Config) error {
 		cfg.Encryption.DefaultScope != "tables_only" &&
 		cfg.Encryption.DefaultScope != "off" {
 		return fmt.Errorf("unknown encryption.default_scope %q (want all|tables_only|off)", cfg.Encryption.DefaultScope)
+	}
+
+	// Warn when localhost auth bypass is enabled (default: true).
+	if cfg.Auth.LocalhostBypass && cfg.Auth.Enabled {
+		fmt.Fprintln(os.Stderr, "WARNING: localhost auth bypass is enabled — disable in production (auth.localhost_bypass: false)")
 	}
 
 	// Validate port ranges

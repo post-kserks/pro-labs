@@ -276,3 +276,89 @@ func TestCleanupRevokedTokensPersists(t *testing.T) {
 		t.Fatalf("expected 1 entry after cleanup, got %d", len(entries))
 	}
 }
+
+func TestLocalhostBypassEnabled(t *testing.T) {
+	m, err := New(true, map[string]string{"sekret": "ci"}, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	m.SetLocalhostBypass(true)
+
+	handler := m.Middleware(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	for _, addr := range []string{"127.0.0.1:12345", "[::1]:12345", "localhost:12345"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/query", nil)
+		req.RemoteAddr = addr
+		handler(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("localhost bypass enabled but %s returned %d", addr, rec.Code)
+		}
+	}
+}
+
+func TestLocalhostBypassDisabled(t *testing.T) {
+	m, err := New(true, map[string]string{"sekret": "ci"}, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	m.SetLocalhostBypass(false)
+
+	handler := m.Middleware(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Localhost without token should be rejected
+	for _, addr := range []string{"127.0.0.1:12345", "[::1]:12345", "localhost:12345"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/query", nil)
+		req.RemoteAddr = addr
+		handler(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("localhost bypass disabled but %s returned %d (want 401)", addr, rec.Code)
+		}
+	}
+
+	// Localhost with valid token should pass
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/query", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Authorization", "Bearer sekret")
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("localhost with valid token returned %d (want 200)", rec.Code)
+	}
+}
+
+func TestNonLocalhostAlwaysRequiresToken(t *testing.T) {
+	m, err := New(true, map[string]string{"sekret": "ci"}, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	m.SetLocalhostBypass(true) // even with bypass enabled
+
+	handler := m.Middleware(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Remote address without token → 401
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/query", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	handler(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("remote without token returned %d (want 401)", rec.Code)
+	}
+
+	// Remote address with valid token → 200
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/query", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("Authorization", "Bearer sekret")
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("remote with valid token returned %d (want 200)", rec.Code)
+	}
+}

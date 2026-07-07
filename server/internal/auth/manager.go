@@ -44,16 +44,17 @@ var rolePermissions = map[string][]string{
 // Manager хранит HMAC-SHA256 хеши токенов с серверным секретом.
 // HMAC привязан к секрету — rainbow tables бесполезны.
 type Manager struct {
-	enabled    bool
-	mu         sync.RWMutex
-	tokens     map[string]*TokenInfo // HMAC-SHA256(token, secret) hex → token info
-	revoked    map[string]time.Time  // HMAC-SHA256(token, secret) hex → revocation time
-	secret     []byte
-	warnedOnce sync.Once
-	logger     *slog.Logger
-	rateLim    *authRateLimiter
-	auditFunc  AuditFunc
-	dataDir    string // directory for persisting revoked tokens
+	enabled        bool
+	localhostBypass bool
+	mu             sync.RWMutex
+	tokens         map[string]*TokenInfo // HMAC-SHA256(token, secret) hex → token info
+	revoked        map[string]time.Time  // HMAC-SHA256(token, secret) hex → revocation time
+	secret         []byte
+	warnedOnce     sync.Once
+	logger         *slog.Logger
+	rateLim        *authRateLimiter
+	auditFunc      AuditFunc
+	dataDir        string // directory for persisting revoked tokens
 }
 
 // authRateLimiter отслеживает неудачные попытки аутентификации по IP.
@@ -193,12 +194,13 @@ func New(enabled bool, tokens map[string]string, logger *slog.Logger, rateWindow
 	}
 
 	m := &Manager{
-		enabled: enabled,
-		tokens:  hashed,
-		revoked: make(map[string]time.Time),
-		secret:  secret,
-		logger:  logger,
-		rateLim: newAuthRateLimiter(rateWindowSec, maxFails, blockForSec),
+		enabled:        enabled,
+		localhostBypass: true, // default: backward-compatible bypass for localhost
+		tokens:         hashed,
+		revoked:        make(map[string]time.Time),
+		secret:         secret,
+		logger:         logger,
+		rateLim:        newAuthRateLimiter(rateWindowSec, maxFails, blockForSec),
 	}
 	go m.cleanupRevokedTokens()
 	return m, nil
@@ -206,6 +208,14 @@ func New(enabled bool, tokens map[string]string, logger *slog.Logger, rateWindow
 
 func (m *Manager) Enabled() bool {
 	return m.enabled
+}
+
+// SetLocalhostBypass controls whether localhost (127.0.0.1, ::1, localhost)
+// requests skip authentication. Default is true for backward compatibility.
+func (m *Manager) SetLocalhostBypass(v bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.localhostBypass = v
 }
 
 // RevokeToken marks a token as revoked. Revoked tokens are rejected by ValidateToken.
@@ -491,8 +501,8 @@ func (m *Manager) Middleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		ip := extractClientIP(r)
-		// Skip auth for localhost — web UI needs to make API calls without tokens
-		if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
+		// Skip auth for localhost when bypass is enabled — web UI needs to make API calls without tokens
+		if m.localhostBypass && (ip == "127.0.0.1" || ip == "::1" || ip == "localhost") {
 			next(w, r)
 			return
 		}
