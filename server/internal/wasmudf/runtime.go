@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"time"
-	"unicode/utf8"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -24,8 +23,6 @@ const (
 	DefaultMaxModuleSize = 10 * 1024 * 1024
 	// wasmMagic is the WASM binary magic number: \0asm.
 	wasmMagic = "\x00asm"
-	// maxExportNameLength is the maximum length of a WASM export name.
-	maxExportNameLength = 256
 )
 
 // allowedExports is the whitelist of function names that WASM UDF modules may export.
@@ -91,69 +88,6 @@ func validateSectionSizes(data []byte, maxModuleSize int64) error {
 			return fmt.Errorf("WASM section %d declares size %d but only %d bytes remain", sectionID, sectionSize, len(data)-off)
 		}
 		off += int(sectionSize)
-	}
-	return nil
-}
-
-// validateExportNames parses the WASM export section (section ID 7) and validates
-// that export names are valid UTF-8, within length bounds, and in the whitelist.
-func validateExportNames(data []byte) error {
-	off := 0
-	for off < len(data) {
-		sectionID := data[off]
-		off++
-
-		sectionSize, n, err := decodeLEB128(data[off:])
-		if err != nil {
-			return nil // not an export section, skip validation
-		}
-		off += n
-
-		if off+int(sectionSize) > len(data) {
-			return nil
-		}
-
-		if sectionID != 7 {
-			off += int(sectionSize)
-			continue
-		}
-
-		// Parse export section
-		secData := data[off : off+int(sectionSize)]
-		soff := 0
-		exportCount, n, err := decodeLEB128(secData[soff:])
-		if err != nil {
-			return fmt.Errorf("invalid export section count: %w", err)
-		}
-		soff += n
-
-		for i := uint32(0); i < exportCount; i++ {
-			if soff >= len(secData) {
-				return fmt.Errorf("export section truncated at export %d", i)
-			}
-			nameLen, n, err := decodeLEB128(secData[soff:])
-			if err != nil {
-				return fmt.Errorf("invalid export name length at export %d: %w", i, err)
-			}
-			soff += n
-
-			if int(nameLen) > maxExportNameLength {
-				return fmt.Errorf("export name length %d exceeds maximum %d bytes at export %d", nameLen, maxExportNameLength, i)
-			}
-			if soff+int(nameLen) > len(secData) {
-				return fmt.Errorf("export name truncated at export %d", i)
-			}
-			name := string(secData[soff : soff+int(nameLen)])
-			soff += int(nameLen)
-
-			if !utf8.ValidString(name) {
-				return fmt.Errorf("export name %q is not valid UTF-8", name)
-			}
-			if !allowedExports[name] {
-				return fmt.Errorf("WASM module has unexpected export %q (allowed: alloc, execute, execute_args, result_len, result_copy)", name)
-			}
-		}
-		return nil
 	}
 	return nil
 }
