@@ -370,6 +370,10 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 		stmt, err = p.parseEnableRls()
 	case lexer.TOKEN_VERIFY:
 		stmt, err = p.parseVerifyAuditLog()
+	case lexer.TOKEN_GRANT:
+		stmt, err = p.parseGrant()
+	case lexer.TOKEN_REVOKE:
+		stmt, err = p.parseRevoke()
 	case lexer.TOKEN_APPLY:
 		stmt, err = p.parseMigration("APPLY")
 	case lexer.TOKEN_PREVIEW:

@@ -41,6 +41,11 @@ var rolePermissions = map[string][]string{
 	"reader": {"SELECT", "EXPLAIN"},
 }
 
+// GrantsProvider supplies dynamic role grants from the system.grants table.
+type GrantsProvider interface {
+	GetRoleGrants(roleName string) (map[string][]string, error)
+}
+
 // Manager хранит HMAC-SHA256 хеши токенов с серверным секретом.
 // HMAC привязан к секрету — rainbow tables бесполезны.
 type Manager struct {
@@ -55,6 +60,7 @@ type Manager struct {
 	rateLim        *authRateLimiter
 	auditFunc      AuditFunc
 	dataDir        string // directory for persisting revoked tokens
+	grantsProvider GrantsProvider // dynamic RBAC grants from DB
 }
 
 // authRateLimiter отслеживает неудачные попытки аутентификации по IP.
@@ -380,6 +386,13 @@ func (m *Manager) SetAuditFunc(fn AuditFunc) {
 	m.auditFunc = fn
 }
 
+// SetGrantsProvider sets the dynamic grants provider for RBAC checks.
+func (m *Manager) SetGrantsProvider(gp GrantsProvider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.grantsProvider = gp
+}
+
 // NewDisabled creates a disabled auth manager that allows all requests.
 func NewDisabled() (*Manager, error) {
 	return &Manager{enabled: false}, nil
@@ -467,6 +480,34 @@ func (m *Manager) CheckPermission(token, operation string) bool {
 		return true
 	}
 	role := m.GetTokenRole(token)
+
+	// Check dynamic grants from DB first (if provider is set).
+	m.mu.RLock()
+	gp := m.grantsProvider
+	m.mu.RUnlock()
+	if gp != nil {
+		dynamicPerms, err := gp.GetRoleGrants(role)
+		if err == nil && dynamicPerms != nil {
+			// Check global grants (object "*").
+			if globalPrivs, ok := dynamicPerms["*"]; ok {
+				for _, p := range globalPrivs {
+					if p == "ALL" || strings.EqualFold(p, operation) {
+						return true
+					}
+				}
+			}
+			// Check object-specific grants.
+			for _, privs := range dynamicPerms {
+				for _, p := range privs {
+					if p == "ALL" || strings.EqualFold(p, operation) {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback to hardcoded role permissions.
 	perms, ok := rolePermissions[role]
 	if !ok {
 		return false

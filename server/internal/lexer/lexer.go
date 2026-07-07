@@ -152,6 +152,12 @@ const (
 	TOKEN_PARTITIONS
 	TOKEN_MAXVALUE
 
+	// RBAC keywords
+	TOKEN_ROLE
+	TOKEN_GRANT
+	TOKEN_REVOKE
+	TOKEN_PRIVILEGES
+
 	// Data types
 	TOKEN_INT
 	TOKEN_FLOAT_TYPE
@@ -684,6 +690,9 @@ var keywords = map[string]TokenType{
 	"THAN":             TOKEN_THAN,
 	"PARTITIONS":       TOKEN_PARTITIONS,
 	"MAXVALUE":         TOKEN_MAXVALUE,
+	"GRANT":            TOKEN_GRANT,
+	"REVOKE":           TOKEN_REVOKE,
+	"PRIVILEGES":       TOKEN_PRIVILEGES,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -847,6 +856,10 @@ var tokenNames = [...]string{
 	TOKEN_THAN:              "THAN",
 	TOKEN_PARTITIONS:        "PARTITIONS",
 	TOKEN_MAXVALUE:          "MAXVALUE",
+	TOKEN_ROLE:              "ROLE",
+	TOKEN_GRANT:             "GRANT",
+	TOKEN_REVOKE:            "REVOKE",
+	TOKEN_PRIVILEGES:        "PRIVILEGES",
 	TOKEN_IDENT:             "IDENT",
 	TOKEN_INT_LIT:           "INT_LIT",
 	TOKEN_FLOAT_LIT:         "FLOAT_LIT",

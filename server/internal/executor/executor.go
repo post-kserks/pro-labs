@@ -100,6 +100,18 @@ func init() {
 	registerCommand(reflect.TypeOf((*parser.VerifyAuditLogStatement)(nil)), func(s parser.Statement) Command {
 		return &VerifyAuditLogCommand{stmt: s.(*parser.VerifyAuditLogStatement)}
 	})
+	registerCommand(reflect.TypeOf((*parser.CreateRoleStatement)(nil)), func(s parser.Statement) Command {
+		return &CreateRoleCommand{stmt: s.(*parser.CreateRoleStatement)}
+	})
+	registerCommand(reflect.TypeOf((*parser.DropRoleStatement)(nil)), func(s parser.Statement) Command {
+		return &DropRoleCommand{stmt: s.(*parser.DropRoleStatement)}
+	})
+	registerCommand(reflect.TypeOf((*parser.GrantStatement)(nil)), func(s parser.Statement) Command {
+		return &GrantCommand{stmt: s.(*parser.GrantStatement)}
+	})
+	registerCommand(reflect.TypeOf((*parser.RevokeStatement)(nil)), func(s parser.Statement) Command {
+		return &RevokeCommand{stmt: s.(*parser.RevokeStatement)}
+	})
 	registerCommand(reflect.TypeOf((*parser.CopyStatement)(nil)), func(s parser.Statement) Command {
 		stmt := s.(*parser.CopyStatement)
 		if stmt.IsFrom {

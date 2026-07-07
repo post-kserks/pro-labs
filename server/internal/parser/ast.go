@@ -424,6 +424,29 @@ type EnableRlsStatement struct {
 // VerifyAuditLogStatement represents "VERIFY AUDIT LOG".
 type VerifyAuditLogStatement struct{}
 
+// RBAC statements
+type CreateRoleStatement struct {
+	Name     string
+	Password string
+}
+
+type DropRoleStatement struct {
+	Name     string
+	IfExists bool
+}
+
+type GrantStatement struct {
+	Privileges []string
+	On         string
+	To         string
+}
+
+type RevokeStatement struct {
+	Privileges []string
+	On         string
+	From       string
+}
+
 func (*CreateDatabaseStatement) statementNode()  {}
 func (*DropDatabaseStatement) statementNode()    {}
 func (*UseDatabaseStatement) statementNode()     {}
@@ -456,6 +479,10 @@ func (*MigrationStatement) statementNode()       {}
 func (*CreatePolicyStatement) statementNode()    {}
 func (*EnableRlsStatement) statementNode()       {}
 func (*VerifyAuditLogStatement) statementNode() {}
+func (*CreateRoleStatement) statementNode()     {}
+func (*DropRoleStatement) statementNode()       {}
+func (*GrantStatement) statementNode()          {}
+func (*RevokeStatement) statementNode()         {}
 func (*CTEStatement) statementNode()             {}
 func (*CreateViewStatement) statementNode()      {}
 func (*DropViewStatement) statementNode()        {}
@@ -500,6 +527,10 @@ func (*MigrationStatement) StatementType() string       { return "MIGRATION" }
 func (*CreatePolicyStatement) StatementType() string    { return "CREATE_POLICY" }
 func (*EnableRlsStatement) StatementType() string       { return "ENABLE_RLS" }
 func (*VerifyAuditLogStatement) StatementType() string  { return "VERIFY_AUDIT_LOG" }
+func (*CreateRoleStatement) StatementType() string     { return "CREATE_ROLE" }
+func (*DropRoleStatement) StatementType() string       { return "DROP_ROLE" }
+func (*GrantStatement) StatementType() string          { return "GRANT" }
+func (*RevokeStatement) StatementType() string         { return "REVOKE" }
 func (*CTEStatement) StatementType() string             { return "CTE" }
 func (*CreateViewStatement) StatementType() string      { return "CREATE_VIEW" }
 func (*DropViewStatement) StatementType() string        { return "DROP_VIEW" }

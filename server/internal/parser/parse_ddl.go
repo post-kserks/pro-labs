@@ -363,6 +363,11 @@ func (p *sqlParser) parseCreate() (Statement, error) {
 		return p.parseCreateProcedure()
 	case lexer.TOKEN_INDEX:
 		return p.parseCreateIndex()
+	case lexer.TOKEN_IDENT:
+		if strings.ToUpper(p.current().Literal) == "ROLE" {
+			return p.parseCreateRole()
+		}
+		return nil, p.expectedError("DATABASE, TABLE, VIEW, INDEX or ROLE", p.current())
 	default:
 		return nil, p.expectedError("DATABASE, TABLE, VIEW or INDEX", p.current())
 	}
@@ -561,6 +566,27 @@ func (p *sqlParser) parseCreateProcedure() (Statement, error) {
 		}
 	}
 	return &CreateProcedureStatement{Name: procName, Params: params, Body: body, Language: lang, Options: options}, nil
+}
+
+func (p *sqlParser) parseCreateRole() (Statement, error) {
+	p.advance() // ROLE
+	name, err := p.consumeIdent("role name")
+	if err != nil {
+		return nil, err
+	}
+	password := ""
+	if p.current().Type == lexer.TOKEN_WITH {
+		p.advance() // WITH
+		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "PASSWORD" {
+			p.advance() // PASSWORD
+			if p.current().Type != lexer.TOKEN_STRING_LIT {
+				return nil, p.expectedError("password string", p.current())
+			}
+			password = p.current().Literal
+			p.advance()
+		}
+	}
+	return &CreateRoleStatement{Name: name, Password: password}, nil
 }
 
 func (p *sqlParser) parseCreateTable() (Statement, error) {
@@ -948,6 +974,24 @@ func (p *sqlParser) parseDrop() (Statement, error) {
 		return &DropProcedureStatement{Name: name}, nil
 	case lexer.TOKEN_INDEX:
 		return p.parseDropIndex()
+	case lexer.TOKEN_IDENT:
+		if strings.ToUpper(p.current().Literal) == "ROLE" {
+			p.advance() // ROLE
+			ifExists := false
+			if p.current().Type == lexer.TOKEN_IF {
+				p.advance() // IF
+				if err := p.consume(lexer.TOKEN_EXISTS, "EXISTS"); err != nil {
+					return nil, err
+				}
+				ifExists = true
+			}
+			name, err := p.consumeIdent("role name")
+			if err != nil {
+				return nil, err
+			}
+			return &DropRoleStatement{Name: name, IfExists: ifExists}, nil
+		}
+		return nil, p.expectedError("DATABASE, TABLE, VIEW, INDEX or ROLE", p.current())
 	default:
 		return nil, p.expectedError("DATABASE, TABLE, VIEW or INDEX", p.current())
 	}
@@ -1122,6 +1166,88 @@ func (p *sqlParser) parseUse() (Statement, error) {
 		return nil, err
 	}
 	return &UseDatabaseStatement{DatabaseName: name}, nil
+}
+
+func (p *sqlParser) parseGrant() (Statement, error) {
+	p.advance() // GRANT
+
+	privileges, err := p.parsePrivilegeList()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_ON, "ON"); err != nil {
+		return nil, err
+	}
+	on, err := p.parseObjectName()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_TO, "TO"); err != nil {
+		return nil, err
+	}
+	to, err := p.consumeIdent("role name")
+	if err != nil {
+		return nil, err
+	}
+	return &GrantStatement{Privileges: privileges, On: on, To: to}, nil
+}
+
+func (p *sqlParser) parseRevoke() (Statement, error) {
+	p.advance() // REVOKE
+
+	privileges, err := p.parsePrivilegeList()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_ON, "ON"); err != nil {
+		return nil, err
+	}
+	on, err := p.parseObjectName()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_FROM, "FROM"); err != nil {
+		return nil, err
+	}
+	from, err := p.consumeIdent("role name")
+	if err != nil {
+		return nil, err
+	}
+	return &RevokeStatement{Privileges: privileges, On: on, From: from}, nil
+}
+
+// parseObjectName parses an object name for GRANT/REVOKE, accepting either
+// an identifier or the * wildcard.
+func (p *sqlParser) parseObjectName() (string, error) {
+	if p.current().Type == lexer.TOKEN_STAR {
+		p.advance()
+		return "*", nil
+	}
+	return p.consumeIdent("object name")
+}
+
+func (p *sqlParser) parsePrivilegeList() ([]string, error) {
+	var privileges []string
+	for {
+		tok := p.current()
+		upper := strings.ToUpper(tok.Literal)
+		switch upper {
+		case "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALL":
+			privileges = append(privileges, upper)
+			p.advance()
+		default:
+			if len(privileges) == 0 {
+				return nil, p.expectedError("privilege name (SELECT, INSERT, UPDATE, DELETE, CREATE, ALL)", tok)
+			}
+			return privileges, nil
+		}
+		if p.current().Type == lexer.TOKEN_COMMA {
+			p.advance()
+			continue
+		}
+		break
+	}
+	return privileges, nil
 }
 
 func (p *sqlParser) parsePartitionSpec() (*PartitionSpec, error) {

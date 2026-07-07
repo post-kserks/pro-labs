@@ -286,3 +286,73 @@ func TestDefaultRoleIsAdmin(t *testing.T) {
 		t.Fatal("default admin should be allowed DELETE")
 	}
 }
+
+// mockGrantsProvider implements GrantsProvider for testing.
+type mockGrantsProvider struct {
+	grants map[string]map[string][]string // role -> object -> []privilege
+}
+
+func (p *mockGrantsProvider) GetRoleGrants(roleName string) (map[string][]string, error) {
+	if p.grants == nil {
+		return nil, nil
+	}
+	return p.grants[roleName], nil
+}
+
+func TestCheckPermissionDynamicGrants(t *testing.T) {
+	m, err := New(true, nil, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Create a token with a custom role (not in hardcoded map).
+	token := m.GenerateToken("custom-user", "custom")
+
+	// Without grants provider, unknown role should be denied.
+	if m.CheckPermission(token, "SELECT") {
+		t.Fatal("custom role without grants should be denied")
+	}
+
+	// Set up dynamic grants provider.
+	m.SetGrantsProvider(&mockGrantsProvider{
+		grants: map[string]map[string][]string{
+			"custom": {
+				"*": {"SELECT", "INSERT"},
+			},
+		},
+	})
+
+	// Now custom role should have SELECT and INSERT.
+	if !m.CheckPermission(token, "SELECT") {
+		t.Fatal("custom role should be allowed SELECT via dynamic grants")
+	}
+	if !m.CheckPermission(token, "INSERT") {
+		t.Fatal("custom role should be allowed INSERT via dynamic grants")
+	}
+	if m.CheckPermission(token, "DELETE") {
+		t.Fatal("custom role should NOT be allowed DELETE via dynamic grants")
+	}
+}
+
+func TestCheckPermissionDynamicGrantsFallback(t *testing.T) {
+	m, err := New(true, nil, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	token := m.GenerateToken("reader-user", "reader")
+
+	// Set up dynamic grants that restrict reader beyond defaults.
+	m.SetGrantsProvider(&mockGrantsProvider{
+		grants: map[string]map[string][]string{
+			"reader": {}, // empty grants — no dynamic permissions
+		},
+	})
+
+	// Fallback to hardcoded: reader has SELECT.
+	if !m.CheckPermission(token, "SELECT") {
+		t.Fatal("reader should still have SELECT from hardcoded fallback")
+	}
+	// Fallback to hardcoded: reader doesn't have INSERT.
+	if m.CheckPermission(token, "INSERT") {
+		t.Fatal("reader should NOT have INSERT (neither dynamic nor hardcoded)")
+	}
+}
