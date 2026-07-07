@@ -307,3 +307,51 @@ func TestFormatExpressionRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestInsertSelectCheckConstraint(t *testing.T) {
+	session := setupSession(t)
+
+	// Create source table with data
+	executeSQL(t, session, "CREATE TABLE src_products (id INT, name VARCHAR(100), price FLOAT);")
+	executeSQL(t, session, "INSERT INTO src_products VALUES (1, 'Widget', 9.99);")
+	executeSQL(t, session, "INSERT INTO src_products VALUES (2, 'Gadget', 19.99);")
+	executeSQL(t, session, "INSERT INTO src_products VALUES (3, 'Thing', -5.00);")
+
+	// Create destination table with CHECK constraint on price
+	executeSQL(t, session, "CREATE TABLE dst_products (id INT, name VARCHAR(100), price FLOAT);")
+	executeSQL(t, session, "ALTER TABLE dst_products ADD CONSTRAINT chk_price CHECK (price > 0);")
+
+	// INSERT ... SELECT should enforce CHECK constraint
+	executeSQLExpectError(t, session, "INSERT INTO dst_products SELECT * FROM src_products;")
+
+	// Verify no rows were inserted (all-or-nothing semantics)
+	result := executeSQL(t, session, "SELECT COUNT(*) FROM dst_products;")
+	if result.Rows[0][0] != "0" {
+		t.Fatalf("expected 0 rows, got %s", result.Rows[0][0])
+	}
+}
+
+func TestInsertSelectCheckConstraintPass(t *testing.T) {
+	session := setupSession(t)
+
+	// Create source table with only valid prices
+	executeSQL(t, session, "CREATE TABLE src_prices (id INT, val FLOAT);")
+	executeSQL(t, session, "INSERT INTO src_prices VALUES (1, 5.00);")
+	executeSQL(t, session, "INSERT INTO src_prices VALUES (2, 10.00);")
+
+	// Create destination table with CHECK constraint
+	executeSQL(t, session, "CREATE TABLE dst_prices (id INT, val FLOAT);")
+	executeSQL(t, session, "ALTER TABLE dst_prices ADD CONSTRAINT chk_val CHECK (val > 0);")
+
+	// All rows pass CHECK
+	result := executeSQL(t, session, "INSERT INTO dst_prices SELECT * FROM src_prices;")
+	if result.Affected != 2 {
+		t.Fatalf("expected 2 affected rows, got %d", result.Affected)
+	}
+
+	// Verify data
+	sel := executeSQL(t, session, "SELECT COUNT(*) FROM dst_prices;")
+	if sel.Rows[0][0] != "2" {
+		t.Fatalf("expected 2 rows in dst_prices, got %s", sel.Rows[0][0])
+	}
+}

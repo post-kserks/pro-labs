@@ -497,6 +497,9 @@ func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string
 				return nil, fmt.Errorf("INSERT ... SELECT: NOT NULL constraint failed for column '%s' in row %d", col.Name, ri)
 			}
 		}
+		if err := enforceCheckConstraints(schema, storageRow); err != nil {
+			return nil, fmt.Errorf("INSERT ... SELECT: row %d: %w", ri, err)
+		}
 		rowsToInsert = append(rowsToInsert, storageRow)
 	}
 
