@@ -162,6 +162,9 @@ func New(cfg Config) *Server {
 		}
 		cfg.Auth = mgr
 	}
+	if cfg.Storage != nil {
+		cfg.Auth.SetDataDir(cfg.Storage.DataDir())
+	}
 	if cfg.AuditTable != nil {
 		cfg.Auth.SetAuditFunc(func(actor, action, target, detail string) {
 			cfg.AuditTable.Append(audit.Entry{

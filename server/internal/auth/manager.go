@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,7 @@ type Manager struct {
 	logger     *slog.Logger
 	rateLim    *authRateLimiter
 	auditFunc  AuditFunc
+	dataDir    string // directory for persisting revoked tokens
 }
 
 // authRateLimiter отслеживает неудачные попытки аутентификации по IP.
@@ -210,13 +212,14 @@ func (m *Manager) Enabled() bool {
 func (m *Manager) RevokeToken(token string) {
 	hash := m.hashToken(token)
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.revoked[hash] = time.Now()
 	if m.logger != nil {
 		if info, ok := m.tokens[hash]; ok {
 			m.logger.Info("token revoked", "label", info.Label)
 		}
 	}
+	m.mu.Unlock()
+	m.SaveRevoked()
 }
 
 // IsRevoked checks whether a token has been revoked.
@@ -228,20 +231,136 @@ func (m *Manager) IsRevoked(token string) bool {
 	return ok
 }
 
+// revokedEntry represents a single revoked token in JSON serialization.
+type revokedEntry struct {
+	TokenHash  string    `json:"token_hash"`
+	RevokedAt  time.Time `json:"revoked_at"`
+}
+
+// SetDataDir sets the directory used to persist revoked tokens and loads
+// any previously saved revoked tokens from disk. The directory is created
+// if it does not exist.
+func (m *Manager) SetDataDir(dir string) {
+	m.mu.Lock()
+	m.dataDir = dir
+	m.mu.Unlock()
+	if dir != "" {
+		m.LoadRevoked()
+	}
+}
+
+// revokedTokensPath returns the full path to the revoked tokens JSON file.
+func (m *Manager) revokedTokensPath() string {
+	return filepath.Join(m.dataDir, "revoked_tokens.json")
+}
+
+// SaveRevoked persists the current revoked tokens map to disk as JSON.
+// Uses atomic write (temp file + rename) to prevent corruption on crash.
+// Must be called while m.mu is NOT held (it acquires its own lock).
+func (m *Manager) SaveRevoked() {
+	m.mu.RLock()
+	entries := make([]revokedEntry, 0, len(m.revoked))
+	for hash, ts := range m.revoked {
+		entries = append(entries, revokedEntry{TokenHash: hash, RevokedAt: ts})
+	}
+	dataDir := m.dataDir
+	m.mu.RUnlock()
+
+	if dataDir == "" {
+		return
+	}
+
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		if m.logger != nil {
+			m.logger.Error("failed to create data dir for revoked tokens", "error", err)
+		}
+		return
+	}
+
+	data, err := json.Marshal(entries)
+	if err != nil {
+		if m.logger != nil {
+			m.logger.Error("failed to marshal revoked tokens", "error", err)
+		}
+		return
+	}
+
+	path := m.revokedTokensPath()
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		if m.logger != nil {
+			m.logger.Error("failed to write revoked tokens file", "error", err)
+		}
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		if m.logger != nil {
+			m.logger.Error("failed to rename revoked tokens file", "error", err)
+		}
+		os.Remove(tmp)
+	}
+}
+
+// LoadRevoked loads revoked tokens from disk into the in-memory map.
+// If the file does not exist (first run), it silently returns without error.
+// Must be called while m.mu is NOT held (it acquires its own lock).
+func (m *Manager) LoadRevoked() {
+	m.mu.RLock()
+	dataDir := m.dataDir
+	m.mu.RUnlock()
+
+	if dataDir == "" {
+		return
+	}
+
+	path := m.revokedTokensPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		if m.logger != nil {
+			m.logger.Error("failed to read revoked tokens file", "error", err)
+		}
+		return
+	}
+
+	var entries []revokedEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		if m.logger != nil {
+			m.logger.Error("failed to parse revoked tokens file", "error", err)
+		}
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range entries {
+		m.revoked[e.TokenHash] = e.RevokedAt
+	}
+}
+
 // cleanupRevokedTokens periodically removes revoked token entries older than 24h.
 func (m *Manager) cleanupRevokedTokens() {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
 	for range ticker.C {
-		m.mu.Lock()
-		now := time.Now()
-		for hash, revokedAt := range m.revoked {
-			if now.Sub(revokedAt) > 24*time.Hour {
-				delete(m.revoked, hash)
-			}
-		}
-		m.mu.Unlock()
+		m.purgeExpiredRevokedTokens()
 	}
+}
+
+// purgeExpiredRevokedTokens removes revoked token entries older than 24h
+// and persists the updated map to disk.
+func (m *Manager) purgeExpiredRevokedTokens() {
+	m.mu.Lock()
+	now := time.Now()
+	for hash, revokedAt := range m.revoked {
+		if now.Sub(revokedAt) > 24*time.Hour {
+			delete(m.revoked, hash)
+		}
+	}
+	m.mu.Unlock()
+	m.SaveRevoked()
 }
 
 // SetAuditFunc sets a callback function for audit logging.
