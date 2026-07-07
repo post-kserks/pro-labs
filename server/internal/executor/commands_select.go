@@ -271,7 +271,56 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 				subSel.Columns = c.stmt.Columns
 			}
 			cmd := &SelectCommand{stmt: subSel}
-			return cmd.Execute(ctx)
+			result, err := cmd.Execute(ctx)
+			if err != nil {
+				return nil, err
+			}
+
+			// Apply view-level RLS on the result
+			rlsEnabled, rlsPolicies, err := loadViewRLS(ctx, dbName, c.stmt.TableName)
+			if err != nil {
+				return nil, err
+			}
+			if rlsEnabled {
+				if len(rlsPolicies) == 0 {
+					return nil, fmt.Errorf("RLS is enabled on view '%s' but no policies are defined", c.stmt.TableName)
+				}
+				// Build a synthetic schema for RLS filtering using the result's columns
+				viewSchema := &storage.TableSchema{
+					Name:     c.stmt.TableName,
+					Database: dbName,
+					Columns:  make([]storage.ColumnSchema, len(result.Columns)),
+					Policies: rlsPolicies,
+				}
+				for i, col := range result.Columns {
+					viewSchema.Columns[i] = storage.ColumnSchema{Name: col, Type: "TEXT"}
+				}
+				// Convert result rows back to storage.Row for filtering
+				storageRows := make([]storage.Row, len(result.Rows))
+				for i, r := range result.Rows {
+					row := make(storage.Row, len(r))
+					for j, v := range r {
+						row[j] = v
+					}
+					storageRows[i] = row
+				}
+				filtered, err := filterRowsWithRLS(storageRows, viewSchema, ctx, dbName, c.stmt.TableName)
+				if err != nil {
+					return nil, err
+				}
+				// Rebuild string rows from filtered storage rows
+				filteredRows := make([][]string, len(filtered))
+				for i, r := range filtered {
+					row := make([]string, len(r))
+					for j, v := range r {
+						row[j] = fmt.Sprintf("%v", v)
+					}
+					filteredRows[i] = row
+				}
+				result.Rows = filteredRows
+			}
+
+			return result, nil
 		}
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
@@ -799,9 +848,12 @@ func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName s
 		return nil, fmt.Errorf("table '%s' has partition spec but could not initialize", c.stmt.TableName)
 	}
 
-	// Read from all partitions and merge
+	// Prune partitions based on WHERE clause predicates
+	partitions := pt.PrunePartitions(c.stmt.Where)
+
+	// Read from pruned partitions and merge
 	var allRows []storage.Row
-	for _, part := range pt.Partitions {
+	for _, part := range partitions {
 		if !ctx.Storage.TableExists(dbName, part.TableName) {
 			continue
 		}

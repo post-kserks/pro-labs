@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"fmt"
+	"hash/fnv"
 	"testing"
 
+	"vaultdb/internal/parser"
 	"vaultdb/internal/txmanager"
 	"vaultdb/internal/wal"
 )
@@ -262,5 +265,169 @@ func TestPartitionPruneAll(t *testing.T) {
 	pruned := pt.PrunePartitions(nil)
 	if len(pruned) != 3 {
 		t.Errorf("expected 3 partitions returned, got %d", len(pruned))
+	}
+}
+
+func TestRangePartitionPruning(t *testing.T) {
+	pt := &PartitionedTable{
+		Spec: &PartitionSpec{
+			Type:    "RANGE",
+			Columns: []string{"order_date"},
+			Partitions: []PartitionDef{
+				{Name: "p2023", Bound: "2024-01-01"},
+				{Name: "p2024", Bound: "2025-01-01"},
+				{Name: "p2025", Bound: nil},
+			},
+		},
+		Schema: &TableSchema{
+			Name: "orders",
+			Columns: []ColumnSchema{
+				{Name: "id", Type: "INT"},
+				{Name: "order_date", Type: "TEXT"},
+				{Name: "amount", Type: "FLOAT"},
+			},
+		},
+		Partitions: []Partition{
+			{Name: "p2023", TableName: "orders_p2023", Bound: "2024-01-01"},
+			{Name: "p2024", TableName: "orders_p2024", Bound: "2025-01-01"},
+			{Name: "p2025", TableName: "orders_p2025", Bound: nil},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		where    parser.Expression
+		expected []string
+	}{
+		{
+			name:     "equality on 2023",
+			where:    &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "=", Right: &parser.Value{Type: "string", StrVal: "2023-06-15"}},
+			expected: []string{"orders_p2023"},
+		},
+		{
+			name:     "equality on 2024",
+			where:    &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "=", Right: &parser.Value{Type: "string", StrVal: "2024-06-15"}},
+			expected: []string{"orders_p2024"},
+		},
+		{
+			name:     "equality on 2025",
+			where:    &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "=", Right: &parser.Value{Type: "string", StrVal: "2025-06-15"}},
+			expected: []string{"orders_p2025"},
+		},
+		{
+			name:     "less than 2024-06-15",
+			where:    &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "<", Right: &parser.Value{Type: "string", StrVal: "2024-06-15"}},
+			expected: []string{"orders_p2023", "orders_p2024"},
+		},
+		{
+			name:     "less than 2024-01-01 (excludes p2024)",
+			where:    &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "<", Right: &parser.Value{Type: "string", StrVal: "2024-01-01"}},
+			expected: []string{"orders_p2023"},
+		},
+		{
+			name:     "greater than 2024",
+			where:    &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: ">", Right: &parser.Value{Type: "string", StrVal: "2024-06-15"}},
+			expected: []string{"orders_p2024", "orders_p2025"},
+		},
+		{
+			name:     "less than or equal 2025",
+			where:    &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "<=", Right: &parser.Value{Type: "string", StrVal: "2025-01-01"}},
+			expected: []string{"orders_p2023", "orders_p2024", "orders_p2025"},
+		},
+		{
+			name:     "less than or equal 2024-12-31",
+			where:    &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "<=", Right: &parser.Value{Type: "string", StrVal: "2024-12-31"}},
+			expected: []string{"orders_p2023", "orders_p2024"},
+		},
+		{
+			name:     "complex AND on key",
+			where: &parser.AndExpr{
+				Left:  &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: ">=", Right: &parser.Value{Type: "string", StrVal: "2024-01-01"}},
+				Right: &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "<", Right: &parser.Value{Type: "string", StrVal: "2025-06-15"}},
+			},
+			expected: []string{"orders_p2024", "orders_p2025"},
+		},
+		{
+			name:     "non-key column returns all",
+			where:    &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "amount"}, Operator: ">", Right: &parser.Value{Type: "float", FltVal: 100}},
+			expected: []string{"orders_p2023", "orders_p2024", "orders_p2025"},
+		},
+		{
+			name:     "OR returns all",
+			where: &parser.OrExpr{
+				Left:  &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "=", Right: &parser.Value{Type: "string", StrVal: "2023-01-01"}},
+				Right: &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "=", Right: &parser.Value{Type: "string", StrVal: "2024-01-01"}},
+			},
+			expected: []string{"orders_p2023", "orders_p2024", "orders_p2025"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pruned := pt.PrunePartitions(tt.where)
+			if len(pruned) != len(tt.expected) {
+				t.Fatalf("expected %d partitions, got %d: %v", len(tt.expected), len(pruned), pruned)
+			}
+			for i, p := range pruned {
+				if p.TableName != tt.expected[i] {
+					t.Errorf("partition %d: expected '%s', got '%s'", i, tt.expected[i], p.TableName)
+				}
+			}
+		})
+	}
+}
+
+func TestHashPartitionPruning(t *testing.T) {
+	pt := &PartitionedTable{
+		Spec: &PartitionSpec{
+			Type:    "HASH",
+			Columns: []string{"user_id"},
+			NumParts: 4,
+		},
+		Schema: &TableSchema{
+			Name: "sessions",
+			Columns: []ColumnSchema{
+				{Name: "user_id", Type: "INT"},
+				{Name: "data", Type: "TEXT"},
+			},
+		},
+		Partitions: []Partition{
+			{Name: "p0", TableName: "sessions_p0"},
+			{Name: "p1", TableName: "sessions_p1"},
+			{Name: "p2", TableName: "sessions_p2"},
+			{Name: "p3", TableName: "sessions_p3"},
+		},
+	}
+
+	// Equality on partition key returns single partition
+	where := &parser.BinaryExpr{
+		Left:     &parser.ColumnRef{Name: "user_id"},
+		Operator: "=",
+		Right:    &parser.Value{Type: "int", IntVal: 42},
+	}
+	pruned := pt.PrunePartitions(where)
+	if len(pruned) != 1 {
+		t.Fatalf("expected 1 partition, got %d", len(pruned))
+	}
+
+	// Verify same hash as InsertRoute for same value
+	h := fnv.New32a()
+	fmt.Fprintf(h, "%v", 42)
+	hash := h.Sum32()
+	idx := int(hash) % 4
+	expected := fmt.Sprintf("sessions_p%d", idx)
+	if pruned[0].TableName != expected {
+		t.Errorf("expected partition '%s', got '%s'", expected, pruned[0].TableName)
+	}
+
+	// Non-equality returns all
+	whereNeq := &parser.BinaryExpr{
+		Left:     &parser.ColumnRef{Name: "user_id"},
+		Operator: ">",
+		Right:    &parser.Value{Type: "int", IntVal: 42},
+	}
+	pruned = pt.PrunePartitions(whereNeq)
+	if len(pruned) != 4 {
+		t.Errorf("expected 4 partitions for non-equality, got %d", len(pruned))
 	}
 }
