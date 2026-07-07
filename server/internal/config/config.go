@@ -20,11 +20,12 @@ type LiveQueriesConfig struct {
 
 // TLSConfig — параметры TLS.
 type TLSConfig struct {
-	Enabled    bool   `yaml:"enabled"`
-	CertFile   string `yaml:"cert_file"`
-	KeyFile    string `yaml:"key_file"`
-	MinVersion string `yaml:"min_version"` // "1.2" or "1.3"
-	Enforce    bool   `yaml:"enforce"`     // reject non-TLS connections
+	Enabled      bool   `yaml:"enabled"`
+	CertFile     string `yaml:"cert_file"`
+	KeyFile      string `yaml:"key_file"`
+	MinVersion   string `yaml:"min_version"`   // "1.2" or "1.3"
+	Enforce      bool   `yaml:"enforce"`       // reject non-TLS connections
+	RedirectHTTP bool   `yaml:"redirect_http"` // auto redirect HTTP to HTTPS
 }
 
 // ServerConfig — сетевые параметры сервера.
@@ -261,6 +262,9 @@ func validateConfig(cfg *Config) error {
 		if cfg.Server.TLS.KeyFile == "" {
 			return fmt.Errorf("tls.key_file must not be empty when tls.enabled is true")
 		}
+	} else {
+		// Warning when TLS is disabled
+		fmt.Fprintln(os.Stderr, "WARNING: TLS is disabled — server is running on plain HTTP. Enable tls.enabled in production.")
 	}
 	if cfg.Server.TLS.MinVersion != "" && cfg.Server.TLS.MinVersion != "1.2" && cfg.Server.TLS.MinVersion != "1.3" {
 		return fmt.Errorf("unknown tls.min_version %q (want 1.2 or 1.3)", cfg.Server.TLS.MinVersion)

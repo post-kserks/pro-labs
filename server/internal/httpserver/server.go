@@ -46,6 +46,7 @@ type Config struct {
 	TLSKeyFile                string
 	TLSMinVersion             string // "1.2" or "1.3"
 	TLSEnforce                bool
+	TLSRedirectHTTP           bool
 	MaxLiveQuerySubscriptions int
 	MaxLiveQueryDurationSec   int
 	SessionPoolMaxIdle        int
@@ -302,7 +303,7 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) apiMux() *http.ServeMux {
+func (s *Server) apiMux() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/query", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleQuery))))
@@ -328,10 +329,10 @@ func (s *Server) apiMux() *http.ServeMux {
 		http.NotFound(w, r)
 	})
 
-	return mux
+	return s.withHTTPRedirect(s.withTLSEnforcement(mux))
 }
 
-func (s *Server) monitorMux() *http.ServeMux {
+func (s *Server) monitorMux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleMonitorHealth))
 	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
@@ -340,5 +341,5 @@ func (s *Server) monitorMux() *http.ServeMux {
 	} else {
 		mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.handleMetrics)))
 	}
-	return mux
+	return s.withHTTPRedirect(s.withTLSEnforcement(mux))
 }

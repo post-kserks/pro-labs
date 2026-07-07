@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -22,6 +23,7 @@ const (
 	errCodeCheckConstraint  = 3012
 	errCodeForeignKey       = 3013
 	errCodeQueryTimeout     = 3014
+	errCodeTLSEnforced      = 4001
 	errCodeInternal         = 5000
 	errCodeNotImplemented   = 9999
 
@@ -204,3 +206,31 @@ h1 { color: #333; }
 </body>
 </html>
 `
+
+// withTLSEnforcement rejects non-TLS connections when TLS enforcement is enabled.
+func (s *Server) withTLSEnforcement(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.TLSEnforce && r.TLS == nil {
+			writeError(w, http.StatusBadRequest, errCodeTLSEnforced, "TLS required: this server requires HTTPS connections. Please use TLS to connect.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withHTTPRedirect automatically redirects HTTP requests to HTTPS when redirect_http is enabled.
+func (s *Server) withHTTPRedirect(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.TLSRedirectHTTP && r.TLS == nil {
+			target := &url.URL{
+				Scheme:   "https",
+				Host:     r.Host,
+				Path:     r.URL.Path,
+				RawQuery: r.URL.RawQuery,
+			}
+			http.Redirect(w, r, target.String(), http.StatusMovedPermanently)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

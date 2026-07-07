@@ -28,6 +28,15 @@ auth:
   # Set to false in production to require tokens for all connections.
   localhost_bypass: true
 
+# TLS configuration.
+# tls:
+#   enabled: true
+#   cert_file: /path/to/cert.pem
+#   key_file: /path/to/key.pem
+#   min_version: "1.2"
+#   enforce: true          # Reject non-TLS connections
+#   redirect_http: true    # Auto redirect HTTP to HTTPS
+
 # Внешний embedding-провайдер для SEMANTIC_MATCH и AI_EMBED.
 # Если секция не заполнена, SEMANTIC_MATCH возвращает понятную ошибку.
 ai:
