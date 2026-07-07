@@ -85,7 +85,7 @@ make build
 ./run.sh
 
 # With custom config
-./run.sh 0.0.0.0 5432 8080 ./vaultdb.yaml
+./run.sh 0.0.0.0 5432 8080 5433
 ```
 
 ---

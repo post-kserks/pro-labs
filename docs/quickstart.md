@@ -272,30 +272,30 @@ conn = Client("localhost", 5432)
 conn.connect()
 
 # Execute queries
-result = conn.query("demo", "SELECT * FROM users WHERE age > 20;")
-for row in result.rows:
+result = conn.query("SELECT * FROM users WHERE age > 20;", database="demo")
+for row in result["rows"]:
     print(f"User: {row[1]}")
 
 conn.close()
 ```
 
-Install: `pip install vaultdb`
+Install: `pip install vaultdb-client`
 
 ## 16. Use as JS/TS Client
 
 ```typescript
-import { Client } from "vaultdb";
+import { Client } from "@vaultdb/client";
 
 const client = new Client("localhost", 5432);
 await client.connect();
 
-const result = await client.query("demo", "SELECT * FROM users WHERE age > 20;");
+const result = await client.query("SELECT * FROM users WHERE age > 20;", undefined, "demo");
 console.log(result.rows);
 
 await client.close();
 ```
 
-Install: `npm install vaultdb`
+Install: `npm install @vaultdb/client`
 
 ## Next Steps
 

@@ -97,12 +97,15 @@ Execute a single SQL statement.
 | 3004 | Storage error |
 | 3005 | Transaction unsupported over HTTP |
 | 3006 | Rate limited |
-| 3007 | Not found |
-| 3008 | Already exists |
-| 3009 | Permission denied |
-| 3010 | Timeout |
-| 3011 | Not supported |
-| 3012 | Internal error |
+| 3007 | NOT NULL constraint violation |
+| 3008 | Type mismatch |
+| 3009 | Table not found |
+| 3010 | Database not found |
+| 3011 | Duplicate value (PK/UNIQUE) |
+| 3012 | CHECK constraint violation |
+| 3013 | Foreign key violation |
+| 3014 | Query timeout |
+| 5000 | Internal error |
 
 ---
 
@@ -112,7 +115,7 @@ Execute a query and stream results via Server-Sent Events (SSE).
 
 ### Request
 
-Same as `/api/query`.
+Same fields as `/api/query` except `params` (parameterized queries not supported in stream mode).
 
 ### Response
 
@@ -190,7 +193,6 @@ Execute multiple queries sequentially.
 
 ```json
 {
-  "status": "ok",
   "results": [
     {"status": "ok", "type": "insert", "affected": 1},
     {"status": "ok", "type": "insert", "affected": 1},
@@ -210,7 +212,11 @@ List all databases.
 ```json
 {
   "status": "ok",
-  "databases": ["mydb", "analytics", "logs"]
+  "databases": [
+    {"name": "mydb"},
+    {"name": "analytics"},
+    {"name": "logs"}
+  ]
 }
 ```
 
@@ -352,9 +358,15 @@ Liveness probe.
 {
   "status": "ok",
   "version": "1.1.1",
-  "uptime_seconds": 3600,
-  "active_connections": 5,
-  "storage": "ok"
+  "uptime_s": 3600,
+  "connections": 5,
+  "wal_enabled": true,
+  "time_travel": true,
+  "checks": {
+    "storage": {"status": "pass"},
+    "wal": {"status": "pass"},
+    "session_pool": {"status": "pass", "active": 1, "idle": 9, "max": 10}
+  }
 }
 ```
 

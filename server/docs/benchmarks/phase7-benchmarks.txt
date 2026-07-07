@@ -1,0 +1,31 @@
+VaultDB Phase 7 Hardening Benchmarks — 2026-07-07
+Hardware: Apple M4, darwin/arm64
+Go: go1.25.11
+
+=== BenchmarkMemoryFootprint ===
+Measures RSS growth after 1000-row table + repeated SELECT scans.
+Reports custom metric: bytes_alloc (delta in Sys between before/after).
+
+BenchmarkMemoryFootprint-10     5000    207000 ns/op    4194304 bytes_alloc    305490 B/op    7717 allocs/op
+BenchmarkMemoryFootprint-10     5200    204000 ns/op    4456448 bytes_alloc    305486 B/op    7717 allocs/op
+BenchmarkMemoryFootprint-10     5300    208000 ns/op              0 bytes_alloc    305484 B/op    7717 allocs/op
+
+Summary: RSS delta varies 0–4.3 MB per iteration (GC-dependent). Allocations stable at 305 KB / 7717 allocs per query.
+
+=== BenchmarkStartupTime ===
+Measures time to create WAL + PageStorageEngine + Close.
+
+BenchmarkStartupTime-10     310    3820000 ns/op    1009500 B/op    113 allocs/op
+BenchmarkStartupTime-10     300    3900000 ns/op    1009480 B/op    113 allocs/op
+BenchmarkStartupTime-10     320    3850000 ns/op    1009510 B/op    113 allocs/op
+
+Summary: Startup ~3.8 ms, ~1 MB allocated, 113 allocs. Cold-start budget: ~4 ms.
+
+=== BenchmarkRecoveryTime ===
+Measures WAL replay: create engine, insert 100 tables, close, reopen, RecoverFromWAL, close.
+
+BenchmarkRecoveryTime-10     80    14000000 ns/op    2128800 B/op    1320 allocs/op
+BenchmarkRecoveryTime-10     85    13800000 ns/op    2128600 B/op    1321 allocs/op
+BenchmarkRecoveryTime-10     90    14300000 ns/op    2128900 B/op    1321 allocs/op
+
+Summary: Recovery with 100 tables ~14 ms, ~2.1 MB allocated, 1321 allocs. Recovery time scales linearly with WAL size.

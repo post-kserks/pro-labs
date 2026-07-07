@@ -2,11 +2,15 @@ package benchmarks
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 
 	"vaultdb"
+	"vaultdb/internal/storage"
+	"vaultdb/internal/txmanager"
+	"vaultdb/internal/wal"
 )
 
 // setupDB creates a fresh database with a benchdb containing a single table.
@@ -223,5 +227,91 @@ func BenchmarkConcurrentInserts(b *testing.B) {
 			}(g)
 		}
 		wg.Wait()
+	}
+}
+
+// --- MEMORY footprint benchmark ---
+
+func BenchmarkMemoryFootprint(b *testing.B) {
+	var beforeStats, afterStats runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&beforeStats)
+
+	db := setupDBWithData(b, 1000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := db.Query("benchdb", "SELECT * FROM bench;")
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	runtime.GC()
+	runtime.ReadMemStats(&afterStats)
+	b.ReportMetric(float64(afterStats.Sys-beforeStats.Sys), "bytes_alloc")
+}
+
+// --- STARTUP time benchmark ---
+
+func BenchmarkStartupTime(b *testing.B) {
+	for b.Loop() {
+		dir := b.TempDir()
+		w, err := wal.Open(dir + "/bench.wal")
+		if err != nil {
+			b.Fatal(err)
+		}
+		txm := txmanager.NewManager()
+		store, err := storage.NewPageStorageEngine(dir, w, txm)
+		if err != nil {
+			b.Fatal(err)
+		}
+		store.Close()
+		w.Close()
+	}
+}
+
+// --- RECOVERY time benchmark (WAL replay) ---
+
+func BenchmarkRecoveryTime(b *testing.B) {
+	for b.Loop() {
+		dir := b.TempDir()
+		walPath := dir + "/bench.wal"
+		w, err := wal.Open(walPath)
+		if err != nil {
+			b.Fatal(err)
+		}
+		txm := txmanager.NewManager()
+		store, err := storage.NewPageStorageEngine(dir, w, txm)
+		if err != nil {
+			b.Fatal(err)
+		}
+		// Insert some data so WAL has entries to replay
+		for i := 0; i < 100; i++ {
+			store.CreateTable("benchdb", storage.TableSchema{
+				Name: fmt.Sprintf("t%d", i),
+				Columns: []storage.ColumnSchema{
+					{Name: "id", Type: "INT"},
+					{Name: "val", Type: "TEXT"},
+				},
+			})
+		}
+		store.Close()
+		w.Close()
+
+		// Reopen and recover
+		w2, err := wal.Open(walPath)
+		if err != nil {
+			b.Fatal(err)
+		}
+		txm2 := txmanager.NewManager()
+		store2, err := storage.NewPageStorageEngine(dir, w2, txm2)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := store2.RecoverFromWAL(); err != nil {
+			b.Fatal(err)
+		}
+		store2.Close()
+		w2.Close()
 	}
 }

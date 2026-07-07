@@ -472,3 +472,52 @@ REVOKE TOKEN 'vdb_sk_your_token_here';
 - Token revocation is immediate and permanent
 - Revoked tokens are cleaned up after 24 hours
 - Requires admin privileges to execute
+
+---
+
+## MERGE
+
+Perform conditional INSERT or UPDATE based on a source dataset.
+
+```sql
+MERGE INTO target t
+USING source s
+ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET t.name = s.name
+WHEN NOT MATCHED THEN INSERT (id, name) VALUES (s.id, s.name);
+```
+
+---
+
+## TRUNCATE
+
+Remove all rows from a table.
+
+```sql
+TRUNCATE TABLE users;
+```
+
+---
+
+## SAVEPOINT
+
+Create a savepoint within a transaction for partial rollback.
+
+```sql
+BEGIN;
+INSERT INTO users VALUES (1, 'Alice');
+SAVEPOINT sp1;
+INSERT INTO users VALUES (2, 'Bob');
+ROLLBACK TO SAVEPOINT sp1;  -- undo only the second insert
+COMMIT;  -- only Alice is committed
+```
+
+---
+
+## HISTORY
+
+Query the version history of a row.
+
+```sql
+HISTORY users WHERE id = 1;
+```
