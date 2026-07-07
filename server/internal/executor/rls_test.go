@@ -119,3 +119,77 @@ func TestRLSDeleteRespectsPolicy(t *testing.T) {
 		t.Fatalf("expected 0 rows after DELETE (all visible were deleted), got %d", len(result.Rows))
 	}
 }
+
+func TestRLSViewInheritsTableRLS(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE TABLE products (id INT PRIMARY KEY, name TEXT, dept TEXT, price INT);")
+	executeSQL(t, session, "INSERT INTO products VALUES (1, 'Laptop', 'eng', 1000);")
+	executeSQL(t, session, "INSERT INTO products VALUES (2, 'Phone', 'eng', 500);")
+	executeSQL(t, session, "INSERT INTO products VALUES (3, 'Desk', 'sales', 300);")
+	executeSQL(t, session, "INSERT INTO products VALUES (4, 'Chair', 'sales', 200);")
+
+	// Enable RLS on base table: only engineering dept visible
+	executeSQL(t, session, "ENABLE RLS ON products;")
+	executeSQL(t, session, "CREATE POLICY eng_only ON products FOR ALL TO public USING (dept = 'eng');")
+
+	// Without a view, only 2 rows
+	result := executeSQL(t, session, "SELECT id, name FROM products ORDER BY id;")
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows on table, got %d: %v", len(result.Rows), result.Rows)
+	}
+
+	// Create view on the table
+	executeSQL(t, session, "CREATE VIEW all_products AS SELECT id, name, price FROM products;")
+
+	// Query through view: base table RLS still applies
+	result = executeSQL(t, session, "SELECT id, name FROM all_products ORDER BY id;")
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows through view (base table RLS), got %d: %v", len(result.Rows), result.Rows)
+	}
+	if result.Rows[0][1] != "Laptop" || result.Rows[1][1] != "Phone" {
+		t.Fatalf("expected Laptop and Phone, got: %v", result.Rows)
+	}
+}
+
+func TestRLSViewOwnPolicy(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE TABLE orders (id INT PRIMARY KEY, customer TEXT, region TEXT, amount INT);")
+	executeSQL(t, session, "INSERT INTO orders VALUES (1, 'Alice', 'us', 100);")
+	executeSQL(t, session, "INSERT INTO orders VALUES (2, 'Bob', 'eu', 200);")
+	executeSQL(t, session, "INSERT INTO orders VALUES (3, 'Charlie', 'us', 300);")
+	executeSQL(t, session, "INSERT INTO orders VALUES (4, 'Diana', 'eu', 40);")
+
+	// Create view with no RLS on base table — all 4 rows visible
+	executeSQL(t, session, "CREATE VIEW eu_orders AS SELECT id, customer, amount FROM orders WHERE region = 'eu';")
+	result := executeSQL(t, session, "SELECT id, customer FROM eu_orders ORDER BY id;")
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 eu rows, got %d: %v", len(result.Rows), result.Rows)
+	}
+
+	// Enable RLS on the view itself
+	executeSQL(t, session, "ENABLE RLS ON eu_orders;")
+	// No policies yet — should error
+	stmt, _ := parser.Parse("SELECT id FROM eu_orders;")
+	_, err := session.Execute(stmt)
+	if err == nil || !strings.Contains(err.Error(), "no policies are defined") {
+		t.Fatalf("expected 'no policies are defined' error, got: %v", err)
+	}
+
+	// Add policy: only orders > 50
+	executeSQL(t, session, "CREATE POLICY high_value ON eu_orders FOR ALL TO public USING (amount > 50);")
+
+	// Only Bob (200) should be visible through the view
+	result = executeSQL(t, session, "SELECT id, customer FROM eu_orders ORDER BY id;")
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row (high-value eu order), got %d: %v", len(result.Rows), result.Rows)
+	}
+	if result.Rows[0][0] != "2" || result.Rows[0][1] != "Bob" {
+		t.Fatalf("expected Bob, got: %v", result.Rows)
+	}
+
+	// Base table is unaffected — still all 4 rows
+	result = executeSQL(t, session, "SELECT id FROM orders ORDER BY id;")
+	if len(result.Rows) != 4 {
+		t.Fatalf("expected 4 rows on base table, got %d: %v", len(result.Rows), result.Rows)
+	}
+}

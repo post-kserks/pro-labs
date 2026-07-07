@@ -167,6 +167,58 @@ func loadAllObjectsByType(ctx *ExecutionContext, dbName, objType string) ([]map[
 	return results, nil
 }
 
+// loadViewRLS loads the RLS metadata from a view definition.
+func loadViewRLS(ctx *ExecutionContext, dbName, viewName string) (bool, []storage.RLSPolicy, error) {
+	def, err := loadObject(ctx, dbName, objTypeView, viewName)
+	if err != nil || def == nil {
+		return false, nil, err
+	}
+	rlsEnabled, _ := def["rls_enabled"].(bool)
+	var policies []storage.RLSPolicy
+	if pRaw, ok := def["policies"]; ok {
+		pBytes, err := json.Marshal(pRaw)
+		if err != nil {
+			return false, nil, fmt.Errorf("marshal view policies: %w", err)
+		}
+		if err := json.Unmarshal(pBytes, &policies); err != nil {
+			return false, nil, fmt.Errorf("unmarshal view policies: %w", err)
+		}
+	}
+	return rlsEnabled, policies, nil
+}
+
+// setViewRLS updates the RLS enabled flag on a view definition.
+func setViewRLS(ctx *ExecutionContext, dbName, viewName string, enabled bool) error {
+	def, err := loadObject(ctx, dbName, objTypeView, viewName)
+	if err != nil {
+		return err
+	}
+	if def == nil {
+		return fmt.Errorf("view '%s' not found", viewName)
+	}
+	def["rls_enabled"] = enabled
+	return storeObject(ctx, dbName, objTypeView, viewName, def)
+}
+
+// addViewPolicy appends an RLS policy to a view definition.
+func addViewPolicy(ctx *ExecutionContext, dbName, viewName string, policy storage.RLSPolicy) error {
+	def, err := loadObject(ctx, dbName, objTypeView, viewName)
+	if err != nil {
+		return err
+	}
+	if def == nil {
+		return fmt.Errorf("view '%s' not found", viewName)
+	}
+	var policies []storage.RLSPolicy
+	if pRaw, ok := def["policies"]; ok {
+		pBytes, _ := json.Marshal(pRaw)
+		_ = json.Unmarshal(pBytes, &policies)
+	}
+	policies = append(policies, policy)
+	def["policies"] = policies
+	return storeObject(ctx, dbName, objTypeView, viewName, def)
+}
+
 // objectExists проверяет, существует ли объект с указанным именем и типом.
 
 // objectNamesToCSV конвертирует список имён в строку через запятую.

@@ -232,9 +232,6 @@ func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
-		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
-	}
 
 	usingSQL := ""
 	if c.stmt.Using != nil {
@@ -245,8 +242,14 @@ func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		ToUser:    c.stmt.ToUser,
 		UsingExpr: usingSQL,
 	}
-	if err := ctx.Storage.AddPolicy(dbName, c.stmt.TableName, policy); err != nil {
-		return nil, fmt.Errorf("add policy: %w", err)
+
+	// Check if target is a table or a view
+	if ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+		if err := ctx.Storage.AddPolicy(dbName, c.stmt.TableName, policy); err != nil {
+			return nil, fmt.Errorf("add policy: %w", err)
+		}
+	} else if err := addViewPolicy(ctx, dbName, c.stmt.TableName, policy); err != nil {
+		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
 
 	if ctx.Session != nil && ctx.Session.resultCache != nil {
@@ -271,11 +274,12 @@ func (c *EnableRlsCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+	if ctx.Storage.TableExists(dbName, c.stmt.TableName) {
+		if err := ctx.Storage.SetTableRLS(dbName, c.stmt.TableName, true); err != nil {
+			return nil, err
+		}
+	} else if err := setViewRLS(ctx, dbName, c.stmt.TableName, true); err != nil {
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
-	}
-	if err := ctx.Storage.SetTableRLS(dbName, c.stmt.TableName, true); err != nil {
-		return nil, err
 	}
 
 	if ctx.Session != nil && ctx.Session.resultCache != nil {
@@ -304,7 +308,7 @@ func (c *CreateViewCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("create view: %w", err)
 	}
 
-	querySQL := fmt.Sprintf("%v", c.stmt.Query)
+	querySQL := parser.FormatSelectStatement(c.stmt.Query)
 
 	vd := map[string]interface{}{
 		"name":  c.stmt.Name,

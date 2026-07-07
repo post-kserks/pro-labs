@@ -215,6 +215,107 @@ func formatValueSQL(v Value) string {
 	}
 }
 
+// FormatSelectStatement converts a SelectStatement back to a SQL string.
+func FormatSelectStatement(sel *SelectStatement) string {
+	if sel == nil {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("SELECT ")
+
+	if sel.Distinct {
+		sb.WriteString("DISTINCT ")
+	}
+
+	if len(sel.Columns) == 0 {
+		sb.WriteString("*")
+	} else {
+		parts := make([]string, len(sel.Columns))
+		for i, col := range sel.Columns {
+			s := FormatExpression(col.Expr)
+			if col.Alias != "" {
+				s += " AS " + col.Alias
+			}
+			parts[i] = s
+		}
+		sb.WriteString(strings.Join(parts, ", "))
+	}
+
+	if sel.TableName != "" {
+		sb.WriteString(" FROM ")
+		sb.WriteString(sel.TableName)
+		if sel.Alias != "" {
+			sb.WriteString(" AS " + sel.Alias)
+		}
+	} else if sel.FromSubquery != nil {
+		sb.WriteString(" FROM (")
+		sb.WriteString(FormatSelectStatement(sel.FromSubquery))
+		sb.WriteString(")")
+		if sel.FromAlias != "" {
+			sb.WriteString(" AS " + sel.FromAlias)
+		}
+	}
+
+	for _, j := range sel.Joins {
+		sb.WriteString(fmt.Sprintf(" %s JOIN %s", j.Type, j.TableName))
+		if j.Alias != "" {
+			sb.WriteString(" AS " + j.Alias)
+		}
+		if j.Condition != nil {
+			sb.WriteString(" ON ")
+			sb.WriteString(FormatExpression(j.Condition))
+		}
+	}
+
+	if sel.Where != nil {
+		sb.WriteString(" WHERE ")
+		sb.WriteString(FormatExpression(sel.Where))
+	}
+
+	if len(sel.GroupBy) > 0 {
+		parts := make([]string, len(sel.GroupBy))
+		for i, g := range sel.GroupBy {
+			parts[i] = FormatExpression(g)
+		}
+		sb.WriteString(" GROUP BY ")
+		sb.WriteString(strings.Join(parts, ", "))
+	}
+
+	if sel.Having != nil {
+		sb.WriteString(" HAVING ")
+		sb.WriteString(FormatExpression(sel.Having))
+	}
+
+	if len(sel.OrderBy) > 0 {
+		parts := make([]string, len(sel.OrderBy))
+		for i, o := range sel.OrderBy {
+			s := FormatExpression(o.Expr)
+			if o.Direction != "" {
+				s += " " + o.Direction
+			}
+			parts[i] = s
+		}
+		sb.WriteString(" ORDER BY ")
+		sb.WriteString(strings.Join(parts, ", "))
+	}
+
+	if sel.HasLimit {
+		sb.WriteString(fmt.Sprintf(" LIMIT %d", sel.Limit))
+	} else if sel.LimitExpr != nil {
+		sb.WriteString(" LIMIT ")
+		sb.WriteString(FormatExpression(sel.LimitExpr))
+	}
+
+	if sel.HasOffset {
+		sb.WriteString(fmt.Sprintf(" OFFSET %d", sel.Offset))
+	} else if sel.OffsetExpr != nil {
+		sb.WriteString(" OFFSET ")
+		sb.WriteString(FormatExpression(sel.OffsetExpr))
+	}
+
+	return sb.String()
+}
+
 func normalizeWhitespace(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\t", " ")

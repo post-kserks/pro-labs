@@ -107,7 +107,13 @@ func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
-		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
+		// Check if it's a view
+		viewQuery, viewErr := loadViewQueryWithCtx(ctx, dbName, c.stmt.TableName)
+		if viewErr != nil || viewQuery == "" {
+			return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
+		}
+		// Delegate to full executeSimpleSelect for view handling (including view-level RLS)
+		return c.executeSimpleSelect(ctx, dbName)
 	}
 
 	schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
@@ -267,35 +273,46 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 			if c.stmt.Distinct {
 				subSel.Distinct = true
 			}
-			if len(c.stmt.Columns) > 0 {
-				subSel.Columns = c.stmt.Columns
-			}
-			cmd := &SelectCommand{stmt: subSel}
-			result, err := cmd.Execute(ctx)
-			if err != nil {
-				return nil, err
-			}
 
-			// Apply view-level RLS on the result
+			// Check view-level RLS before replacing columns — RLS policies may
+			// reference columns that the outer query doesn't select.
 			rlsEnabled, rlsPolicies, err := loadViewRLS(ctx, dbName, c.stmt.TableName)
 			if err != nil {
 				return nil, err
 			}
-			if rlsEnabled {
-				if len(rlsPolicies) == 0 {
-					return nil, fmt.Errorf("RLS is enabled on view '%s' but no policies are defined", c.stmt.TableName)
+
+			// Block view query if RLS is enabled but no policies exist
+			if rlsEnabled && len(rlsPolicies) == 0 {
+				return nil, fmt.Errorf("RLS is enabled on view '%s' but no policies are defined", c.stmt.TableName)
+			}
+
+			if rlsEnabled && len(rlsPolicies) > 0 {
+				// When view has RLS, keep the view's original columns so RLS
+				// policies can reference all view columns. Project afterwards.
+				origCols := subSel.Columns
+				cmd := &SelectCommand{stmt: subSel}
+				result, err := cmd.Execute(ctx)
+				if err != nil {
+					return nil, err
 				}
-				// Build a synthetic schema for RLS filtering using the result's columns
+
+				// Build a synthetic schema for RLS filtering using the view's columns
 				viewSchema := &storage.TableSchema{
-					Name:     c.stmt.TableName,
-					Database: dbName,
-					Columns:  make([]storage.ColumnSchema, len(result.Columns)),
-					Policies: rlsPolicies,
+					Name:       c.stmt.TableName,
+					Database:   dbName,
+					Columns:    make([]storage.ColumnSchema, len(origCols)),
+					RLSEnabled: true,
+					Policies:   rlsPolicies,
 				}
-				for i, col := range result.Columns {
-					viewSchema.Columns[i] = storage.ColumnSchema{Name: col, Type: "TEXT"}
+				for i, col := range origCols {
+					name := parser.FormatExpression(col.Expr)
+					if col.Alias != "" {
+						name = col.Alias
+					}
+					viewSchema.Columns[i] = storage.ColumnSchema{Name: name, Type: "TEXT"}
 				}
-				// Convert result rows back to storage.Row for filtering
+
+				// Convert result rows to storage.Row for RLS filtering
 				storageRows := make([]storage.Row, len(result.Rows))
 				for i, r := range result.Rows {
 					row := make(storage.Row, len(r))
@@ -308,6 +325,7 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 				if err != nil {
 					return nil, err
 				}
+
 				// Rebuild string rows from filtered storage rows
 				filteredRows := make([][]string, len(filtered))
 				for i, r := range filtered {
@@ -318,9 +336,54 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 					filteredRows[i] = row
 				}
 				result.Rows = filteredRows
+
+				// Project only the outer query's requested columns
+				if len(c.stmt.Columns) > 0 && len(c.stmt.Columns) < len(result.Columns) {
+					projected := make([][]string, len(result.Rows))
+					for i, r := range result.Rows {
+						projRow := make([]string, len(c.stmt.Columns))
+						for j, col := range c.stmt.Columns {
+							colRef, ok := col.Expr.(*parser.ColumnRef)
+							if !ok {
+								projRow[j] = fmt.Sprintf("%v", col.Expr)
+								continue
+							}
+							// Find the column index in the view result
+							for k, rc := range result.Columns {
+								if strings.EqualFold(rc, colRef.Name) {
+									if k < len(r) {
+										projRow[j] = r[k]
+									}
+									break
+								}
+							}
+						}
+						projected[i] = projRow
+					}
+					result.Rows = projected
+					// Update column names
+					projCols := make([]string, len(c.stmt.Columns))
+					for i, col := range c.stmt.Columns {
+						if col.Alias != "" {
+							projCols[i] = col.Alias
+						} else if colRef, ok := col.Expr.(*parser.ColumnRef); ok {
+							projCols[i] = colRef.Name
+						} else {
+							projCols[i] = fmt.Sprintf("col%d", i)
+						}
+					}
+					result.Columns = projCols
+				}
+
+				return result, nil
 			}
 
-			return result, nil
+			// No view-level RLS: original behavior
+			if len(c.stmt.Columns) > 0 {
+				subSel.Columns = c.stmt.Columns
+			}
+			cmd := &SelectCommand{stmt: subSel}
+			return cmd.Execute(ctx)
 		}
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
