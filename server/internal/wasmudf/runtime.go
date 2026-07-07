@@ -2,10 +2,12 @@ package wasmudf
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -18,21 +20,164 @@ const (
 	DefaultTimeout = 30 * time.Second
 	// wasmPageSize is the size of a single WASM memory page in bytes.
 	wasmPageSize = 64 * 1024
+	// DefaultMaxModuleSize is the default maximum allowed WASM binary size (10 MB).
+	DefaultMaxModuleSize = 10 * 1024 * 1024
+	// wasmMagic is the WASM binary magic number: \0asm.
+	wasmMagic = "\x00asm"
+	// maxExportNameLength is the maximum length of a WASM export name.
+	maxExportNameLength = 256
 )
 
 // allowedExports is the whitelist of function names that WASM UDF modules may export.
 var allowedExports = map[string]bool{
-	"alloc":         true,
-	"execute":       true,
-	"execute_args":  true,
-	"result_len":    true,
-	"result_copy":   true,
+	"alloc":        true,
+	"execute":      true,
+	"execute_args": true,
+	"result_len":   true,
+	"result_copy":  true,
+}
+
+// ValidateWASMBytes performs structural validation of a WASM binary before passing to wazero.
+// It checks: magic bytes, total size, and per-section size bounds.
+// Export whitelist validation is handled by wazero's ExportedFunctions() in LoadModule.
+func ValidateWASMBytes(data []byte, maxModuleSize int64) error {
+	// 1. Size check
+	if int64(len(data)) > maxModuleSize {
+		return fmt.Errorf("WASM module size %d bytes exceeds maximum %d bytes", len(data), maxModuleSize)
+	}
+
+	// 2. Magic bytes check: first 4 bytes must be 0x00 0x61 0x73 0x6D ("\0asm")
+	if len(data) < 8 {
+		return fmt.Errorf("WASM binary too small: %d bytes (minimum 8 for header)", len(data))
+	}
+	if string(data[0:4]) != wasmMagic {
+		return fmt.Errorf("invalid WASM magic bytes: expected %x, got %x", []byte(wasmMagic), data[0:4])
+	}
+
+	// 3. Version check: bytes 4-7 must be 0x01 0x00 0x00 0x00 (version 1)
+	if data[4] != 0x01 || data[5] != 0x00 || data[6] != 0x00 || data[7] != 0x00 {
+		return fmt.Errorf("unsupported WASM version: %d (expected 1)", binary.LittleEndian.Uint32(data[4:8]))
+	}
+
+	// 4. Validate section sizes: walk sections and ensure no single section exceeds maxModuleSize
+	if err := validateSectionSizes(data[8:], maxModuleSize); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateSectionSizes walks WASM sections and checks each section's declared size.
+func validateSectionSizes(data []byte, maxModuleSize int64) error {
+	off := 0
+	for off < len(data) {
+		if off+1 > len(data) {
+			break
+		}
+		sectionID := data[off]
+		off++
+
+		sectionSize, n, err := decodeLEB128(data[off:])
+		if err != nil {
+			return fmt.Errorf("invalid LEB128 in section %d size: %w", sectionID, err)
+		}
+		off += n
+
+		if int64(sectionSize) > maxModuleSize {
+			return fmt.Errorf("WASM section %d size %d bytes exceeds maximum %d bytes", sectionID, sectionSize, maxModuleSize)
+		}
+
+		if off+int(sectionSize) > len(data) {
+			return fmt.Errorf("WASM section %d declares size %d but only %d bytes remain", sectionID, sectionSize, len(data)-off)
+		}
+		off += int(sectionSize)
+	}
+	return nil
+}
+
+// validateExportNames parses the WASM export section (section ID 7) and validates
+// that export names are valid UTF-8, within length bounds, and in the whitelist.
+func validateExportNames(data []byte) error {
+	off := 0
+	for off < len(data) {
+		sectionID := data[off]
+		off++
+
+		sectionSize, n, err := decodeLEB128(data[off:])
+		if err != nil {
+			return nil // not an export section, skip validation
+		}
+		off += n
+
+		if off+int(sectionSize) > len(data) {
+			return nil
+		}
+
+		if sectionID != 7 {
+			off += int(sectionSize)
+			continue
+		}
+
+		// Parse export section
+		secData := data[off : off+int(sectionSize)]
+		soff := 0
+		exportCount, n, err := decodeLEB128(secData[soff:])
+		if err != nil {
+			return fmt.Errorf("invalid export section count: %w", err)
+		}
+		soff += n
+
+		for i := uint32(0); i < exportCount; i++ {
+			if soff >= len(secData) {
+				return fmt.Errorf("export section truncated at export %d", i)
+			}
+			nameLen, n, err := decodeLEB128(secData[soff:])
+			if err != nil {
+				return fmt.Errorf("invalid export name length at export %d: %w", i, err)
+			}
+			soff += n
+
+			if int(nameLen) > maxExportNameLength {
+				return fmt.Errorf("export name length %d exceeds maximum %d bytes at export %d", nameLen, maxExportNameLength, i)
+			}
+			if soff+int(nameLen) > len(secData) {
+				return fmt.Errorf("export name truncated at export %d", i)
+			}
+			name := string(secData[soff : soff+int(nameLen)])
+			soff += int(nameLen)
+
+			if !utf8.ValidString(name) {
+				return fmt.Errorf("export name %q is not valid UTF-8", name)
+			}
+			if !allowedExports[name] {
+				return fmt.Errorf("WASM module has unexpected export %q (allowed: alloc, execute, execute_args, result_len, result_copy)", name)
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
+// decodeLEB128 decodes an unsigned LEB128-encoded uint32 from data.
+func decodeLEB128(data []byte) (uint32, int, error) {
+	var result uint32
+	var shift uint
+	for i := 0; i < len(data) && i < 5; i++ {
+		b := data[i]
+		result |= uint32(b&0x7f) << shift
+		if b&0x80 == 0 {
+			return result, i + 1, nil
+		}
+		shift += 7
+	}
+	return 0, 0, fmt.Errorf("LEB128 too long or truncated")
 }
 
 // Runtime manages WASM module compilation and execution.
 type Runtime struct {
 	runtime        wazero.Runtime
 	defaultTimeout time.Duration
+	maxModuleSize  int64 // maximum allowed WASM binary size in bytes
 }
 
 // NewRuntime creates a new WASM runtime with sensible defaults:
@@ -61,7 +206,29 @@ func NewRuntimeWithLimits(maxMemoryPages uint32, timeout time.Duration) (*Runtim
 	// WASI is intentionally NOT instantiated. WASM UDF modules must be
 	// self-contained and have no host filesystem or process access.
 
-	return &Runtime{runtime: r, defaultTimeout: timeout}, nil
+	return &Runtime{runtime: r, defaultTimeout: timeout, maxModuleSize: DefaultMaxModuleSize}, nil
+}
+
+// NewRuntimeWithConfig creates a WASM runtime with all limits explicitly set.
+func NewRuntimeWithConfig(maxMemoryPages uint32, timeout time.Duration, maxModuleSize int64) (*Runtime, error) {
+	if timeout == 0 {
+		timeout = DefaultTimeout
+	}
+	if maxModuleSize <= 0 {
+		maxModuleSize = DefaultMaxModuleSize
+	}
+
+	ctx := context.Background()
+	cfg := wazero.NewRuntimeConfig().
+		WithCloseOnContextDone(true)
+
+	if maxMemoryPages > 0 {
+		cfg = cfg.WithMemoryLimitPages(maxMemoryPages)
+	}
+
+	r := wazero.NewRuntimeWithConfig(ctx, cfg)
+
+	return &Runtime{runtime: r, defaultTimeout: timeout, maxModuleSize: maxModuleSize}, nil
 }
 
 // Close releases all runtime resources.
@@ -83,6 +250,10 @@ func (rt *Runtime) LoadModule(path string) (*WASMFunction, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read WASM module: %w", err)
+	}
+
+	if err := ValidateWASMBytes(data, rt.maxModuleSize); err != nil {
+		return nil, fmt.Errorf("validate WASM binary: %w", err)
 	}
 
 	ctx := context.Background()

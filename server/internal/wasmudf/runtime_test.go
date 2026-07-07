@@ -175,7 +175,7 @@ func (m *wasmModule) build() []byte {
 		var body bytes.Buffer
 		body.WriteByte(byte(len(m.exports)))
 		for _, e := range m.exports {
-			body.WriteByte(byte(len(e.name)))
+			body.Write(leb128(uint32(len(e.name))))
 			body.WriteString(e.name)
 			body.WriteByte(e.kind)
 			body.Write(leb128(e.index))
@@ -1316,5 +1316,215 @@ func TestLoadModuleRequiresExecuteExport(t *testing.T) {
 	_, err = rt.LoadModule(path)
 	if err == nil {
 		t.Fatal("expected error for module without 'execute' export")
+	}
+}
+
+// --- ValidateWASMBytes tests ---
+
+func TestValidateWASMBytesValid(t *testing.T) {
+	// testWASM is a valid binary with "execute" export (whitelisted).
+	if err := ValidateWASMBytes(testWASM, DefaultMaxModuleSize); err != nil {
+		t.Errorf("expected valid WASM to pass validation, got: %v", err)
+	}
+}
+
+func TestValidateWASMBytesInvalidMagic(t *testing.T) {
+	data := make([]byte, len(testWASM))
+	copy(data, testWASM)
+	data[0] = 0xFF
+	if err := ValidateWASMBytes(data, DefaultMaxModuleSize); err == nil {
+		t.Fatal("expected error for invalid magic bytes")
+	}
+}
+
+func TestValidateWASMBytesTooSmall(t *testing.T) {
+	if err := ValidateWASMBytes([]byte{0x00, 0x61}, DefaultMaxModuleSize); err == nil {
+		t.Fatal("expected error for binary too small")
+	}
+}
+
+func TestValidateWASMBytesUnsupportedVersion(t *testing.T) {
+	data := make([]byte, len(testWASM))
+	copy(data, testWASM)
+	data[4] = 0x02 // version 2
+	if err := ValidateWASMBytes(data, DefaultMaxModuleSize); err == nil {
+		t.Fatal("expected error for unsupported version")
+	}
+}
+
+func TestValidateWASMBytesOversized(t *testing.T) {
+	if err := ValidateWASMBytes(testWASM, 4); err == nil {
+		t.Fatal("expected error for oversized module")
+	}
+}
+
+func TestValidateWASMBytesUnexpectedExport(t *testing.T) {
+	// ValidateWASMBytes passes binary-level checks for testWASMNoExecute.
+	// Export whitelist is enforced by wazero at compile time in LoadModule.
+	if err := ValidateWASMBytes(testWASMNoExecute, DefaultMaxModuleSize); err != nil {
+		t.Errorf("ValidateWASMBytes should pass binary checks, got: %v", err)
+	}
+	// But LoadModule should reject it due to unexpected "foo" export.
+	rt, err := NewRuntime()
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer rt.Close()
+	path := writeTempWASM(t, testWASMNoExecute)
+	_, err = rt.LoadModule(path)
+	if err == nil {
+		t.Fatal("expected LoadModule to reject module with unexpected 'foo' export")
+	}
+}
+
+func TestValidateWASMBytesValidExport(t *testing.T) {
+	// Module exporting only "execute" — should pass.
+	if err := ValidateWASMBytes(testWASM, DefaultMaxModuleSize); err != nil {
+		t.Errorf("expected 'execute' export to be accepted, got: %v", err)
+	}
+}
+
+func TestValidateWASMBytesEmpty(t *testing.T) {
+	if err := ValidateWASMBytes(nil, DefaultMaxModuleSize); err == nil {
+		t.Fatal("expected error for nil input")
+	}
+	if err := ValidateWASMBytes([]byte{}, DefaultMaxModuleSize); err == nil {
+		t.Fatal("expected error for empty input")
+	}
+}
+
+// --- decodeLEB128 edge cases ---
+
+func TestDecodeLEB128Zero(t *testing.T) {
+	val, n, err := decodeLEB128([]byte{0x00})
+	if err != nil {
+		t.Fatalf("decodeLEB128(0): %v", err)
+	}
+	if val != 0 || n != 1 {
+		t.Errorf("got (%d, %d), want (0, 1)", val, n)
+	}
+}
+
+func TestDecodeLEB128OneByte(t *testing.T) {
+	val, n, err := decodeLEB128([]byte{0x7f})
+	if err != nil {
+		t.Fatalf("decodeLEB128(0x7f): %v", err)
+	}
+	if val != 127 || n != 1 {
+		t.Errorf("got (%d, %d), want (127, 1)", val, n)
+	}
+}
+
+func TestDecodeLEB128TwoBytes(t *testing.T) {
+	val, n, err := decodeLEB128([]byte{0x80, 0x01})
+	if err != nil {
+		t.Fatalf("decodeLEB128(0x80,0x01): %v", err)
+	}
+	if val != 128 || n != 2 {
+		t.Errorf("got (%d, %d), want (128, 2)", val, n)
+	}
+}
+
+func TestDecodeLEB128Truncated(t *testing.T) {
+	// All continuation bits set, but no terminator — should error.
+	_, _, err := decodeLEB128([]byte{0x80, 0x80, 0x80, 0x80, 0x80})
+	if err == nil {
+		t.Fatal("expected error for truncated LEB128")
+	}
+}
+
+func TestDecodeLEB128MaxUint32(t *testing.T) {
+	val, n, err := decodeLEB128([]byte{0xff, 0xff, 0xff, 0xff, 0x0f})
+	if err != nil {
+		t.Fatalf("decodeLEB128(max uint32): %v", err)
+	}
+	if val != 0xffffffff || n != 5 {
+		t.Errorf("got (%d, %d), want (0xffffffff, 5)", val, n)
+	}
+}
+
+func TestDecodeLEB128Empty(t *testing.T) {
+	_, _, err := decodeLEB128([]byte{})
+	if err == nil {
+		t.Fatal("expected error for empty input")
+	}
+}
+
+// --- Section size validation edge cases ---
+
+func TestValidateSectionSizesTruncated(t *testing.T) {
+	// Build a binary that claims a section size larger than remaining data.
+	data := []byte{
+		0x00, 0x61, 0x73, 0x6d, // magic
+		0x01, 0x00, 0x00, 0x00, // version 1
+		0x01, // type section ID
+		0xFF, 0xFF, 0xFF, 0xFF, 0x0f, // section size = max uint32 (but data is only a few bytes)
+	}
+	if err := ValidateWASMBytes(data, DefaultMaxModuleSize); err == nil {
+		t.Fatal("expected error for section declaring size larger than remaining data")
+	}
+}
+
+func TestValidateSectionSizesOversized(t *testing.T) {
+	// Section size exactly at the maxModuleSize limit (1 byte) — should fail.
+	data := []byte{
+		0x00, 0x61, 0x73, 0x6d,
+		0x01, 0x00, 0x00, 0x00,
+		0x01, // type section ID
+		0x02, // LEB128: size = 2
+		0x01, 0x00, // 2 bytes of section content
+	}
+	if err := ValidateWASMBytes(data, 1); err == nil {
+		t.Fatal("expected error when section size exceeds maxModuleSize")
+	}
+}
+
+func TestValidateWASMBytesMultipleExports(t *testing.T) {
+	// Module with two valid exports: "alloc" and "execute".
+	p := &wasmModule{
+		types: [][]byte{
+			{0x60, 0x00, 0x01, 0x7f},               // (func (result i32))
+			{0x60, 0x01, 0x7f, 0x01, 0x7f}, // (func (param i32) (result i32))
+		},
+		funcs:  []byte{0, 1}, // alloc:t1, execute:t0
+		exports: []exportDef{{"alloc", 0, 0}, {"execute", 0, 1}},
+		codes: [][]byte{
+			funcBody(oneI32Local, append([]byte{0x20, 0x00})),
+			funcBody(noLocals, append(i32Const0)),
+		},
+	}
+	bin := p.build()
+	if err := ValidateWASMBytes(bin, DefaultMaxModuleSize); err != nil {
+		t.Errorf("expected valid exports to pass, got: %v", err)
+	}
+}
+
+func TestValidateWASMBytesExportNameTooLong(t *testing.T) {
+	// A module with a long export name passes binary validation (no binary-level name check).
+	// Export whitelist is enforced by wazero at compile time in LoadModule.
+	longName := ""
+	for i := 0; i < 260; i++ {
+		longName += "a"
+	}
+	p := &wasmModule{
+		types:    [][]byte{{0x60, 0x00, 0x01, 0x7f}},
+		funcs:    []byte{0},
+		exports:  []exportDef{{longName, 0, 0}},
+		codes:    [][]byte{funcBody(noLocals, append(i32Const0))},
+	}
+	bin := p.build()
+	if err := ValidateWASMBytes(bin, DefaultMaxModuleSize); err != nil {
+		t.Errorf("ValidateWASMBytes should pass binary checks for long export name, got: %v", err)
+	}
+	// LoadModule should reject it since the long name is not in the whitelist.
+	rt, err := NewRuntime()
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer rt.Close()
+	path := writeTempWASM(t, bin)
+	_, err = rt.LoadModule(path)
+	if err == nil {
+		t.Fatal("expected LoadModule to reject module with non-whitelisted export")
 	}
 }
