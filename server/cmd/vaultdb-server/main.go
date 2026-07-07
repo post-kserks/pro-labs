@@ -468,6 +468,7 @@ func main() {
 		logger.Error("failed to create auth manager", "error", err)
 		os.Exit(1)
 	}
+	authManager.SetLocalhostBypass(cfg.Auth.LocalhostBypass)
 
 	// Embedding-провайдер для SEMANTIC_MATCH/AI_EMBED. Без настроенного AI
 	// эти операции возвращают понятную ошибку (NoopEmbedder в executor).

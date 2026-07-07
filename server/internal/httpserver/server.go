@@ -162,6 +162,7 @@ func New(cfg Config) *Server {
 		}
 		cfg.Auth = mgr
 	}
+	cfg.Auth.SetLocalhostBypass(config.Default().Auth.LocalhostBypass)
 	if cfg.Storage != nil {
 		cfg.Auth.SetDataDir(cfg.Storage.DataDir())
 	}
