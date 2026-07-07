@@ -1951,3 +1951,107 @@ func TestHTTPTransactionMultipleQueriesInTx(t *testing.T) {
 		t.Fatalf("expected 3 rows after multi-insert commit, got %d", len(rows))
 	}
 }
+
+func TestHandleHandshakeValid(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+	srv.cfg.Version = "1.1.1"
+
+	body := `{"type":"handshake","client_version":"2.0","client_name":"test-client","supported_features":["params","database"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["type"] != "handshake" {
+		t.Errorf("type = %v, want handshake", resp["type"])
+	}
+	if resp["protocol_version"] != "2.0" {
+		t.Errorf("protocol_version = %v, want 2.0", resp["protocol_version"])
+	}
+	if resp["server"] != "VaultDB" {
+		t.Errorf("server = %v, want VaultDB", resp["server"])
+	}
+	if resp["server_version"] != "1.1.1" {
+		t.Errorf("server_version = %v, want 1.1.1", resp["server_version"])
+	}
+	features, ok := resp["supported_features"].([]interface{})
+	if !ok || len(features) != 3 {
+		t.Errorf("supported_features = %v, want 3 features", resp["supported_features"])
+	}
+}
+
+func TestHandleHandshakeVersionMismatch(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	body := `{"type":"handshake","client_version":"1.0","client_name":"old-client"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["status"] != "error" {
+		t.Errorf("status = %v, want error", resp["status"])
+	}
+}
+
+func TestHandleHandshakeMissingFields(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"empty type", `{"client_version":"2.0"}`},
+		{"wrong type", `{"type":"query","client_version":"2.0"}`},
+		{"missing version", `{"type":"handshake"}`},
+		{"invalid json", `{bad json`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(tt.body))
+			srv.apiMux().ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleHandshakeRequiresAuth(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, true, map[string]string{"valid-token": "user1"}))
+
+	body := `{"type":"handshake","client_version":"2.0","client_name":"test"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want %d (unauthorized): %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
+func TestHandleHandshakeMethodNotAllowed(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/handshake", nil)
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET status %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}

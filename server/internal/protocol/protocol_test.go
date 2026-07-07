@@ -170,3 +170,121 @@ func TestResponseJSON(t *testing.T) {
 		t.Errorf("Message = %q, want %q", decoded.Message, "done")
 	}
 }
+
+func TestHandshakeRequestRoundTrip(t *testing.T) {
+	req := HandshakeRequest{
+		Type:              "handshake",
+		ClientVersion:     "2.0",
+		ClientName:        "test-client",
+		SupportedFeatures: []string{"params", "database"},
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	var decoded HandshakeRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if decoded.Type != "handshake" {
+		t.Errorf("Type = %q, want %q", decoded.Type, "handshake")
+	}
+	if decoded.ClientVersion != "2.0" {
+		t.Errorf("ClientVersion = %q, want %q", decoded.ClientVersion, "2.0")
+	}
+	if decoded.ClientName != "test-client" {
+		t.Errorf("ClientName = %q, want %q", decoded.ClientName, "test-client")
+	}
+	if len(decoded.SupportedFeatures) != 2 {
+		t.Errorf("SupportedFeatures len = %d, want 2", len(decoded.SupportedFeatures))
+	}
+}
+
+func TestHandshakeResponseRoundTrip(t *testing.T) {
+	resp := HandshakeResponse{
+		Type:              "handshake",
+		ProtocolVersion:   "2.0",
+		Server:            "VaultDB",
+		ServerVersion:     "2.0.0",
+		SupportedFeatures: []string{"params", "database", "as_of"},
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	var decoded HandshakeResponse
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if decoded.Type != "handshake" {
+		t.Errorf("Type = %q, want %q", decoded.Type, "handshake")
+	}
+	if decoded.ProtocolVersion != "2.0" {
+		t.Errorf("ProtocolVersion = %q, want %q", decoded.ProtocolVersion, "2.0")
+	}
+	if decoded.Server != "VaultDB" {
+		t.Errorf("Server = %q, want %q", decoded.Server, "VaultDB")
+	}
+}
+
+func TestValidateHandshakeRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     HandshakeRequest
+		wantErr bool
+	}{
+		{"valid", HandshakeRequest{Type: "handshake", ClientVersion: "2.0"}, false},
+		{"empty type", HandshakeRequest{Type: "", ClientVersion: "2.0"}, true},
+		{"wrong type", HandshakeRequest{Type: "query", ClientVersion: "2.0"}, true},
+		{"missing version", HandshakeRequest{Type: "handshake", ClientVersion: ""}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateHandshakeRequest(tt.req)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateHandshakeRequest() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestCheckVersionCompatibility(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		wantErr bool
+	}{
+		{"exact match", "2.0", false},
+		{"patch version", "2.0.1", false},
+		{"minor mismatch ok", "2.1", false},
+		{"major mismatch", "1.0", true},
+		{"major mismatch high", "3.0", true},
+		{"invalid", "abc", true},
+		{"empty", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CheckVersionCompatibility(tt.version)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CheckVersionCompatibility(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestServerFeatures(t *testing.T) {
+	features := ServerFeatures()
+	if len(features) != 3 {
+		t.Fatalf("ServerFeatures() len = %d, want 3", len(features))
+	}
+	expected := map[string]bool{FeatureParams: true, FeatureDatabase: true, FeatureAsOf: true}
+	for _, f := range features {
+		if !expected[f] {
+			t.Errorf("unexpected feature %q", f)
+		}
+	}
+}

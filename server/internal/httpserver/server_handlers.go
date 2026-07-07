@@ -13,6 +13,7 @@ import (
 
 	"vaultdb/internal/executor"
 	"vaultdb/internal/parser"
+	"vaultdb/internal/protocol"
 	"vaultdb/internal/storage"
 )
 
@@ -1099,4 +1100,37 @@ func generateSessionID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+func (s *Server) handleHandshake(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
+	var req protocol.HandshakeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err.Error() == "http: request body too large" {
+			writeError(w, http.StatusRequestEntityTooLarge, errCodeBadRequest, "request body too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "invalid JSON body")
+		return
+	}
+
+	if err := protocol.ValidateHandshakeRequest(req); err != nil {
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, err.Error())
+		return
+	}
+
+	if err := protocol.CheckVersionCompatibility(req.ClientVersion); err != nil {
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, err.Error())
+		return
+	}
+
+	resp := protocol.HandshakeResponse{
+		Type:              "handshake",
+		ProtocolVersion:   protocol.ProtocolV2,
+		Server:            protocol.ServerName,
+		ServerVersion:     s.cfg.Version,
+		SupportedFeatures: protocol.ServerFeatures(),
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }

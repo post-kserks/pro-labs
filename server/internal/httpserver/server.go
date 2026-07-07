@@ -314,6 +314,7 @@ func (s *Server) apiMux() http.Handler {
 	mux.HandleFunc("/api/docs/openapi.json", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleOpenAPI))))
 	mux.HandleFunc("/api/databases", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleListDatabases))))
 	mux.HandleFunc("/api/databases/", s.withRateLimit(s.cfg.Auth.Middleware(s.handleDatabasesSubroutes)))
+	mux.HandleFunc("/api/v2/handshake", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleHandshake))))
 
 	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleHealth))
 	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
