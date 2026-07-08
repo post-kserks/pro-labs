@@ -60,13 +60,14 @@ type StorageConfig struct {
 
 // AuthConfig — параметры аутентификации.
 type AuthConfig struct {
-	Enabled        bool   `yaml:"enabled"`
-	MTLSEnabled    bool   `yaml:"mtls_enabled"`
-	MTLScaFile     string `yaml:"mtls_ca_file"`
-	RateWindowSec  int    `yaml:"rate_window_seconds"`
-	MaxFails       int    `yaml:"max_fails"`
-	BlockForSec    int    `yaml:"block_for_seconds"`
-	LocalhostBypass bool  `yaml:"localhost_bypass"`
+	Enabled          bool   `yaml:"enabled"`
+	MTLSEnabled      bool   `yaml:"mtls_enabled"`
+	MTLScaFile       string `yaml:"mtls_ca_file"`
+	RateWindowSec    int    `yaml:"rate_window_seconds"`
+	MaxFails         int    `yaml:"max_fails"`
+	BlockForSec      int    `yaml:"block_for_seconds"`
+	LocalhostBypass  bool   `yaml:"localhost_bypass"`
+	RequireTLSForToken bool `yaml:"require_tls_for_token"`
 }
 
 // AIConfig — параметры внешнего embedding-провайдера для SEMANTIC_MATCH/AI_EMBED.

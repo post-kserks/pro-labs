@@ -25,6 +25,7 @@ const (
 	errCodeForeignKey       = 3013
 	errCodeQueryTimeout     = 3014
 	errCodeTLSEnforced      = 4001
+	errCodeTokenRequiresTLS = 4002
 	errCodeInternal         = 5000
 	errCodeNotImplemented   = 9999
 
@@ -214,6 +215,21 @@ func (s *Server) withTLSEnforcement(next http.Handler) http.Handler {
 		if s.cfg.TLSEnforce && r.TLS == nil {
 			writeError(w, http.StatusBadRequest, errCodeTLSEnforced, "TLS required: this server requires HTTPS connections. Please use TLS to connect.")
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withRequireTLSForToken rejects requests containing auth tokens when TLS is not active.
+func (s *Server) withRequireTLSForToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.AuthRequireTLSForToken && r.TLS == nil {
+			authHeader := r.Header.Get("Authorization")
+			tokenHeader := r.Header.Get("X-VaultDB-Token")
+			if authHeader != "" || tokenHeader != "" {
+				writeError(w, http.StatusBadRequest, errCodeTokenRequiresTLS, "Auth tokens are not accepted over unencrypted connections. Use HTTPS.")
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})

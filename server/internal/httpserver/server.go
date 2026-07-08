@@ -47,6 +47,7 @@ type Config struct {
 	TLSMinVersion             string // "1.2" or "1.3"
 	TLSEnforce                bool
 	TLSRedirectHTTP           bool
+	AuthRequireTLSForToken    bool
 	MaxLiveQuerySubscriptions int
 	MaxLiveQueryDurationSec   int
 	SessionPoolMaxIdle        int
@@ -63,7 +64,6 @@ type Server struct {
 	txm                 *txmanager.Manager
 	br                  *executor.Broadcaster
 	activeSubscriptions atomic.Int64
-	nextSubID           atomic.Int64
 	sessions            *sessionStore
 	sessionPool         *pool.SessionPool
 }
@@ -218,8 +218,17 @@ func New(cfg Config) *Server {
 }
 
 func (s *Server) Start(ctx context.Context) error {
-	if s.cfg.TLSEnforce && (s.cfg.TLSCertFile == "" || s.cfg.TLSKeyFile == "") {
+	tlsEnabled := s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != ""
+
+	if s.cfg.TLSEnforce && !tlsEnabled {
 		return fmt.Errorf("TLS enforcement is enabled but TLS is not configured (cert_file=%q, key_file=%q)", s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+	}
+
+	if !tlsEnabled {
+		s.cfg.Logger.Warn("SECURITY WARNING: TLS is disabled — auth tokens are transmitted in plaintext. Enable TLS (tls.cert_file + tls.key_file) in production.")
+		if s.cfg.AuthRequireTLSForToken {
+			s.cfg.Logger.Warn("auth.require_tls_for_token is enabled — requests with auth tokens will be rejected when TLS is not active")
+		}
 	}
 
 	// Start audit chain verifier if configured.
@@ -341,7 +350,7 @@ func (s *Server) apiMux() http.Handler {
 		http.NotFound(w, r)
 	})
 
-	return withPanicRecovery(s.withHTTPRedirect(s.withTLSEnforcement(mux)))
+	return withPanicRecovery(s.withHTTPRedirect(s.withRequireTLSForToken(s.withTLSEnforcement(mux))))
 }
 
 func (s *Server) monitorMux() http.Handler {
@@ -353,5 +362,5 @@ func (s *Server) monitorMux() http.Handler {
 	} else {
 		mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.handleMetrics)))
 	}
-	return withPanicRecovery(s.withHTTPRedirect(s.withTLSEnforcement(mux)))
+	return withPanicRecovery(s.withHTTPRedirect(s.withRequireTLSForToken(s.withTLSEnforcement(mux))))
 }
