@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -105,6 +106,37 @@ func parseMajorVersion(version string) (int, error) {
 		return 0, fmt.Errorf("empty version string")
 	}
 	return strconv.Atoi(parts[0])
+}
+
+// ParseRequest parses raw bytes into a Request, returning an error for invalid input.
+// It handles JSON unmarshaling and basic validation.
+func ParseRequest(data []byte) (Request, error) {
+	var req Request
+	if err := json.Unmarshal(data, &req); err != nil {
+		return req, fmt.Errorf("invalid request JSON: %w", err)
+	}
+	return req, nil
+}
+
+// ParseResponse parses raw bytes into a Response.
+func ParseResponse(data []byte) (Response, error) {
+	var resp Response
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return resp, fmt.Errorf("invalid response JSON: %w", err)
+	}
+	return resp, nil
+}
+
+// ParseHandshake parses raw bytes into a HandshakeRequest with validation.
+func ParseHandshake(data []byte) (HandshakeRequest, error) {
+	var req HandshakeRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return req, fmt.Errorf("invalid handshake JSON: %w", err)
+	}
+	if err := ValidateHandshakeRequest(req); err != nil {
+		return req, err
+	}
+	return req, nil
 }
 
 type Request struct {
