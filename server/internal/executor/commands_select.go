@@ -128,12 +128,17 @@ func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	rowsScanned := len(rows)
 
 	// Apply RLS
 	rows, err = filterRowsWithRLS(rows, schema, ctx, dbName, c.stmt.TableName)
 	if err != nil {
 		return nil, err
 	}
+
+	// Apply optimizer predicate pushdown: filter rows early using per-table
+	// predicates before the full WHERE evaluation.
+	rows = applyPushdownFilter(dbName, c.stmt, c.stmt.TableName, rows, schema, ctx)
 
 	// Build column index for O(1) lookups during expression evaluation
 	ensureColumnIndex(ctx, schema)
@@ -223,10 +228,11 @@ func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	return &Result{
-		Type:    "rows",
-		Columns: projectColumns,
-		Rows:    resultRows[start:end],
-		Schema:  resultSchema,
+		Type:        "rows",
+		Columns:     projectColumns,
+		Rows:        resultRows[start:end],
+		Schema:      resultSchema,
+		RowsScanned: rowsScanned,
 	}, nil
 }
 
@@ -403,6 +409,7 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 
 	var rows []storage.Row
 	var asOfNote string
+	var rowsScanned int
 
 	// Try index lookup (only for single table for now)
 	// Внутри транзакции индекс пропускаем — он обошёл бы tx-overlay (Bug #1).
@@ -433,6 +440,7 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 			return nil, err
 		}
 	}
+	rowsScanned = len(rows)
 
 	// Apply RLS before JOINs and WHERE
 	if c.stmt.TableName != "" {
@@ -441,6 +449,10 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 			return nil, err
 		}
 	}
+
+	// Apply optimizer predicate pushdown: filter main table rows early
+	// using per-table predicates before JOINs reduce row count further.
+	rows = applyPushdownFilter(dbName, c.stmt, c.stmt.TableName, rows, mainSchema, ctx)
 
 	// Combined schema and rows for JOIN
 	combinedSchema := mainSchema
@@ -589,11 +601,12 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	}
 
 	return &Result{
-		Type:     "rows",
-		Columns:  projectColumns,
-		Rows:     finalRows,
-		Schema:   resultSchema,
-		AsOfNote: asOfNote,
+		Type:        "rows",
+		Columns:     projectColumns,
+		Rows:        finalRows,
+		Schema:      resultSchema,
+		AsOfNote:    asOfNote,
+		RowsScanned: rowsScanned,
 	}, nil
 }
 
@@ -926,6 +939,7 @@ func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName s
 		}
 		allRows = append(allRows, rows...)
 	}
+	rowsScanned := len(allRows)
 
 	// Apply tx overlay (read-your-wown-writes for transactions)
 	allRows, err := applyTxOverlay(ctx, dbName, c.stmt.TableName, allRows)
@@ -938,6 +952,10 @@ func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName s
 	if err != nil {
 		return nil, err
 	}
+
+	// Apply optimizer predicate pushdown: filter rows early using per-table
+	// predicates before the full WHERE evaluation.
+	allRows = applyPushdownFilter(dbName, c.stmt, c.stmt.TableName, allRows, schema, ctx)
 
 	// Build column index for O(1) lookups
 	ensureColumnIndex(ctx, schema)
@@ -1004,5 +1022,5 @@ func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName s
 		}
 	}
 
-	return &Result{Type: "rows", Columns: columns, Rows: resultRows}, nil
+	return &Result{Type: "rows", Columns: columns, Rows: resultRows, RowsScanned: rowsScanned}, nil
 }

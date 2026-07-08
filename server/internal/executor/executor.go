@@ -131,13 +131,14 @@ type Command interface {
 
 // Result is a uniform executor output for all statements.
 type Result struct {
-	Type     string
-	Columns  []string
-	Rows     [][]string
-	Schema   *storage.TableSchema
-	Affected int
-	Message  string
-	AsOfNote string
+	Type        string
+	Columns     []string
+	Rows        [][]string
+	Schema      *storage.TableSchema
+	Affected    int
+	Message     string
+	AsOfNote    string
+	RowsScanned int // total rows read from storage before filtering
 }
 
 // ExecutionContext carries mutable session state and dependencies.
