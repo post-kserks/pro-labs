@@ -1,11 +1,20 @@
 package protocol
 
 import (
+	"crypto/rand"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// GenerateRequestID returns a cryptographically random 32-char hex string
+// suitable for use as a request identifier.
+func GenerateRequestID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%x", b)
+}
 
 const (
 	ProtocolV2        = "2.0"

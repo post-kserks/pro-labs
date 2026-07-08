@@ -336,3 +336,17 @@ func TestHandshakeRequestNonceJSON(t *testing.T) {
 		t.Errorf("NonceTimestamp = %d, want 1700000000", decoded.NonceTimestamp)
 	}
 }
+
+func TestGenerateRequestID(t *testing.T) {
+	ids := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		id := GenerateRequestID()
+		if len(id) != 32 {
+			t.Errorf("GenerateRequestID() length = %d, want 32", len(id))
+		}
+		if ids[id] {
+			t.Errorf("GenerateRequestID() produced duplicate: %q", id)
+		}
+		ids[id] = true
+	}
+}
