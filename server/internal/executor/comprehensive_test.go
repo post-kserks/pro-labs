@@ -512,7 +512,7 @@ func TestConcurrentAccessComprehensive(t *testing.T) {
 	}
 }
 
-func TestConnectionPoolComprehensive(t *testing.T) {
+func TestConnectionLimiterComprehensive(t *testing.T) {
 	// Test that connection pool works correctly
 	// This is more of an integration test
 	session := setupSession(t)

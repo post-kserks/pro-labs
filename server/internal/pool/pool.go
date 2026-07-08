@@ -1,3 +1,13 @@
+// Package pool provides connection limiting and session pooling utilities.
+//
+// ConnectionLimiter tracks active TCP connections and enforces a maximum
+// concurrency limit. It is NOT a connection pool in the traditional sense —
+// connections are not reused or returned to a shared cache. Each Acquire
+// creates a new connection (or wraps an accepted one) and Release marks it
+// as no longer active. Idle connections are cleaned up periodically.
+//
+// SessionPool provides true pooling for executor.Session objects, allowing
+// HTTP handlers to reuse sessions across requests.
 package pool
 
 import (
@@ -13,8 +23,10 @@ import (
 	"vaultdb/internal/executor"
 )
 
-// Pool — пул соединений с автоматическим управлением.
-type Pool struct {
+// ConnectionLimiter tracks active connections and enforces a maximum concurrency limit.
+// Despite the historical "Pool" name, this does NOT pool or reuse connections — it
+// merely counts active connections and rejects new ones when the limit is reached.
+type ConnectionLimiter struct {
 	mu          sync.Mutex
 	connections []*Connection
 	minSize     int
@@ -77,8 +89,8 @@ func (c *Connection) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
 
-// NewPool создаёт новый пул соединений.
-func NewPool(minSize, maxSize int, idleTimeout time.Duration, factory func() (net.Conn, error)) *Pool {
+// NewConnectionLimiter creates a new connection limiter.
+func NewConnectionLimiter(minSize, maxSize int, idleTimeout time.Duration, factory func() (net.Conn, error)) *ConnectionLimiter {
 	if minSize <= 0 {
 		minSize = 1
 	}
@@ -89,7 +101,7 @@ func NewPool(minSize, maxSize int, idleTimeout time.Duration, factory func() (ne
 		idleTimeout = 5 * time.Minute
 	}
 
-	p := &Pool{
+	p := &ConnectionLimiter{
 		connections: make([]*Connection, 0, maxSize),
 		minSize:     minSize,
 		maxSize:     maxSize,
@@ -105,7 +117,7 @@ func NewPool(minSize, maxSize int, idleTimeout time.Duration, factory func() (ne
 }
 
 // Acquire получает соединение из пула.
-func (p *Pool) Acquire() (*Connection, error) {
+func (p *ConnectionLimiter) Acquire() (*Connection, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -145,7 +157,7 @@ func (p *Pool) Acquire() (*Connection, error) {
 }
 
 // Release возвращает соединение в пул.
-func (p *Pool) Release(conn *Connection) {
+func (p *ConnectionLimiter) Release(conn *Connection) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -156,7 +168,7 @@ func (p *Pool) Release(conn *Connection) {
 // AcquireConn оборачивает существующее соединение в пул.
 // Используется когда соединение уже принято (listener.Accept),
 // а не создаётся через factory.
-func (p *Pool) AcquireConn(raw net.Conn) (*Connection, error) {
+func (p *ConnectionLimiter) AcquireConn(raw net.Conn) (*Connection, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -184,7 +196,7 @@ func randomID() string {
 }
 
 // Close закрывает пул и все соединения.
-func (p *Pool) Close() {
+func (p *ConnectionLimiter) Close() {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -206,7 +218,7 @@ func (p *Pool) Close() {
 }
 
 // Stats возвращает статистику пула.
-func (p *Pool) Stats() PoolStats {
+func (p *ConnectionLimiter) Stats() ConnectionLimiterStats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -220,22 +232,22 @@ func (p *Pool) Stats() PoolStats {
 		}
 	}
 
-	return PoolStats{
+	return ConnectionLimiterStats{
 		Active: active,
 		Idle:   idle,
 		Total:  len(p.connections),
 	}
 }
 
-// PoolStats статистика пула соединений.
-type PoolStats struct {
+// ConnectionLimiterStats статистика пула соединений.
+type ConnectionLimiterStats struct {
 	Active int
 	Idle   int
 	Total  int
 }
 
 // isHealthy
-func (p *Pool) isHealthy(conn *Connection) bool {
+func (p *ConnectionLimiter) isHealthy(conn *Connection) bool {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
@@ -254,7 +266,7 @@ func (p *Pool) isHealthy(conn *Connection) bool {
 }
 
 // removeConnLocked удаляет соединение из списка (должно вызываться с p.mu).
-func (p *Pool) removeConnLocked(conn *Connection) {
+func (p *ConnectionLimiter) removeConnLocked(conn *Connection) {
 	for i, c := range p.connections {
 		if c == conn {
 			p.connections = append(p.connections[:i], p.connections[i+1:]...)
@@ -263,7 +275,7 @@ func (p *Pool) removeConnLocked(conn *Connection) {
 	}
 }
 
-func (p *Pool) cleanupLoop() {
+func (p *ConnectionLimiter) cleanupLoop() {
 	defer p.wg.Done()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -278,7 +290,7 @@ func (p *Pool) cleanupLoop() {
 	}
 }
 
-func (p *Pool) cleanup() {
+func (p *ConnectionLimiter) cleanup() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -429,16 +441,16 @@ func (p *SessionPool) Close() {
 }
 
 // Stats возвращает статистику пула сессий.
-func (p *SessionPool) Stats() SessionPoolStats {
-	return SessionPoolStats{
+func (p *SessionPool) Stats() SessionConnectionLimiterStats {
+	return SessionConnectionLimiterStats{
 		Active: int(atomic.LoadInt32(&p.active)),
 		Idle:   len(p.sessions),
 		Max:    p.maxOpen,
 	}
 }
 
-// SessionPoolStats статистика пула сессий.
-type SessionPoolStats struct {
+// SessionConnectionLimiterStats статистика пула сессий.
+type SessionConnectionLimiterStats struct {
 	Active int
 	Idle   int
 	Max    int
