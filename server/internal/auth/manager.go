@@ -9,13 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"vaultdb/internal/iputil"
 )
 
 // AuditFunc is a callback function for audit logging.
@@ -181,13 +182,7 @@ func (rl *authRateLimiter) updateBlockedIPsMetricLocked() {
 	}
 }
 
-func extractClientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	return host
-}
+
 
 // hashToken вычисляет HMAC-SHA256 токена с серверным секретом.
 func (m *Manager) hashToken(token string) string {
@@ -574,7 +569,7 @@ func (m *Manager) Middleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		ip := extractClientIP(r)
+		ip := iputil.ExtractClientIP(r, nil)
 		// Skip auth for localhost when bypass is enabled — web UI needs to make API calls without tokens
 		if m.localhostBypass && (ip == "127.0.0.1" || ip == "::1" || ip == "localhost") {
 			next(w, r)

@@ -2,11 +2,11 @@ package httpserver
 
 import (
 	"encoding/json"
-	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
+
+	"vaultdb/internal/iputil"
 )
 
 const maxRateLimitKeys = 100000
@@ -130,47 +130,10 @@ func (rl *RateLimiter) evictOldest() {
 	}
 }
 
-// extractClientIP extracts the real client IP from the request.
-// trustedProxies is a list of CIDR ranges of trusted reverse proxies.
-// If the request comes from a trusted proxy, X-Forwarded-For is used.
-// Otherwise, RemoteAddr is used directly — spoofed headers are ignored.
-func extractClientIP(r *http.Request, trustedProxies []net.IPNet) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-
-	clientIP := net.ParseIP(host)
-	isTrusted := false
-	if clientIP != nil {
-		for _, cidr := range trustedProxies {
-			if cidr.Contains(clientIP) {
-				isTrusted = true
-				break
-			}
-		}
-	}
-
-	if isTrusted {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.Split(xff, ",")
-			trimmed := strings.TrimSpace(parts[0])
-			if trimmed != "" {
-				return trimmed
-			}
-		}
-		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			return strings.TrimSpace(xri)
-		}
-	}
-
-	return host
-}
-
 // Middleware возвращает HTTP middleware для rate limiting.
 func (rl *RateLimiter) Middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key := extractClientIP(r, nil)
+		key := iputil.ExtractClientIP(r, nil)
 
 		if !rl.Allow(key) {
 			w.Header().Set("Content-Type", "application/json")
