@@ -38,6 +38,10 @@ func TestParseValidStatements(t *testing.T) {
 		"ALTER TABLE heroes ADD COLUMN age INT;",
 		"ALTER TABLE heroes DROP COLUMN alive;",
 		"ALTER TABLE heroes RENAME COLUMN level TO exp;",
+		"ARCHIVE AUDIT LOG TO '/tmp/audit.json';",
+		"ARCHIVE AUDIT LOG TO '/tmp/audit.json' KEEP 100;",
+		"ARCHIVE AUDIT LOG;",
+		"ARCHIVE AUDIT LOG KEEP 50;",
 	}
 
 	for _, query := range queries {

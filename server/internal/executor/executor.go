@@ -100,6 +100,9 @@ func init() {
 	registerCommand(reflect.TypeOf((*parser.VerifyAuditLogStatement)(nil)), func(s parser.Statement) Command {
 		return &VerifyAuditLogCommand{stmt: s.(*parser.VerifyAuditLogStatement)}
 	})
+	registerCommand(reflect.TypeOf((*parser.ArchiveAuditLogStatement)(nil)), func(s parser.Statement) Command {
+		return &ArchiveAuditLogCommand{stmt: s.(*parser.ArchiveAuditLogStatement)}
+	})
 	registerCommand(reflect.TypeOf((*parser.CreateRoleStatement)(nil)), func(s parser.Statement) Command {
 		return &CreateRoleCommand{stmt: s.(*parser.CreateRoleStatement)}
 	})

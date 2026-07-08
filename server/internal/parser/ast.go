@@ -424,6 +424,12 @@ type EnableRlsStatement struct {
 // VerifyAuditLogStatement represents "VERIFY AUDIT LOG".
 type VerifyAuditLogStatement struct{}
 
+// ArchiveAuditLogStatement represents "ARCHIVE AUDIT LOG [TO 'path'] [KEEP N]".
+type ArchiveAuditLogStatement struct {
+	Path      string // output file path (empty = use config default)
+	KeepCount int    // number of recent entries to keep after archive (0 = truncate all)
+}
+
 // RBAC statements
 type CreateRoleStatement struct {
 	Name     string
@@ -478,7 +484,8 @@ func (*SetOperationStatement) statementNode()    {}
 func (*MigrationStatement) statementNode()       {}
 func (*CreatePolicyStatement) statementNode()    {}
 func (*EnableRlsStatement) statementNode()       {}
-func (*VerifyAuditLogStatement) statementNode() {}
+func (*VerifyAuditLogStatement) statementNode()     {}
+func (*ArchiveAuditLogStatement) statementNode()    {}
 func (*CreateRoleStatement) statementNode()     {}
 func (*DropRoleStatement) statementNode()       {}
 func (*GrantStatement) statementNode()          {}
@@ -527,6 +534,7 @@ func (*MigrationStatement) StatementType() string       { return "MIGRATION" }
 func (*CreatePolicyStatement) StatementType() string    { return "CREATE_POLICY" }
 func (*EnableRlsStatement) StatementType() string       { return "ENABLE_RLS" }
 func (*VerifyAuditLogStatement) StatementType() string  { return "VERIFY_AUDIT_LOG" }
+func (*ArchiveAuditLogStatement) StatementType() string { return "ARCHIVE_AUDIT_LOG" }
 func (*CreateRoleStatement) StatementType() string     { return "CREATE_ROLE" }
 func (*DropRoleStatement) StatementType() string       { return "DROP_ROLE" }
 func (*GrantStatement) StatementType() string          { return "GRANT" }

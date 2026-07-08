@@ -480,7 +480,12 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 	case lexer.TOKEN_PREVIEW:
 		stmt, err = p.parseMigration("PREVIEW")
 	default:
-		return nil, p.expectedError("a statement", p.current())
+		// Handle non-keyword statements that start with identifiers
+		if p.current().Type == lexer.TOKEN_IDENT && p.current().Literal == "ARCHIVE" {
+			stmt, err = p.parseArchiveAuditLog()
+		} else {
+			return nil, p.expectedError("a statement", p.current())
+		}
 	}
 
 	if err != nil {

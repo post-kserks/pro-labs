@@ -478,6 +478,92 @@ func TestLastHash(t *testing.T) {
 	}
 }
 
+func TestTruncateKeepLast(t *testing.T) {
+	store := newMockStorage()
+	log := NewTableLog(store)
+	if err := log.EnsureTable(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add 10 entries
+	for i := 0; i < 10; i++ {
+		entry := Entry{
+			Actor:  fmt.Sprintf("user%d", i),
+			Action: "INSERT",
+			Target: "test",
+		}
+		if err := log.Append(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Keep last 3
+	if err := log.TruncateKeepLast(3); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := log.ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(entries))
+	}
+
+	// Verify the kept entries are the last 3
+	if entries[0].Actor != "user7" {
+		t.Errorf("expected actor 'user7', got %q", entries[0].Actor)
+	}
+	if entries[2].Actor != "user9" {
+		t.Errorf("expected actor 'user9', got %q", entries[2].Actor)
+	}
+
+	// Verify hash chain is valid
+	valid, count, err := log.VerifyChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !valid {
+		t.Error("chain should be valid after truncation")
+	}
+	if count != 3 {
+		t.Errorf("expected 3 entries in chain, got %d", count)
+	}
+}
+
+func TestTruncateKeepLastZero(t *testing.T) {
+	store := newMockStorage()
+	log := NewTableLog(store)
+	if err := log.EnsureTable(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add 5 entries
+	for i := 0; i < 5; i++ {
+		entry := Entry{
+			Actor:  fmt.Sprintf("user%d", i),
+			Action: "INSERT",
+			Target: "test",
+		}
+		if err := log.Append(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Keep 0 = truncate all
+	if err := log.TruncateKeepLast(0); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := log.ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected 0 entries, got %d", len(entries))
+	}
+}
+
 func TestVerifierStartAndStop(t *testing.T) {
 	store := newMockStorage()
 	log := NewTableLog(store)

@@ -29,6 +29,7 @@ type Session struct {
 	Broadcaster *Broadcaster
 	AuditLog    *logging.AuditLogger
 	AuditTable  *audit.TableLog
+	ArchivePath string
 
 	PreparedStatements map[string]*PreparedStatement
 	planCache          *PlanCache
