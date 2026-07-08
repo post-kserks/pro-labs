@@ -1956,7 +1956,7 @@ func TestHandleHandshakeValid(t *testing.T) {
 	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
 	srv.cfg.Version = "1.1.1"
 
-	body := `{"type":"handshake","client_version":"2.0","client_name":"test-client","supported_features":["params","database"]}`
+	body := fmt.Sprintf(`{"type":"handshake","client_version":"2.0","client_name":"test-client","supported_features":["params","database"],"nonce":"test-nonce-123","nonce_timestamp":%d}`, time.Now().Unix())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(body))
 	srv.apiMux().ServeHTTP(rec, req)
