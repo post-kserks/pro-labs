@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strings"
 )
 
@@ -231,6 +232,25 @@ func (s *Server) withHTTPRedirect(next http.Handler) http.Handler {
 			http.Redirect(w, r, target.String(), http.StatusMovedPermanently)
 			return
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withPanicRecovery wraps a handler to recover from panics, log the stack trace, and return 500.
+func withPanicRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				stack := debug.Stack()
+				slog.Error("panic recovered",
+					"error", rec,
+					"stack", string(stack),
+					"method", r.Method,
+					"path", r.URL.Path,
+				)
+				http.Error(w, `{"status":"error","error_code":5000,"message":"internal server error"}`, http.StatusInternalServerError)
+			}
+		}()
 		next.ServeHTTP(w, r)
 	})
 }

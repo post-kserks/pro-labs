@@ -341,7 +341,7 @@ func (s *Server) apiMux() http.Handler {
 		http.NotFound(w, r)
 	})
 
-	return s.withHTTPRedirect(s.withTLSEnforcement(mux))
+	return withPanicRecovery(s.withHTTPRedirect(s.withTLSEnforcement(mux)))
 }
 
 func (s *Server) monitorMux() http.Handler {
@@ -353,5 +353,5 @@ func (s *Server) monitorMux() http.Handler {
 	} else {
 		mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.handleMetrics)))
 	}
-	return s.withHTTPRedirect(s.withTLSEnforcement(mux))
+	return withPanicRecovery(s.withHTTPRedirect(s.withTLSEnforcement(mux)))
 }
