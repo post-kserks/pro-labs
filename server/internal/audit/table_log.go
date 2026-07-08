@@ -52,6 +52,19 @@ func (t *TableLog) EnsureTable() error {
 				{Name: "entry_hash", Type: "VARCHAR", VarcharLen: 64},
 				{Name: "data", Type: "TEXT"},
 			},
+			RLSEnabled: true,
+			Policies: []storage.RLSPolicy{
+				{
+					Name:      "audit_admin_all",
+					ToUser:    "admin",
+					UsingExpr: "true",
+				},
+				{
+					Name:      "audit_user_own_entries",
+					ToUser:    "nonadmin",
+					UsingExpr: "actor = current_user",
+				},
+			},
 		}
 		if err := t.storage.CreateTable(SystemDB, schema); err != nil {
 			return fmt.Errorf("create audit log table: %w", err)

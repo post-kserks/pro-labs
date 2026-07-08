@@ -62,7 +62,18 @@ func (m *mockStorage) ListTables(dbName string) ([]storage.TableInfo, error) {
 }
 
 func (m *mockStorage) GetTableSchema(dbName, tableName string) (*storage.TableSchema, error) {
-	return nil, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	db, ok := m.databases[dbName]
+	if !ok {
+		return nil, fmt.Errorf("database %q not found", dbName)
+	}
+	t, ok := db[tableName]
+	if !ok {
+		return nil, fmt.Errorf("table %q not found", tableName)
+	}
+	s := t.schema
+	return &s, nil
 }
 
 func (m *mockStorage) SelectRows(dbName, tableName string) ([]storage.Row, error) {
@@ -666,4 +677,47 @@ func TestVerifierStopIdempotent(t *testing.T) {
 	// Double stop should be safe
 	log.StopVerifier()
 	log.StopVerifier()
+}
+
+func TestAuditRLSEnabledOnTable(t *testing.T) {
+	store := newMockStorage()
+	log := NewTableLog(store)
+	if err := log.EnsureTable(); err != nil {
+		t.Fatal(err)
+	}
+
+	schema, err := store.GetTableSchema(SystemDB, AuditTableName)
+	if err != nil {
+		t.Fatalf("GetTableSchema: %v", err)
+	}
+	if !schema.RLSEnabled {
+		t.Fatal("expected RLS to be enabled on audit log table")
+	}
+	if len(schema.Policies) != 2 {
+		t.Fatalf("expected 2 RLS policies, got %d", len(schema.Policies))
+	}
+
+	// Verify admin policy allows all
+	adminPolicy := schema.Policies[0]
+	if adminPolicy.Name != "audit_admin_all" {
+		t.Errorf("expected admin policy name 'audit_admin_all', got %q", adminPolicy.Name)
+	}
+	if adminPolicy.ToUser != "admin" {
+		t.Errorf("expected admin policy ToUser 'admin', got %q", adminPolicy.ToUser)
+	}
+	if adminPolicy.UsingExpr != "true" {
+		t.Errorf("expected admin policy UsingExpr 'true', got %q", adminPolicy.UsingExpr)
+	}
+
+	// Verify non-admin policy restricts by actor
+	userPolicy := schema.Policies[1]
+	if userPolicy.Name != "audit_user_own_entries" {
+		t.Errorf("expected user policy name 'audit_user_own_entries', got %q", userPolicy.Name)
+	}
+	if userPolicy.ToUser != "nonadmin" {
+		t.Errorf("expected user policy ToUser 'nonadmin', got %q", userPolicy.ToUser)
+	}
+	if userPolicy.UsingExpr != "actor = current_user" {
+		t.Errorf("expected user policy UsingExpr 'actor = current_user', got %q", userPolicy.UsingExpr)
+	}
 }
