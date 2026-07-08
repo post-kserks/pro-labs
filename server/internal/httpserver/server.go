@@ -53,6 +53,7 @@ type Config struct {
 	SessionPoolMaxOpen        int
 	SessionPoolIdleTimeoutSec int
 	AuditTable                *audit.TableLog
+	AuditVerifyInterval       time.Duration
 }
 
 type Server struct {
@@ -155,7 +156,7 @@ func New(cfg Config) *Server {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Auth == nil {
-		mgr, err := auth.New(false, nil, cfg.Logger, 60, 10, 300)
+		mgr, err := auth.NewWithCollector(false, nil, cfg.Logger, 60, 10, 300, cfg.Metrics)
 		if err != nil {
 			cfg.Logger.Error("failed to create auth manager", "error", err)
 			cfg.Logger.Warn("continuing with auth disabled")
@@ -219,6 +220,11 @@ func New(cfg Config) *Server {
 func (s *Server) Start(ctx context.Context) error {
 	if s.cfg.TLSEnforce && (s.cfg.TLSCertFile == "" || s.cfg.TLSKeyFile == "") {
 		return fmt.Errorf("TLS enforcement is enabled but TLS is not configured (cert_file=%q, key_file=%q)", s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+	}
+
+	// Start audit chain verifier if configured.
+	if s.cfg.AuditTable != nil && s.cfg.AuditVerifyInterval > 0 {
+		s.cfg.AuditTable.StartVerifier(s.cfg.AuditVerifyInterval, s.cfg.Logger)
 	}
 
 	apiServer := &http.Server{
@@ -299,6 +305,11 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.	sessions.stop()
 	s.sessionPool.Close()
+
+	// Stop audit chain verifier.
+	if s.cfg.AuditTable != nil {
+		s.cfg.AuditTable.StopVerifier()
+	}
 
 	return nil
 }

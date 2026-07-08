@@ -88,6 +88,13 @@ type EncryptionConfig struct {
 	EncryptWAL     bool   `yaml:"encrypt_wal"`
 }
 
+// AuditConfig — параметры журналирования аудита.
+type AuditConfig struct {
+	ArchivePath      string `yaml:"archive_path"`
+	ArchiveKeepCount int    `yaml:"archive_keep_count"`
+	VerifyIntervalSec int   `yaml:"verify_interval_sec"`
+}
+
 // Config — корневая конфигурация vaultdb.yaml.
 type Config struct {
 	Server     ServerConfig     `yaml:"server"`
@@ -95,6 +102,7 @@ type Config struct {
 	Auth       AuthConfig       `yaml:"auth"`
 	AI         AIConfig         `yaml:"ai"`
 	Encryption EncryptionConfig `yaml:"encryption"`
+	Audit      AuditConfig      `yaml:"audit"`
 }
 
 const (
@@ -117,6 +125,7 @@ const (
 	DefaultAuthRateWindowSec     = 60
 	DefaultAuthMaxFails          = 10
 	DefaultAuthBlockForSec       = 300
+	DefaultAuditVerifyIntervalSec = 300 // 5 minutes
 )
 
 // Default возвращает конфигурацию со значениями по умолчанию.
@@ -156,6 +165,9 @@ func Default() *Config {
 			MaxFails:        DefaultAuthMaxFails,
 			BlockForSec:     DefaultAuthBlockForSec,
 			LocalhostBypass: true,
+		},
+		Audit: AuditConfig{
+			VerifyIntervalSec: DefaultAuditVerifyIntervalSec,
 		},
 	}
 }
@@ -293,6 +305,12 @@ func validateConfig(cfg *Config) error {
 		cfg.Encryption.DefaultScope != "tables_only" &&
 		cfg.Encryption.DefaultScope != "off" {
 		return fmt.Errorf("unknown encryption.default_scope %q (want all|tables_only|off)", cfg.Encryption.DefaultScope)
+	}
+	if cfg.Audit.VerifyIntervalSec == 0 {
+		cfg.Audit.VerifyIntervalSec = DefaultAuditVerifyIntervalSec
+	}
+	if cfg.Audit.VerifyIntervalSec < 10 {
+		return fmt.Errorf("audit.verify_interval_sec must be >= 10, got %d", cfg.Audit.VerifyIntervalSec)
 	}
 
 	// Warn when localhost auth bypass is enabled (default: true).

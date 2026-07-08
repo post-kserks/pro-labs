@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/audit"
 	"vaultdb/internal/auth"
 	"vaultdb/internal/config"
 	"vaultdb/internal/executor"
@@ -103,7 +104,7 @@ func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *
 	return pageStore, w
 }
 
-func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPort, monitorPort int, store storage.StorageEngine, authManager *auth.Manager, metricsCollector *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, embedder ai.Embedder, activeConnections func() int64, logger *slog.Logger, tlsCert, tlsKey string) <-chan error {
+func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPort, monitorPort int, store storage.StorageEngine, authManager *auth.Manager, metricsCollector *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, embedder ai.Embedder, activeConnections func() int64, logger *slog.Logger, tlsCert, tlsKey string, auditLog *audit.TableLog) <-chan error {
 	rateLimiter := httpserver.NewRateLimiter(cfg.Server.RateLimitRPS, cfg.Server.RateLimitBurst)
 	httpSrv := httpserver.New(httpserver.Config{
 		Host:                      host,
@@ -130,6 +131,8 @@ func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPor
 		TLSKeyFile:                tlsKey,
 		MaxLiveQuerySubscriptions: cfg.Server.LiveQueries.BufferSize,
 		MaxLiveQueryDurationSec:   cfg.Server.QueryTimeoutSec,
+		AuditTable:                auditLog,
+		AuditVerifyInterval:       time.Duration(cfg.Audit.VerifyIntervalSec) * time.Second,
 	})
 	httpErrCh := make(chan error, 1)
 	go func() {
@@ -401,6 +404,12 @@ func main() {
 		cfg.Server.LiveQueries.BufferSize,
 		logger)
 
+	// Audit log table.
+	auditLog := audit.NewTableLog(store)
+	if err := auditLog.EnsureTable(); err != nil {
+		logger.Warn("failed to create audit log table", "error", err)
+	}
+
 	var activeConnections atomic.Int64
 
 	// Start storage metrics background updater
@@ -495,7 +504,7 @@ func main() {
 
 	httpErrCh := runHTTPServer(ctx, cfg, *host, *httpPort, *monitorPort, store, authManager, metricsCollector, txm, br, embedder, func() int64 {
 		return activeConnections.Load()
-	}, logger, *tlsCert, *tlsKey)
+	}, logger, *tlsCert, *tlsKey, auditLog)
 
 	maxRequestSize := cfg.Server.MaxRequestSizeBytes
 	if maxRequestSize <= 0 {

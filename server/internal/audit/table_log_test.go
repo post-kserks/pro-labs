@@ -2,6 +2,8 @@ package audit
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -474,4 +476,108 @@ func TestLastHash(t *testing.T) {
 	if hash == "" {
 		t.Error("expected non-empty hash after append")
 	}
+}
+
+func TestVerifierStartAndStop(t *testing.T) {
+	store := newMockStorage()
+	log := NewTableLog(store)
+	if err := log.EnsureTable(); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	// Start verifier with a short interval
+	log.StartVerifier(100*time.Millisecond, logger)
+
+	// Append some entries
+	for i := 0; i < 3; i++ {
+		entry := Entry{
+			Actor:  fmt.Sprintf("user%d", i),
+			Action: "INSERT",
+			Target: "test",
+		}
+		if err := log.Append(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Give the verifier time to run at least once
+	time.Sleep(200 * time.Millisecond)
+
+	// Stop should not panic or hang
+	log.StopVerifier()
+}
+
+func TestVerifierDetectsBrokenChain(t *testing.T) {
+	store := newMockStorage()
+	log := NewTableLog(store)
+	if err := log.EnsureTable(); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	// Add valid entries
+	for i := 0; i < 2; i++ {
+		entry := Entry{
+			Actor:  fmt.Sprintf("user%d", i),
+			Action: "INSERT",
+			Target: "test",
+		}
+		if err := log.Append(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Tamper with the chain
+	store.mu.Lock()
+	db := store.databases[SystemDB]
+	tbl := db[AuditTableName]
+	tbl.rows = append(tbl.rows, storage.Row{
+		int64(3),
+		time.Now().UTC(),
+		"attacker",
+		"DROP",
+		"everything",
+		"",
+		"fake_prev",
+		"fake_hash",
+		`{"id":3}`,
+	})
+	store.mu.Unlock()
+
+	// VerifyChain should detect the break
+	valid, count, err := log.VerifyChain()
+	if err == nil {
+		t.Fatal("expected error from broken chain")
+	}
+	if valid {
+		t.Error("expected invalid chain")
+	}
+	if count != 2 {
+		t.Errorf("expected break at position 2, got %d", count)
+	}
+
+	// Start/stop verifier (should not hang even with broken chain)
+	log.StartVerifier(50*time.Millisecond, logger)
+	time.Sleep(120 * time.Millisecond)
+	log.StopVerifier()
+}
+
+func TestVerifierStopIdempotent(t *testing.T) {
+	store := newMockStorage()
+	log := NewTableLog(store)
+	if err := log.EnsureTable(); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	log.StartVerifier(100*time.Millisecond, logger)
+	time.Sleep(50 * time.Millisecond)
+
+	// Double stop should be safe
+	log.StopVerifier()
+	log.StopVerifier()
 }
