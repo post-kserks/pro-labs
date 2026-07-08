@@ -20,6 +20,14 @@ type RateLimiter struct {
 	cleanupInterval time.Duration
 	stopCh          chan struct{}
 	maxKeys         int
+	collector       metricsCollector
+}
+
+// metricsCollector is a minimal interface to avoid importing the metrics package.
+type metricsCollector interface {
+	IncRatelimitBlocked()
+	SetRatelimitActiveKeys(int64)
+	IncRatelimitEvictions()
 }
 
 // tokenBucket — token bucket for a single key.
@@ -31,6 +39,11 @@ type tokenBucket struct {
 
 // NewRateLimiter создаёт новый rate limiter.
 func NewRateLimiter(rate int, burst int) *RateLimiter {
+	return NewRateLimiterWithCollector(rate, burst, nil)
+}
+
+// NewRateLimiterWithCollector создаёт rate limiter с опциональным metrics collector.
+func NewRateLimiterWithCollector(rate int, burst int, c metricsCollector) *RateLimiter {
 	if rate <= 0 {
 		rate = 100
 	}
@@ -45,6 +58,7 @@ func NewRateLimiter(rate int, burst int) *RateLimiter {
 		cleanupInterval: 5 * time.Minute,
 		stopCh:          make(chan struct{}),
 		maxKeys:         maxRateLimitKeys,
+		collector:       c,
 	}
 
 	go rl.cleanupLoop()
@@ -80,10 +94,22 @@ func (rl *RateLimiter) Allow(key string) bool {
 
 	if bucket.tokens >= 1 {
 		bucket.tokens--
+		rl.updateActiveKeysMetric()
 		return true
 	}
 
+	if rl.collector != nil {
+		rl.collector.IncRatelimitBlocked()
+	}
+	rl.updateActiveKeysMetric()
 	return false
+}
+
+// updateActiveKeysMetric updates the gauge for currently tracked keys.
+func (rl *RateLimiter) updateActiveKeysMetric() {
+	if rl.collector != nil {
+		rl.collector.SetRatelimitActiveKeys(int64(len(rl.tokens)))
+	}
 }
 
 // evictOldest removes the least recently used token bucket.
@@ -98,6 +124,9 @@ func (rl *RateLimiter) evictOldest() {
 	}
 	if oldestKey != "" {
 		delete(rl.tokens, oldestKey)
+		if rl.collector != nil {
+			rl.collector.IncRatelimitEvictions()
+		}
 	}
 }
 

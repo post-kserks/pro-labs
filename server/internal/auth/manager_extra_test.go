@@ -141,7 +141,7 @@ func TestMiddlewareDisabled(t *testing.T) {
 // растут неограниченно: устаревшие записи с большого числа разных IP вычищаются
 // фоновым sweep'ом по истечении окна.
 func TestRateLimiterSweepBoundsMemory(t *testing.T) {
-	rl := newAuthRateLimiter(1, 100, 1) // окно 1с, блок 1с
+	rl := newAuthRateLimiter(1, 100, 1, nil) // окно 1с, блок 1с
 
 	// Заполняем тысячей разных IP с одной (недостаточной для блокировки) ошибкой.
 	for i := 0; i < 1000; i++ {

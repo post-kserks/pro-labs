@@ -61,6 +61,13 @@ type Manager struct {
 	auditFunc      AuditFunc
 	dataDir        string // directory for persisting revoked tokens
 	grantsProvider GrantsProvider // dynamic RBAC grants from DB
+	collector      authMetricsCollector
+}
+
+// authMetricsCollector is a minimal interface for auth rate limiter metrics.
+type authMetricsCollector interface {
+	IncAuthFailedAttempts()
+	SetAuthBlockedIPs(int64)
 }
 
 // authRateLimiter отслеживает неудачные попытки аутентификации по IP.
@@ -72,9 +79,10 @@ type authRateLimiter struct {
 	maxFails  int
 	blockFor  time.Duration
 	lastSweep time.Time
+	collector authMetricsCollector
 }
 
-func newAuthRateLimiter(windowSec, maxFails, blockForSec int) *authRateLimiter {
+func newAuthRateLimiter(windowSec, maxFails, blockForSec int, collector authMetricsCollector) *authRateLimiter {
 	if windowSec <= 0 {
 		windowSec = 60
 	}
@@ -91,6 +99,7 @@ func newAuthRateLimiter(windowSec, maxFails, blockForSec int) *authRateLimiter {
 		maxFails:  maxFails,
 		blockFor:  time.Duration(blockForSec) * time.Second,
 		lastSweep: time.Now(),
+		collector: collector,
 	}
 }
 
@@ -124,6 +133,9 @@ func (rl *authRateLimiter) recordFailure(ip string) {
 	defer rl.mu.Unlock()
 	now := time.Now()
 	rl.sweepLocked(now)
+	if rl.collector != nil {
+		rl.collector.IncAuthFailedAttempts()
+	}
 	rl.attempts[ip] = append(rl.attempts[ip], now)
 	cutoff := now.Add(-rl.window)
 	filtered := rl.attempts[ip][:0]
@@ -136,6 +148,7 @@ func (rl *authRateLimiter) recordFailure(ip string) {
 	if len(filtered) >= rl.maxFails {
 		rl.blocked[ip] = now.Add(rl.blockFor)
 	}
+	rl.updateBlockedIPsMetric()
 }
 
 func (rl *authRateLimiter) isBlocked(ip string) bool {
@@ -144,14 +157,28 @@ func (rl *authRateLimiter) isBlocked(ip string) bool {
 	rl.sweepLocked(time.Now())
 	until, ok := rl.blocked[ip]
 	if !ok {
+		rl.updateBlockedIPsMetricLocked()
 		return false
 	}
 	if time.Now().After(until) {
 		delete(rl.blocked, ip)
 		delete(rl.attempts, ip)
+		rl.updateBlockedIPsMetricLocked()
 		return false
 	}
 	return true
+}
+
+func (rl *authRateLimiter) updateBlockedIPsMetric() {
+	if rl.collector != nil {
+		rl.collector.SetAuthBlockedIPs(int64(len(rl.blocked)))
+	}
+}
+
+func (rl *authRateLimiter) updateBlockedIPsMetricLocked() {
+	if rl.collector != nil {
+		rl.collector.SetAuthBlockedIPs(int64(len(rl.blocked)))
+	}
 }
 
 func extractClientIP(r *http.Request) string {
@@ -174,6 +201,11 @@ func (m *Manager) hashToken(token string) string {
 // Если переменная не задана — генерируем случайный (для тестов/разработки).
 // В production VAULTDB_AUTH_SECRET обязателен (проверяется в main.go).
 func New(enabled bool, tokens map[string]string, logger *slog.Logger, rateWindowSec, maxFails, blockForSec int) (*Manager, error) {
+	return NewWithCollector(enabled, tokens, logger, rateWindowSec, maxFails, blockForSec, nil)
+}
+
+// NewWithCollector создаёт менеджер с опциональным metrics collector.
+func NewWithCollector(enabled bool, tokens map[string]string, logger *slog.Logger, rateWindowSec, maxFails, blockForSec int, collector authMetricsCollector) (*Manager, error) {
 	secret := []byte(os.Getenv("VAULTDB_AUTH_SECRET"))
 
 	if len(secret) == 0 {
@@ -206,7 +238,8 @@ func New(enabled bool, tokens map[string]string, logger *slog.Logger, rateWindow
 		revoked:        make(map[string]time.Time),
 		secret:         secret,
 		logger:         logger,
-		rateLim:        newAuthRateLimiter(rateWindowSec, maxFails, blockForSec),
+		rateLim:        newAuthRateLimiter(rateWindowSec, maxFails, blockForSec, collector),
+		collector:      collector,
 	}
 	go m.cleanupRevokedTokens()
 	return m, nil

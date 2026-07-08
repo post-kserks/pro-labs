@@ -94,6 +94,15 @@ type Collector struct {
 	// Метрики хранилища (обновляются периодически)
 	storageMu   sync.RWMutex
 	storageRows map[string]map[string]int64
+
+	// Rate limiter метрики
+	ratelimitBlockedTotal   atomic.Int64
+	ratelimitActiveKeys     atomic.Int64
+	ratelimitEvictionsTotal atomic.Int64
+
+	// Auth rate limiter метрики
+	authBlockedIPs           atomic.Int64
+	authFailedAttemptsTotal  atomic.Int64
 }
 
 const (
@@ -164,6 +173,15 @@ func (c *Collector) IncWALEntries()  { c.walEntries.Add(1) }
 func (c *Collector) IncCheckpoints() { c.walCheckpoints.Add(1) }
 func (c *Collector) IncIndexHit()    { c.indexHits.Add(1) }
 func (c *Collector) IncIndexMiss()   { c.indexMisses.Add(1) }
+
+// Rate limiter metrics.
+func (c *Collector) IncRatelimitBlocked()   { c.ratelimitBlockedTotal.Add(1) }
+func (c *Collector) SetRatelimitActiveKeys(n int64) { c.ratelimitActiveKeys.Store(n) }
+func (c *Collector) IncRatelimitEvictions() { c.ratelimitEvictionsTotal.Add(1) }
+
+// Auth rate limiter metrics.
+func (c *Collector) SetAuthBlockedIPs(n int64)       { c.authBlockedIPs.Store(n) }
+func (c *Collector) IncAuthFailedAttempts()           { c.authFailedAttemptsTotal.Add(1) }
 
 func sanitizeMetricLabel(s string) string {
 	s = strings.ReplaceAll(s, `\`, `_`)
@@ -358,6 +376,40 @@ func (c *Collector) Render() string {
 			fmt.Fprintf(&b, "vaultdb_storage_rows_overflow 1\n")
 		}
 	}
+
+	// ── Rate limiter метрики ────────────────────────────────────────
+
+	fmt.Fprintf(&b,
+		"\n# HELP vaultdb_ratelimit_blocked_total Requests blocked by rate limiter\n"+
+			"# TYPE vaultdb_ratelimit_blocked_total counter\n"+
+			"vaultdb_ratelimit_blocked_total %d\n",
+		c.ratelimitBlockedTotal.Load())
+
+	fmt.Fprintf(&b,
+		"\n# HELP vaultdb_ratelimit_active_keys Currently tracked keys in rate limiter\n"+
+			"# TYPE vaultdb_ratelimit_active_keys gauge\n"+
+			"vaultdb_ratelimit_active_keys %d\n",
+		c.ratelimitActiveKeys.Load())
+
+	fmt.Fprintf(&b,
+		"\n# HELP vaultdb_ratelimit_evictions_total LRU evictions from rate limiter\n"+
+			"# TYPE vaultdb_ratelimit_evictions_total counter\n"+
+			"vaultdb_ratelimit_evictions_total %d\n",
+		c.ratelimitEvictionsTotal.Load())
+
+	// ── Auth rate limiter метрики ────────────────────────────────────
+
+	fmt.Fprintf(&b,
+		"\n# HELP vaultdb_auth_blocked_ips Currently blocked IPs in auth rate limiter\n"+
+			"# TYPE vaultdb_auth_blocked_ips gauge\n"+
+			"vaultdb_auth_blocked_ips %d\n",
+		c.authBlockedIPs.Load())
+
+	fmt.Fprintf(&b,
+		"\n# HELP vaultdb_auth_failed_attempts_total Failed auth attempts\n"+
+			"# TYPE vaultdb_auth_failed_attempts_total counter\n"+
+			"vaultdb_auth_failed_attempts_total %d\n",
+		c.authFailedAttemptsTotal.Load())
 
 	return b.String()
 }

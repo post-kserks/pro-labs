@@ -91,3 +91,43 @@ func TestMetricsCardinalityNoOverflow(t *testing.T) {
 		t.Error("unexpected vaultdb_storage_rows_overflow when under limit")
 	}
 }
+
+func TestRatelimitMetricsRender(t *testing.T) {
+	c := New()
+
+	c.IncRatelimitBlocked()
+	c.IncRatelimitBlocked()
+	c.IncRatelimitBlocked()
+	c.SetRatelimitActiveKeys(42)
+	c.IncRatelimitEvictions()
+
+	out := c.Render()
+	for _, want := range []string{
+		"vaultdb_ratelimit_blocked_total 3",
+		"vaultdb_ratelimit_active_keys 42",
+		"vaultdb_ratelimit_evictions_total 1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("render output missing %q", want)
+		}
+	}
+}
+
+func TestAuthRateLimitMetricsRender(t *testing.T) {
+	c := New()
+
+	c.IncAuthFailedAttempts()
+	c.IncAuthFailedAttempts()
+	c.IncAuthFailedAttempts()
+	c.SetAuthBlockedIPs(5)
+
+	out := c.Render()
+	for _, want := range []string{
+		"vaultdb_auth_failed_attempts_total 3",
+		"vaultdb_auth_blocked_ips 5",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("render output missing %q", want)
+		}
+	}
+}
