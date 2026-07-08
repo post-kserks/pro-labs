@@ -1528,3 +1528,80 @@ func TestValidateWASMBytesExportNameTooLong(t *testing.T) {
 		t.Fatal("expected LoadModule to reject module with non-whitelisted export")
 	}
 }
+
+// --- WASMConfig tests ---
+
+func TestWASMConfigGetAllowedExportsDefault(t *testing.T) {
+	cfg := &WASMConfig{}
+	got := cfg.GetAllowedExports()
+	if len(got) != len(DefaultAllowedExports) {
+		t.Errorf("len = %d, want %d", len(got), len(DefaultAllowedExports))
+	}
+	for i, e := range got {
+		if e != DefaultAllowedExports[i] {
+			t.Errorf("GetAllowedExports()[%d] = %q, want %q", i, e, DefaultAllowedExports[i])
+		}
+	}
+}
+
+func TestWASMConfigGetAllowedExportsCustom(t *testing.T) {
+	cfg := &WASMConfig{AllowedExports: []string{"execute", "custom_func"}}
+	got := cfg.GetAllowedExports()
+	if len(got) != 2 {
+		t.Errorf("len = %d, want 2", len(got))
+	}
+	if got[0] != "execute" || got[1] != "custom_func" {
+		t.Errorf("got %v, want [execute custom_func]", got)
+	}
+}
+
+func TestSetAllowedExportsOverridesDefault(t *testing.T) {
+	rt, err := NewRuntime()
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer rt.Close()
+
+	// Custom whitelist allows "execute" and "debugger"
+	rt.SetAllowedExports([]string{"execute", "debugger"})
+
+	// Module exporting "debugger" — previously rejected, now allowed
+	p := &wasmModule{
+		types:    [][]byte{{0x60, 0x00, 0x01, 0x7f}},
+		funcs:    []byte{0, 0},
+		exports:  []exportDef{{"execute", 0, 0}, {"debugger", 0, 1}},
+		codes:    [][]byte{funcBody(noLocals, append(i32Const0)), funcBody(noLocals, append(i32Const0))},
+	}
+	path := writeTempWASM(t, p.build())
+	fn, err := rt.LoadModule(path)
+	if err != nil {
+		t.Fatalf("LoadModule should accept 'debugger' with custom whitelist: %v", err)
+	}
+	if fn == nil {
+		t.Fatal("expected non-nil WASMFunction")
+	}
+}
+
+func TestSetAllowedExportsRejectsRemoved(t *testing.T) {
+	rt, err := NewRuntime()
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer rt.Close()
+
+	// Custom whitelist only allows "alloc" — "execute" is missing
+	rt.SetAllowedExports([]string{"alloc"})
+
+	// Module with only "execute" should be rejected
+	p := &wasmModule{
+		types:    [][]byte{{0x60, 0x00, 0x01, 0x7f}},
+		funcs:    []byte{0},
+		exports:  []exportDef{{"execute", 0, 0}},
+		codes:    [][]byte{funcBody(noLocals, append(i32Const0))},
+	}
+	path := writeTempWASM(t, p.build())
+	_, err = rt.LoadModule(path)
+	if err == nil {
+		t.Fatal("expected LoadModule to reject 'execute' when not in custom whitelist")
+	}
+}

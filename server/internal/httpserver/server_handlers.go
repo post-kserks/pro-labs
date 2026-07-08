@@ -1124,6 +1124,11 @@ func (s *Server) handleHandshake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := protocol.ValidateNonce(req.Nonce, req.NonceTimestamp); err != nil {
+		writeError(w, http.StatusUnauthorized, errCodeBadRequest, err.Error())
+		return
+	}
+
 	resp := protocol.HandshakeResponse{
 		Type:              "handshake",
 		ProtocolVersion:   protocol.ProtocolV2,

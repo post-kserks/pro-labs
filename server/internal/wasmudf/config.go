@@ -7,6 +7,28 @@ import (
 	"time"
 )
 
+// WASMConfig holds configurable WASM UDF settings.
+type WASMConfig struct {
+	AllowedExports []string `json:"allowed_exports"` // if set, overrides default export whitelist
+}
+
+// DefaultAllowedExports is the default export whitelist when WASMConfig.AllowedExports is empty.
+var DefaultAllowedExports = []string{
+	"alloc",
+	"execute",
+	"execute_args",
+	"result_len",
+	"result_copy",
+}
+
+// GetAllowedExports returns the configured export whitelist, falling back to DefaultAllowedExports.
+func (c *WASMConfig) GetAllowedExports() []string {
+	if len(c.AllowedExports) > 0 {
+		return c.AllowedExports
+	}
+	return DefaultAllowedExports
+}
+
 // ParseOptions parses WASM function options from the WITH clause.
 func ParseOptions(opts map[string]string) (memoryLimit uint32, timeout time.Duration, err error) {
 	for k, v := range opts {

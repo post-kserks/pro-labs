@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestRequestRoundTrip(t *testing.T) {
@@ -286,5 +287,52 @@ func TestServerFeatures(t *testing.T) {
 		if !expected[f] {
 			t.Errorf("unexpected feature %q", f)
 		}
+	}
+}
+
+func TestValidateNonce(t *testing.T) {
+	tests := []struct {
+		name    string
+		nonce   string
+		ts      int64
+		wantErr bool
+	}{
+		{"valid", "abc123", time.Now().Unix(), false},
+		{"empty nonce", "", time.Now().Unix(), true},
+		{"zero timestamp", "abc123", 0, true},
+		{"negative timestamp", "abc123", -1, true},
+		{"expired nonce", "abc123", time.Now().Add(-60 * time.Second).Unix(), true},
+		{"just in time", "abc123", time.Now().Add(-29 * time.Second).Unix(), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateNonce(tt.nonce, tt.ts)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateNonce(%q, %d) error = %v, wantErr %v", tt.nonce, tt.ts, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestHandshakeRequestNonceJSON(t *testing.T) {
+	req := HandshakeRequest{
+		Type:           "handshake",
+		ClientVersion:  "2.0",
+		Nonce:          "test-nonce-value",
+		NonceTimestamp: 1700000000,
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded HandshakeRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Nonce != "test-nonce-value" {
+		t.Errorf("Nonce = %q, want %q", decoded.Nonce, "test-nonce-value")
+	}
+	if decoded.NonceTimestamp != 1700000000 {
+		t.Errorf("NonceTimestamp = %d, want 1700000000", decoded.NonceTimestamp)
 	}
 }

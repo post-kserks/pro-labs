@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -20,6 +21,8 @@ type HandshakeRequest struct {
 	ClientVersion     string   `json:"client_version"`    // e.g. "2.0"
 	ClientName        string   `json:"client_name"`       // e.g. "vaultdb-go-client"
 	SupportedFeatures []string `json:"supported_features"` // client features
+	Nonce             string   `json:"nonce"`              // anti-replay nonce (RFC 9564)
+	NonceTimestamp    int64    `json:"nonce_timestamp"`    // unix timestamp of nonce creation
 }
 
 // HandshakeResponse is the server's handshake reply.
@@ -65,6 +68,24 @@ func CheckVersionCompatibility(clientVersion string) error {
 	if clientMajor != serverMajor {
 		return fmt.Errorf("version mismatch: client %q (major %d) is incompatible with server protocol %q (major %d)",
 			clientVersion, clientMajor, ProtocolV2, serverMajor)
+	}
+	return nil
+}
+
+// NonceMaxAge is the maximum age of a handshake nonce before rejection.
+const NonceMaxAge = 30 * time.Second
+
+// ValidateNonce checks that the handshake nonce is present and not older than NonceMaxAge.
+func ValidateNonce(nonce string, nonceTimestamp int64) error {
+	if nonce == "" {
+		return fmt.Errorf("nonce is required for anti-replay protection")
+	}
+	if nonceTimestamp <= 0 {
+		return fmt.Errorf("nonce_timestamp is required")
+	}
+	nonceTime := time.Unix(nonceTimestamp, 0)
+	if time.Since(nonceTime) > NonceMaxAge {
+		return fmt.Errorf("nonce expired (older than %v)", NonceMaxAge)
 	}
 	return nil
 }

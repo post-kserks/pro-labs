@@ -111,7 +111,8 @@ func decodeLEB128(data []byte) (uint32, int, error) {
 type Runtime struct {
 	runtime        wazero.Runtime
 	defaultTimeout time.Duration
-	maxModuleSize  int64 // maximum allowed WASM binary size in bytes
+	maxModuleSize  int64              // maximum allowed WASM binary size in bytes
+	allowedExports map[string]bool    // export whitelist; nil means use package default
 }
 
 // NewRuntime creates a new WASM runtime with sensible defaults:
@@ -170,6 +171,15 @@ func (rt *Runtime) Close() error {
 	return rt.runtime.Close(context.Background())
 }
 
+// SetAllowedExports overrides the default export whitelist for subsequent LoadModule calls.
+func (rt *Runtime) SetAllowedExports(exports []string) {
+	m := make(map[string]bool, len(exports))
+	for _, e := range exports {
+		m[e] = true
+	}
+	rt.allowedExports = m
+}
+
 // WASMFunction represents a loaded WASM module ready for execution.
 type WASMFunction struct {
 	Runtime     *Runtime
@@ -197,9 +207,13 @@ func (rt *Runtime) LoadModule(path string) (*WASMFunction, error) {
 	}
 
 	// Validate that the module only exports allowed functions.
+	exports := rt.allowedExports
+	if exports == nil {
+		exports = allowedExports
+	}
 	for name, def := range compiled.ExportedFunctions() {
 		_ = def // we only need the name for validation
-		if !allowedExports[name] {
+		if !exports[name] {
 			return nil, fmt.Errorf("WASM module has unexpected export %q (allowed: alloc, execute, execute_args, result_len, result_copy)", name)
 		}
 	}
