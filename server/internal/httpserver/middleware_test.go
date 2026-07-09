@@ -105,16 +105,16 @@ func TestTLSDisabledWarningLogged(t *testing.T) {
 	// Give the server time to start and log.
 	time.Sleep(300 * time.Millisecond)
 
-	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, "auth tokens are transmitted in plaintext") {
-		t.Fatalf("expected plaintext warning in logs, got: %s", logOutput)
-	}
-
 	cancel()
 	select {
 	case <-errCh:
 	case <-time.After(5 * time.Second):
 		t.Fatal("server did not shut down in time")
+	}
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "auth tokens are transmitted in plaintext") {
+		t.Fatalf("expected plaintext warning in logs, got: %s", logOutput)
 	}
 }
 

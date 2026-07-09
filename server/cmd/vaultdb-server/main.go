@@ -550,7 +550,7 @@ func main() {
 
 	// Connection pool
 	maxConns := cfg.Server.MaxConnections
-	connPool := pool.NewPool(poolInitialCapacity, maxConns, poolIdleTimeout, nil)
+	connPool := pool.NewConnectionLimiter(poolInitialCapacity, maxConns, poolIdleTimeout, nil)
 
 	go func() {
 		<-ctx.Done()
