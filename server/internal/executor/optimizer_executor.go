@@ -41,9 +41,9 @@ func cloneSelectStatement(stmt *parser.SelectStatement) *parser.SelectStatement 
 // TablePredicates, and filters the given rows using the predicate for the
 // specified table. Returns the filtered rows. If no predicate exists for the
 // table, rows are returned unchanged.
-func applyPushdownFilter(dbName string, stmt *parser.SelectStatement, tableName string, rows []storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) []storage.Row {
+func applyPushdownFilter(dbName string, stmt *parser.SelectStatement, tableName string, rows []storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) ([]storage.Row, error) {
 	if stmt.Where == nil || len(rows) == 0 {
-		return rows
+		return rows, nil
 	}
 
 	store := ctx.Storage
@@ -52,12 +52,12 @@ func applyPushdownFilter(dbName string, stmt *parser.SelectStatement, tableName 
 	clone := cloneSelectStatement(stmt)
 	plan, err := optimizer.OptimizePlan(dbName, clone)
 	if err != nil || plan == nil {
-		return rows
+		return rows, nil
 	}
 
 	pred, ok := plan.TablePredicates[tableName]
 	if !ok || pred == nil {
-		return rows
+		return rows, nil
 	}
 
 	ensureColumnIndex(ctx, schema)
@@ -66,11 +66,11 @@ func applyPushdownFilter(dbName string, stmt *parser.SelectStatement, tableName 
 	for _, row := range rows {
 		ok, err := evalExpr(pred, row, schema, ctx)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		if ok {
 			filtered = append(filtered, row)
 		}
 	}
-	return filtered
+	return filtered, nil
 }

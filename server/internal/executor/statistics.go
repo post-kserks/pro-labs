@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
@@ -120,7 +121,9 @@ func (sc *StatisticsCollector) collectStats(dbName, tableName string) *TableStat
 			if val == nil {
 				nullCount++
 			} else {
-				distinctValues[val] = true
+				// Use fmt.Sprintf for unhashable types (slices, maps)
+				key := fmt.Sprintf("%v", val)
+				distinctValues[key] = true
 			}
 		}
 

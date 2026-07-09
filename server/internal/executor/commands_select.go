@@ -138,7 +138,10 @@ func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
 
 	// Apply optimizer predicate pushdown: filter rows early using per-table
 	// predicates before the full WHERE evaluation.
-	rows = applyPushdownFilter(dbName, c.stmt, c.stmt.TableName, rows, schema, ctx)
+	rows, err = applyPushdownFilter(dbName, c.stmt, c.stmt.TableName, rows, schema, ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build column index for O(1) lookups during expression evaluation
 	ensureColumnIndex(ctx, schema)
@@ -452,7 +455,10 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 
 	// Apply optimizer predicate pushdown: filter main table rows early
 	// using per-table predicates before JOINs reduce row count further.
-	rows = applyPushdownFilter(dbName, c.stmt, c.stmt.TableName, rows, mainSchema, ctx)
+	rows, err = applyPushdownFilter(dbName, c.stmt, c.stmt.TableName, rows, mainSchema, ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Combined schema and rows for JOIN
 	combinedSchema := mainSchema
@@ -955,7 +961,10 @@ func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName s
 
 	// Apply optimizer predicate pushdown: filter rows early using per-table
 	// predicates before the full WHERE evaluation.
-	allRows = applyPushdownFilter(dbName, c.stmt, c.stmt.TableName, allRows, schema, ctx)
+	allRows, err = applyPushdownFilter(dbName, c.stmt, c.stmt.TableName, allRows, schema, ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build column index for O(1) lookups
 	ensureColumnIndex(ctx, schema)
