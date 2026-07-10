@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"vaultdb/internal/fts"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/wasmudf"
@@ -14,6 +15,9 @@ import (
 
 // builtinFunc — function type for builtin SQL functions.
 type builtinFunc func(args []interface{}, ctx *ExecutionContext) (interface{}, error)
+
+// extendedBuiltinFunc — function type for builtins that need row/schema access.
+type extendedBuiltinFunc func(args []interface{}, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error)
 
 // builtinFuncs — map of builtin SQL functions.
 var builtinFuncs = map[string]builtinFunc{
@@ -85,6 +89,11 @@ var builtinFuncs = map[string]builtinFunc{
 	"JSONB_EXTRACT_PATH":   fnJsonbExtractPath,
 }
 
+// extendedBuiltinFuncs — functions that need row/schema context (not just args).
+var extendedBuiltinFuncs = map[string]extendedBuiltinFunc{
+	"BM25_SCORE": fnBm25Score,
+}
+
 // evalFunctionCall evaluates a function call.
 func evalFunctionCall(fn *parser.FunctionCall, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
 	args := make([]interface{}, len(fn.Args))
@@ -97,6 +106,9 @@ func evalFunctionCall(fn *parser.FunctionCall, row storage.Row, schema *storage.
 	}
 
 	name := strings.ToUpper(fn.Name)
+	if efn, ok := extendedBuiltinFuncs[name]; ok {
+		return efn(args, row, schema, ctx)
+	}
 	if fn, ok := builtinFuncs[name]; ok {
 		return fn(args, ctx)
 	}
@@ -624,4 +636,72 @@ func fnInitcapBuiltin(args []interface{}, ctx *ExecutionContext) (interface{}, e
 		return nil, fmt.Errorf("INITCAP requires 1 argument")
 	}
 	return initcap(valueToString(args[0])), nil
+}
+
+// fnBm25Score computes BM25 relevance score.
+// Usage: bm25_score(table_name, column_name, 'search query')
+func fnBm25Score(args []interface{}, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
+	if len(args) != 3 {
+		return nil, fmt.Errorf("BM25_SCORE requires 3 arguments: table_name, column_name, query")
+	}
+	if ctx == nil || ctx.Storage == nil {
+		return nil, fmt.Errorf("BM25_SCORE: no storage engine available")
+	}
+
+	tableName := valueToString(args[0])
+	colName := valueToString(args[1])
+	query := valueToString(args[2])
+
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("BM25_SCORE: %w", err)
+	}
+
+	tableSchema, err := ctx.Storage.GetTableSchema(dbName, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("BM25_SCORE: %w", err)
+	}
+
+	colIdx := -1
+	for i, c := range tableSchema.Columns {
+		if strings.EqualFold(c.Name, colName) {
+			colIdx = i
+			break
+		}
+	}
+	if colIdx < 0 {
+		return nil, fmt.Errorf("BM25_SCORE: column '%s' not found in table '%s'", colName, tableName)
+	}
+
+	allRows, err := ctx.Storage.ReadCurrentRows(dbName, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("BM25_SCORE: %w", err)
+	}
+
+	corpus := fts.NewCorpus()
+	for _, r := range allRows {
+		if colIdx < len(r) {
+			docTerms := fts.Tokenize(valueToString(r[colIdx]))
+			corpus.IndexDoc(docTerms)
+		}
+	}
+
+	queryTerms := fts.Tokenize(query)
+	if len(queryTerms) == 0 || corpus.TotalDocs == 0 {
+		return 0.0, nil
+	}
+
+	// Find current row's column value for scoring
+	currentText := ""
+	if row != nil && colIdx < len(row) {
+		currentText = valueToString(row[colIdx])
+	} else if schema != nil {
+		// Fallback: try to resolve from current row using the schema
+		if val, err := resolveColumn(row, schema, colName, ctx.ColumnIndex); err == nil {
+			currentText = valueToString(val)
+		}
+	}
+
+	docTerms := fts.Tokenize(currentText)
+	return corpus.ScoreDocument(docTerms, queryTerms), nil
 }

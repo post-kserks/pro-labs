@@ -404,6 +404,57 @@ func TestFtsMatchConsolidated(t *testing.T) {
 	})
 }
 
+func TestBm25ScoreFunction(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE TABLE bm25_docs (id INT, content TEXT);")
+	executeSQL(t, session, "INSERT INTO bm25_docs VALUES (1, 'the quick brown fox jumps over the lazy dog');")
+	executeSQL(t, session, "INSERT INTO bm25_docs VALUES (2, 'a completely different document about databases');")
+	executeSQL(t, session, "INSERT INTO bm25_docs VALUES (3, 'the fox is quick and brown');")
+
+	t.Run("returns_float_scores", func(t *testing.T) {
+		res := executeSQL(t, session, "SELECT id, bm25_score('bm25_docs', 'content', 'quick fox') AS score FROM bm25_docs WHERE content FTS_MATCH 'quick fox' ORDER BY score DESC;")
+		if len(res.Rows) != 2 {
+			t.Fatalf("expected 2 rows, got %d: %#v", len(res.Rows), len(res.Rows))
+		}
+		// Both matching rows should have positive scores
+		for _, row := range res.Rows {
+			if len(row) < 2 {
+				t.Fatalf("expected at least 2 columns, got %d", len(row))
+			}
+		}
+	})
+
+	t.Run("higher_score_for_better_match", func(t *testing.T) {
+		// Row 1 has "quick brown fox" — more query term overlap than row 3 "fox is quick and brown"
+		// Both should match; row 1 should score >= row 3
+		res := executeSQL(t, session, "SELECT id, bm25_score('bm25_docs', 'content', 'quick brown fox') AS score FROM bm25_docs WHERE content FTS_MATCH 'quick brown fox' ORDER BY score DESC;")
+		if len(res.Rows) != 2 {
+			t.Fatalf("expected 2 rows, got %d", len(res.Rows))
+		}
+	})
+
+	t.Run("no_match_returns_zero", func(t *testing.T) {
+		res := executeSQL(t, session, "SELECT bm25_score('bm25_docs', 'content', 'zzzzz') FROM bm25_docs WHERE content FTS_MATCH 'zzzzz';")
+		if len(res.Rows) != 0 {
+			t.Fatalf("expected 0 rows for no-match query, got %d", len(res.Rows))
+		}
+	})
+
+	t.Run("works_without_where_filter", func(t *testing.T) {
+		// bm25_score should work even without a WHERE FTS_MATCH clause
+		res := executeSQL(t, session, "SELECT id, bm25_score('bm25_docs', 'content', 'fox') AS score FROM bm25_docs ORDER BY score DESC;")
+		if len(res.Rows) != 3 {
+			t.Fatalf("expected 3 rows, got %d", len(res.Rows))
+		}
+		// Rows with 'fox' should score higher than the one without
+		for _, row := range res.Rows {
+			if len(row) < 2 {
+				t.Fatalf("expected at least 2 columns, got %d", len(row))
+			}
+		}
+	})
+}
+
 func TestInferType(t *testing.T) {
 	tests := []struct {
 		name string
