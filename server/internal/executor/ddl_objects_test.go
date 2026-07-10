@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"vaultdb/internal/parser"
@@ -452,4 +454,165 @@ func TestObjectPersistenceMockStorage(t *testing.T) {
 			t.Fatalf("expected 'users', got %v", result.Rows[0][0])
 		}
 	})
+}
+
+func TestCreateFunctionWASMValidation(t *testing.T) {
+	t.Run("WASM function validates file exists", func(t *testing.T) {
+		dir := t.TempDir()
+		txm := txmanager.NewManager()
+		store, err := storage.NewPageStorageEngine(dir, nil, txm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		session := NewSession(store, nil, txm, nil)
+
+		executeSQL(t, session, "CREATE DATABASE testdb;")
+		executeSQL(t, session, "USE testdb;")
+
+		// WASM file doesn't exist -> should fail
+		_, err = session.Execute(&parser.CreateFunctionStatement{
+			Name:       "hash_pii",
+			Params:     []string{"value"},
+			ReturnType: "TEXT",
+			Body:       "file:///nonexistent/hash_pii.wasm",
+			Language:   "WASM",
+		})
+		if err == nil {
+			t.Fatal("expected error for missing WASM file")
+		}
+	})
+
+	t.Run("WASM function with valid file path", func(t *testing.T) {
+		dir := t.TempDir()
+		txm := txmanager.NewManager()
+		store, err := storage.NewPageStorageEngine(dir, nil, txm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		session := NewSession(store, nil, txm, nil)
+
+		executeSQL(t, session, "CREATE DATABASE testdb;")
+		executeSQL(t, session, "USE testdb;")
+
+		// Create a fake WASM file under the data directory (DataDir() = dir/pagedb)
+		wasmDir := filepath.Join(dir, "pagedb")
+		wasmPath := filepath.Join(wasmDir, "test.wasm")
+		if err := os.WriteFile(wasmPath, []byte("fake wasm"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Use a relative path (file://test.wasm) — absolute paths are rejected
+		// because WASM modules must live under the data directory.
+		result, err := session.Execute(&parser.CreateFunctionStatement{
+			Name:       "test_wasm",
+			Params:     []string{"x"},
+			ReturnType: "INT",
+			Body:       "file://test.wasm",
+			Language:   "WASM",
+			Options:    map[string]string{"memory_limit": "32MB"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Message != "Function 'test_wasm' created." {
+			t.Fatalf("unexpected message: %s", result.Message)
+		}
+	})
+
+	t.Run("WASM function rejects unknown options", func(t *testing.T) {
+		dir := t.TempDir()
+		txm := txmanager.NewManager()
+		store, err := storage.NewPageStorageEngine(dir, nil, txm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		session := NewSession(store, nil, txm, nil)
+
+		executeSQL(t, session, "CREATE DATABASE testdb;")
+		executeSQL(t, session, "USE testdb;")
+
+		wasmPath := dir + "/test.wasm"
+		if err := os.WriteFile(wasmPath, []byte("fake wasm"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = session.Execute(&parser.CreateFunctionStatement{
+			Name:       "test_wasm",
+			Params:     []string{"x"},
+			ReturnType: "INT",
+			Body:       wasmPath,
+			Language:   "WASM",
+			Options:    map[string]string{"invalid_option": "value"},
+		})
+		if err == nil {
+			t.Fatal("expected error for unknown WASM option")
+		}
+	})
+
+	t.Run("SQL function still works", func(t *testing.T) {
+		dir := t.TempDir()
+		txm := txmanager.NewManager()
+		store, err := storage.NewPageStorageEngine(dir, nil, txm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		session := NewSession(store, nil, txm, nil)
+
+		executeSQL(t, session, "CREATE DATABASE testdb;")
+		executeSQL(t, session, "USE testdb;")
+		executeSQL(t, session, "CREATE TABLE t (a INT);")
+
+		result, err := session.Execute(&parser.CreateFunctionStatement{
+			Name:       "my_func",
+			Params:     []string{"x"},
+			ReturnType: "INT",
+			Body:       "SELECT a FROM t",
+			Language:   "SQL",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Message != "Function 'my_func' created." {
+			t.Fatalf("unexpected message: %s", result.Message)
+		}
+	})
+}
+
+// --- Security: WASM path traversal tests ---
+
+func TestValidateWASMPath(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := t.TempDir()
+
+	// Create a WASM file inside dataDir
+	wasmPath := dir + "/test.wasm"
+	if err := os.WriteFile(wasmPath, []byte{0x00, 0x61, 0x73, 0x6d}, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		body    string
+		dataDir string
+		wantErr bool
+	}{
+		{"relative valid", "file://test.wasm", dir, false},
+		{"absolute inside", "file://" + wasmPath, dataDir, true}, // absolute path rejected
+		{"path traversal", "file://../../etc/passwd", dir, true}, // traversal rejected
+		{"double dot", "file://sub/../../../etc/passwd", dir, true},
+		{"nonexistent", "file://nonexistent.wasm", dir, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validateWASMPath(tt.body, tt.dataDir)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateWASMPath(%q, %q) error = %v, wantErr %v", tt.body, tt.dataDir, err, tt.wantErr)
+			}
+		})
+	}
 }

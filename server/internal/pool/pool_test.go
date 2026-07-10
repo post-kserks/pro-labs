@@ -54,12 +54,12 @@ func echoFactory() func() (net.Conn, error) {
 	}
 }
 
-func TestPool(t *testing.T) {
+func TestConnectionLimiter(t *testing.T) {
 	tests := []struct {
 		name string
 		fn   func(t *testing.T)
 	}{
-		{"new_pool_defaults", testNewPoolDefaults},
+		{"new_pool_defaults", testNewConnectionLimiterDefaults},
 		{"acquire_release", testAcquireRelease},
 		{"acquire_max", testAcquireMax},
 		{"stats", testStats},
@@ -76,8 +76,8 @@ func TestPool(t *testing.T) {
 	}
 }
 
-func testNewPoolDefaults(t *testing.T) {
-	p := NewPool(0, 0, 0, testFactory())
+func testNewConnectionLimiterDefaults(t *testing.T) {
+	p := NewConnectionLimiter(0, 0, 0, testFactory())
 	defer p.Close()
 
 	if p.minSize != 1 {
@@ -92,7 +92,7 @@ func testNewPoolDefaults(t *testing.T) {
 }
 
 func testAcquireRelease(t *testing.T) {
-	p := NewPool(1, 10, time.Minute, testFactory())
+	p := NewConnectionLimiter(1, 10, time.Minute, testFactory())
 	defer p.Close()
 
 	conn, err := p.Acquire()
@@ -124,7 +124,7 @@ func testAcquireRelease(t *testing.T) {
 }
 
 func testAcquireMax(t *testing.T) {
-	p := NewPool(1, 3, time.Minute, testFactory())
+	p := NewConnectionLimiter(1, 3, time.Minute, testFactory())
 	defer p.Close()
 
 	var conns []*Connection
@@ -150,7 +150,7 @@ func testAcquireMax(t *testing.T) {
 }
 
 func testStats(t *testing.T) {
-	p := NewPool(1, 10, time.Minute, testFactory())
+	p := NewConnectionLimiter(1, 10, time.Minute, testFactory())
 	defer p.Close()
 
 	stats := p.Stats()
@@ -186,7 +186,7 @@ func testStats(t *testing.T) {
 }
 
 func testClose(t *testing.T) {
-	p := NewPool(1, 10, time.Minute, testFactory())
+	p := NewConnectionLimiter(1, 10, time.Minute, testFactory())
 
 	conn, err := p.Acquire()
 	if err != nil {
@@ -205,9 +205,9 @@ func testClose(t *testing.T) {
 	}
 }
 
-func TestPoolCleanupEdgeCase(t *testing.T) {
+func TestConnectionLimiterCleanupEdgeCase(t *testing.T) {
 	t.Run("keeps_minSize_when_all_expired", func(t *testing.T) {
-		p := NewPool(2, 10, time.Millisecond, testFactory())
+		p := NewConnectionLimiter(2, 10, time.Millisecond, testFactory())
 		defer p.Close()
 
 		var conns []*Connection
@@ -236,7 +236,7 @@ func TestPoolCleanupEdgeCase(t *testing.T) {
 	})
 
 	t.Run("removes_expired_beyond_minSize", func(t *testing.T) {
-		p := NewPool(2, 10, time.Millisecond, testFactory())
+		p := NewConnectionLimiter(2, 10, time.Millisecond, testFactory())
 		defer p.Close()
 
 		var conns []*Connection
@@ -265,7 +265,7 @@ func TestPoolCleanupEdgeCase(t *testing.T) {
 	})
 
 	t.Run("preserves_active_connections", func(t *testing.T) {
-		p := NewPool(2, 10, time.Millisecond, testFactory())
+		p := NewConnectionLimiter(2, 10, time.Millisecond, testFactory())
 		defer p.Close()
 
 		active1, _ := p.Acquire()
@@ -302,7 +302,7 @@ func TestPoolCleanupEdgeCase(t *testing.T) {
 }
 
 func testConcurrentAcquireRelease(t *testing.T) {
-	p := NewPool(1, 20, time.Minute, testFactory())
+	p := NewConnectionLimiter(1, 20, time.Minute, testFactory())
 	defer p.Close()
 
 	var wg sync.WaitGroup
@@ -334,7 +334,7 @@ func testConcurrentAcquireRelease(t *testing.T) {
 
 func testHealthCheck(t *testing.T) {
 	f := echoFactory()
-	p := NewPool(1, 5, time.Minute, f)
+	p := NewConnectionLimiter(1, 5, time.Minute, f)
 	defer p.Close()
 
 	conn, err := p.Acquire()
@@ -355,7 +355,7 @@ func testHealthCheck(t *testing.T) {
 
 func testConnectionReuse(t *testing.T) {
 	f := echoFactory()
-	p := NewPool(2, 5, time.Minute, f)
+	p := NewConnectionLimiter(2, 5, time.Minute, f)
 	defer p.Close()
 
 	conn1, err := p.Acquire()
@@ -396,7 +396,7 @@ func testConnectionReuse(t *testing.T) {
 
 func testConnectionTimeout(t *testing.T) {
 	f := echoFactory()
-	p := NewPool(1, 5, time.Millisecond, f)
+	p := NewConnectionLimiter(1, 5, time.Millisecond, f)
 	defer p.Close()
 
 	var conns []*Connection
@@ -429,7 +429,7 @@ func testFactoryError(t *testing.T) {
 		return nil, io.ErrUnexpectedEOF
 	}
 
-	p := NewPool(0, 5, time.Minute, errFactory)
+	p := NewConnectionLimiter(0, 5, time.Minute, errFactory)
 	defer p.Close()
 
 	conn, err := p.Acquire()
@@ -440,7 +440,7 @@ func testFactoryError(t *testing.T) {
 
 func testReadWrite(t *testing.T) {
 	f := echoFactory()
-	p := NewPool(1, 5, time.Minute, f)
+	p := NewConnectionLimiter(1, 5, time.Minute, f)
 	defer p.Close()
 
 	conn, err := p.Acquire()

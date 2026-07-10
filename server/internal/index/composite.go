@@ -9,8 +9,8 @@ import (
 	"sync"
 )
 
-// CompositeIndex — составной индекс по нескольким столбцам.
-// Ключ = конкатенация значений столбцов через разделитель.
+// CompositeIndex — composite index on multiple columns.
+// Key = concatenation of column values with a separator.
 type CompositeIndex struct {
 	mu       sync.RWMutex
 	name     string
@@ -22,7 +22,7 @@ type CompositeIndex struct {
 	reverse map[int]string
 }
 
-// NewCompositeIndex создаёт составной индекс.
+// NewCompositeIndex creates a composite index.
 func NewCompositeIndex(name string, columns []string, colIndex []int) *CompositeIndex {
 	return &CompositeIndex{
 		name:     name,
@@ -36,6 +36,24 @@ func (idx *CompositeIndex) Name() string   { return idx.name }
 func (idx *CompositeIndex) Column() string { return strings.Join(idx.columns, ",") }
 func (idx *CompositeIndex) ColIndex() int  { return idx.colIndex[0] }
 func (idx *CompositeIndex) Type() string   { return "composite" }
+
+// Columns returns the column names this index covers.
+func (idx *CompositeIndex) Columns() []string {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	result := make([]string, len(idx.columns))
+	copy(result, idx.columns)
+	return result
+}
+
+// HasStoredColumns returns false — composite index does not store columns.
+func (idx *CompositeIndex) HasStoredColumns() bool { return false }
+
+// GetStoredColumns returns nil — composite index does not store columns.
+func (idx *CompositeIndex) GetStoredColumns(rowPos int) (map[string]interface{}, bool) {
+	return nil, false
+}
+
 func (idx *CompositeIndex) RenameColumn(old, new string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()

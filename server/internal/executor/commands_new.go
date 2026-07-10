@@ -10,7 +10,7 @@ import (
 
 const maxMergeRows = 1000000
 
-// CTECommand выполняет CTE (WITH clause).
+// CTECommand executes CTE (WITH clause).
 type CTECommand struct {
 	stmt *parser.CTEStatement
 }
@@ -82,14 +82,14 @@ func (c *TruncateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}, nil
 }
 
-// MergeCommand выполняет MERGE INTO.
+// MergeCommand executes MERGE INTO.
 type MergeCommand struct {
 	stmt *parser.MergeStatement
 }
 
-// extractMergeEqualityColumns извлекает пары столбцов из простого ON-условия
-// вида "target.col = source.col" для hash join.
-// Возвращает: (target col name, source col name).
+// extractMergeEqualityColumns extracts column pairs from a simple ON condition
+// of the form "target.col = source.col" for hash join.
+// Returns: (target col name, source col name).
 func extractMergeEqualityColumns(cond parser.Expression, targetTable, sourceTable string) [][2]string {
 	be, ok := cond.(*parser.BinaryExpr)
 	if !ok || be.Operator != "=" {
@@ -100,7 +100,7 @@ func extractMergeEqualityColumns(cond parser.Expression, targetTable, sourceTabl
 	if !lok || !rok {
 		return nil
 	}
-	// Определяем какой столбец к какой таблице относится
+	// Determine which column belongs to which table
 	leftName := leftCol.Name
 	rightName := rightCol.Name
 	leftIsTarget := strings.HasPrefix(leftName, targetTable+".")
@@ -114,7 +114,7 @@ func extractMergeEqualityColumns(cond parser.Expression, targetTable, sourceTabl
 	return nil
 }
 
-// buildMergeKeyFromCombined создаёт хеш-ключ из значений столбцов для hash join.
+// buildMergeKeyFromCombined builds a hash key from column values for hash join.
 func buildMergeKeyFromCombined(row storage.Row, colName string, combinedColIdx map[string]int, _ int) string {
 	ci, ok := combinedColIdx[strings.ToLower(colName)]
 	if !ok || ci >= len(row) {
@@ -129,8 +129,8 @@ func (c *MergeCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 
-	// Запись MERGE сериализуем с коммитами под commit-локом целевой таблицы
-	// (Bug #2b); при commit-apply lock уже взят — mutateUnderTableLock это учитывает.
+	// MERGE writes are serialized with commits under the target table's commit lock
+	// (Bug #2b); at commit-apply time, the lock is already held — mutateUnderTableLock accounts for this.
 	var result *Result
 	err = mutateUnderTableLock(ctx, dbName, c.stmt.TargetTable, func() error {
 		var e error
@@ -273,7 +273,7 @@ func (c *MergeCommand) executeSourceSubquery(ctx *ExecutionContext) (*Result, er
 	return cmd.Execute(ctx)
 }
 
-// executeMergeHashJoin использует hash join для простых ON-условий (col = col).
+// executeMergeHashJoin uses hash join for simple ON conditions (col = col).
 func (c *MergeCommand) executeMergeHashJoin(ctx *ExecutionContext, dbName string, targetRows, sourceRows []storage.Row, targetSchema, sourceSchema *storage.TableSchema, eqCols [][2]string, combinedSchema *storage.TableSchema) (int, []storage.Row, []storage.Row, error) {
 	affected := 0
 	var returningRows []storage.Row
@@ -378,9 +378,9 @@ func (c *MergeCommand) executeMergeHashJoin(ctx *ExecutionContext, dbName string
 	return affected, returningRows, oldRows, nil
 }
 
-// executeMergeNestedLoop выполняет MERGE через nested loop.
-// Все UPDATE собираются и применяются одним вызовом UpdateRowsDirect,
-// чтобы избежать сдвига позиций при последовательных UpdateRows.
+// executeMergeNestedLoop executes MERGE via nested loop.
+// All UPDATEs are collected and applied in a single UpdateRowsDirect call
+// to avoid position shifting from sequential UpdateRows.
 func (c *MergeCommand) executeMergeNestedLoop(ctx *ExecutionContext, dbName string, targetRows, sourceRows []storage.Row, targetSchema, sourceSchema *storage.TableSchema, combinedSchema *storage.TableSchema, sourceName string) (int, []storage.Row, []storage.Row, error) {
 	affected := 0
 	var returningRows []storage.Row
@@ -473,7 +473,7 @@ func (c *MergeCommand) executeMergeNestedLoop(ctx *ExecutionContext, dbName stri
 	return affected, returningRows, oldRows, nil
 }
 
-// executeMergeInsert выполняет INSERT для WHEN NOT MATCHED.
+// executeMergeInsert performs INSERT for WHEN NOT MATCHED.
 func (c *MergeCommand) executeMergeInsert(ctx *ExecutionContext, dbName string, sourceRow storage.Row, targetSchema, sourceSchema *storage.TableSchema, combinedSchema *storage.TableSchema) error {
 	if c.stmt.WhenNotMatched.SelectQuery != nil {
 		return c.executeMergeInsertSelect(ctx, dbName, sourceRow, targetSchema, sourceSchema, combinedSchema)
@@ -610,7 +610,7 @@ func (c *MergeCommand) executeMergeInsertSelect(ctx *ExecutionContext, dbName st
 	return err
 }
 
-// SavepointCommand выполняет SAVEPOINT.
+// SavepointCommand executes SAVEPOINT.
 type SavepointCommand struct {
 	stmt *parser.SavepointStatement
 }
@@ -630,7 +630,7 @@ func (c *SavepointCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}, nil
 }
 
-// RollbackToSavepointCommand выполняет ROLLBACK TO SAVEPOINT.
+// RollbackToSavepointCommand executes ROLLBACK TO SAVEPOINT.
 type RollbackToSavepointCommand struct {
 	stmt *parser.RollbackToSavepointStatement
 }
@@ -652,7 +652,7 @@ func (c *RollbackToSavepointCommand) Execute(ctx *ExecutionContext) (*Result, er
 	}, nil
 }
 
-// ReleaseSavepointCommand выполняет RELEASE SAVEPOINT.
+// ReleaseSavepointCommand executes RELEASE SAVEPOINT.
 type ReleaseSavepointCommand struct {
 	stmt *parser.ReleaseSavepointStatement
 }

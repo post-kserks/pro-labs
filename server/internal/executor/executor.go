@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/auth"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -93,6 +94,34 @@ func init() {
 	registerCommand(reflect.TypeOf((*parser.CallProcedureStatement)(nil)), func(s parser.Statement) Command {
 		return &CallProcedureCommand{stmt: s.(*parser.CallProcedureStatement)}
 	})
+	registerCommand(reflect.TypeOf((*parser.ShowEncryptionStatusStatement)(nil)), func(s parser.Statement) Command {
+		return &ShowEncryptionStatusCommand{stmt: s.(*parser.ShowEncryptionStatusStatement)}
+	})
+	registerCommand(reflect.TypeOf((*parser.VerifyAuditLogStatement)(nil)), func(s parser.Statement) Command {
+		return &VerifyAuditLogCommand{stmt: s.(*parser.VerifyAuditLogStatement)}
+	})
+	registerCommand(reflect.TypeOf((*parser.ArchiveAuditLogStatement)(nil)), func(s parser.Statement) Command {
+		return &ArchiveAuditLogCommand{stmt: s.(*parser.ArchiveAuditLogStatement)}
+	})
+	registerCommand(reflect.TypeOf((*parser.CreateRoleStatement)(nil)), func(s parser.Statement) Command {
+		return &CreateRoleCommand{stmt: s.(*parser.CreateRoleStatement)}
+	})
+	registerCommand(reflect.TypeOf((*parser.DropRoleStatement)(nil)), func(s parser.Statement) Command {
+		return &DropRoleCommand{stmt: s.(*parser.DropRoleStatement)}
+	})
+	registerCommand(reflect.TypeOf((*parser.GrantStatement)(nil)), func(s parser.Statement) Command {
+		return &GrantCommand{stmt: s.(*parser.GrantStatement)}
+	})
+	registerCommand(reflect.TypeOf((*parser.RevokeStatement)(nil)), func(s parser.Statement) Command {
+		return &RevokeCommand{stmt: s.(*parser.RevokeStatement)}
+	})
+	registerCommand(reflect.TypeOf((*parser.CopyStatement)(nil)), func(s parser.Statement) Command {
+		stmt := s.(*parser.CopyStatement)
+		if stmt.IsFrom {
+			return &CopyFromCommand{stmt: stmt}
+		}
+		return &CopyToCommand{stmt: stmt}
+	})
 }
 
 // Command is the Command pattern abstraction.
@@ -102,13 +131,14 @@ type Command interface {
 
 // Result is a uniform executor output for all statements.
 type Result struct {
-	Type     string
-	Columns  []string
-	Rows     [][]string
-	Schema   *storage.TableSchema
-	Affected int
-	Message  string
-	AsOfNote string
+	Type        string
+	Columns     []string
+	Rows        [][]string
+	Schema      *storage.TableSchema
+	Affected    int
+	Message     string
+	AsOfNote    string
+	RowsScanned int // total rows read from storage before filtering
 }
 
 // ExecutionContext carries mutable session state and dependencies.
@@ -141,11 +171,18 @@ type ExecutionContext struct {
 	OldRow storage.Row
 	NewRow storage.Row
 
-	// InCommitApply true, пока выполняется applyOps внутри Commit. В этот момент
-	// commit-локи нужных таблиц уже захвачены (sync.Mutex не реентрантный),
-	// поэтому autocommit-обёртка mutateUnderTableLock НЕ должна брать их повторно
-	// — иначе self-deadlock (Bug #2, deadlock guard).
+	// InCommitApply true while applyOps is running inside Commit. At this point
+	// commit locks for needed tables are already held (sync.Mutex is not reentrant),
+	// so the autocommit wrapper mutateUnderTableLock must NOT acquire them again
+	// — otherwise self-deadlock (Bug #2, deadlock guard).
 	InCommitApply bool
+
+	// Parallel holds the parallel execution configuration for this query.
+	Parallel ParallelConfig
+
+	// triggerDepth tracks recursive trigger invocation depth.
+	// Incremented before executeTriggerBody, decremented after.
+	triggerDepth int
 }
 
 type Executor struct {
@@ -155,25 +192,27 @@ type Executor struct {
 	broadcaster  *Broadcaster
 	embedder     ai.Embedder
 	wal          *wal.WAL
+	authMgr      *auth.Manager // RBAC: nil means permission checks disabled
 	queryTimeout time.Duration
 	maxRows      int
+	parallel     ParallelConfig
 	mu           sync.RWMutex
 }
 
 func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Executor {
-	// По умолчанию AI не настроен: SEMANTIC_MATCH/AI_EMBED возвращают
-	// понятную ошибку, а не тихий mock-результат.
+	// By default AI is not configured: SEMANTIC_MATCH/AI_EMBED return
+	// a clear error instead of a silent mock result.
 	return &Executor{storage: store, metrics: m, txm: txm, broadcaster: b, embedder: ai.NoopEmbedder{}}
 }
 
-// SetWAL подключает WAL для записи операций транзакций.
+// SetWAL connects WAL for write operations of transactions.
 func (e *Executor) SetWAL(w *wal.WAL) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.wal = w
 }
 
-// SetEmbedder подключает реальный embedding-провайдер.
+// SetEmbedder connects a real embedding provider.
 func (e *Executor) SetEmbedder(emb ai.Embedder) {
 	if emb != nil {
 		e.mu.Lock()
@@ -182,20 +221,41 @@ func (e *Executor) SetEmbedder(emb ai.Embedder) {
 	}
 }
 
-// SetQueryTimeout задаёт таймаут на выполнение запроса.
+// SetQueryTimeout sets the query execution timeout.
 func (e *Executor) SetQueryTimeout(d time.Duration) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.queryTimeout = d
 }
 
-// SetMaxRows задаёт максимальное количество строк в результате SELECT.
+// SetMaxRows sets the maximum number of rows in SELECT results.
 func (e *Executor) SetMaxRows(n int) {
 	if n > 0 {
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		e.maxRows = n
 	}
+}
+
+// SetParallelConfig configures parallel query execution.
+func (e *Executor) SetParallelConfig(cfg ParallelConfig) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.parallel = cfg
+}
+
+// ParallelConfig returns the current parallel execution configuration.
+func (e *Executor) ParallelConfig() ParallelConfig {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.parallel
+}
+
+// SetAuthManager connects the authentication manager for RBAC checks.
+func (e *Executor) SetAuthManager(m *auth.Manager) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.authMgr = m
 }
 
 func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
@@ -209,7 +269,21 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	queryTimeout := e.queryTimeout
 	embedder := e.embedder
 	wal := e.wal
+	parallelCfg := e.parallel
+	authMgr := e.authMgr
 	e.mu.RUnlock()
+
+	// RBAC permission check: if auth is enabled and the session carries a token,
+	// verify the role is allowed to perform this operation.
+	if authMgr != nil && authMgr.Enabled() {
+		token := sess.GetToken()
+		if token != "" {
+			op := stmt.StatementType()
+			if !authMgr.CheckPermission(token, op) {
+				return nil, fmt.Errorf("permission denied: role %q cannot execute %s", sess.GetRole(), op)
+			}
+		}
+	}
 
 	queryCtx := sess.ServerContext()
 	if queryTimeout > 0 {
@@ -228,6 +302,7 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 		WAL:          wal,
 		Ctx:          queryCtx,
 		SnapshotTxID: sess.SnapshotTxID(),
+		Parallel:     parallelCfg,
 	}
 	result, err := cmd.Execute(ctx)
 

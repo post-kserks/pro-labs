@@ -161,7 +161,7 @@ func (a *stringAgg) Result() interface{} {
 	return strings.Join(a.values, a.delimiter)
 }
 
-// boolAndAgg handles BOOL_AND(col) — все значения true?
+// boolAndAgg handles BOOL_AND(col) — all values true?
 type boolAndAgg struct {
 	hasVal bool
 	result bool
@@ -190,7 +190,7 @@ func (a *boolAndAgg) Result() interface{} {
 	return a.result
 }
 
-// boolOrAgg handles BOOL_OR(col) — хотя бы одно значение true?
+// boolOrAgg handles BOOL_OR(col) — at least one value true?
 type boolOrAgg struct {
 	hasVal bool
 	result bool
@@ -280,7 +280,7 @@ func (a *varianceAgg) Result() interface{} {
 	return a.m2 / float64(a.n-1)
 }
 
-// jsonObjectAgg собирает ключи и значения в JSON объект.
+// jsonObjectAgg collects keys and values into a JSON object.
 type jsonObjectAgg struct {
 	keys   []string
 	values []interface{}

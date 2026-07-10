@@ -1,4 +1,4 @@
-// Package config загружает vaultdb.yaml.
+// Package config loads vaultdb.yaml.
 package config
 
 import (
@@ -11,14 +11,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// LiveQueriesConfig управляет поведением Live Queries при медленных клиентах.
+// LiveQueriesConfig controls Live Query behavior for slow clients.
 type LiveQueriesConfig struct {
 	BufferSize    int    `yaml:"buffer_size"`
 	DropPolicy    string `yaml:"drop_policy"`
 	BlockTimeoutS int    `yaml:"block_timeout_s"`
 }
 
-// ServerConfig — сетевые параметры сервера.
+// TLSConfig — TLS parameters.
+type TLSConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	CertFile     string `yaml:"cert_file"`
+	KeyFile      string `yaml:"key_file"`
+	MinVersion   string `yaml:"min_version"`   // "1.2" or "1.3"
+	Enforce      bool   `yaml:"enforce"`       // reject non-TLS connections
+	RedirectHTTP bool   `yaml:"redirect_http"` // auto redirect HTTP to HTTPS
+}
+
+// ServerConfig — server network parameters.
 type ServerConfig struct {
 	Host                string            `yaml:"host"`
 	Port                int               `yaml:"port"`
@@ -36,27 +46,31 @@ type ServerConfig struct {
 	MaxPreparedStmts    int               `yaml:"max_prepared_statements"`
 	RateLimitRPS        int               `yaml:"rate_limit_rps"`
 	RateLimitBurst      int               `yaml:"rate_limit_burst"`
+	TLS                 TLSConfig         `yaml:"tls"`
 }
 
-// StorageConfig — параметры хранилища.
+// StorageConfig — storage parameters.
 type StorageConfig struct {
 	Engine           string `yaml:"engine"`
 	DataDir          string `yaml:"data_dir"`
 	ResultCacheSize  int    `yaml:"result_cache_size"`
 	ResultCacheTTL_s int    `yaml:"result_cache_ttl_seconds"`
+	BufferPoolPages  int    `yaml:"buffer_pool_pages"`
 }
 
-// AuthConfig — параметры аутентификации.
+// AuthConfig — authentication parameters.
 type AuthConfig struct {
-	Enabled       bool   `yaml:"enabled"`
-	MTLSEnabled   bool   `yaml:"mtls_enabled"`
-	MTLScaFile    string `yaml:"mtls_ca_file"`
-	RateWindowSec int    `yaml:"rate_window_seconds"`
-	MaxFails      int    `yaml:"max_fails"`
-	BlockForSec   int    `yaml:"block_for_seconds"`
+	Enabled            bool   `yaml:"enabled"`
+	MTLSEnabled        bool   `yaml:"mtls_enabled"`
+	MTLScaFile         string `yaml:"mtls_ca_file"`
+	RateWindowSec      int    `yaml:"rate_window_seconds"`
+	MaxFails           int    `yaml:"max_fails"`
+	BlockForSec        int    `yaml:"block_for_seconds"`
+	LocalhostBypass    bool   `yaml:"localhost_bypass"`
+	RequireTLSForToken bool   `yaml:"require_tls_for_token"`
 }
 
-// AIConfig — параметры внешнего embedding-провайдера для SEMANTIC_MATCH/AI_EMBED.
+// AIConfig — external embedding provider parameters for SEMANTIC_MATCH/AI_EMBED.
 type AIConfig struct {
 	Provider     string `yaml:"provider"`
 	Endpoint     string `yaml:"endpoint"`
@@ -66,36 +80,56 @@ type AIConfig struct {
 	CacheSize    int    `yaml:"cache_size"`
 }
 
-// Config — корневая конфигурация vaultdb.yaml.
+// EncryptionConfig — Transparent Data Encryption (TDE) parameters.
+type EncryptionConfig struct {
+	Enabled        bool   `yaml:"enabled"`
+	KeySource      string `yaml:"key_source"`    // passphrase | os_keychain | kms
+	DefaultScope   string `yaml:"default_scope"` // all | tables_only | off
+	EncryptCatalog bool   `yaml:"encrypt_catalog"`
+	EncryptWAL     bool   `yaml:"encrypt_wal"`
+}
+
+// AuditConfig — audit logging parameters.
+type AuditConfig struct {
+	ArchivePath       string `yaml:"archive_path"`
+	ArchiveKeepCount  int    `yaml:"archive_keep_count"`
+	VerifyIntervalSec int    `yaml:"verify_interval_sec"`
+}
+
+// Config — root configuration of vaultdb.yaml.
 type Config struct {
-	Server  ServerConfig  `yaml:"server"`
-	Storage StorageConfig `yaml:"storage"`
-	Auth    AuthConfig    `yaml:"auth"`
-	AI      AIConfig      `yaml:"ai"`
+	Server     ServerConfig     `yaml:"server"`
+	Storage    StorageConfig    `yaml:"storage"`
+	Auth       AuthConfig       `yaml:"auth"`
+	AI         AIConfig         `yaml:"ai"`
+	Encryption EncryptionConfig `yaml:"encryption"`
+	Audit      AuditConfig      `yaml:"audit"`
 }
 
 const (
-	DefaultMaxRequestSize        = 64 * 1024 * 1024 // 64 МБ
-	DefaultLiveQueryBuffer       = 256
-	DefaultLiveQueryPolicy       = "drop"
-	DefaultLiveQueryBlockTimeout = 5
-	DefaultQueryTimeoutSec       = 30
-	DefaultMaxConnections        = 1000
-	DefaultShutdownTimeoutSec    = 30
-	DefaultMaxRows               = 1000000
-	DefaultTCPKeepAliveSec       = 30
-	DefaultTCPIdleTimeoutSec     = 300
-	DefaultMaxPreparedStmts      = 1000
-	DefaultResultCacheSize       = 256
-	DefaultResultCacheTTL        = 30
-	DefaultRateLimitRPS          = 100
-	DefaultRateLimitBurst        = 200
-	DefaultAuthRateWindowSec     = 60
-	DefaultAuthMaxFails          = 10
-	DefaultAuthBlockForSec       = 300
+	DefaultMaxRequestSize         = 64 * 1024 * 1024 // 64 MB
+	DefaultLiveQueryBuffer        = 256
+	DefaultLiveQueryPolicy        = "drop"
+	DefaultLiveQueryBlockTimeout  = 5
+	DefaultQueryTimeoutSec        = 30
+	DefaultMaxConnections         = 1000
+	DefaultShutdownTimeoutSec     = 30
+	DefaultMaxRows                = 1000000
+	DefaultTCPKeepAliveSec        = 30
+	DefaultTCPIdleTimeoutSec      = 300
+	DefaultMaxPreparedStmts       = 1000
+	DefaultResultCacheSize        = 256
+	DefaultResultCacheTTL         = 30
+	DefaultRateLimitRPS           = 100
+	DefaultRateLimitBurst         = 200
+	DefaultBufferPoolPages        = 16384 // 128MB with 8KB pages
+	DefaultAuthRateWindowSec      = 60
+	DefaultAuthMaxFails           = 10
+	DefaultAuthBlockForSec        = 300
+	DefaultAuditVerifyIntervalSec = 300 // 5 minutes
 )
 
-// Default возвращает конфигурацию со значениями по умолчанию.
+// Default returns configuration with default values.
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -124,18 +158,23 @@ func Default() *Config {
 			DataDir:          "./data",
 			ResultCacheSize:  DefaultResultCacheSize,
 			ResultCacheTTL_s: DefaultResultCacheTTL,
+			BufferPoolPages:  DefaultBufferPoolPages,
 		},
 		Auth: AuthConfig{
-			Enabled:       true,
-			RateWindowSec: DefaultAuthRateWindowSec,
-			MaxFails:      DefaultAuthMaxFails,
-			BlockForSec:   DefaultAuthBlockForSec,
+			Enabled:         true,
+			RateWindowSec:   DefaultAuthRateWindowSec,
+			MaxFails:        DefaultAuthMaxFails,
+			BlockForSec:     DefaultAuthBlockForSec,
+			LocalhostBypass: true,
+		},
+		Audit: AuditConfig{
+			VerifyIntervalSec: DefaultAuditVerifyIntervalSec,
 		},
 	}
 }
 
-// Load читает конфигурацию из файла. Отсутствующие ключи получают значения
-// по умолчанию. Если path пустой — возвращаются значения по умолчанию.
+// Load reads configuration from a file. Missing keys get
+// default values. If path is empty — default values are returned.
 func Load(path string) (*Config, error) {
 	cfg := Default()
 	if path == "" {
@@ -207,6 +246,9 @@ func validateConfig(cfg *Config) error {
 	if cfg.Storage.ResultCacheTTL_s == 0 {
 		cfg.Storage.ResultCacheTTL_s = DefaultResultCacheTTL
 	}
+	if cfg.Storage.BufferPoolPages == 0 {
+		cfg.Storage.BufferPoolPages = DefaultBufferPoolPages
+	}
 	if cfg.Server.TCPKeepAliveSec == 0 {
 		cfg.Server.TCPKeepAliveSec = DefaultTCPKeepAliveSec
 	}
@@ -222,6 +264,24 @@ func validateConfig(cfg *Config) error {
 	if cfg.Server.RateLimitBurst == 0 {
 		cfg.Server.RateLimitBurst = DefaultRateLimitBurst
 	}
+	// TLS validation
+	if cfg.Server.TLS.Enforce && !cfg.Server.TLS.Enabled {
+		return fmt.Errorf("tls.enforce is true but tls.enabled is false: TLS must be enabled to enforce it")
+	}
+	if cfg.Server.TLS.Enabled {
+		if cfg.Server.TLS.CertFile == "" {
+			return fmt.Errorf("tls.cert_file must not be empty when tls.enabled is true")
+		}
+		if cfg.Server.TLS.KeyFile == "" {
+			return fmt.Errorf("tls.key_file must not be empty when tls.enabled is true")
+		}
+	} else {
+		// Warning when TLS is disabled
+		fmt.Fprintln(os.Stderr, "WARNING: TLS is disabled — server is running on plain HTTP. Enable tls.enabled in production.")
+	}
+	if cfg.Server.TLS.MinVersion != "" && cfg.Server.TLS.MinVersion != "1.2" && cfg.Server.TLS.MinVersion != "1.3" {
+		return fmt.Errorf("unknown tls.min_version %q (want 1.2 or 1.3)", cfg.Server.TLS.MinVersion)
+	}
 	if cfg.Auth.RateWindowSec == 0 {
 		cfg.Auth.RateWindowSec = DefaultAuthRateWindowSec
 	}
@@ -230,6 +290,33 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Auth.BlockForSec == 0 {
 		cfg.Auth.BlockForSec = DefaultAuthBlockForSec
+	}
+	if cfg.Encryption.KeySource == "" {
+		cfg.Encryption.KeySource = "passphrase"
+	}
+	if cfg.Encryption.DefaultScope == "" {
+		cfg.Encryption.DefaultScope = "all"
+	}
+	if cfg.Encryption.KeySource != "passphrase" &&
+		cfg.Encryption.KeySource != "os_keychain" &&
+		cfg.Encryption.KeySource != "kms" {
+		return fmt.Errorf("unknown encryption.key_source %q (want passphrase|os_keychain|kms)", cfg.Encryption.KeySource)
+	}
+	if cfg.Encryption.DefaultScope != "all" &&
+		cfg.Encryption.DefaultScope != "tables_only" &&
+		cfg.Encryption.DefaultScope != "off" {
+		return fmt.Errorf("unknown encryption.default_scope %q (want all|tables_only|off)", cfg.Encryption.DefaultScope)
+	}
+	if cfg.Audit.VerifyIntervalSec == 0 {
+		cfg.Audit.VerifyIntervalSec = DefaultAuditVerifyIntervalSec
+	}
+	if cfg.Audit.VerifyIntervalSec < 10 {
+		return fmt.Errorf("audit.verify_interval_sec must be >= 10, got %d", cfg.Audit.VerifyIntervalSec)
+	}
+
+	// Warn when localhost auth bypass is enabled (default: true).
+	if cfg.Auth.LocalhostBypass && cfg.Auth.Enabled {
+		fmt.Fprintln(os.Stderr, "WARNING: localhost auth bypass is enabled — disable in production (auth.localhost_bypass: false)")
 	}
 
 	// Validate port ranges
@@ -272,7 +359,7 @@ func validateConfig(cfg *Config) error {
 	return nil
 }
 
-// ApplyEnvOverrides применяет переменные окружения, перекрывая значения из файла.
+// ApplyEnvOverrides applies environment variables, overriding file values.
 func ApplyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("VAULTDB_HOST"); v != "" {
 		cfg.Server.Host = v
@@ -310,6 +397,15 @@ func ApplyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("VAULTDB_DATA_DIR"); v != "" {
 		cfg.Storage.DataDir = v
 	}
+	if v := os.Getenv("VAULTDB_BUFFER_POOL_PAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			slog.Warn("invalid VAULTDB_BUFFER_POOL_PAGES, ignoring", "value", v, "error", err)
+		} else if n < 64 {
+			slog.Warn("VAULTDB_BUFFER_POOL_PAGES too small (min 64), ignoring", "value", v)
+		} else {
+			cfg.Storage.BufferPoolPages = n
+		}
+	}
 	if v := os.Getenv("VAULTDB_MTLS_ENABLED"); v != "" {
 		cfg.Auth.MTLSEnabled = envBoolValue(v)
 	}
@@ -330,8 +426,8 @@ func envBoolValue(v string) bool {
 	}
 }
 
-// Reload перезагружает конфигурацию из файла.
-// Возвращает ошибку если конфиг невалиден.
+// Reload reloads configuration from a file.
+// Returns an error if config is invalid.
 func Reload(path string) (*Config, error) {
 	return Load(path)
 }

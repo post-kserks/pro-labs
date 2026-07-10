@@ -20,6 +20,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Server.LiveQueries.DropPolicy != "drop" {
 		t.Fatalf("default drop policy = %q", cfg.Server.LiveQueries.DropPolicy)
 	}
+	if cfg.Storage.BufferPoolPages != DefaultBufferPoolPages {
+		t.Fatalf("default buffer_pool_pages = %d, want %d", cfg.Storage.BufferPoolPages, DefaultBufferPoolPages)
+	}
 }
 
 func TestLoadFullConfig(t *testing.T) {
@@ -29,7 +32,7 @@ server:
   port: 6000
   http_port: 8081
   monitor_port: 5434
-  max_request_size_bytes: 67108864  # 64 МБ
+  max_request_size_bytes: 67108864  # 64 MB
   live_queries:
     buffer_size: 128
     drop_policy: "evict"
@@ -38,6 +41,7 @@ server:
 storage:
   engine: page
   data_dir: /data
+  buffer_pool_pages: 8192
 
 auth:
   enabled: false
@@ -70,6 +74,9 @@ ai:
 	}
 	if cfg.Storage.Engine != "page" || cfg.Storage.DataDir != "/data" {
 		t.Fatalf("storage section: %+v", cfg.Storage)
+	}
+	if cfg.Storage.BufferPoolPages != 8192 {
+		t.Fatalf("storage.buffer_pool_pages = %d, want 8192", cfg.Storage.BufferPoolPages)
 	}
 	if cfg.Auth.Enabled {
 		t.Fatal("auth.enabled should be false")
@@ -229,6 +236,35 @@ func TestApplyEnvOverrides_AIKey(t *testing.T) {
 	ApplyEnvOverrides(cfg)
 	if cfg.AI.APIKey != "secret-key-123" {
 		t.Fatalf("ai_api_key = %q", cfg.AI.APIKey)
+	}
+}
+
+func TestApplyEnvOverrides_BufferPoolPages(t *testing.T) {
+	cfg := Default()
+	t.Setenv("VAULTDB_BUFFER_POOL_PAGES", "32768")
+	ApplyEnvOverrides(cfg)
+	if cfg.Storage.BufferPoolPages != 32768 {
+		t.Fatalf("buffer_pool_pages = %d, want 32768", cfg.Storage.BufferPoolPages)
+	}
+}
+
+func TestApplyEnvOverrides_BufferPoolPagesInvalid(t *testing.T) {
+	cfg := Default()
+	cfg.Storage.BufferPoolPages = 16384
+	t.Setenv("VAULTDB_BUFFER_POOL_PAGES", "not-a-number")
+	ApplyEnvOverrides(cfg)
+	if cfg.Storage.BufferPoolPages != 16384 {
+		t.Fatalf("buffer_pool_pages should remain 16384 on invalid env, got %d", cfg.Storage.BufferPoolPages)
+	}
+}
+
+func TestApplyEnvOverrides_BufferPoolPagesTooSmall(t *testing.T) {
+	cfg := Default()
+	cfg.Storage.BufferPoolPages = 16384
+	t.Setenv("VAULTDB_BUFFER_POOL_PAGES", "10")
+	ApplyEnvOverrides(cfg)
+	if cfg.Storage.BufferPoolPages != 16384 {
+		t.Fatalf("buffer_pool_pages should remain 16384 when too small, got %d", cfg.Storage.BufferPoolPages)
 	}
 }
 
@@ -610,5 +646,122 @@ func TestLoad_DefaultsWithEmptyPath(t *testing.T) {
 	}
 	if cfg.Auth.BlockForSec != DefaultAuthBlockForSec {
 		t.Fatalf("default block_for_seconds = %d", cfg.Auth.BlockForSec)
+	}
+	if cfg.Server.TLS.Enforce {
+		t.Fatal("default tls.enforce should be false")
+	}
+	if cfg.Server.TLS.Enabled {
+		t.Fatal("default tls.enabled should be false")
+	}
+}
+
+// --- TLS validation tests ---
+
+func TestValidation_TLSEnforceWithoutEnabled(t *testing.T) {
+	yaml := `
+server:
+  tls:
+    enforce: true
+    enabled: false
+storage:
+  data_dir: /d
+`
+	path := filepath.Join(t.TempDir(), "tls.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error: tls.enforce=true without tls.enabled")
+	}
+}
+
+func TestValidation_TLSEnabledWithoutCertFile(t *testing.T) {
+	yaml := `
+server:
+  tls:
+    enabled: true
+    key_file: /path/to/key.pem
+storage:
+  data_dir: /d
+`
+	path := filepath.Join(t.TempDir(), "tls.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error: tls.enabled without cert_file")
+	}
+}
+
+func TestValidation_TLSEnabledWithoutKeyFile(t *testing.T) {
+	yaml := `
+server:
+  tls:
+    enabled: true
+    cert_file: /path/to/cert.pem
+storage:
+  data_dir: /d
+`
+	path := filepath.Join(t.TempDir(), "tls.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error: tls.enabled without key_file")
+	}
+}
+
+func TestValidation_TLSBadMinVersion(t *testing.T) {
+	yaml := `
+server:
+  tls:
+    enabled: true
+    cert_file: /path/to/cert.pem
+    key_file: /path/to/key.pem
+    min_version: "1.1"
+storage:
+  data_dir: /d
+`
+	path := filepath.Join(t.TempDir(), "tls.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error: invalid tls.min_version")
+	}
+}
+
+func TestValidation_TLSValidConfig(t *testing.T) {
+	yaml := `
+server:
+  tls:
+    enabled: true
+    cert_file: /path/to/cert.pem
+    key_file: /path/to/key.pem
+    min_version: "1.3"
+    enforce: true
+storage:
+  data_dir: /d
+`
+	path := filepath.Join(t.TempDir(), "tls.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("valid TLS config should load: %v", err)
+	}
+	if !cfg.Server.TLS.Enabled {
+		t.Fatal("tls.enabled should be true")
+	}
+	if !cfg.Server.TLS.Enforce {
+		t.Fatal("tls.enforce should be true")
+	}
+	if cfg.Server.TLS.MinVersion != "1.3" {
+		t.Fatalf("tls.min_version = %q, want 1.3", cfg.Server.TLS.MinVersion)
 	}
 }

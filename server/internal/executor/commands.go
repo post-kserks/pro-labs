@@ -135,7 +135,7 @@ func coerceToColumn(value storage.Value, column storage.ColumnSchema) (storage.V
 			return nil, fmt.Errorf("expected BOOL value, got %T", value)
 		}
 		return boolValue, nil
-	case "TEXT", "VARCHAR":
+	case "TEXT", "VARCHAR", "BLOB":
 		stringValue, ok := value.(string)
 		if !ok {
 			return nil, fmt.Errorf("expected string value, got %T", value)

@@ -1,12 +1,12 @@
 # User-Defined Functions and Procedures
 
-VaultDB supports creating custom functions and procedures with SQL bodies.
+VaultDB supports creating custom functions and procedures with SQL bodies and WebAssembly modules.
 
-## Functions
+## SQL User-Defined Functions
 
 Functions return a single value and can be used in expressions.
 
-### Creating a Function
+### Creating a SQL Function
 
 ```sql
 CREATE FUNCTION double_value(x INT) RETURNS INT AS
@@ -25,6 +25,40 @@ SELECT double_value(age) FROM users;
 ```sql
 DROP FUNCTION double_value;
 ```
+
+## WASM User-Defined Functions
+
+Create custom SQL functions backed by WebAssembly modules for performance-critical operations.
+
+### Creating a WASM Function
+
+```sql
+CREATE FUNCTION hash_pii(value TEXT) RETURNS TEXT
+LANGUAGE WASM
+AS 'file:///plugins/hash_pii.wasm'
+WITH (memory_limit = '16MB', timeout = '100ms');
+```
+
+### WASM Options
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `memory_limit` | Maximum memory (KB, MB, GB) | `'16MB'`, `'512KB'`, `'1GB'` |
+| `timeout` | Maximum execution time (Go duration format) | `'100ms'`, `'5s'`, `'1m'` |
+
+### Using a WASM Function
+
+```sql
+-- Call it like any SQL function
+SELECT hash_pii(email) FROM users;
+```
+
+### WASM Function Requirements
+
+- WASM modules must export a `main` function
+- Functions accept and return string values
+- Memory is isolated per execution
+- Timeouts prevent infinite loops
 
 ## Procedures
 
@@ -63,6 +97,7 @@ CREATE FUNCTION get_user_name(user_id INT) RETURNS TEXT AS
 
 - Functions return a single value (scalar)
 - Procedures execute multi-statement blocks
-- Function/procedure bodies are SQL statements (not Go code)
+- SQL function bodies must be SELECT statements
 - No support for PL/pgSQL-style procedural logic
 - Parameters are passed as SQL values
+- WASM functions are sandboxed and cannot access the database directly

@@ -13,6 +13,7 @@ import (
 
 	"vaultdb/internal/executor"
 	"vaultdb/internal/parser"
+	"vaultdb/internal/protocol"
 	"vaultdb/internal/storage"
 )
 
@@ -45,21 +46,28 @@ type BatchResponseResult struct {
 }
 
 func (s *Server) newSession() *executor.Session {
-	sess := executor.NewSession(s.cfg.Storage, s.metrics, s.txm, s.br)
-	if s.cfg.Embedder != nil {
-		sess.SetEmbedder(s.cfg.Embedder)
+	return newSessionWithConfig(s.cfg)
+}
+
+func newSessionWithConfig(cfg Config) *executor.Session {
+	sess := executor.NewSession(cfg.Storage, cfg.Metrics, cfg.TxManager, cfg.Broadcaster)
+	if cfg.Embedder != nil {
+		sess.SetEmbedder(cfg.Embedder)
 	}
-	if s.cfg.QueryTimeoutSec > 0 {
-		sess.SetQueryTimeout(time.Duration(s.cfg.QueryTimeoutSec) * time.Second)
+	if cfg.QueryTimeoutSec > 0 {
+		sess.SetQueryTimeout(time.Duration(cfg.QueryTimeoutSec) * time.Second)
 	}
-	if s.cfg.MaxRows > 0 {
-		sess.SetMaxRows(s.cfg.MaxRows)
+	if cfg.MaxRows > 0 {
+		sess.SetMaxRows(cfg.MaxRows)
 	}
-	if s.cfg.MaxPreparedStmts > 0 {
-		sess.SetMaxPreparedStatements(s.cfg.MaxPreparedStmts)
+	if cfg.MaxPreparedStmts > 0 {
+		sess.SetMaxPreparedStatements(cfg.MaxPreparedStmts)
 	}
-	if s.cfg.ResultCacheSize > 0 {
-		sess.SetResultCacheConfig(s.cfg.ResultCacheSize, s.cfg.ResultCacheTTLSec)
+	if cfg.ResultCacheSize > 0 {
+		sess.SetResultCacheConfig(cfg.ResultCacheSize, cfg.ResultCacheTTLSec)
+	}
+	if cfg.AuditTable != nil {
+		sess.AuditTable = cfg.AuditTable
 	}
 	return sess
 }
@@ -87,14 +95,18 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Params) > 0 {
-		query = applyParams(query, req.Params)
-	}
-
 	stmt, err := parser.Parse(query)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, errCodeParseError, err.Error())
 		return
+	}
+
+	if len(req.Params) > 0 {
+		stmt, err = bindHTTPParams(stmt, req.Params)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errCodeBadRequest, err.Error())
+			return
+		}
 	}
 
 	_, isTx := stmt.(*parser.BeginStatement)
@@ -123,7 +135,17 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 				"session_id is required for COMMIT/ROLLBACK")
 			return
 		}
-		session = s.newSession()
+		var poolErr error
+		session, poolErr = s.sessionPool.Get()
+		if poolErr != nil {
+			writeError(w, http.StatusServiceUnavailable, errCodeInternal,
+				"session pool exhausted, try again later")
+			return
+		}
+		// Apply config settings to pooled session
+		if s.cfg.MaxRows > 0 {
+			session.SetMaxRows(s.cfg.MaxRows)
+		}
 		if req.Database != "" {
 			session.SetCurrentDatabase(req.Database)
 		}
@@ -138,7 +160,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if !ephemeral {
 			s.sessions.remove(sessionID)
 		} else {
-			session.Close()
+			s.sessionPool.Put(session)
 		}
 		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
@@ -157,7 +179,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	} else if isCommit || isRollback {
 		s.sessions.remove(sessionID)
 	} else if ephemeral {
-		session.Close()
+		s.sessionPool.Put(session)
 	}
 
 	response := map[string]interface{}{
@@ -270,10 +292,6 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if len(q.Params) > 0 {
-			query = applyParams(query, q.Params)
-		}
-
 		stmt, err := parser.Parse(query)
 		if err != nil {
 			results = append(results, BatchResponseResult{
@@ -281,6 +299,17 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 				Error:  err.Error(),
 			})
 			continue
+		}
+
+		if len(q.Params) > 0 {
+			stmt, err = bindHTTPParams(stmt, q.Params)
+			if err != nil {
+				results = append(results, BatchResponseResult{
+					Status: "error",
+					Error:  err.Error(),
+				})
+				continue
+			}
 		}
 
 		switch stmt.(type) {
@@ -292,7 +321,14 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		session := s.newSession()
+		session, poolErr := s.sessionPool.Get()
+		if poolErr != nil {
+			results = append(results, BatchResponseResult{
+				Status: "error",
+				Error:  "session pool exhausted",
+			})
+			continue
+		}
 		if req.Database != "" {
 			session.SetCurrentDatabase(req.Database)
 		}
@@ -300,7 +336,7 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		result, err := session.Execute(stmt)
 		duration := time.Since(start).Milliseconds()
-		session.Close()
+		s.sessionPool.Put(session)
 
 		if err != nil {
 			results = append(results, BatchResponseResult{
@@ -460,6 +496,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status": "pass",
 	}
 
+	poolStats := s.sessionPool.Stats()
+	checks["session_pool"] = map[string]interface{}{
+		"status": "pass",
+		"active": poolStats.Active,
+		"idle":   poolStats.Idle,
+		"max":    poolStats.Max,
+	}
+
 	if s.cfg.Auth == nil || !s.cfg.Auth.Enabled() || s.cfg.Auth.ValidateToken(extractHealthToken(r)) {
 		uptime := int(time.Since(s.startedAt).Seconds())
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -581,7 +625,7 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	sub := s.br.NewSubscription(fmt.Sprintf("sub-%d", s.nextSubID.Add(1)), selectStmt, db, s.cfg.Storage.CurrentTxID())
+	sub := s.br.NewSubscription(fmt.Sprintf("sub-%s", protocol.GenerateRequestID()), selectStmt, db, s.cfg.Storage.CurrentTxID())
 	send := sub.Send
 
 	s.br.Subscribe(sub)
@@ -595,8 +639,12 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), maxDuration)
 	defer cancel()
 
-	sess := s.newSession()
-	defer sess.Close()
+	sess, poolErr := s.sessionPool.Get()
+	if poolErr != nil {
+		http.Error(w, "session pool exhausted", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.sessionPool.Put(sess)
 	if db != "" {
 		sess.SetCurrentDatabase(db)
 	}
@@ -730,8 +778,12 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 	}
 
 	stmt := &parser.SelectStatement{TableName: tableName, Where: where}
-	sess := s.newSession()
-	defer sess.Close()
+	sess, poolErr := s.sessionPool.Get()
+	if poolErr != nil {
+		writeError(w, http.StatusServiceUnavailable, errCodeInternal, "session pool exhausted")
+		return
+	}
+	defer s.sessionPool.Put(sess)
 	sess.SetCurrentDatabase(dbName)
 	res, err := sess.Execute(stmt)
 	if err != nil {
@@ -860,7 +912,13 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 				"session_id is required for COMMIT/ROLLBACK")
 			return
 		}
-		session = s.newSession()
+		var poolErr error
+		session, poolErr = s.sessionPool.Get()
+		if poolErr != nil {
+			writeError(w, http.StatusServiceUnavailable, errCodeInternal,
+				"session pool exhausted, try again later")
+			return
+		}
 		if req.Database != "" {
 			session.SetCurrentDatabase(req.Database)
 		}
@@ -882,7 +940,7 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 		if !ephemeral {
 			s.sessions.remove(sessionID)
 		} else {
-			session.Close()
+			s.sessionPool.Put(session)
 		}
 		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
 		return
@@ -901,7 +959,7 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 	} else if isCommit || isRollback {
 		s.sessions.remove(sessionID)
 	} else if ephemeral {
-		session.Close()
+		s.sessionPool.Put(session)
 	}
 
 	type sseMsg struct {
@@ -966,16 +1024,28 @@ func parseHTTPRowValue(v interface{}) storage.Value {
 	}
 }
 
-func isNumeric(s string) bool {
-	if len(s) == 0 {
-		return false
+func convertHTTPParam(val string) parser.Value {
+	if i, err := strconv.ParseInt(val, 10, 64); err == nil {
+		return parser.Value{Type: "int", IntVal: i}
 	}
-	// Don't treat +7999 as numeric — SQL doesn't accept +prefix literals
-	if s[0] == '+' {
-		return false
+	if f, err := strconv.ParseFloat(val, 64); err == nil {
+		return parser.Value{Type: "float", FltVal: f}
 	}
-	_, err := strconv.ParseFloat(s, 64)
-	return err == nil
+	if val == "true" {
+		return parser.Value{Type: "bool", BoolVal: true}
+	}
+	if val == "false" {
+		return parser.Value{Type: "bool", BoolVal: false}
+	}
+	return parser.Value{Type: "string", StrVal: val}
+}
+
+func bindHTTPParams(stmt parser.Statement, params []string) (parser.Statement, error) {
+	values := make([]parser.Value, len(params))
+	for i, p := range params {
+		values[i] = convertHTTPParam(p)
+	}
+	return executor.BindParams(stmt, values)
 }
 
 func convertRowValue(value string, colType string) interface{} {
@@ -1032,69 +1102,40 @@ func generateSessionID() string {
 	return fmt.Sprintf("%x", b)
 }
 
-func applyParams(query string, params []string) string {
-	var buf strings.Builder
-	inString := false
-	quoteChar := byte(0)
-	escaped := false
-
-	for i := 0; i < len(query); i++ {
-		c := query[i]
-
-		if escaped {
-			buf.WriteByte(c)
-			escaped = false
-			continue
+func (s *Server) handleHandshake(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
+	var req protocol.HandshakeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err.Error() == "http: request body too large" {
+			writeError(w, http.StatusRequestEntityTooLarge, errCodeBadRequest, "request body too large")
+			return
 		}
-
-		if c == '\\' && inString {
-			buf.WriteByte(c)
-			escaped = true
-			continue
-		}
-
-		if inString {
-			buf.WriteByte(c)
-			if c == quoteChar {
-				inString = false
-			}
-			continue
-		}
-
-		if c == '\'' || c == '"' {
-			inString = true
-			quoteChar = c
-			buf.WriteByte(c)
-			continue
-		}
-
-		if c == '$' && i+1 < len(query) {
-			j := i + 1
-			for j < len(query) && query[j] >= '0' && query[j] <= '9' {
-				j++
-			}
-			if j > i+1 {
-				numStr := query[i+1 : j]
-				idx, err := strconv.Atoi(numStr)
-				if err == nil && idx >= 1 && idx <= len(params) {
-					val := params[idx-1]
-					if isNumeric(val) {
-						buf.WriteString(val)
-					} else {
-						val = strings.ReplaceAll(val, `\`, `\\`)
-						val = strings.ReplaceAll(val, "'", "\\'")
-						buf.WriteByte('\'')
-						buf.WriteString(val)
-						buf.WriteByte('\'')
-					}
-					i = j - 1
-					continue
-				}
-			}
-		}
-
-		buf.WriteByte(c)
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, "invalid JSON body")
+		return
 	}
 
-	return buf.String()
+	if err := protocol.ValidateHandshakeRequest(req); err != nil {
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, err.Error())
+		return
+	}
+
+	if err := protocol.CheckVersionCompatibility(req.ClientVersion); err != nil {
+		writeError(w, http.StatusBadRequest, errCodeBadRequest, err.Error())
+		return
+	}
+
+	if err := protocol.ValidateNonce(req.Nonce, req.NonceTimestamp); err != nil {
+		writeError(w, http.StatusUnauthorized, errCodeBadRequest, err.Error())
+		return
+	}
+
+	resp := protocol.HandshakeResponse{
+		Type:              "handshake",
+		ProtocolVersion:   protocol.ProtocolV2,
+		Server:            protocol.ServerName,
+		ServerVersion:     s.cfg.Version,
+		SupportedFeatures: protocol.ServerFeatures(),
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }

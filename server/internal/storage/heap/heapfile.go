@@ -3,12 +3,14 @@
 package heap
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 
+	"vaultdb/internal/crypto"
 	"vaultdb/internal/storage/page"
 )
 
@@ -23,6 +25,10 @@ type HeapFile struct {
 	mu       sync.RWMutex
 	segments []*os.File
 	closed   bool
+
+	// Cached page count — avoids repeated Stat() calls on every segment.
+	cachedPageCount uint32
+	pageCountValid  bool
 }
 
 func segmentName(segNo uint16) string {
@@ -39,7 +45,7 @@ func CreateHeapFile(dir string) (*HeapFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &HeapFile{dir: dir, segments: []*os.File{f}}, nil
+	return &HeapFile{dir: dir, segments: []*os.File{f}, cachedPageCount: 0, pageCountValid: true}, nil
 }
 
 // OpenHeapFile opens an existing heap file (all consecutive segments).
@@ -83,6 +89,55 @@ func (hf *HeapFile) Close() error {
 	return firstErr
 }
 
+// ReadPageAhead reads `ahead` consecutive pages starting at pid in parallel.
+// Pages beyond the heap boundary are silently dropped. Returns the pages that
+// were successfully read (length ≤ ahead) and the first error encountered.
+func (hf *HeapFile) ReadPageAhead(pid page.PageID, ahead int) ([]*page.Page, error) {
+	if ahead <= 0 {
+		return nil, nil
+	}
+
+	total, err := hf.PageCount()
+	if err != nil {
+		return nil, err
+	}
+
+	// Clamp `ahead` to what actually exists starting from pid.
+	if int(pid.PageNo)+ahead > int(total) {
+		ahead = int(total) - int(pid.PageNo)
+	}
+	if ahead <= 0 {
+		return nil, nil
+	}
+
+	pages := make([]*page.Page, ahead)
+	errs := make([]error, ahead)
+	var wg sync.WaitGroup
+
+	for i := 0; i < ahead; i++ {
+		nextPid := page.PageID{
+			TableID:   pid.TableID,
+			SegmentNo: pid.SegmentNo,
+			PageNo:    pid.PageNo + uint32(i),
+		}
+		pages[i] = &page.Page{}
+		wg.Add(1)
+		go func(p *page.Page, idx int) {
+			defer wg.Done()
+			errs[idx] = hf.ReadPage(nextPid, p)
+		}(pages[i], i)
+	}
+	wg.Wait()
+
+	// Return partial results up to the first error.
+	for i, e := range errs {
+		if e != nil {
+			return pages[:i], e
+		}
+	}
+	return pages, nil
+}
+
 // ReadPage reads a page from disk into buf and verifies its checksum.
 func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
 	hf.mu.RLock()
@@ -108,6 +163,59 @@ func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
 	return nil
 }
 
+// ReadPageEncrypted reads a page from disk into buf, decrypting if necessary.
+// If em is nil, the page is read as plaintext (same as ReadPage).
+func (hf *HeapFile) ReadPageEncrypted(pid page.PageID, buf *page.Page, em *crypto.EncryptionManager) error {
+	hf.mu.RLock()
+	if hf.closed {
+		hf.mu.RUnlock()
+		return errors.New("heap file is closed")
+	}
+	if int(pid.SegmentNo) >= len(hf.segments) {
+		hf.mu.RUnlock()
+		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
+	}
+	seg := hf.segments[pid.SegmentNo]
+	hf.mu.RUnlock()
+
+	if em == nil {
+		if _, err := seg.ReadAt(buf[:], pid.FileOffset()); err != nil {
+			return fmt.Errorf("readpage %v: %w", pid, err)
+		}
+		if !buf.VerifyChecksum() {
+			return fmt.Errorf("page %v: stored=%d computed=%d: %w",
+				pid, buf.Header().Checksum, buf.ComputeChecksum(), ErrChecksumMismatch)
+		}
+		return nil
+	}
+
+	raw := make([]byte, page.EncryptedOnDiskPageSize)
+	if _, err := seg.ReadAt(raw, pid.EncryptedFileOffset()); err != nil {
+		return fmt.Errorf("readpage encrypted %v: %w", pid, err)
+	}
+
+	if !page.IsEncryptedPage(raw) {
+		return fmt.Errorf("page %v: expected encrypted page, got unencrypted or corrupt data", pid)
+	}
+	hdr, err := page.ParseEncryptedHeader(raw)
+	if err != nil {
+		return err
+	}
+	ciphertext := raw[page.EncryptedPageHeaderSize:]
+
+	plaintext, err := em.DecryptPage(hdr.Nonce[:], ciphertext, pid.Bytes(), hdr.KeyVersion)
+	if err != nil {
+		return fmt.Errorf("decrypt page %v: %w", pid, err)
+	}
+	copy(buf[:], plaintext)
+
+	if !buf.VerifyChecksum() {
+		return fmt.Errorf("page %v: stored=%d computed=%d: %w",
+			pid, buf.Header().Checksum, buf.ComputeChecksum(), ErrChecksumMismatch)
+	}
+	return nil
+}
+
 // WritePage computes the page checksum and writes the page to disk.
 // It does NOT fsync — durability ordering is the WAL's responsibility.
 func (hf *HeapFile) WritePage(pid page.PageID, buf *page.Page) error {
@@ -125,6 +233,43 @@ func (hf *HeapFile) WritePage(pid page.PageID, buf *page.Page) error {
 
 	buf.SetChecksum()
 	_, err := seg.WriteAt(buf[:], pid.FileOffset())
+	return err
+}
+
+// WritePageEncrypted encrypts the page and writes it to disk. If em is nil,
+// the page is written in plaintext (same as WritePage).
+func (hf *HeapFile) WritePageEncrypted(pid page.PageID, buf *page.Page, em *crypto.EncryptionManager) error {
+	hf.mu.RLock()
+	if hf.closed {
+		hf.mu.RUnlock()
+		return errors.New("heap file is closed")
+	}
+	if int(pid.SegmentNo) >= len(hf.segments) {
+		hf.mu.RUnlock()
+		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
+	}
+	seg := hf.segments[pid.SegmentNo]
+	hf.mu.RUnlock()
+
+	if em == nil {
+		buf.SetChecksum()
+		_, err := seg.WriteAt(buf[:], pid.FileOffset())
+		return err
+	}
+
+	buf.SetChecksum()
+	nonce, ciphertext, err := em.EncryptPage(buf[:], pid.Bytes())
+	if err != nil {
+		return fmt.Errorf("encrypt page: %w", err)
+	}
+
+	out := make([]byte, page.EncryptedOnDiskPageSize)
+	copy(out[0:4], []byte(page.EncryptedPageMagic))
+	binary.LittleEndian.PutUint32(out[4:8], em.KeyVersion())
+	copy(out[8:20], nonce)
+	copy(out[20:], ciphertext)
+
+	_, err = seg.WriteAt(out, pid.EncryptedFileOffset())
 	return err
 }
 
@@ -173,13 +318,30 @@ func (hf *HeapFile) AllocatePage(pageType uint8) (page.PageID, *page.Page, error
 	if _, err := seg.WriteAt(buf[:], pid.FileOffset()); err != nil {
 		return page.PageID{}, nil, err
 	}
+
+	// Invalidate cached page count since we just added a page.
+	hf.pageCountValid = false
+
 	return pid, buf, nil
 }
 
 // PageCount returns the total number of pages across all segments.
 func (hf *HeapFile) PageCount() (uint32, error) {
 	hf.mu.RLock()
-	defer hf.mu.RUnlock()
+	if hf.pageCountValid {
+		count := hf.cachedPageCount
+		hf.mu.RUnlock()
+		return count, nil
+	}
+	hf.mu.RUnlock()
+
+	hf.mu.Lock()
+	defer hf.mu.Unlock()
+
+	// Double-check after acquiring write lock
+	if hf.pageCountValid {
+		return hf.cachedPageCount, nil
+	}
 	if hf.closed {
 		return 0, errors.New("heap file is closed")
 	}
@@ -194,7 +356,18 @@ func (hf *HeapFile) PageCount() (uint32, error) {
 	if total > 0xFFFFFFFF {
 		return 0, fmt.Errorf("total page count exceeds uint32 range: %d", total)
 	}
-	return uint32(total), nil
+	hf.cachedPageCount = uint32(total)
+	hf.pageCountValid = true
+	return hf.cachedPageCount, nil
+}
+
+// InvalidatePageCount marks the cached page count as stale so the next
+// PageCount() call recomputes from disk. Must be called after AllocatePage
+// or any operation that changes the on-disk page count.
+func (hf *HeapFile) InvalidatePageCount() {
+	hf.mu.Lock()
+	defer hf.mu.Unlock()
+	hf.pageCountValid = false
 }
 
 // SegmentCount returns the number of segment files.

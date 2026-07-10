@@ -158,11 +158,35 @@ func (p *sqlParser) parseReleaseSavepoint() (Statement, error) {
 func (p *sqlParser) parseSelect() (Statement, error) {
 	p.advance() // SELECT
 
-	// Check for DISTINCT
+	// Check for DISTINCT [ON (...)]
 	distinct := false
+	var distinctOn []Expression
 	if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "DISTINCT" {
 		distinct = true
 		p.advance()
+
+		// Check for DISTINCT ON (expr, ...)
+		if p.current().Type == lexer.TOKEN_ON {
+			p.advance()
+			if err := p.consume(lexer.TOKEN_LPAREN, "'(' after DISTINCT ON"); err != nil {
+				return nil, err
+			}
+			for {
+				expr, err := p.parseExpression()
+				if err != nil {
+					return nil, err
+				}
+				distinctOn = append(distinctOn, expr)
+				if p.current().Type == lexer.TOKEN_COMMA {
+					p.advance()
+					continue
+				}
+				break
+			}
+			if err := p.consume(lexer.TOKEN_RPAREN, "')' after DISTINCT ON columns"); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	columns := make([]SelectColumn, 0, 8)
@@ -210,22 +234,29 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 			isLateral = true
 		}
 		if p.current().Type == lexer.TOKEN_LPAREN || isLateral {
+			if err := p.checkDepth(); err != nil {
+				return nil, err
+			}
 			if p.current().Type == lexer.TOKEN_LPAREN {
 				p.advance() // consume '('
 			}
 			stmt, err := p.parseSelect()
 			if err != nil {
+				p.exitDepth()
 				return nil, fmt.Errorf("derived table: %w", err)
 			}
 			sub, ok := stmt.(*SelectStatement)
 			if !ok {
+				p.exitDepth()
 				return nil, fmt.Errorf("derived table: expected SELECT statement")
 			}
 			if !isLateral {
 				if err := p.consume(lexer.TOKEN_RPAREN, ")"); err != nil {
+					p.exitDepth()
 					return nil, err
 				}
 			}
+			p.exitDepth()
 			fromSubquery = sub
 			if isLateral {
 				sub.IsLateral = true
@@ -444,6 +475,7 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 		CountAll:     false,
 		AsOf:         asOf,
 		Distinct:     distinct,
+		DistinctOn:   distinctOn,
 	}
 
 	if p.current().Type == lexer.TOKEN_LIMIT {

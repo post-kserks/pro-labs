@@ -28,10 +28,13 @@ func ensureColumnIndex(ctx *ExecutionContext, schema *storage.TableSchema) {
 	ctx.ColumnIndex = buildColumnIndex(schema)
 }
 
-// resolveColumn находит значение столбца по имени в строке данных.
+// resolveColumn finds a column value by name in a data row.
 // When columnIndex is non-nil, unqualified lookups use the O(1) cache first,
 // falling back to linear scan only for qualified (table.column) names.
 func resolveColumn(row storage.Row, schema *storage.TableSchema, name string, columnIndex map[string]int) (interface{}, error) {
+	if schema == nil {
+		return nil, fmt.Errorf("column %q: no schema available", name)
+	}
 	// Fast path: use cached index for unqualified names.
 	if columnIndex != nil && !strings.Contains(name, ".") {
 		if idx, ok := columnIndex[strings.ToLower(name)]; ok && idx < len(row) {
@@ -58,7 +61,7 @@ func resolveColumn(row storage.Row, schema *storage.TableSchema, name string, co
 	return nil, fmt.Errorf("unknown column '%s'", name)
 }
 
-// inferTypeFromExpr определяет тип выражения по схеме.
+// inferTypeFromExpr determines expression type from schema.
 func inferTypeFromExpr(expr parser.Expression, schema *storage.TableSchema) string {
 	if expr == nil {
 		return "TEXT"
@@ -98,7 +101,7 @@ func inferTypeFromExpr(expr parser.Expression, schema *storage.TableSchema) stri
 	return "TEXT"
 }
 
-// parserValueToRaw преобразует parser.Value в raw Go value.
+// parserValueToRaw converts parser.Value to a raw Go value.
 func parserValueToRaw(value parser.Value) interface{} {
 	switch value.Type {
 	case "int":
@@ -116,7 +119,7 @@ func parserValueToRaw(value parser.Value) interface{} {
 	}
 }
 
-// toFloat преобразует значение в float64.
+// toFloat converts a value to float64.
 func toFloat(value interface{}) (float64, bool) {
 	switch v := value.(type) {
 	case int:
@@ -138,7 +141,7 @@ func toFloat(value interface{}) (float64, bool) {
 	}
 }
 
-// toInt64 преобразует значение в int64.
+// toInt64 converts a value to int64.
 func toInt64(value interface{}) (int64, bool) {
 	switch v := value.(type) {
 	case int:
@@ -155,7 +158,7 @@ func toInt64(value interface{}) (int64, bool) {
 	}
 }
 
-// initcap делает первую букву каждого слова заглавной.
+// initcap capitalizes the first letter of each word.
 func initcap(s string) string {
 	words := strings.Fields(s)
 	for i, w := range words {

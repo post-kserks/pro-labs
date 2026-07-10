@@ -33,6 +33,16 @@ storage:
   data_dir: "./data"
   result_cache_size: 256
   result_cache_ttl_seconds: 30
+  buffer_pool_pages: 16384  # 128 MB (default)
+  # For large deployments:
+  # buffer_pool_pages: 65536  # 512 MB
+
+tls:
+  enabled: false
+  cert_file: ""
+  key_file: ""
+  min_version: "1.2"             # "1.2" or "1.3"
+  enforce: false                 # reject non-TLS connections when true
 
 auth:
   enabled: true
@@ -41,6 +51,16 @@ auth:
   rate_window_seconds: 60
   max_fails: 10
   block_for_seconds: 300
+
+encryption:
+  enabled: false
+  key_source: "passphrase"       # passphrase | os_keychain | kms
+  default_scope: "all"           # all | tables_only | off
+  encrypt_catalog: false
+  encrypt_wal: true
+
+# WASM UDF functions are configured via SQL, not YAML.
+# Memory limits and timeouts are per-function.
 
 ai:
   provider: ""
@@ -192,6 +212,45 @@ ai:
 - **Default**: `30`
 - **Description**: Time-to-live for cached query results in seconds.
 
+### `storage.buffer_pool_pages`
+
+- **Type**: integer
+- **Default**: `16384` (128 MB)
+- **Description**: Number of 8KB pages in the buffer pool. Increase for large datasets (e.g., `65536` for 512 MB).
+
+## TLS Options
+
+### `tls.enabled`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable TLS encryption for TCP and HTTP connections. Requires `cert_file` and `key_file`.
+
+### `tls.cert_file`
+
+- **Type**: string
+- **Default**: `""`
+- **Description**: Path to the TLS certificate file (PEM format).
+
+### `tls.key_file`
+
+- **Type**: string
+- **Default**: `""`
+- **Description**: Path to the TLS private key file (PEM format).
+
+### `tls.min_version`
+
+- **Type**: string
+- **Default**: `"1.2"`
+- **Options**: `"1.2"`, `"1.3"`
+- **Description**: Minimum TLS protocol version. `"1.2"` allows TLS 1.2+; `"1.3"` requires TLS 1.3 only. Cipher suites are restricted to ECDHE+AES-GCM regardless of version.
+
+### `tls.enforce`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: When `true`, the server rejects all non-TLS connections. Produces an error at startup if TLS is not configured (`tls.enabled: false`).
+
 ## Authentication Options
 
 ### `auth.enabled`
@@ -229,6 +288,59 @@ ai:
 - **Type**: integer
 - **Default**: `300`
 - **Description**: Duration of IP block after exceeding `max_fails`.
+
+## Encryption Options
+
+### `encryption.enabled`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable Transparent Data Encryption (TDE). When enabled, all data pages and WAL are encrypted with AES-256-GCM.
+
+### `encryption.key_source`
+
+- **Type**: string
+- **Default**: `"passphrase"`
+- **Options**: `"passphrase"`, `"os_keychain"`, `"kms"`
+- **Description**: Source of the Key Encryption Key (KEK). `passphrase` derives KEK from password via Argon2id. `os_keychain` uses system keychain (macOS/Linux/Windows). `kms` uses external KMS (AWS/Vault/Azure).
+
+### `encryption.default_scope`
+
+- **Type**: string
+- **Default**: `"all"`
+- **Options**: `"all"`, `"tables_only"`, `"off"`
+- **Description**: Default encryption scope for new databases. `all` encrypts everything, `tables_only` encrypts only table data, `off` disables encryption.
+
+### `encryption.encrypt_catalog`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Whether to encrypt table/column names in the catalog. When false, schema is readable without the key (useful for recovery).
+
+### `encryption.encrypt_wal`
+
+- **Type**: boolean
+- **Default**: `true`
+- **Description**: Whether to encrypt WAL records. Should be `true` when `encryption.enabled` is `true`.
+
+## RBAC Roles
+
+VaultDB includes built-in role-based access control. Tokens are assigned roles at registration time.
+
+| Role | Permissions |
+|------|-------------|
+| `admin` | All operations (`*`) |
+| `writer` | SELECT, INSERT, UPDATE, DELETE, CREATE/DROP TABLE, CREATE/DROP INDEX, COPY FROM/TO, CREATE/DROP VIEW, CREATE/DROP TRIGGER, ALTER TABLE, TRUNCATE, MERGE |
+| `reader` | SELECT, EXPLAIN |
+
+Roles are assigned when tokens are registered:
+
+```bash
+# Token format: token:label:role (role defaults to "admin" if omitted)
+export VAULTDB_API_TOKENS="token1:label1:admin,token2:label2:writer,token3:label3:reader"
+```
+
+> **Note:** Roles can be managed via SQL (CREATE ROLE, DROP ROLE, GRANT, REVOKE) and stored in system.roles table. Built-in roles (admin, writer, reader) are available by default.
 
 ## AI Options
 
@@ -283,6 +395,7 @@ ai:
 | `-tls-cert` | (none) | — | TLS certificate file |
 | `-tls-key` | (none) | — | TLS private key file |
 | `-tls-ca` | (none) | `auth.mtls_ca_file` | CA file for mTLS |
+| `-tls-enforce` | `false` | `tls.enforce` | Reject non-TLS connections |
 
 ## Environment Variables
 
@@ -300,6 +413,16 @@ ai:
 | `VAULTDB_MTLS_ENABLED` | `auth.mtls_enabled` | Enable mTLS |
 | `VAULTDB_MTLS_CA_FILE` | `auth.mtls_ca_file` | CA file for mTLS |
 | `VAULTDB_AI_API_KEY` | `ai.api_key` | AI embedding API key |
+| `VAULTDB_ENCRYPTION_PASSPHRASE` | `encryption.key_source` | Passphrase for TDE encryption (when using `passphrase` key source) |
+
+## Hard Limits (Not Configurable)
+
+| Limit | Value | Description |
+|-------|-------|-------------|
+| COPY row limit | 1,000,000 | Maximum rows per `COPY FROM` import |
+| Parser depth | 32 | Maximum nested subquery/EXISTS depth |
+| Segment size | 65,536 pages | Pages per heap file segment (512 MB) |
+| Object name length | 128 chars | Max length for database/table names |
 
 ## Validation Rules
 
@@ -310,3 +433,5 @@ ai:
 - `engine` must be `page` or `json`.
 - `storage.data_dir` must not be empty.
 - When `auth.enabled` is `true`, `VAULTDB_AUTH_SECRET` must be set.
+- When `tls.enforce` is `true`, `tls.enabled` must also be `true`.
+- `tls.min_version` must be `"1.2"` or `"1.3"` (or empty).

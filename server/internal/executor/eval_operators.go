@@ -5,7 +5,7 @@ import (
 	"math"
 )
 
-// compareValues сравнивает два значения по оператору.
+// compareValues compares two values using an operator.
 func compareValues(left, right interface{}, op string) (bool, error) {
 	if left == nil || right == nil {
 		switch op {
@@ -51,7 +51,7 @@ func compareValues(left, right interface{}, op string) (bool, error) {
 	}
 }
 
-// CompareValues возвращает -1 если a < b, 1 если a > b, 0 если a == b.
+// CompareValues returns -1 if a < b, 1 if a > b, 0 if a == b.
 func CompareValues(a, b interface{}) int {
 	if a == nil && b == nil {
 		return 0
@@ -122,7 +122,7 @@ func compareOrdered[T ~float64 | ~string](left, right T, op string) (bool, error
 	}
 }
 
-// evalArithmetic выполняет арифметические операции.
+// evalArithmetic performs arithmetic operations.
 func evalArithmetic(left, right interface{}, op string) (interface{}, error) {
 	if left == nil || right == nil {
 		return nil, nil

@@ -44,10 +44,50 @@ auth:
   block_for_seconds: 300  # Block duration (5 minutes)
 ```
 
+### Token Revocation
+
+Tokens can be revoked at runtime via the HTTP admin endpoint:
+
+```bash
+curl -X POST http://localhost:8080/admin/revoke-token \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{"token": "vdb_sk_token_to_revoke"}'
+```
+
+**Behavior:**
+- Revoked tokens are rejected immediately on all subsequent requests
+- Revocation entries are cleaned up after 24 hours (revoked token data expires)
+- Revocation is checked on every request (both TCP and HTTP)
+- Revoked entries are tracked by HMAC hash, not raw token
+
+### RBAC Roles
+
+VaultDB includes built-in role-based access control:
+
+| Role | Permissions |
+|------|-------------|
+| `admin` | All operations (`*`) |
+| `writer` | SELECT, INSERT, UPDATE, DELETE, CREATE/DROP TABLE, CREATE/DROP INDEX, COPY FROM/TO, CREATE/DROP VIEW, CREATE/DROP TRIGGER, ALTER TABLE, TRUNCATE, MERGE |
+| `reader` | SELECT, EXPLAIN |
+
+Tokens are assigned roles at registration:
+
+```bash
+# Format: token:label:role
+export VAULTDB_API_TOKENS="admin-token:ops:admin,app-token:myapp:writer,reader-token:mon:reader"
+```
+
+> **Note:** Roles are currently hardcoded and cannot be customized via configuration.
+
 ### Bypass Rules
 
 - When `auth.enabled: false`, all requests pass through
-- **Localhost always bypasses auth** (`127.0.0.1`, `::1`, `localhost`)
+- **Monitor port (5433)**: `/health` and `/ready` endpoints do not require authentication
+- **HTTP API (8080)**: All endpoints require authentication, including requests from localhost
+- **TCP protocol (5432)**: Authentication is required for all connections
+
+> **Note:** For local development, set `auth.enabled: false` or use the auto-generated token from `{data_dir}/.generated-token`.
 
 ## TLS Encryption
 
@@ -61,10 +101,21 @@ vaultdb-server \
   --tls-key server.key
 ```
 
+Or via configuration:
+
+```yaml
+tls:
+  enabled: true
+  cert_file: /path/to/server.crt
+  key_file: /path/to/server.key
+  min_version: "1.2"   # "1.2" or "1.3"
+  enforce: true         # reject non-TLS connections
+```
+
 **Enforced settings**:
-- Minimum TLS 1.2
+- Minimum TLS 1.2 (configurable to 1.3 via `min_version`)
 - Curve preferences: X25519, P-256
-- Cipher suites: ECDHE+AES-GCM only
+- Cipher suites: ECDHE+AES-GCM only (TLS_ECDHE_ECDSA/RSA_WITH_AES_128/256_GCM_SHA256/384)
 
 ### Mutual TLS (mTLS)
 
@@ -164,6 +215,39 @@ Policies are stored in the table's `_schema.json`:
 }
 ```
 
+## Transparent Data Encryption (TDE)
+
+VaultDB supports page-level encryption using AES-256-GCM.
+
+### Enabling TDE
+
+```yaml
+# vaultdb.yaml
+encryption:
+  enabled: true
+  key_source: "passphrase"
+```
+
+### Key Management
+
+- **Envelope Encryption**: KEK (Key Encryption Key) encrypts DEK (Data Encryption Key)
+- **Passphrase**: Key derived via Argon2id (64MB memory, 3 iterations)
+- **OS Keychain**: macOS Keychain, Linux libsecret, Windows DPAPI
+- **KMS**: AWS KMS, HashiCorp Vault, Azure Key Vault
+- **Key Rotation**: KEK rotation is instant (<1 second), DEK rotation is online
+
+### Security Properties
+
+- Pages are encrypted with AES-256-GCM (authenticated encryption)
+- Each page has unique nonce preventing replay attacks
+- PageID is bound as AAD preventing page swap attacks
+- WAL is also encrypted to prevent data leakage through journal
+
+### Performance
+
+- With AES-NI: ~17% overhead on INSERT/SELECT
+- Without AES-NI: 300-500% overhead (warning logged)
+
 ## Network Security
 
 ### Port Separation
@@ -191,6 +275,107 @@ HTTP responses include:
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
 - `Content-Security-Policy: default-src 'self'`
+
+## Audit Logging
+
+VaultDB includes a built-in audit log with hash-chain integrity verification.
+
+### System Table
+
+The audit log is stored in the `vaultdb_audit_log` system table:
+
+```sql
+SELECT * FROM vaultdb_audit_log
+WHERE actor = 'admin@company.com'
+  AND action = 'ALTER TABLE'
+ORDER BY occurred_at DESC
+LIMIT 50;
+```
+
+### Hash-Chain Integrity
+
+Each audit entry contains a SHA-256 hash of the previous entry, forming an immutable chain:
+
+```sql
+VERIFY AUDIT LOG;
+-- Output: "Audit chain intact: 48392 entries verified, no tampering detected."
+```
+
+### What Gets Logged
+
+| Event | Logged |
+|-------|--------|
+| CREATE/DROP DATABASE | Yes |
+| CREATE/ALTER/DROP TABLE | Yes |
+| CREATE/DROP INDEX | Yes |
+| CREATE/DROP VIEW | Yes |
+| CREATE/DROP TRIGGER | Yes |
+| RLS policy changes | Yes |
+| Encryption key rotation | Yes |
+| Authentication success/failure | Yes |
+| Token revocation | Yes |
+| SELECT/INSERT/UPDATE/DELETE | Optional (configurable per table) |
+
+### RLS on Audit Log
+
+Row-level security can be applied to the audit log table itself:
+
+```sql
+ALTER TABLE vaultdb_audit_log ENABLE ROW LEVEL SECURITY;
+CREATE POLICY audit_admin ON vaultdb_audit_log
+    FOR ALL TO admin_role
+    USING (true);
+```
+
+## SQL Injection Protection
+
+VaultDB validates SQL at multiple layers to prevent injection:
+
+- **Migrations validated at CREATE time** — structural analysis before any execution
+- **Function bodies validated** — stored function bodies must be pure `SELECT` expressions
+- **Procedure bodies validated** — procedure bodies may only contain DML statements
+- **Trigger re-entrant guard** — triggers are limited to a maximum recursion depth of 3
+- **HTTP API parameter binding** — the HTTP API uses AST-level parameter binding, not string interpolation
+
+## WASM UDF Security
+
+WASM user-defined functions run in an isolated sandbox with the following protections:
+
+### Memory Limits
+
+- Default maximum memory: 256 pages (16 MB)
+- Configurable per-function via `WITH (MEMORY_LIMIT '256MB')`
+- `wazero` enforces memory limits at the WASM runtime level — modules cannot allocate beyond the limit
+
+### Export Validation
+
+Only whitelisted function exports are allowed:
+
+| Export | Purpose |
+|--------|---------|
+| `execute` | Main entry point (required) |
+| `alloc` | Memory allocation for arguments |
+| `execute_args` | Argument marshaling |
+| `result_len` | Query result length |
+| `result_copy` | Copy result to host memory |
+
+Any module exporting unknown functions is **rejected** during loading.
+
+### Additional Protections
+
+- **No WASI**: WASI is intentionally not instantiated — modules must be self-contained
+- **Timeout enforcement**: Default 30 seconds, configurable per-function via `WITH (TIMEOUT '5s')`
+- **Per-call isolation**: Each `execute` call instantiates a fresh module instance
+- **No host function access**: WASM modules cannot call host functions or access the filesystem
+
+## COPY Path Sandboxing
+
+`COPY FROM` enforces object name validation to prevent path traversal:
+
+- Database and table names must match `[a-zA-Z_][a-zA-Z0-9_]*`
+- Names cannot contain path separators (`/`, `\`), `..`, or null bytes
+- Maximum name length: 128 characters
+- Maximum rows per import: 1,000,000 (prevents memory exhaustion)
 
 ## Error Message Sanitization
 

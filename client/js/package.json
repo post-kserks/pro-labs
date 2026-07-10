@@ -1,0 +1,21 @@
+{
+  "name": "@vaultdb/client",
+  "version": "2.0.0",
+  "description": "VaultDB TCP client for Node.js (protocol v2)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "npx tsx --test tests/client.test.ts"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}

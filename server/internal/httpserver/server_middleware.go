@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"runtime/debug"
 	"strings"
 )
 
@@ -22,6 +24,8 @@ const (
 	errCodeCheckConstraint  = 3012
 	errCodeForeignKey       = 3013
 	errCodeQueryTimeout     = 3014
+	errCodeTLSEnforced      = 4001
+	errCodeTokenRequiresTLS = 4002
 	errCodeInternal         = 5000
 	errCodeNotImplemented   = 9999
 
@@ -204,3 +208,65 @@ h1 { color: #333; }
 </body>
 </html>
 `
+
+// withTLSEnforcement rejects non-TLS connections when TLS enforcement is enabled.
+func (s *Server) withTLSEnforcement(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.TLSEnforce && r.TLS == nil {
+			writeError(w, http.StatusBadRequest, errCodeTLSEnforced, "TLS required: this server requires HTTPS connections. Please use TLS to connect.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withRequireTLSForToken rejects requests containing auth tokens when TLS is not active.
+func (s *Server) withRequireTLSForToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.AuthRequireTLSForToken && r.TLS == nil {
+			authHeader := r.Header.Get("Authorization")
+			tokenHeader := r.Header.Get("X-VaultDB-Token")
+			if authHeader != "" || tokenHeader != "" {
+				writeError(w, http.StatusBadRequest, errCodeTokenRequiresTLS, "Auth tokens are not accepted over unencrypted connections. Use HTTPS.")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withHTTPRedirect automatically redirects HTTP requests to HTTPS when redirect_http is enabled.
+func (s *Server) withHTTPRedirect(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.TLSRedirectHTTP && r.TLS == nil {
+			target := &url.URL{
+				Scheme:   "https",
+				Host:     r.Host,
+				Path:     r.URL.Path,
+				RawQuery: r.URL.RawQuery,
+			}
+			http.Redirect(w, r, target.String(), http.StatusMovedPermanently)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withPanicRecovery wraps a handler to recover from panics, log the stack trace, and return 500.
+func withPanicRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				stack := debug.Stack()
+				slog.Error("panic recovered",
+					"error", rec,
+					"stack", string(stack),
+					"method", r.Method,
+					"path", r.URL.Path,
+				)
+				http.Error(w, `{"status":"error","error_code":5000,"message":"internal server error"}`, http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}

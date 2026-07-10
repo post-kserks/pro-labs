@@ -1,5 +1,7 @@
 # VaultDB Deployment Guide
 
+> **For production deployments** with GC tuning, Kubernetes manifests, and resource sizing, see the [Enterprise Deployment Guide](deployment-enterprise.md).
+
 ## Prerequisites
 
 - Docker 20.10+ (for container deployment)
@@ -83,7 +85,7 @@ make build
 ./run.sh
 
 # With custom config
-./run.sh 0.0.0.0 5432 8080 ./vaultdb.yaml
+./run.sh 0.0.0.0 5432 8080 5433
 ```
 
 ---
@@ -104,6 +106,13 @@ server:
   tcp_keepalive_sec: 30
   tcp_idle_timeout_sec: 300
   max_prepared_statements: 1000
+
+tls:
+  enabled: false
+  cert_file: ""
+  key_file: ""
+  min_version: "1.2"
+  enforce: false
 
 storage:
   engine: page
@@ -139,6 +148,9 @@ ai:
 | `VAULTDB_MTLS_ENABLED` | Enable mTLS | `false` |
 | `VAULTDB_MTLS_CA_FILE` | CA certificate path | — |
 | `VAULTDB_AI_API_KEY` | AI embedding API key | — |
+| `VAULTDB_TLS_ENABLED` | Enable TLS | `false` |
+| `VAULTDB_TLS_CERT_FILE` | TLS certificate path | — |
+| `VAULTDB_TLS_KEY_FILE` | TLS private key path | — |
 
 ---
 
@@ -152,6 +164,19 @@ VaultDB auto-generates self-signed certificates on first start. Set:
 auth:
   mtls_enabled: true
 ```
+
+### TLS Configuration
+
+```yaml
+tls:
+  enabled: true
+  cert_file: /path/to/server.crt
+  key_file: /path/to/server.key
+  min_version: "1.2"    # "1.2" or "1.3"
+  enforce: true          # reject non-TLS connections
+```
+
+> **Note:** `tls.enforce: true` requires `tls.enabled: true`. The server will refuse to start if enforcement is enabled without TLS certificates.
 
 ### Production TLS
 
@@ -313,3 +338,15 @@ VaultDB has built-in WAL checksums and torn-page protection. If corruption is de
 6. **Enable encryption at rest** — use filesystem-level encryption (LUKS, FileVault)
 7. **Monitor auth failures** — check metrics for brute force attempts
 8. **Keep updated** — run `govulncheck` regularly
+
+---
+
+## Enterprise Deployment
+
+For production deployments with tuning recommendations, see [Enterprise Deployment Guide](deployment-enterprise.md).
+
+Key topics:
+- GOGC/GOMEMLIMIT tuning
+- Resource sizing
+- Kubernetes deployment
+- Security checklist

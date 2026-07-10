@@ -49,7 +49,7 @@ func (o *Optimizer) reorderJoins(dbName string, plan *OptimizedPlan) {
 	}
 }
 
-// chooseJoinMethods выбирает лучший метод соединения для JOIN.
+// chooseJoinMethods selects the best join method for JOIN.
 func (o *Optimizer) chooseJoinMethods(dbName string, stmt *parser.SelectStatement) []JoinMethod {
 	methods := make([]JoinMethod, len(stmt.Joins))
 	for i, join := range stmt.Joins {

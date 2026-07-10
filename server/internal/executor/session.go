@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/audit"
+	"vaultdb/internal/auth"
 	"vaultdb/internal/logging"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
@@ -26,6 +28,8 @@ type Session struct {
 	TxManager   *txmanager.Manager
 	Broadcaster *Broadcaster
 	AuditLog    *logging.AuditLogger
+	AuditTable  *audit.TableLog
+	ArchivePath string
 
 	PreparedStatements map[string]*PreparedStatement
 	planCache          *PlanCache
@@ -33,6 +37,10 @@ type Session struct {
 	snapshotTxID       uint64
 	maxPreparedStmts   int
 	serverCtx          context.Context
+
+	// RBAC: token and role for permission checks.
+	token string
+	role  string
 }
 
 type PreparedStatement struct {
@@ -40,7 +48,7 @@ type PreparedStatement struct {
 	Query parser.Statement
 }
 
-// SessionConfig содержит все параметры для создания сессии.
+// SessionConfig contains all parameters for creating a session.
 type SessionConfig struct {
 	Store            storage.StorageEngine
 	Metrics          *metrics.Collector
@@ -48,6 +56,7 @@ type SessionConfig struct {
 	Broadcaster      *Broadcaster
 	Embedder         ai.Embedder
 	WAL              *wal.WAL
+	AuthManager      *auth.Manager
 	QueryTimeout     time.Duration
 	MaxRows          int
 	MaxPreparedStmts int
@@ -64,7 +73,7 @@ func NewSession(store storage.StorageEngine, m *metrics.Collector, txm *txmanage
 	})
 }
 
-// NewSessionWithConfig создаёт сессию с полной конфигурацией.
+// NewSessionWithConfig creates a session with full configuration.
 func NewSessionWithConfig(cfg SessionConfig) *Session {
 	s := &Session{
 		executor:           New(cfg.Store, cfg.Metrics, cfg.TxManager, cfg.Broadcaster),
@@ -93,6 +102,9 @@ func NewSessionWithConfig(cfg SessionConfig) *Session {
 	if cfg.ResultCacheSize > 0 {
 		s.SetResultCacheConfig(cfg.ResultCacheSize, int(cfg.ResultCacheTTL.Seconds()))
 	}
+	if cfg.AuthManager != nil {
+		s.SetAuthManager(cfg.AuthManager)
+	}
 	return s
 }
 
@@ -110,22 +122,27 @@ func (s *Session) SetResultCacheConfig(size int, ttlSec int) {
 	}
 }
 
-// SetEmbedder подключает embedding-провайдер для SEMANTIC_MATCH/AI_EMBED.
+// SetEmbedder connects an embedding provider for SEMANTIC_MATCH/AI_EMBED.
 func (s *Session) SetEmbedder(emb ai.Embedder) {
 	s.executor.SetEmbedder(emb)
 }
 
-// SetWAL подключает WAL для записи операций транзакций.
+// SetAuthManager connects the authentication manager for RBAC checks.
+func (s *Session) SetAuthManager(m *auth.Manager) {
+	s.executor.SetAuthManager(m)
+}
+
+// SetWAL connects WAL for writing transaction operations.
 func (s *Session) SetWAL(w *wal.WAL) {
 	s.executor.SetWAL(w)
 }
 
-// SetQueryTimeout задаёт таймаут на выполнение запроса.
+// SetQueryTimeout sets the query execution timeout.
 func (s *Session) SetQueryTimeout(d time.Duration) {
 	s.executor.SetQueryTimeout(d)
 }
 
-// SetMaxRows задаёт максимальное количество строк в результате SELECT.
+// SetMaxRows sets the maximum number of rows in SELECT results.
 func (s *Session) SetMaxRows(n int) {
 	s.executor.SetMaxRows(n)
 }
@@ -136,8 +153,8 @@ func (s *Session) IsInTx() bool {
 	return s.ActiveTx != nil && s.ActiveTx.State == txmanager.TxActive
 }
 
-// GetActiveTx возвращает текущую транзакцию под блокировкой.
-// Если транзакции нет — возвращает nil.
+// GetActiveTx returns the current transaction under lock.
+// If there is no transaction — returns nil.
 func (s *Session) GetActiveTx() *txmanager.Transaction {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -160,14 +177,14 @@ func (s *Session) SetCurrentDatabase(name string) {
 	s.currentDB = name
 }
 
-// SetSnapshotTxID задаёт ID транзакции для snapshot isolation при live queries.
+// SetSnapshotTxID sets the transaction ID for snapshot isolation in live queries.
 func (s *Session) SetSnapshotTxID(txID uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.snapshotTxID = txID
 }
 
-// SnapshotTxID возвращает ID снимка транзакции (0 = нет снимка).
+// SnapshotTxID returns the transaction snapshot ID (0 = no snapshot).
 func (s *Session) SnapshotTxID() uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -209,14 +226,14 @@ func (s *Session) ClearActiveTx() {
 	s.ActiveTx = nil
 }
 
-// SetServerContext задаёт контекст сервера для отмены запросов при shutdown.
+// SetServerContext sets the server context for query cancellation at shutdown.
 func (s *Session) SetServerContext(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.serverCtx = ctx
 }
 
-// ServerContext возвращает контекст сервера (или context.Background если не задан).
+// ServerContext returns the server context (or context.Background if not set).
 func (s *Session) ServerContext() context.Context {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -226,9 +243,37 @@ func (s *Session) ServerContext() context.Context {
 	return context.Background()
 }
 
-// Close очищает ресурсы сессии.
-// Если есть активная транзакция — откатывает её, чтобы не терять данные
-// и не утекать ресурсы (spill-файлы и т.д.).
+// SetToken stores the bearer token for RBAC permission checks.
+func (s *Session) SetToken(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.token = token
+}
+
+// GetToken returns the stored bearer token.
+func (s *Session) GetToken() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.token
+}
+
+// SetRole stores the user role (e.g. "admin", "writer", "reader").
+func (s *Session) SetRole(role string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.role = role
+}
+
+// GetRole returns the stored role.
+func (s *Session) GetRole() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.role
+}
+
+// Close cleans up session resources.
+// If there is an active transaction — rolls it back to avoid data loss
+// and resource leaks (spill files, etc.).
 func (s *Session) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -237,4 +282,36 @@ func (s *Session) Close() {
 	}
 	s.PreparedStatements = make(map[string]*PreparedStatement)
 	s.ActiveTx = nil
+}
+
+// Reset resets session state for reuse in the pool.
+func (s *Session) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ActiveTx != nil && s.ActiveTx.State == txmanager.TxActive {
+		s.ActiveTx.Rollback()
+	}
+	s.ActiveTx = nil
+	s.currentDB = ""
+	s.snapshotTxID = 0
+	s.token = ""
+	s.role = ""
+	s.PreparedStatements = make(map[string]*PreparedStatement)
+	// Reset executor settings for pooled sessions
+	if s.executor != nil {
+		s.executor.SetMaxRows(0)
+		s.executor.SetQueryTimeout(0)
+	}
+}
+
+// LogAudit appends an entry to the table-based audit log.
+func (s *Session) LogAudit(actor, action, target, detail string) {
+	if s.AuditTable != nil {
+		s.AuditTable.Append(audit.Entry{
+			Actor:  actor,
+			Action: action,
+			Target: target,
+			Detail: detail,
+		})
+	}
 }

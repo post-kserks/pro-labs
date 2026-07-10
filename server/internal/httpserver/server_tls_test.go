@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -241,6 +243,193 @@ func TestHTTPTLSWithoutConfig(t *testing.T) {
 		t.Fatalf("plain TCP connection should succeed: %v", err)
 	}
 	conn.Close()
+
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not shut down in time")
+	}
+}
+
+func TestHTTPTLSEnforceWithoutTLSFails(t *testing.T) {
+	apiPort := freePort(t)
+	monitorPort := freePort(t)
+
+	srv := newTestServer(t, mustAuth(t, false, nil))
+	srv.cfg.TLSCertFile = ""
+	srv.cfg.TLSKeyFile = ""
+	srv.cfg.TLSEnforce = true
+	srv.cfg.Port = apiPort
+	srv.cfg.MonitorPort = monitorPort
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := srv.Start(ctx)
+	if err == nil {
+		t.Fatal("expected error: TLSEnforce=true without TLS config should fail")
+	}
+}
+
+func TestHTTPTLSMinVersion13(t *testing.T) {
+	certFile, keyFile := generateTLSCertFiles(t)
+
+	apiPort := freePort(t)
+	monitorPort := freePort(t)
+
+	srv := newTestServer(t, mustAuth(t, false, nil))
+	srv.cfg.TLSCertFile = certFile
+	srv.cfg.TLSKeyFile = keyFile
+	srv.cfg.TLSMinVersion = "1.3"
+	srv.cfg.Port = apiPort
+	srv.cfg.MonitorPort = monitorPort
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Start(ctx)
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+
+	addr := fmt.Sprintf("127.0.0.1:%d", apiPort)
+
+	// TLS 1.2 should fail when min_version is 1.3
+	baseTLS := &tls.Config{InsecureSkipVerify: true}
+	tlsCfg12 := baseTLS.Clone()
+	tlsCfg12.MinVersion = tls.VersionTLS12
+	tlsCfg12.MaxVersion = tls.VersionTLS12
+
+	_, err := tls.DialWithDialer(&net.Dialer{Timeout: 2 * time.Second}, "tcp", addr, tlsCfg12)
+	if err == nil {
+		t.Fatal("TLS 1.2 connection should fail when min_version=1.3")
+	}
+
+	// TLS 1.3 should succeed
+	tlsCfg13 := baseTLS.Clone()
+	tlsCfg13.MinVersion = tls.VersionTLS13
+
+	conn13, err := tls.DialWithDialer(&net.Dialer{Timeout: 2 * time.Second}, "tcp", addr, tlsCfg13)
+	if err != nil {
+		t.Fatalf("TLS 1.3 connection should succeed: %v", err)
+	}
+	conn13.Close()
+
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not shut down in time")
+	}
+}
+
+func TestHTTPTLSEnforcementRejectsNonTLS(t *testing.T) {
+	certFile, keyFile := generateTLSCertFiles(t)
+
+	apiPort := freePort(t)
+	monitorPort := freePort(t)
+
+	srv := newTestServer(t, mustAuth(t, false, nil))
+	srv.cfg.TLSCertFile = certFile
+	srv.cfg.TLSKeyFile = keyFile
+	srv.cfg.TLSEnforce = true
+	srv.cfg.Port = apiPort
+	srv.cfg.MonitorPort = monitorPort
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Start(ctx)
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+
+	addr := fmt.Sprintf("127.0.0.1:%d", apiPort)
+
+	// Plain HTTP should be rejected when enforcement is on
+	resp, err := http.Get(fmt.Sprintf("http://%s/health", addr))
+	if err != nil {
+		t.Fatalf("HTTP request should succeed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", resp.StatusCode)
+	}
+
+	// TLS should still work
+	baseTLS := &tls.Config{InsecureSkipVerify: true}
+	tlsCfg := baseTLS.Clone()
+	tlsCfg.MinVersion = tls.VersionTLS12
+
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 2 * time.Second}, "tcp", addr, tlsCfg)
+	if err != nil {
+		t.Fatalf("TLS connection should succeed: %v", err)
+	}
+	conn.Close()
+
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not shut down in time")
+	}
+}
+
+func TestHTTPTLSRedirectHTTP(t *testing.T) {
+	// Test redirect middleware directly without TLS configured
+	// This simulates the case where server runs on plain HTTP and redirects to HTTPS
+	apiPort := freePort(t)
+	monitorPort := freePort(t)
+
+	srv := newTestServer(t, mustAuth(t, false, nil))
+	srv.cfg.TLSCertFile = "" // No TLS configured
+	srv.cfg.TLSKeyFile = ""
+	srv.cfg.TLSRedirectHTTP = true
+	srv.cfg.Port = apiPort
+	srv.cfg.MonitorPort = monitorPort
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Start(ctx)
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+
+	addr := fmt.Sprintf("127.0.0.1:%d", apiPort)
+
+	// Plain HTTP should be redirected to HTTPS
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse // Don't follow redirect
+		},
+	}
+
+	resp, err := client.Get(fmt.Sprintf("http://%s/health", addr))
+	if err != nil {
+		t.Fatalf("HTTP request should succeed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMovedPermanently {
+		t.Fatalf("expected status 301, got %d", resp.StatusCode)
+	}
+
+	location := resp.Header.Get("Location")
+	if location == "" {
+		t.Fatal("expected Location header")
+	}
+	if !strings.Contains(location, "https://") {
+		t.Fatalf("expected redirect to HTTPS, got %s", location)
+	}
 
 	cancel()
 	select {

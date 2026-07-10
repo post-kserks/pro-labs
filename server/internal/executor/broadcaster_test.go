@@ -23,7 +23,7 @@ func TestSubscriptionPolicyEvict(t *testing.T) {
 		}
 	}
 
-	// В буфере должны остаться два последних обновления (3 и 4)
+	// Buffer should still contain the last two updates (3 and 4)
 	first := <-s.Send
 	second := <-s.Send
 	if first.Affected != 3 || second.Affected != 4 {
@@ -42,7 +42,7 @@ func TestSubscriptionPolicyBlockTimesOut(t *testing.T) {
 	if !s.notify(&Result{}, logger) {
 		t.Fatal("first notify must succeed")
 	}
-	// Буфер полон, читателя нет — по таймауту notify должен вернуть false
+	// Buffer full, no reader — notify should return false after timeout
 	start := time.Now()
 	if s.notify(&Result{}, logger) {
 		t.Fatal("second notify must time out and request unsubscribe")
@@ -71,7 +71,7 @@ func TestSubscriptionPolicyDrop(t *testing.T) {
 func TestSubscriptionCloseIsIdempotent(t *testing.T) {
 	s := &Subscription{Send: make(chan *Result)}
 	s.Close()
-	s.Close() // не должно паниковать
+	s.Close() // should not panic
 	if s.notify(&Result{}, slog.Default()) {
 		t.Fatal("notify after close must request unsubscribe")
 	}

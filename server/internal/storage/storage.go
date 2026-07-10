@@ -1,6 +1,10 @@
 package storage
 
-import "time"
+import (
+	"time"
+
+	"vaultdb/internal/index"
+)
 
 // Value is a single cell value in a row.
 // Supported runtime types: int64, float64, string, bool, nil.
@@ -43,6 +47,21 @@ type TableSchema struct {
 	RLSEnabled  bool              `json:"rls_enabled,omitempty"`
 	Policies    []RLSPolicy       `json:"policies,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`
+	PartitionBy *PartitionSpec    `json:"partition_by,omitempty"`
+}
+
+// PartitionSpec describes how a table is partitioned.
+type PartitionSpec struct {
+	Type       string         `json:"type"`       // "RANGE", "HASH"
+	Columns    []string       `json:"columns"`    // partition key columns
+	Partitions []PartitionDef `json:"partitions"` // RANGE: explicit partition definitions
+	NumParts   int            `json:"num_parts"`  // HASH: number of partitions
+}
+
+// PartitionDef defines a single partition.
+type PartitionDef struct {
+	Name  string      `json:"name"`
+	Bound interface{} `json:"bound,omitempty"` // upper bound for RANGE (nil = MAXVALUE)
 }
 
 // RLSPolicy stores a row-level security policy for a table.
@@ -74,11 +93,11 @@ type TxLogEntry struct {
 
 type VacuumStats struct {
 	TableName      string
-	RowsBefore     int   // строк до vacuum (включая все версии)
-	RowsAfter      int   // строк после vacuum (только актуальные)
-	ReclaimedRows  int   // удалено устаревших версий
-	FileSizeBefore int64 // байт до
-	FileSizeAfter  int64 // байт после
+	RowsBefore     int   // rows before vacuum (including all versions)
+	RowsAfter      int   // rows after vacuum (only live)
+	ReclaimedRows  int   // dead versions removed
+	FileSizeBefore int64 // bytes before
+	FileSizeAfter  int64 // bytes after
 	DurationMs     float64
 }
 
@@ -104,8 +123,10 @@ type ReadOnlyEngine interface {
 	TableVersionStats(dbName, tableName string) (*TableVersionStats, error)
 	TableModifiedSince(db, table string, txID uint64) (bool, error)
 	CurrentTxID() uint64
+	SchemaVersion() uint64
 	ListIndexes(dbName, tableName string) ([]string, error)
 	FindIndexForColumn(dbName, tableName, column string) (string, bool)
+	GetIndex(dbName, tableName, indexName string) (index.Index, bool)
 	IndexLookup(dbName, tableName, column, value string) ([]int, bool)
 	IndexRangeLookup(dbName, tableName, column, low, high string) ([]int, bool)
 	IndexFTSLookup(dbName, tableName, column, query string) ([]int, bool)
@@ -139,6 +160,7 @@ type AdminEngine interface {
 	DropDatabase(name string) error
 	FinalCheckpoint() error
 	Close() error
+	DataDir() string
 }
 
 // StorageEngine is the full abstraction used by executor.

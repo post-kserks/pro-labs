@@ -142,6 +142,21 @@ const (
 	TOKEN_RELEASE
 	TOKEN_EXISTS
 	TOKEN_IF
+	TOKEN_ENCRYPTED
+	TOKEN_ENCRYPTION
+	TOKEN_VERIFY
+	TOKEN_COPY
+	TOKEN_HASH
+	TOKEN_LESS
+	TOKEN_THAN
+	TOKEN_PARTITIONS
+	TOKEN_MAXVALUE
+
+	// RBAC keywords
+	TOKEN_ROLE
+	TOKEN_GRANT
+	TOKEN_REVOKE
+	TOKEN_PRIVILEGES
 
 	// Data types
 	TOKEN_INT
@@ -168,6 +183,7 @@ const (
 	TOKEN_TIMESTAMPTZ
 	TOKEN_SERIAL
 	TOKEN_IDENTITY
+	TOKEN_BLOB
 
 	// Literals and identifiers
 	TOKEN_IDENT
@@ -664,6 +680,19 @@ var keywords = map[string]TokenType{
 	"RELEASE":        TOKEN_RELEASE,
 	"EXISTS":         TOKEN_EXISTS,
 	"IF":             TOKEN_IF,
+	"BLOB":           TOKEN_BLOB,
+	"ENCRYPTED":      TOKEN_ENCRYPTED,
+	"ENCRYPTION":     TOKEN_ENCRYPTION,
+	"VERIFY":         TOKEN_VERIFY,
+	"COPY":           TOKEN_COPY,
+	"HASH":           TOKEN_HASH,
+	"LESS":           TOKEN_LESS,
+	"THAN":           TOKEN_THAN,
+	"PARTITIONS":     TOKEN_PARTITIONS,
+	"MAXVALUE":       TOKEN_MAXVALUE,
+	"GRANT":          TOKEN_GRANT,
+	"REVOKE":         TOKEN_REVOKE,
+	"PRIVILEGES":     TOKEN_PRIVILEGES,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -817,6 +846,20 @@ var tokenNames = [...]string{
 	TOKEN_RELEASE:           "RELEASE",
 	TOKEN_EXISTS:            "EXISTS",
 	TOKEN_IF:                "IF",
+	TOKEN_BLOB:              "BLOB",
+	TOKEN_ENCRYPTED:         "ENCRYPTED",
+	TOKEN_ENCRYPTION:        "ENCRYPTION",
+	TOKEN_VERIFY:            "VERIFY",
+	TOKEN_COPY:              "COPY",
+	TOKEN_HASH:              "HASH",
+	TOKEN_LESS:              "LESS",
+	TOKEN_THAN:              "THAN",
+	TOKEN_PARTITIONS:        "PARTITIONS",
+	TOKEN_MAXVALUE:          "MAXVALUE",
+	TOKEN_ROLE:              "ROLE",
+	TOKEN_GRANT:             "GRANT",
+	TOKEN_REVOKE:            "REVOKE",
+	TOKEN_PRIVILEGES:        "PRIVILEGES",
 	TOKEN_IDENT:             "IDENT",
 	TOKEN_INT_LIT:           "INT_LIT",
 	TOKEN_FLOAT_LIT:         "FLOAT_LIT",

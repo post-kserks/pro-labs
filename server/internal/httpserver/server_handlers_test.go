@@ -1440,68 +1440,167 @@ func (f *flushResponseWriter) Flush() {}
 
 func TestApplyParamsMixedTypes(t *testing.T) {
 	tests := []struct {
-		name   string
-		query  string
-		params []string
-		want   string
+		name      string
+		query     string
+		params    []string
+		wantType  string
+		wantValue interface{}
 	}{
 		{
-			name:   "string param is quoted",
-			query:  "SELECT * FROM t WHERE name = $1;",
-			params: []string{"Alice"},
-			want:   "SELECT * FROM t WHERE name = 'Alice';",
+			name:      "string param",
+			query:     "SELECT * FROM t WHERE name = $1;",
+			params:    []string{"Alice"},
+			wantType:  "string",
+			wantValue: "Alice",
 		},
 		{
-			name:   "integer param is not quoted",
-			query:  "SELECT * FROM t WHERE id = $1;",
-			params: []string{"42"},
-			want:   "SELECT * FROM t WHERE id = 42;",
+			name:      "integer param",
+			query:     "SELECT * FROM t WHERE id = $1;",
+			params:    []string{"42"},
+			wantType:  "int",
+			wantValue: int64(42),
 		},
 		{
-			name:   "float param is not quoted",
-			query:  "SELECT * FROM t WHERE val = $1;",
-			params: []string{"3.14"},
-			want:   "SELECT * FROM t WHERE val = 3.14;",
+			name:      "float param",
+			query:     "SELECT * FROM t WHERE val = $1;",
+			params:    []string{"3.14"},
+			wantType:  "float",
+			wantValue: 3.14,
 		},
 		{
-			name:   "negative integer is not quoted",
-			query:  "SELECT * FROM t WHERE id = $1;",
-			params: []string{"-5"},
-			want:   "SELECT * FROM t WHERE id = -5;",
+			name:      "negative integer",
+			query:     "SELECT * FROM t WHERE id = $1;",
+			params:    []string{"-5"},
+			wantType:  "int",
+			wantValue: int64(-5),
 		},
 		{
-			name:   "mixed types",
-			query:  "SELECT * FROM t WHERE id = $1 AND name = $2 AND val = $3;",
-			params: []string{"7", "Bob", "2.5"},
-			want:   "SELECT * FROM t WHERE id = 7 AND name = 'Bob' AND val = 2.5;",
+			name:      "zero",
+			query:     "SELECT * FROM t WHERE id = $1;",
+			params:    []string{"0"},
+			wantType:  "int",
+			wantValue: int64(0),
 		},
 		{
-			name:   "string with special chars stays quoted",
-			query:  "SELECT * FROM t WHERE name = $1;",
-			params: []string{"it's a test"},
-			want:   "SELECT * FROM t WHERE name = 'it\\'s a test';",
+			name:      "negative float",
+			query:     "SELECT * FROM t WHERE val = $1;",
+			params:    []string{"-1.5"},
+			wantType:  "float",
+			wantValue: -1.5,
 		},
 		{
-			name:   "zero is not quoted",
-			query:  "SELECT * FROM t WHERE id = $1;",
-			params: []string{"0"},
-			want:   "SELECT * FROM t WHERE id = 0;",
+			name:      "boolean true",
+			query:     "SELECT * FROM t WHERE active = $1;",
+			params:    []string{"true"},
+			wantType:  "bool",
+			wantValue: true,
 		},
 		{
-			name:   "negative float is not quoted",
-			query:  "SELECT * FROM t WHERE val = $1;",
-			params: []string{"-1.5"},
-			want:   "SELECT * FROM t WHERE val = -1.5;",
+			name:      "boolean false",
+			query:     "SELECT * FROM t WHERE active = $1;",
+			params:    []string{"false"},
+			wantType:  "bool",
+			wantValue: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := applyParams(tt.query, tt.params)
-			if got != tt.want {
-				t.Errorf("applyParams(%q, %v) = %q, want %q", tt.query, tt.params, got, tt.want)
+			stmt, err := parser.Parse(tt.query)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			bound, err := bindHTTPParams(stmt, tt.params)
+			if err != nil {
+				t.Fatalf("bindHTTPParams: %v", err)
+			}
+
+			// Extract the bound value from the WHERE clause
+			sel, ok := bound.(*parser.SelectStatement)
+			if !ok {
+				t.Fatalf("expected SelectStatement, got %T", bound)
+			}
+			bin, ok := sel.Where.(*parser.BinaryExpr)
+			if !ok {
+				t.Fatalf("expected BinaryExpr in WHERE, got %T", sel.Where)
+			}
+			val, ok := bin.Right.(*parser.Value)
+			if !ok {
+				t.Fatalf("expected Value on right side, got %T", bin.Right)
+			}
+			if val.Type != tt.wantType {
+				t.Errorf("type = %q, want %q", val.Type, tt.wantType)
+			}
+			switch tt.wantType {
+			case "int":
+				if val.IntVal != tt.wantValue.(int64) {
+					t.Errorf("IntVal = %v, want %v", val.IntVal, tt.wantValue)
+				}
+			case "float":
+				if val.FltVal != tt.wantValue.(float64) {
+					t.Errorf("FltVal = %v, want %v", val.FltVal, tt.wantValue)
+				}
+			case "string":
+				if val.StrVal != tt.wantValue.(string) {
+					t.Errorf("StrVal = %q, want %q", val.StrVal, tt.wantValue)
+				}
+			case "bool":
+				if val.BoolVal != tt.wantValue.(bool) {
+					t.Errorf("BoolVal = %v, want %v", val.BoolVal, tt.wantValue)
+				}
 			}
 		})
+	}
+}
+
+func TestBindHTTPParamsMixedTypes(t *testing.T) {
+	query := "SELECT * FROM t WHERE id = $1 AND name = $2 AND val = $3;"
+	params := []string{"7", "Bob", "2.5"}
+
+	stmt, err := parser.Parse(query)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	bound, err := bindHTTPParams(stmt, params)
+	if err != nil {
+		t.Fatalf("bindHTTPParams: %v", err)
+	}
+
+	sel, ok := bound.(*parser.SelectStatement)
+	if !ok {
+		t.Fatalf("expected SelectStatement, got %T", bound)
+	}
+	// WHERE is (id = $1 AND name = $2) AND val = $3
+	// The AND is left-associative, so outer AND has val=$3 on right
+	outerAnd, ok := sel.Where.(*parser.AndExpr)
+	if !ok {
+		t.Fatalf("expected AndExpr at top, got %T", sel.Where)
+	}
+	rightVal, ok := outerAnd.Right.(*parser.BinaryExpr)
+	if !ok {
+		t.Fatalf("expected BinaryExpr on right, got %T", outerAnd.Right)
+	}
+	val3, ok := rightVal.Right.(*parser.Value)
+	if !ok {
+		t.Fatalf("expected Value for $3, got %T", rightVal.Right)
+	}
+	if val3.Type != "float" || val3.FltVal != 2.5 {
+		t.Errorf("$3 = %v %v, want float 2.5", val3.Type, val3.FltVal)
+	}
+}
+
+func TestBindHTTPParamsEmptyParams(t *testing.T) {
+	query := "SELECT * FROM t WHERE id = 1;"
+	stmt, err := parser.Parse(query)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	bound, err := bindHTTPParams(stmt, nil)
+	if err != nil {
+		t.Fatalf("bindHTTPParams: %v", err)
+	}
+	if bound == nil {
+		t.Fatal("expected non-nil statement")
 	}
 }
 
@@ -1850,5 +1949,109 @@ func TestHTTPTransactionMultipleQueriesInTx(t *testing.T) {
 	rows := selectRes["rows"].([]interface{})
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows after multi-insert commit, got %d", len(rows))
+	}
+}
+
+func TestHandleHandshakeValid(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+	srv.cfg.Version = "1.1.1"
+
+	body := fmt.Sprintf(`{"type":"handshake","client_version":"2.0","client_name":"test-client","supported_features":["params","database"],"nonce":"test-nonce-123","nonce_timestamp":%d}`, time.Now().Unix())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["type"] != "handshake" {
+		t.Errorf("type = %v, want handshake", resp["type"])
+	}
+	if resp["protocol_version"] != "2.0" {
+		t.Errorf("protocol_version = %v, want 2.0", resp["protocol_version"])
+	}
+	if resp["server"] != "VaultDB" {
+		t.Errorf("server = %v, want VaultDB", resp["server"])
+	}
+	if resp["server_version"] != "1.1.1" {
+		t.Errorf("server_version = %v, want 1.1.1", resp["server_version"])
+	}
+	features, ok := resp["supported_features"].([]interface{})
+	if !ok || len(features) != 3 {
+		t.Errorf("supported_features = %v, want 3 features", resp["supported_features"])
+	}
+}
+
+func TestHandleHandshakeVersionMismatch(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	body := `{"type":"handshake","client_version":"1.0","client_name":"old-client"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["status"] != "error" {
+		t.Errorf("status = %v, want error", resp["status"])
+	}
+}
+
+func TestHandleHandshakeMissingFields(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"empty type", `{"client_version":"2.0"}`},
+		{"wrong type", `{"type":"query","client_version":"2.0"}`},
+		{"missing version", `{"type":"handshake"}`},
+		{"invalid json", `{bad json`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(tt.body))
+			srv.apiMux().ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleHandshakeRequiresAuth(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, true, map[string]string{"valid-token": "user1"}))
+
+	body := `{"type":"handshake","client_version":"2.0","client_name":"test"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(body))
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want %d (unauthorized): %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
+func TestHandleHandshakeMethodNotAllowed(t *testing.T) {
+	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/handshake", nil)
+	srv.apiMux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET status %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
 }

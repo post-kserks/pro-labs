@@ -8,75 +8,61 @@ import (
 
 const maxLocksBeforeEviction = 10000
 
-// PageLockManager управляет блокировками на уровне страниц.
-// Позволяет конкурентные записи в разные страницы одной таблицы.
+// PageLockManager manages page-level locks.
+// Allows concurrent writes to different pages of the same table.
 type PageLockManager struct {
-	mu    sync.RWMutex
-	locks map[page.PageID]*sync.RWMutex
+	locks sync.Map // map[page.PageID]*sync.RWMutex
 }
 
-// NewPageLockManager создаёт новый менеджер блокировок.
+// NewPageLockManager creates a new lock manager.
 func NewPageLockManager() *PageLockManager {
-	return &PageLockManager{
-		locks: make(map[page.PageID]*sync.RWMutex),
-	}
+	return &PageLockManager{}
 }
 
-// RLockPage блокирует страницу для чтения.
-func (pm *PageLockManager) RLockPage(pid page.PageID) {
-	pm.mu.Lock()
-	lock, ok := pm.locks[pid]
-	if !ok {
-		lock = &sync.RWMutex{}
-		pm.locks[pid] = lock
-		pm.evictIfTooLarge()
+// getLock returns (or creates) a lock for a page.
+// The operation is atomic — eliminates the race between creating the entry and acquiring the lock.
+func (pm *PageLockManager) getLock(pid page.PageID) *sync.RWMutex {
+	if v, ok := pm.locks.Load(pid); ok {
+		return v.(*sync.RWMutex)
 	}
-	pm.mu.Unlock()
+	lock := &sync.RWMutex{}
+	actual, _ := pm.locks.LoadOrStore(pid, lock)
+	return actual.(*sync.RWMutex)
+}
 
+// RLockPage locks the page for reads.
+func (pm *PageLockManager) RLockPage(pid page.PageID) {
+	lock := pm.getLock(pid)
 	lock.RLock()
 }
 
-// UnlockPage снимает блокировку чтения со страницы.
+// UnlockPage releases read lock on page.
 func (pm *PageLockManager) UnlockPage(pid page.PageID) {
-	pm.mu.RLock()
-	lock, ok := pm.locks[pid]
-	pm.mu.RUnlock()
-
+	v, ok := pm.locks.Load(pid)
 	if ok {
-		lock.RUnlock()
+		v.(*sync.RWMutex).RUnlock()
 	} else {
 		slog.Warn("page lock not found on unlock", "pageID", pid)
 	}
 }
 
-// LockPage блокирует страницу для записи.
+// LockPage locks the page for writes.
 func (pm *PageLockManager) LockPage(pid page.PageID) {
-	pm.mu.Lock()
-	lock, ok := pm.locks[pid]
-	if !ok {
-		lock = &sync.RWMutex{}
-		pm.locks[pid] = lock
-		pm.evictIfTooLarge()
-	}
-	pm.mu.Unlock()
-
+	lock := pm.getLock(pid)
 	lock.Lock()
 }
 
-// UnlockPageWrite снимает блокировку записи со страницы.
+// UnlockPageWrite releases write lock on page.
 func (pm *PageLockManager) UnlockPageWrite(pid page.PageID) {
-	pm.mu.RLock()
-	lock, ok := pm.locks[pid]
-	pm.mu.RUnlock()
-
+	v, ok := pm.locks.Load(pid)
 	if ok {
-		lock.Unlock()
+		v.(*sync.RWMutex).Unlock()
 	} else {
 		slog.Warn("page lock not found on unlock", "pageID", pid)
 	}
 }
 
-// LockTable блокирует все страницы таблицы для записи (для ALTER TABLE и т.п.).
+// LockTable locks all pages of the table for writes (for ALTER TABLE, etc.).
 func (pm *PageLockManager) LockTable(pids []page.PageID) {
 	sortedPids := make([]page.PageID, len(pids))
 	copy(sortedPids, pids)
@@ -87,47 +73,55 @@ func (pm *PageLockManager) LockTable(pids []page.PageID) {
 	}
 }
 
-// UnlockTable снимает блокировки со всех страниц таблицы.
+// UnlockTable releases locks on all pages of a table.
 func (pm *PageLockManager) UnlockTable(pids []page.PageID) {
 	for _, pid := range pids {
 		pm.UnlockPageWrite(pid)
 	}
 }
 
+// evictIfTooLarge removes lock entries not held by any goroutine.
 func (pm *PageLockManager) evictIfTooLarge() {
-	if len(pm.locks) <= maxLocksBeforeEviction {
+	count := 0
+	pm.locks.Range(func(k, v any) bool {
+		count++
+		return true
+	})
+	if count <= maxLocksBeforeEviction {
 		return
 	}
 	target := maxLocksBeforeEviction / 2
-	for pid, lock := range pm.locks {
-		if len(pm.locks) <= target {
-			break
+	pm.locks.Range(func(k, v any) bool {
+		if count <= target {
+			return false
 		}
+		lock := v.(*sync.RWMutex)
 		if lock.TryLock() {
 			lock.Unlock()
-			delete(pm.locks, pid)
+			pm.locks.Delete(k)
+			count--
 		}
-	}
+		return true
+	})
 }
 
-// EvictUnused вызывается извне (без mu.Lock) для массовой очистки.
-// Удаляет все незаблокированные записи. Возвращает количество удалённых.
+// EvictUnused is called externally for bulk cleanup.
+// Removes all unlocked entries. Returns the number removed.
 func (pm *PageLockManager) EvictUnused() int {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-
 	removed := 0
-	for pid, lock := range pm.locks {
+	pm.locks.Range(func(k, v any) bool {
+		lock := v.(*sync.RWMutex)
 		if lock.TryLock() {
 			lock.Unlock()
-			delete(pm.locks, pid)
+			pm.locks.Delete(k)
 			removed++
 		}
-	}
+		return true
+	})
 	return removed
 }
 
-// sortPageIDs сортирует PageID для предотвращения deadlock.
+// sortPageIDs sorts PageIDs to prevent deadlock.
 func sortPageIDs(pids []page.PageID) {
 	for i := 1; i < len(pids); i++ {
 		for j := i; j > 0; j-- {

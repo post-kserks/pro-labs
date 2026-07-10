@@ -157,6 +157,8 @@ func FormatExpression(expr Expression) string {
 		return fmt.Sprintf("%s %sBETWEEN %s AND %s", FormatExpression(e.Expr), not, FormatExpression(e.Lower), FormatExpression(e.Upper))
 	case *JsonPathExpr:
 		return fmt.Sprintf("%s%s'%s'", FormatExpression(e.Left), e.Op, e.Path)
+	case *JSONAccess:
+		return fmt.Sprintf("%s %s %s", FormatExpression(e.Expr), e.Operator, FormatExpression(e.Argument))
 	case *WindowFunctionExpr:
 		args := make([]string, len(e.Args))
 		for i, a := range e.Args {
@@ -211,6 +213,107 @@ func formatValueSQL(v Value) string {
 	default:
 		return v.StrVal
 	}
+}
+
+// FormatSelectStatement converts a SelectStatement back to a SQL string.
+func FormatSelectStatement(sel *SelectStatement) string {
+	if sel == nil {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("SELECT ")
+
+	if sel.Distinct {
+		sb.WriteString("DISTINCT ")
+	}
+
+	if len(sel.Columns) == 0 {
+		sb.WriteString("*")
+	} else {
+		parts := make([]string, len(sel.Columns))
+		for i, col := range sel.Columns {
+			s := FormatExpression(col.Expr)
+			if col.Alias != "" {
+				s += " AS " + col.Alias
+			}
+			parts[i] = s
+		}
+		sb.WriteString(strings.Join(parts, ", "))
+	}
+
+	if sel.TableName != "" {
+		sb.WriteString(" FROM ")
+		sb.WriteString(sel.TableName)
+		if sel.Alias != "" {
+			sb.WriteString(" AS " + sel.Alias)
+		}
+	} else if sel.FromSubquery != nil {
+		sb.WriteString(" FROM (")
+		sb.WriteString(FormatSelectStatement(sel.FromSubquery))
+		sb.WriteString(")")
+		if sel.FromAlias != "" {
+			sb.WriteString(" AS " + sel.FromAlias)
+		}
+	}
+
+	for _, j := range sel.Joins {
+		sb.WriteString(fmt.Sprintf(" %s JOIN %s", j.Type, j.TableName))
+		if j.Alias != "" {
+			sb.WriteString(" AS " + j.Alias)
+		}
+		if j.Condition != nil {
+			sb.WriteString(" ON ")
+			sb.WriteString(FormatExpression(j.Condition))
+		}
+	}
+
+	if sel.Where != nil {
+		sb.WriteString(" WHERE ")
+		sb.WriteString(FormatExpression(sel.Where))
+	}
+
+	if len(sel.GroupBy) > 0 {
+		parts := make([]string, len(sel.GroupBy))
+		for i, g := range sel.GroupBy {
+			parts[i] = FormatExpression(g)
+		}
+		sb.WriteString(" GROUP BY ")
+		sb.WriteString(strings.Join(parts, ", "))
+	}
+
+	if sel.Having != nil {
+		sb.WriteString(" HAVING ")
+		sb.WriteString(FormatExpression(sel.Having))
+	}
+
+	if len(sel.OrderBy) > 0 {
+		parts := make([]string, len(sel.OrderBy))
+		for i, o := range sel.OrderBy {
+			s := FormatExpression(o.Expr)
+			if o.Direction != "" {
+				s += " " + o.Direction
+			}
+			parts[i] = s
+		}
+		sb.WriteString(" ORDER BY ")
+		sb.WriteString(strings.Join(parts, ", "))
+	}
+
+	if sel.HasLimit {
+		sb.WriteString(fmt.Sprintf(" LIMIT %d", sel.Limit))
+	} else if sel.LimitExpr != nil {
+		sb.WriteString(" LIMIT ")
+		sb.WriteString(FormatExpression(sel.LimitExpr))
+	}
+
+	if sel.HasOffset {
+		sb.WriteString(fmt.Sprintf(" OFFSET %d", sel.Offset))
+	} else if sel.OffsetExpr != nil {
+		sb.WriteString(" OFFSET ")
+		sb.WriteString(FormatExpression(sel.OffsetExpr))
+	}
+
+	return sb.String()
 }
 
 func normalizeWhitespace(s string) string {
@@ -269,9 +372,30 @@ func parse(sql string) (Statement, error) {
 	return stmt, nil
 }
 
+const defaultMaxParserDepth = 32
+
 type sqlParser struct {
-	tokens []lexer.Token
-	pos    int
+	tokens   []lexer.Token
+	pos      int
+	depth    int
+	maxDepth int
+}
+
+func (p *sqlParser) checkDepth() error {
+	p.depth++
+	if p.maxDepth <= 0 {
+		p.maxDepth = defaultMaxParserDepth
+	}
+	if p.depth > p.maxDepth {
+		return fmt.Errorf("query too deeply nested (max depth %d)", p.maxDepth)
+	}
+	return nil
+}
+
+func (p *sqlParser) exitDepth() {
+	if p.depth > 0 {
+		p.depth--
+	}
 }
 
 func (p *sqlParser) parseStatement() (Statement, error) {
@@ -315,6 +439,8 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 		stmt, err = p.parseMerge()
 	case lexer.TOKEN_TRUNCATE:
 		stmt, err = p.parseTruncate()
+	case lexer.TOKEN_COPY:
+		stmt, err = p.parseCopy()
 	case lexer.TOKEN_VACUUM:
 		stmt, err = p.parseVacuum()
 	case lexer.TOKEN_BEGIN:
@@ -343,12 +469,23 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 		stmt, err = p.parseCall()
 	case lexer.TOKEN_ENABLE:
 		stmt, err = p.parseEnableRls()
+	case lexer.TOKEN_VERIFY:
+		stmt, err = p.parseVerifyAuditLog()
+	case lexer.TOKEN_GRANT:
+		stmt, err = p.parseGrant()
+	case lexer.TOKEN_REVOKE:
+		stmt, err = p.parseRevoke()
 	case lexer.TOKEN_APPLY:
 		stmt, err = p.parseMigration("APPLY")
 	case lexer.TOKEN_PREVIEW:
 		stmt, err = p.parseMigration("PREVIEW")
 	default:
-		return nil, p.expectedError("a statement", p.current())
+		// Handle non-keyword statements that start with identifiers
+		if p.current().Type == lexer.TOKEN_IDENT && p.current().Literal == "ARCHIVE" {
+			stmt, err = p.parseArchiveAuditLog()
+		} else {
+			return nil, p.expectedError("a statement", p.current())
+		}
 	}
 
 	if err != nil {

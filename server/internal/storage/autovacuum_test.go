@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	"vaultdb/internal/index"
 )
 
 type mockStorageEngine struct {
@@ -74,12 +76,16 @@ func (m *mockStorageEngine) RowHistory(dbName, tableName string, pkValue interfa
 func (m *mockStorageEngine) TableModifiedSince(db, table string, txID uint64) (bool, error) {
 	return false, nil
 }
-func (m *mockStorageEngine) CurrentTxID() uint64 { return 0 }
+func (m *mockStorageEngine) CurrentTxID() uint64   { return 0 }
+func (m *mockStorageEngine) SchemaVersion() uint64 { return 0 }
 func (m *mockStorageEngine) ListIndexes(dbName, tableName string) ([]string, error) {
 	return nil, nil
 }
 func (m *mockStorageEngine) FindIndexForColumn(dbName, tableName, column string) (string, bool) {
 	return "", false
+}
+func (m *mockStorageEngine) GetIndex(dbName, tableName, indexName string) (index.Index, bool) {
+	return nil, false
 }
 func (m *mockStorageEngine) IndexLookup(dbName, tableName, column, value string) ([]int, bool) {
 	return nil, false
@@ -134,6 +140,7 @@ func (m *mockStorageEngine) CreateDatabase(name string) error { return nil }
 func (m *mockStorageEngine) DropDatabase(name string) error   { return nil }
 func (m *mockStorageEngine) FinalCheckpoint() error           { return nil }
 func (m *mockStorageEngine) Close() error                     { return nil }
+func (m *mockStorageEngine) DataDir() string                  { return "" }
 
 func TestAutoVacuumTriggersOnHighDeadRatio(t *testing.T) {
 	vacuumCalled := false

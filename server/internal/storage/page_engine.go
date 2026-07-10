@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vaultdb/internal/index"
@@ -20,27 +21,27 @@ import (
 	"vaultdb/internal/wal"
 )
 
-// PageStorageEngine — реализация StorageEngine поверх бинарного страничного
-// хранилища (internal/storage/page + internal/storage/heap), включается через
-// storage.engine: page в vaultdb.yaml.
+// PageStorageEngine implements StorageEngine on top of binary page-based
+// storage (internal/storage/page + internal/storage/heap), enabled via
+// storage.engine: page in vaultdb.yaml.
 //
-// Формат кортежа: [0:8] created_tx LE, [8:16] deleted_tx LE, [16:] JSON строки.
-// Заголовок фиксированного размера позволяет помечать версию удалённой
-// записью 8 байт на месте, без перемещения кортежа — на этом строится
-// версионность (time travel) и vacuum.
+// Tuple format: [0:8] created_tx LE, [8:16] deleted_tx LE, [16:] JSON row data.
+// Fixed-size header allows marking deleted versions in-place with 8 bytes
+// without moving the tuple — this underpins versioning (time travel) and vacuum.
 //
-// Вторичные индексы поддерживаются (Hash, BTree, GIN, GiST).
+// Secondary indexes are supported (Hash, BTree, GIN, GiST).
 type PageStorageEngine struct {
 	mu      sync.RWMutex
 	rootDir string
 
-	tables  map[string]*pageTable // "db/table" → открытая таблица
+	tables  map[string]*pageTable // "db/table" → open table
 	catalog pageCatalog
 
 	wal      *wal.WAL
 	txMgr    *txmanager.Manager
 	bufPool  *BufferPool
 	pageLock *PageLockManager
+	rowLocks *RowLockManager
 
 	indexes   map[string]*index.IndexManager // "db/table" → index manager
 	indexesMu sync.RWMutex
@@ -51,6 +52,21 @@ type PageStorageEngine struct {
 	// mutations as a safety net.
 	catalogDirty         bool
 	catalogMutationCount uint32
+
+	// Binary catalog cache — provides fast schema lookups without JSON parsing.
+	cachedCatalog *CachedCatalog
+
+	// schemas maps "db/table" → loaded TableSchema (kept in sync with disk).
+	schemas map[string]*TableSchema
+
+	// txCounter is an atomic counter for txID allocation, replacing the
+	// e.mu-protected catalog.CurrentTxID for DML hot paths.
+	txCounter atomic.Uint64
+
+	// Subsystems — focused subsystems extracted for maintainability.
+	catalogMgr *CatalogManager
+	dml        *DMLExecutor
+	ddl        *DDLExecutor
 }
 
 type pageTable struct {
@@ -58,6 +74,11 @@ type pageTable struct {
 	schema  *TableSchema
 	tableID uint32
 	mu      sync.RWMutex // per-table lock
+
+	// Per-table atomic counters. Updated by DML operations without e.mu,
+	// then synced to the catalog under e.mu for persistence.
+	rowCount atomic.Int64  // replaces catalog.RowCounts[key]
+	lastTxID atomic.Uint64 // replaces catalog.LastModified[key]
 }
 
 type pageTxStamp struct {
@@ -80,15 +101,19 @@ const (
 	catalogAutoSaveInterval = 100
 )
 
-// NewPageStorageEngine открывает (или создаёт) страничное хранилище в
+// NewPageStorageEngine opens (or creates) page storage in
 // <dataDir>/pagedb.
-func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) (*PageStorageEngine, error) {
+func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager, opts ...*StorageOptions) (*PageStorageEngine, error) {
 	root := filepath.Join(dataDir, "pagedb")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
 
-	bufPool := NewBufferPool(defaultBufferPoolCapacity)
+	bufPoolSize := defaultBufferPoolCapacity
+	if len(opts) > 0 && opts[0] != nil && opts[0].BufferPoolPages > 0 {
+		bufPoolSize = opts[0].BufferPoolPages
+	}
+	bufPool := NewBufferPool(bufPoolSize)
 	if w != nil {
 		bufPool.SetWAL(w)
 	}
@@ -104,29 +129,54 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager) 
 		txMgr:    txMgr,
 		bufPool:  bufPool,
 		pageLock: NewPageLockManager(),
+		rowLocks: NewRowLockManager(30 * time.Second),
 		indexes:  make(map[string]*index.IndexManager),
+		schemas:  make(map[string]*TableSchema),
 	}
 
 	catalogPath := e.catalogPath()
+	binPath := e.catalogBinaryPath()
+
+	// Always load JSON catalog for transaction state (CurrentTxID, TxTimes, etc.)
 	if data, err := os.ReadFile(catalogPath); err == nil {
 		if err := json.Unmarshal(data, &e.catalog); err != nil {
 			return nil, fmt.Errorf("page engine: corrupt catalog %s: %w", catalogPath, err)
 		}
-		if e.catalog.LastModified == nil {
-			e.catalog.LastModified = make(map[string]uint64)
-		}
-		if e.catalog.RowCounts == nil {
-			e.catalog.RowCounts = make(map[string]int)
-		}
-		if txMgr != nil && e.catalog.CurrentTxID > 0 {
-			txMgr.EnsureCounterAtLeast(e.catalog.CurrentTxID + 1)
+	}
+
+	// Load binary catalog for fast schema metadata lookups.
+	if data, err := os.ReadFile(binPath); err == nil {
+		if bc, err := UnmarshalBinaryCatalog(data); err == nil {
+			_, schemas := UnmarshalToPageCatalog(bc)
+			e.schemas = schemas
+			e.cachedCatalog, _ = NewCachedCatalog(data)
 		}
 	}
+
+	if e.catalog.LastModified == nil {
+		e.catalog.LastModified = make(map[string]uint64)
+	}
+	if e.catalog.RowCounts == nil {
+		e.catalog.RowCounts = make(map[string]int)
+	}
+	if txMgr != nil && e.catalog.CurrentTxID > 0 {
+		txMgr.EnsureCounterAtLeast(e.catalog.CurrentTxID + 1)
+	}
+
+	// Initialize atomic tx counter from catalog state so new txIDs
+	// continue from where the last session left off.
+	e.txCounter.Store(e.catalog.CurrentTxID)
+
+	// Initialize subsystems.
+	e.catalogMgr = NewCatalogManager()
+	e.dml = NewDMLExecutor(e)
+	e.ddl = NewDDLExecutor(e)
+
 	return e, nil
 }
 
-// RecoverFromWAL воспроизводит WAL при старте page engine.
-// Три фазы: Analysis → Redo → Undo (как в PostgreSQL ARIES).
+// RecoverFromWAL replays WAL on page engine startup.
+// Three phases: Analysis → Redo → Undo (as in PostgreSQL ARIES).
 func (e *PageStorageEngine) RecoverFromWAL() error {
 	// Clean up any incomplete ALTER TABLE rewrites before WAL replay
 	e.recoverIncompleteRewrites()
@@ -138,7 +188,7 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 		return nil
 	}
 
-	// Фаза 1: Analysis — определяем какие транзакции закоммичены
+	// Phase 1: Analysis — determine which transactions are committed
 	committed, inProgress, err := e.wal.AnalyzeTransactions()
 	if err != nil {
 		return fmt.Errorf("wal analysis: %w", err)
@@ -168,17 +218,17 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 		slog.Warn("failed to discover tables before WAL recovery", "error", err)
 	}
 
-	// Фаза 2: Redo — воспроизводим ВСЕ записи (и committed, и in-progress)
+	// Phase 2: Redo — replay ALL entries (both committed and in-progress)
 	if err := e.redoPhase(); err != nil {
 		return fmt.Errorf("wal redo: %w", err)
 	}
 
-	// Фаза 3: Undo — откатываем незакоммиченные транзакции
+	// Phase 3: Undo — roll back uncommitted transactions
 	if err := e.undoPhase(inProgress); err != nil {
 		return fmt.Errorf("wal undo: %w", err)
 	}
 
-	// Сначала fsync все heap-файлы, чтобы данные были на диске
+	// First fsync all heap files to ensure data is on disk
 	e.mu.RLock()
 	for _, t := range e.tables {
 		if t.heap != nil {
@@ -193,8 +243,8 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 	// Recalculate catalog from actual table state to fix any inconsistencies
 	e.recalculateCatalog()
 
-	// Записываем checkpoint record в WAL, потом сохраняем catalog с LSN,
-	// затем усекаем WAL — тот же порядок, что и в doCheckpoint.
+	// Write checkpoint record to WAL, then save catalog with LSN,
+	// then truncate WAL — same order as in doCheckpoint.
 	checkpointLSN, err := e.wal.WriteCheckpointRecord()
 	if err != nil {
 		return fmt.Errorf("checkpoint: write checkpoint record after recovery: %w", err)
@@ -245,6 +295,10 @@ func (e *PageStorageEngine) recalculateCatalog() {
 			continue
 		}
 		e.catalog.RowCounts[key] = count
+		t.rowCount.Store(int64(count))
+		if lm, ok := e.catalog.LastModified[key]; ok {
+			t.lastTxID.Store(lm)
+		}
 	}
 
 	if err := e.saveCatalogLocked(); err != nil {
@@ -288,44 +342,45 @@ func (e *PageStorageEngine) redoPhase() error {
 	return e.wal.Replay(func(entry wal.Entry) error {
 		switch entry.OpType {
 		case wal.OpPageInsert:
-			var p wal.WALPageInsertPayload
-			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if err != nil {
 				return err
 			}
-			return e.redoInsert(p)
+			return e.redoInsert(decoded.(wal.WALPageInsertPayload))
 		case wal.OpPageDelete, wal.OpPageUpdateXMax:
-			var p wal.WALPageDeletePayload
-			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if err != nil {
 				return err
 			}
-			return e.redoDelete(p)
+			return e.redoDelete(decoded.(wal.WALPageDeletePayload))
 		case wal.OpSchemaWrite:
-			var p wal.WALSchemaWritePayload
-			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if err != nil {
 				return err
 			}
-			return e.redoSchemaWrite(p)
+			return e.redoSchemaWrite(decoded.(wal.WALSchemaWritePayload))
 		case wal.OpRewriteBegin:
-			slog.Warn("WAL recovery: incomplete table rewrite detected (OpRewriteBegin without OpRewriteCommit)",
-				"db", extractFieldFromPayload(entry.Payload, "db"),
-				"table", extractFieldFromPayload(entry.Payload, "table"),
-				"txid", entry.TxID)
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if db, table := extractRewriteFields(decoded, err); db != "" {
+				slog.Warn("WAL recovery: incomplete table rewrite detected (OpRewriteBegin without OpRewriteCommit)",
+					"db", db, "table", table, "txid", entry.TxID)
+			}
 		case wal.OpRewriteCommit, wal.OpRewriteData:
 			// Rewrite already completed — nothing to redo (data was written to heap)
 		case wal.OpTruncateTable:
-			var p wal.WALTruncateTablePayload
-			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if err != nil {
 				return err
 			}
-			return e.redoTruncateTable(p)
+			return e.redoTruncateTable(decoded.(wal.WALTruncateTablePayload))
 		case wal.OpFullPageImage:
-			var p wal.FullPageImagePayload
-			if err := json.Unmarshal(entry.Payload, &p); err != nil {
+			decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+			if err != nil {
 				return err
 			}
-			return e.replayFullPageImage(p)
+			return e.replayFullPageImage(decoded.(wal.FullPageImagePayload))
 		}
-		return nil // другие типы — пропускаем
+		return nil // other types — skip
 	})
 }
 
@@ -334,24 +389,24 @@ func (e *PageStorageEngine) undoPhase(inProgress map[uint64]bool) error {
 		if err := e.wal.ReplayTransaction(xid, func(entry wal.Entry) error {
 			switch entry.OpType {
 			case wal.OpPageInsert:
-				var p wal.WALPageInsertPayload
-				if err := json.Unmarshal(entry.Payload, &p); err != nil {
+				decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+				if err != nil {
 					return err
 				}
-				return e.undoInsert(p, xid)
+				return e.undoInsert(decoded.(wal.WALPageInsertPayload), xid)
 			case wal.OpPageDelete:
-				var p wal.WALPageDeletePayload
-				if err := json.Unmarshal(entry.Payload, &p); err != nil {
+				decoded, err := wal.DecodeWALPayload(entry.Payload, entry.OpType)
+				if err != nil {
 					return err
 				}
-				return e.undoDelete(p)
+				return e.undoDelete(decoded.(wal.WALPageDeletePayload))
 			}
 			return nil
 		}); err != nil {
 			return fmt.Errorf("undo transaction %d: %w", xid, err)
 		}
 
-		// Записать в WAL что транзакция откатилась
+		// Record in WAL that the transaction was rolled back
 		e.wal.AppendWithTx(xid, wal.OpAbort, nil)
 	}
 	return nil
@@ -367,16 +422,16 @@ func (e *PageStorageEngine) redoInsert(p wal.WALPageInsertPayload) error {
 		return nil
 	}
 
-	// Восстанавливаем tuple на страницу
+	// Restore tuple on page
 	pid := page.PageID{TableID: t.tableID, SegmentNo: p.SegmentNo, PageNo: p.PageNo}
 	var pg page.Page
 	if err := t.heap.ReadPage(pid, &pg); err != nil {
-		// Страница не существует — создаём новую
+		// Page does not exist — create a new one
 		newPid, newPg, err := t.heap.AllocatePage(page.PageTypeHeap)
 		if err != nil {
 			return err
 		}
-		// Fix TableID: AllocatePage не знает о tableID
+		// Fix TableID: AllocatePage doesn't know about tableID
 		newPid.TableID = t.tableID
 		pg = *newPg
 		pid = newPid
@@ -390,7 +445,7 @@ func (e *PageStorageEngine) redoInsert(p wal.WALPageInsertPayload) error {
 		return err
 	}
 
-	// Обновляем каталог
+	// Update catalog
 	e.catalog.RowCounts[key]++
 	return nil
 }
@@ -405,7 +460,7 @@ func (e *PageStorageEngine) redoDelete(p wal.WALPageDeletePayload) error {
 		return nil
 	}
 
-	// Помечаем tuple как удалённый (устанавливаем XMax)
+	// Mark tuple as deleted (set XMax)
 	pid := page.PageID{TableID: t.tableID, SegmentNo: p.SegmentNo, PageNo: p.PageNo}
 	var pg page.Page
 	if err := t.heap.ReadPage(pid, &pg); err != nil {
@@ -417,14 +472,14 @@ func (e *PageStorageEngine) redoDelete(p wal.WALPageDeletePayload) error {
 		return nil
 	}
 
-	// Устанавливаем XMax (deleted_tx)
+	// Set XMax (deleted_tx)
 	binary.LittleEndian.PutUint64(tuple[8:16], p.XMax)
 
 	if err := t.heap.WritePage(pid, &pg); err != nil {
 		return err
 	}
 
-	// Обновляем каталог
+	// Update catalog
 	e.catalog.RowCounts[key]--
 	if e.catalog.RowCounts[key] < 0 {
 		e.catalog.RowCounts[key] = 0
@@ -509,6 +564,12 @@ func (e *PageStorageEngine) replayFullPageImage(p wal.FullPageImagePayload) erro
 		}
 		tid := tableIDFromPath(path)
 		t = &pageTable{heap: hf, schema: &schema, tableID: tid}
+		if rc, ok := e.catalog.RowCounts[key]; ok {
+			t.rowCount.Store(int64(rc))
+		}
+		if lm, ok := e.catalog.LastModified[key]; ok {
+			t.lastTxID.Store(lm)
+		}
 		e.tables[key] = t
 	}
 
@@ -529,17 +590,15 @@ func (e *PageStorageEngine) replayFullPageImage(p wal.FullPageImagePayload) erro
 	return nil
 }
 
-func extractFieldFromPayload(payload []byte, field string) string {
-	var m map[string]interface{}
-	if err := json.Unmarshal(payload, &m); err != nil {
-		return ""
+// extractRewriteFields extracts db/table from a decoded WALRewritePayload.
+func extractRewriteFields(decoded interface{}, err error) (string, string) {
+	if err != nil {
+		return "", ""
 	}
-	if v, ok := m[field]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
+	if p, ok := decoded.(wal.WALRewritePayload); ok {
+		return p.DB, p.Table
 	}
-	return ""
+	return "", ""
 }
 
 func (e *PageStorageEngine) undoInsert(p wal.WALPageInsertPayload, xid uint64) error {
@@ -552,7 +611,7 @@ func (e *PageStorageEngine) undoInsert(p wal.WALPageInsertPayload, xid uint64) e
 		return nil
 	}
 
-	// Undo INSERT = пометить tuple как dead (XMax = xid)
+	// Undo INSERT = mark tuple as dead (XMax = xid)
 	pid := page.PageID{TableID: t.tableID, SegmentNo: p.SegmentNo, PageNo: p.PageNo}
 	var pg page.Page
 	if err := t.heap.ReadPage(pid, &pg); err != nil {
@@ -564,14 +623,14 @@ func (e *PageStorageEngine) undoInsert(p wal.WALPageInsertPayload, xid uint64) e
 		return nil
 	}
 
-	// Устанавливаем XMax = xid (помечаем как удалённый)
+	// Set XMax = xid (mark as deleted)
 	binary.LittleEndian.PutUint64(tuple[8:16], xid)
 
 	if err := t.heap.WritePage(pid, &pg); err != nil {
 		return err
 	}
 
-	// Обновляем каталог
+	// Update catalog
 	e.catalog.RowCounts[key]--
 	if e.catalog.RowCounts[key] < 0 {
 		e.catalog.RowCounts[key] = 0
@@ -589,7 +648,7 @@ func (e *PageStorageEngine) undoDelete(p wal.WALPageDeletePayload) error {
 		return nil
 	}
 
-	// Undo DELETE = снять XMax (восстановить tuple)
+	// Undo DELETE = clear XMax (restore tuple)
 	pid := page.PageID{TableID: t.tableID, SegmentNo: p.SegmentNo, PageNo: p.PageNo}
 	var pg page.Page
 	if err := t.heap.ReadPage(pid, &pg); err != nil {
@@ -601,22 +660,22 @@ func (e *PageStorageEngine) undoDelete(p wal.WALPageDeletePayload) error {
 		return nil
 	}
 
-	// Обнуляем XMax (восстанавливаем tuple)
+	// Zero out XMax (restore tuple)
 	binary.LittleEndian.PutUint64(tuple[8:16], 0)
 
 	if err := t.heap.WritePage(pid, &pg); err != nil {
 		return err
 	}
 
-	// Обновляем каталог
+	// Update catalog
 	e.catalog.RowCounts[key]++
 	return nil
 }
 
-// CheckpointLoop запускается в фоновой горутине и периодически:
-// 1. Сбрасывает WAL на диск (fsync)
-// 2. После успешного WAL fsync — сбрасывает dirty pages из buffer pool
-// 3. Записывает checkpoint запись в WAL
+// CheckpointLoop runs in a background goroutine and periodically:
+// 1. Flushes WAL to disk (fsync)
+// 2. After successful WAL fsync — flushes dirty pages from buffer pool
+// 3. Writes a checkpoint record to WAL
 func (e *PageStorageEngine) CheckpointLoop(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -624,7 +683,7 @@ func (e *PageStorageEngine) CheckpointLoop(ctx context.Context, interval time.Du
 	for {
 		select {
 		case <-ctx.Done():
-			// Финальный checkpoint при shutdown
+			// Final checkpoint on shutdown
 			e.doCheckpoint()
 			return
 		case <-ticker.C:
@@ -640,13 +699,13 @@ func (e *PageStorageEngine) doCheckpoint() error {
 		return nil
 	}
 
-	// Шаг 1: fsync WAL — получаем текущий LSN
+	// Step 1: fsync WAL — get current LSN
 	lsn, err := e.wal.Flush()
 	if err != nil {
 		return fmt.Errorf("checkpoint: wal flush: %w", err)
 	}
 
-	// Шаг 2: сбрасываем dirty pages из buffer pool
+	// Step 2: flush dirty pages from buffer pool
 	e.mu.Lock()
 	if e.bufPool != nil {
 		if err := e.bufPool.FlushDirtyPagesUpToLSN(lsn); err != nil {
@@ -656,18 +715,18 @@ func (e *PageStorageEngine) doCheckpoint() error {
 	}
 	e.mu.Unlock()
 
-	// Шаг 3: записываем checkpoint record в WAL (до сохранения каталога).
-	// Это гарантирует, что при crash между шагом 3 и 4 recovery
-	// сможет найти checkpoint record в WAL.
-	// ВАЖНО: mu не удерживается — нет deadlock WAL↔PageEngine:
+	// Step 3: write checkpoint record to WAL (before saving catalog).
+	// This guarantees that if a crash occurs between steps 3 and 4,
+	// recovery can find the checkpoint record in WAL.
+	// IMPORTANT: mu is not held — no WAL↔PageEngine deadlock:
 	// doCheckpoint: wal.mu (step 3) → mu (step 4), recovery: wal.mu → mu.
 	checkpointLSN, err := e.wal.WriteCheckpointRecord()
 	if err != nil {
 		return fmt.Errorf("checkpoint: write checkpoint record: %w", err)
 	}
 
-	// Шаг 4: сохраняем каталог с CheckpointLSN.
-	// Теперь recovery может определить checkpoint LSN из каталога.
+	// Step 4: save catalog with CheckpointLSN.
+	// Now recovery can determine checkpoint LSN from the catalog.
 	// Also flushes any deferred DML catalog changes (catalogDirty).
 	e.mu.Lock()
 	e.catalog.CheckpointLSN = checkpointLSN
@@ -679,7 +738,7 @@ func (e *PageStorageEngine) doCheckpoint() error {
 	e.catalogMutationCount = 0
 	e.mu.Unlock()
 
-	// Шаг 5: усекаем WAL — все dirty pages сброшены, catalog сохранён
+	// Step 5: truncate WAL — all dirty pages flushed, catalog saved
 	if err := e.wal.TruncateWAL(); err != nil {
 		return fmt.Errorf("checkpoint: truncate wal: %w", err)
 	}
@@ -691,8 +750,16 @@ func (e *PageStorageEngine) catalogPath() string {
 	return filepath.Join(e.rootDir, "_catalog.json")
 }
 
+func (e *PageStorageEngine) catalogBinaryPath() string {
+	return filepath.Join(e.rootDir, "_catalog.bin")
+}
+
 func (e *PageStorageEngine) dbPath(db string) string {
 	return filepath.Join(e.rootDir, db)
+}
+
+func (e *PageStorageEngine) DataDir() string {
+	return e.rootDir
 }
 
 func (e *PageStorageEngine) tablePath(db, table string) string {
@@ -703,7 +770,7 @@ func (e *PageStorageEngine) schemaPathFor(db, table string) string {
 	return filepath.Join(e.tablePath(db, table), "_schema.json")
 }
 
-// getPage загружает страницу из buffer pool или с диска.
+// getPage loads a page from buffer pool or disk.
 func (e *PageStorageEngine) getPage(pid page.PageID, hf *heap.HeapFile, db, table string) (*page.Page, error) {
 	pg, _, err := e.bufPool.FetchPage(pid, hf, db, table)
 	if err != nil {
@@ -712,12 +779,13 @@ func (e *PageStorageEngine) getPage(pid page.PageID, hf *heap.HeapFile, db, tabl
 	return pg, nil
 }
 
-// unpinPage освобождает страницу в buffer pool.
+// unpinPage releases a page in buffer pool.
 func (e *PageStorageEngine) unpinPage(pid page.PageID, dirty bool) {
 	e.bufPool.UnpinPage(pid, dirty)
 }
 
-// saveCatalogLocked сохраняет каталог; вызывается под write-локом.
+// saveCatalogLocked saves the catalog; called under write lock.
+// Saves both JSON (backward compat) and binary (fast read) formats.
 func (e *PageStorageEngine) saveCatalogLocked() error {
 	data, err := json.MarshalIndent(&e.catalog, "", "  ")
 	if err != nil {
@@ -727,7 +795,18 @@ func (e *PageStorageEngine) saveCatalogLocked() error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, e.catalogPath())
+	if err := os.Rename(tmp, e.catalogPath()); err != nil {
+		return err
+	}
+
+	// Save binary catalog alongside JSON.
+	if binData, err := MarshalCatalog(&e.catalog, e.schemas); err == nil {
+		binTmp := e.catalogBinaryPath() + ".tmp"
+		if err := os.WriteFile(binTmp, binData, 0o644); err == nil {
+			_ = os.Rename(binTmp, e.catalogBinaryPath())
+		}
+	}
+	return nil
 }
 
 // markCatalogDirty marks the catalog as needing a disk flush. Called under e.mu
@@ -747,23 +826,34 @@ func (e *PageStorageEngine) markCatalogDirty() {
 	}
 }
 
-// nextTxLocked выделяет новый txID и фиксирует его время (для AS OF).
+// nextTxID atomically allocates a new transaction ID without holding e.mu.
+// This replaces the mu-protected path for DML hot paths.
+func (e *PageStorageEngine) nextTxID() uint64 {
+	txID := e.txCounter.Add(1)
+	if e.txMgr != nil {
+		e.txMgr.EnsureCounterAtLeast(txID + 1)
+	}
+	return txID
+}
+
+// nextTxLocked allocates a new txID and records its timestamp (for AS OF).
 func (e *PageStorageEngine) nextTxLocked() uint64 {
-	e.catalog.CurrentTxID++
+	txID := e.txCounter.Add(1)
+	e.catalog.CurrentTxID = txID
 	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
-		TxID:      e.catalog.CurrentTxID,
+		TxID:      txID,
 		Timestamp: time.Now(),
 	})
 	if len(e.catalog.TxTimes) > maxTxTimesEntries {
 		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
 	}
 	if e.txMgr != nil {
-		e.txMgr.EnsureCounterAtLeast(e.catalog.CurrentTxID + 1)
+		e.txMgr.EnsureCounterAtLeast(txID + 1)
 	}
-	return e.catalog.CurrentTxID
+	return txID
 }
 
-// ── Кодирование кортежей ──────────────────────────────────────────────────
+// ── Tuple encoding ──────────────────────────────────────────────────────────
 
 func encodePageTuple(createdTx, deletedTx uint64, row Row) ([]byte, error) {
 	return encodeBinaryTuple(createdTx, deletedTx, row)
@@ -773,7 +863,7 @@ func decodePageTuple(tuple []byte, schema *TableSchema) (createdTx, deletedTx ui
 	return decodeBinaryTuple(tuple, schema)
 }
 
-// ── Базы данных ───────────────────────────────────────────────────────────
+// ── Databases ───────────────────────────────────────────────────────────────
 
 func (e *PageStorageEngine) CreateDatabase(name string) error {
 	if err := validateObjectName(name); err != nil {
@@ -805,6 +895,7 @@ func (e *PageStorageEngine) DropDatabase(name string) error {
 				slog.Warn("failed to close heap during drop database", "key", key, "error", err)
 			}
 			delete(e.tables, key)
+			delete(e.schemas, key)
 			delete(e.catalog.LastModified, key)
 			delete(e.catalog.RowCounts, key)
 		}
@@ -846,7 +937,7 @@ func (e *PageStorageEngine) ListDatabases() ([]string, error) {
 	return dbs, nil
 }
 
-// ── Таблицы ───────────────────────────────────────────────────────────────
+// ── Tables ──────────────────────────────────────────────────────────────────
 
 func (e *PageStorageEngine) CreateTable(dbName string, schema TableSchema) error {
 	if err := validateObjectName(dbName); err != nil {
@@ -884,7 +975,11 @@ func (e *PageStorageEngine) CreateTable(dbName string, schema TableSchema) error
 	key := dbName + "/" + schema.Name
 	tid := tableIDFromPath(path)
 	e.bufPool.InvalidateTable(tid)
-	e.tables[key] = &pageTable{heap: hf, schema: &schema, tableID: tid}
+	pt := &pageTable{heap: hf, schema: &schema, tableID: tid}
+	pt.rowCount.Store(0)
+	pt.lastTxID.Store(0)
+	e.tables[key] = pt
+	e.schemas[key] = &schema
 	e.catalog.RowCounts[key] = 0
 
 	// Auto-create BTree index on PRIMARY KEY columns
@@ -903,8 +998,8 @@ func (e *PageStorageEngine) CreateTable(dbName string, schema TableSchema) error
 	return e.saveCatalogLocked()
 }
 
-// writeSchemaLocked записывает JSON-схему на диск. Перед записью эмитится
-// WAL-запись OpSchemaWrite, чтобы при recovery можно было перезаписать схему.
+// writeSchemaLocked writes the JSON schema to disk. Before writing, a
+// WAL entry OpSchemaWrite is emitted so that recovery can overwrite the schema.
 func (e *PageStorageEngine) writeSchemaLocked(db, table string, schema *TableSchema) error {
 	data, err := json.MarshalIndent(schema, "", "  ")
 	if err != nil {
@@ -923,9 +1018,9 @@ func (e *PageStorageEngine) writeSchemaLocked(db, table string, schema *TableSch
 	return os.WriteFile(e.schemaPathFor(db, table), data, 0o644)
 }
 
-// getTableForLock возвращает таблицу с захватом per-table мьютекса.
-// write=true — полный Lock (для записи), write=false — RLock (для чтения).
-// Caller должен вызвать t.mu.RUnlock() или t.mu.Unlock() когда закончит.
+// getTableForLock returns a table with the per-table mutex held.
+// write=true — full Lock (for writes), write=false — RLock (for reads).
+// Caller must call t.mu.RUnlock() or t.mu.Unlock() when done.
 func (e *PageStorageEngine) getTableForLock(db, table string, write bool) (*pageTable, error) {
 	t, err := e.getOrCreateTable(db, table)
 	if err != nil {
@@ -947,13 +1042,13 @@ func (e *PageStorageEngine) getTableForWrite(db, table string) (*pageTable, erro
 	return e.getTableForLock(db, table, true)
 }
 
-// getOrCreateTable возвращает таблицу из кэша или открывает с диска.
-// Не берёт per-table lock — это ответственность вызывающего.
+// getOrCreateTable returns a table from cache or opens it from disk.
+// Does not acquire per-table lock — that is the caller's responsibility.
 func (e *PageStorageEngine) getOrCreateTable(db, table string) (*pageTable, error) {
 	key := db + "/" + table
 	path := e.tablePath(db, table)
 
-	// Быстрый путь: таблица уже в кэше
+	// Fast path: table already in cache
 	e.mu.RLock()
 	t, ok := e.tables[key]
 	if ok {
@@ -962,7 +1057,7 @@ func (e *PageStorageEngine) getOrCreateTable(db, table string) (*pageTable, erro
 	}
 	e.mu.RUnlock()
 
-	// Медленный путь: открываем и кэшируем
+	// Slow path: open and cache
 	e.mu.Lock()
 	t, ok = e.tables[key]
 	if !ok {
@@ -989,15 +1084,22 @@ func (e *PageStorageEngine) getOrCreateTable(db, table string) (*pageTable, erro
 		}
 		tid := tableIDFromPath(path)
 		t = &pageTable{heap: hf, schema: &schema, tableID: tid}
+		if rc, ok := e.catalog.RowCounts[key]; ok {
+			t.rowCount.Store(int64(rc))
+		}
+		if lm, ok := e.catalog.LastModified[key]; ok {
+			t.lastTxID.Store(lm)
+		}
 		e.tables[key] = t
+		e.schemas[key] = t.schema
 	}
 	e.mu.Unlock()
 	return t, nil
 }
 
-// getTableLocked открывает таблицу (лениво) и кэширует её.
-// Вызывается под любым из локов e.mu; модификация e.tables безопасна только
-// под write-локом, поэтому readOnly-путь не кэширует при RLock.
+// getTableLocked opens a table lazily and caches it.
+// Called under any of e.mu's locks; modifying e.tables is only safe under
+// the write lock, so the readOnly path does not cache on RLock.
 func (e *PageStorageEngine) getTableLocked(db, table string, cache bool) (*pageTable, error) {
 	key := db + "/" + table
 	if t, ok := e.tables[key]; ok {
@@ -1026,8 +1128,15 @@ func (e *PageStorageEngine) getTableLocked(db, table string, cache bool) (*pageT
 
 	tid := tableIDFromPath(path)
 	t := &pageTable{heap: hf, schema: &schema, tableID: tid}
+	if rc, ok := e.catalog.RowCounts[key]; ok {
+		t.rowCount.Store(int64(rc))
+	}
+	if lm, ok := e.catalog.LastModified[key]; ok {
+		t.lastTxID.Store(lm)
+	}
 	if cache {
 		e.tables[key] = t
+		e.schemas[key] = t.schema
 	}
 	return t, nil
 }
@@ -1048,6 +1157,7 @@ func (e *PageStorageEngine) DropTable(dbName, tableName string) error {
 			slog.Warn("failed to close heap during drop table", "key", key, "error", err)
 		}
 		delete(e.tables, key)
+		delete(e.schemas, key)
 	}
 	path := e.tablePath(dbName, tableName)
 	if _, err := os.Stat(path); err != nil {
@@ -1085,7 +1195,14 @@ func (e *PageStorageEngine) ListTables(dbName string) ([]TableInfo, error) {
 			continue
 		}
 		name := entry.Name()
-		info := TableInfo{Name: name, RowCount: e.catalog.RowCounts[dbName+"/"+name]}
+		key := dbName + "/" + name
+		var info TableInfo
+		if t, ok := e.tables[key]; ok {
+			// Read from per-table atomic counters (lock-free).
+			info = TableInfo{Name: name, RowCount: int(t.rowCount.Load())}
+		} else {
+			info = TableInfo{Name: name, RowCount: e.catalog.RowCounts[key]}
+		}
 		if data, err := os.ReadFile(e.schemaPathFor(dbName, name)); err == nil {
 			var schema TableSchema
 			if json.Unmarshal(data, &schema) == nil {
@@ -1108,4 +1225,21 @@ func (e *PageStorageEngine) GetTableSchema(dbName, tableName string) (*TableSche
 	copied := *t.schema
 	copied.Columns = append([]ColumnSchema(nil), t.schema.Columns...)
 	return &copied, nil
+}
+
+// ── Subsystem accessors ──────────────────────────────────────────────────────
+
+// CatalogManager returns the catalog manager subsystem for schema lookups.
+func (e *PageStorageEngine) CatalogManager() *CatalogManager {
+	return e.catalogMgr
+}
+
+// DML returns the DML executor subsystem for INSERT/UPDATE/DELETE operations.
+func (e *PageStorageEngine) DML() *DMLExecutor {
+	return e.dml
+}
+
+// DDL returns the DDL executor subsystem for CREATE/DROP TABLE operations.
+func (e *PageStorageEngine) DDL() *DDLExecutor {
+	return e.ddl
 }

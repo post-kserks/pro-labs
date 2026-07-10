@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
@@ -10,14 +11,14 @@ import (
 
 const defaultSampleSize = 1000
 
-// TableStatistics хранит статистику по таблице для query optimizer.
+// TableStatistics stores statistics for a table for the query optimizer.
 type TableStatistics struct {
 	TableName   string
 	RowCount    int
 	ColumnStats map[string]*ColumnStatistics
 }
 
-// ColumnStatistics хранит статистику по столбцу.
+// ColumnStatistics stores statistics for a column.
 type ColumnStatistics struct {
 	ColumnName    string
 	DistinctCount int
@@ -26,14 +27,14 @@ type ColumnStatistics struct {
 	MaxValue      interface{}
 }
 
-// StatisticsCollector собирает и кэширует статистику по таблицам.
+// StatisticsCollector collects and caches statistics for tables.
 type StatisticsCollector struct {
 	mu      sync.RWMutex
 	cache   map[string]*TableStatistics // "db/table" → stats
 	storage storage.StorageEngine
 }
 
-// NewStatisticsCollector создаёт collector.
+// NewStatisticsCollector creates a collector.
 func NewStatisticsCollector(store storage.StorageEngine) *StatisticsCollector {
 	return &StatisticsCollector{
 		cache:   make(map[string]*TableStatistics),
@@ -41,7 +42,7 @@ func NewStatisticsCollector(store storage.StorageEngine) *StatisticsCollector {
 	}
 }
 
-// GetTableStats возвращает статистику по таблице (кэшируется).
+// GetTableStats returns statistics for a table (cached).
 func (sc *StatisticsCollector) GetTableStats(dbName, tableName string) *TableStatistics {
 	key := dbName + "/" + tableName
 
@@ -58,7 +59,7 @@ func (sc *StatisticsCollector) GetTableStats(dbName, tableName string) *TableSta
 	return stats
 }
 
-// InvalidateStats сбрасывает кэш статистики для таблицы.
+// InvalidateStats invalidates the statistics cache for a table.
 func (sc *StatisticsCollector) InvalidateStats(dbName, tableName string) {
 	key := dbName + "/" + tableName
 	sc.mu.Lock()
@@ -66,26 +67,26 @@ func (sc *StatisticsCollector) InvalidateStats(dbName, tableName string) {
 	sc.mu.Unlock()
 }
 
-// collectStats собирает статистику по таблице.
+// collectStats collects statistics for a table.
 func (sc *StatisticsCollector) collectStats(dbName, tableName string) *TableStatistics {
 	stats := &TableStatistics{
 		TableName:   tableName,
 		ColumnStats: make(map[string]*ColumnStatistics),
 	}
 
-	// Получаем схему
+	// Get schema
 	schema, err := sc.storage.GetTableSchema(dbName, tableName)
 	if err != nil {
 		return stats
 	}
 
-	// Получаем количество строк
+	// Get row count
 	rowCount, err := sc.storage.CountRows(dbName, tableName)
 	if err == nil {
 		stats.RowCount = rowCount
 	}
 
-	// Если таблица пуста — возвращаем базовую статистику
+	// If table is empty — return basic statistics
 	if rowCount == 0 {
 		for _, col := range schema.Columns {
 			stats.ColumnStats[strings.ToLower(col.Name)] = &ColumnStatistics{
@@ -97,13 +98,13 @@ func (sc *StatisticsCollector) collectStats(dbName, tableName string) *TableStat
 		return stats
 	}
 
-	// Для сбора статистики читаем ограниченную выборку — без полного скана.
+	// For statistics collection, read a limited sample — without full scan.
 	rows, err := sc.storage.ReadSampleRows(dbName, tableName, defaultSampleSize)
 	if err != nil {
 		return stats
 	}
 
-	// Собираем статистику по каждому столбцу
+	// Collect statistics for each column
 	for colIdx, col := range schema.Columns {
 		colStats := &ColumnStatistics{
 			ColumnName: col.Name,
@@ -120,7 +121,9 @@ func (sc *StatisticsCollector) collectStats(dbName, tableName string) *TableStat
 			if val == nil {
 				nullCount++
 			} else {
-				distinctValues[val] = true
+				// Use fmt.Sprintf for unhashable types (slices, maps)
+				key := fmt.Sprintf("%v", val)
+				distinctValues[key] = true
 			}
 		}
 
@@ -132,7 +135,7 @@ func (sc *StatisticsCollector) collectStats(dbName, tableName string) *TableStat
 	return stats
 }
 
-// EstimateSelectivity оценивает селективность предиката (0.0 - 1.0).
+// EstimateSelectivity estimates predicate selectivity (0.0 - 1.0).
 func (sc *StatisticsCollector) EstimateSelectivity(dbName, tableName string, predicate interface{}) float64 {
 	if predicate == nil {
 		return 1.0
@@ -189,14 +192,14 @@ func (sc *StatisticsCollector) estimateBinarySelectivityWithStats(tableStats *Ta
 	}
 }
 
-// estimateBinarySelectivity оценивает селективность для бинарных операций.
+// estimateBinarySelectivity estimates selectivity for binary operations.
 func (sc *StatisticsCollector) estimateBinarySelectivity(stats *TableStatistics, operator string) float64 {
 	switch operator {
 	case "=":
-		// Равенство: 1/distinct_count (если есть индекс)
+		// Equality: 1/distinct_count (if index exists)
 		return 0.1
 	case "!=", "<>":
-		// Неравенство: 1 - selectivity(=)
+		// Inequality: 1 - selectivity(=)
 		return 0.9
 	case "<", ">", "<=", ">=":
 		// Range: ~30%

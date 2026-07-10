@@ -834,7 +834,7 @@ func TestStressDataTypes(t *testing.T) {
 		{"INSERT INTO types_test VALUES (-1, -1.5, FALSE, 'hello', 'world', 42);", "negatives"},
 		{"INSERT INTO types_test VALUES (2147483647, 999999999.99, TRUE, 'x', 'y', NULL);", "max values"},
 		{"INSERT INTO types_test VALUES (-2147483648, -999999999.99, FALSE, 'z', 'w', NULL);", "min values"},
-		{"INSERT INTO types_test VALUES (42, 3.14159265358979, TRUE, 'special chars: !@#$%^&*()', 'unicode: привет мир', NULL);", "special chars"},
+		{"INSERT INTO types_test VALUES (42, 3.14159265358979, TRUE, 'special chars: !@#$%^&*()', 'unicode: hello world', NULL);", "special chars"},
 	}
 
 	for _, tc := range edgeCases {

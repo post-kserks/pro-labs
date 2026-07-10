@@ -188,6 +188,8 @@ func exprToSQL(expr parser.Expression) string {
 		return "CAST(" + exprToSQL(e.Expr) + " AS " + e.TargetType + ")"
 	case *parser.JsonPathExpr:
 		return exprToSQL(e.Left) + "->>'" + e.Path + "'"
+	case *parser.JSONAccess:
+		return exprToSQL(e.Expr) + " " + e.Operator + " " + exprToSQL(e.Argument)
 	default:
 		return fmt.Sprintf("%v", expr)
 	}

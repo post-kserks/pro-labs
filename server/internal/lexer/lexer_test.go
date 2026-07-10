@@ -1537,3 +1537,27 @@ func TestMixedTokenSequence(t *testing.T) {
 		}
 	}
 }
+
+func TestLexerBlobToken(t *testing.T) {
+	input := "BLOB"
+	tokens := lexNonEOF(input)
+	if len(tokens) != 1 {
+		t.Fatalf("expected 1 token, got %d", len(tokens))
+	}
+	if tokens[0].Type != TOKEN_BLOB {
+		t.Errorf("expected TOKEN_BLOB, got %s", tokens[0].Type)
+	}
+	if tokens[0].Literal != "BLOB" {
+		t.Errorf("expected literal 'BLOB', got %q", tokens[0].Literal)
+	}
+
+	// case-insensitive
+	input2 := "blob"
+	tokens2 := lexNonEOF(input2)
+	if len(tokens2) != 1 {
+		t.Fatalf("expected 1 token, got %d", len(tokens2))
+	}
+	if tokens2[0].Type != TOKEN_BLOB {
+		t.Errorf("expected TOKEN_BLOB for 'blob', got %s", tokens2[0].Type)
+	}
+}

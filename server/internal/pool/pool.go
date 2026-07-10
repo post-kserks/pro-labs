@@ -1,3 +1,13 @@
+// Package pool provides connection limiting and session pooling utilities.
+//
+// ConnectionLimiter tracks active TCP connections and enforces a maximum
+// concurrency limit. It is NOT a connection pool in the traditional sense —
+// connections are not reused or returned to a shared cache. Each Acquire
+// creates a new connection (or wraps an accepted one) and Release marks it
+// as no longer active. Idle connections are cleaned up periodically.
+//
+// SessionPool provides true pooling for executor.Session objects, allowing
+// HTTP handlers to reuse sessions across requests.
 package pool
 
 import (
@@ -7,11 +17,16 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"vaultdb/internal/executor"
 )
 
-// Pool — пул соединений с автоматическим управлением.
-type Pool struct {
+// ConnectionLimiter tracks active connections and enforces a maximum concurrency limit.
+// Despite the historical "Pool" name, this does NOT pool or reuse connections — it
+// merely counts active connections and rejects new ones when the limit is reached.
+type ConnectionLimiter struct {
 	mu          sync.Mutex
 	connections []*Connection
 	minSize     int
@@ -23,7 +38,7 @@ type Pool struct {
 	wg          sync.WaitGroup
 }
 
-// Connection — соединение в пуле, оборачивает реальное TCP-соединение.
+// Connection — a connection in the pool, wraps a real TCP connection.
 type Connection struct {
 	conn      net.Conn
 	ID        string
@@ -33,7 +48,7 @@ type Connection struct {
 	mu        sync.Mutex
 }
 
-// Read читает данные из соединения, обновляя LastUsed.
+// Read reads data from the connection, updating LastUsed.
 func (c *Connection) Read(b []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -41,7 +56,7 @@ func (c *Connection) Read(b []byte) (int, error) {
 	return c.conn.Read(b)
 }
 
-// Write записывает данные в соединение, обновляя LastUsed.
+// Write writes data to the connection, updating LastUsed.
 func (c *Connection) Write(b []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -49,33 +64,33 @@ func (c *Connection) Write(b []byte) (int, error) {
 	return c.conn.Write(b)
 }
 
-// Close закрывает底层 TCP-соединение.
+// Close closes the underlying TCP connection.
 func (c *Connection) Close() error {
 	return c.conn.Close()
 }
 
-// RemoteAddr возвращает адрес удалённой стороны.
+// RemoteAddr returns the remote side address.
 func (c *Connection) RemoteAddr() net.Addr {
 	return c.conn.RemoteAddr()
 }
 
-// SetDeadline устанавливает deadline на соединении.
+// SetDeadline sets the deadline on the connection.
 func (c *Connection) SetDeadline(t time.Time) error {
 	return c.conn.SetDeadline(t)
 }
 
-// SetReadDeadline устанавливает read deadline.
+// SetReadDeadline sets the read deadline.
 func (c *Connection) SetReadDeadline(t time.Time) error {
 	return c.conn.SetReadDeadline(t)
 }
 
-// SetWriteDeadline устанавливает write deadline.
+// SetWriteDeadline sets the write deadline.
 func (c *Connection) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
 
-// NewPool создаёт новый пул соединений.
-func NewPool(minSize, maxSize int, idleTimeout time.Duration, factory func() (net.Conn, error)) *Pool {
+// NewConnectionLimiter creates a new connection limiter.
+func NewConnectionLimiter(minSize, maxSize int, idleTimeout time.Duration, factory func() (net.Conn, error)) *ConnectionLimiter {
 	if minSize <= 0 {
 		minSize = 1
 	}
@@ -86,7 +101,7 @@ func NewPool(minSize, maxSize int, idleTimeout time.Duration, factory func() (ne
 		idleTimeout = 5 * time.Minute
 	}
 
-	p := &Pool{
+	p := &ConnectionLimiter{
 		connections: make([]*Connection, 0, maxSize),
 		minSize:     minSize,
 		maxSize:     maxSize,
@@ -101,8 +116,8 @@ func NewPool(minSize, maxSize int, idleTimeout time.Duration, factory func() (ne
 	return p
 }
 
-// Acquire получает соединение из пула.
-func (p *Pool) Acquire() (*Connection, error) {
+// Acquire gets a connection from the pool.
+func (p *ConnectionLimiter) Acquire() (*Connection, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -141,8 +156,8 @@ func (p *Pool) Acquire() (*Connection, error) {
 	return conn, nil
 }
 
-// Release возвращает соединение в пул.
-func (p *Pool) Release(conn *Connection) {
+// Release returns a connection to the pool.
+func (p *ConnectionLimiter) Release(conn *Connection) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -150,10 +165,10 @@ func (p *Pool) Release(conn *Connection) {
 	conn.LastUsed = time.Now()
 }
 
-// AcquireConn оборачивает существующее соединение в пул.
-// Используется когда соединение уже принято (listener.Accept),
-// а не создаётся через factory.
-func (p *Pool) AcquireConn(raw net.Conn) (*Connection, error) {
+// AcquireConn wraps an existing connection into the pool.
+// Used when the connection is already accepted (listener.Accept),
+// rather than created via factory.
+func (p *ConnectionLimiter) AcquireConn(raw net.Conn) (*Connection, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -180,8 +195,8 @@ func randomID() string {
 	return hex.EncodeToString(b)
 }
 
-// Close закрывает пул и все соединения.
-func (p *Pool) Close() {
+// Close closes the pool and all connections.
+func (p *ConnectionLimiter) Close() {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -202,8 +217,8 @@ func (p *Pool) Close() {
 	p.connections = nil
 }
 
-// Stats возвращает статистику пула.
-func (p *Pool) Stats() PoolStats {
+// Stats returns pool statistics.
+func (p *ConnectionLimiter) Stats() ConnectionLimiterStats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -217,22 +232,22 @@ func (p *Pool) Stats() PoolStats {
 		}
 	}
 
-	return PoolStats{
+	return ConnectionLimiterStats{
 		Active: active,
 		Idle:   idle,
 		Total:  len(p.connections),
 	}
 }
 
-// PoolStats статистика пула соединений.
-type PoolStats struct {
+// ConnectionLimiterStats holds connection pool statistics.
+type ConnectionLimiterStats struct {
 	Active int
 	Idle   int
 	Total  int
 }
 
 // isHealthy
-func (p *Pool) isHealthy(conn *Connection) bool {
+func (p *ConnectionLimiter) isHealthy(conn *Connection) bool {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
@@ -246,12 +261,12 @@ func (p *Pool) isHealthy(conn *Connection) bool {
 	if ne, ok := err.(net.Error); ok && ne.Timeout() {
 		return true
 	}
-	// io.EOF означает, что remote side закрыл соединение — оно мёртвое
+	// io.EOF means the remote side closed the connection — it's dead
 	return false
 }
 
-// removeConnLocked удаляет соединение из списка (должно вызываться с p.mu).
-func (p *Pool) removeConnLocked(conn *Connection) {
+// removeConnLocked removes a connection from the list (must be called with p.mu).
+func (p *ConnectionLimiter) removeConnLocked(conn *Connection) {
 	for i, c := range p.connections {
 		if c == conn {
 			p.connections = append(p.connections[:i], p.connections[i+1:]...)
@@ -260,7 +275,7 @@ func (p *Pool) removeConnLocked(conn *Connection) {
 	}
 }
 
-func (p *Pool) cleanupLoop() {
+func (p *ConnectionLimiter) cleanupLoop() {
 	defer p.wg.Done()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -275,7 +290,7 @@ func (p *Pool) cleanupLoop() {
 	}
 }
 
-func (p *Pool) cleanup() {
+func (p *ConnectionLimiter) cleanup() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -303,4 +318,179 @@ func (p *Pool) cleanup() {
 	}
 
 	p.connections = remaining
+}
+
+// SessionPool — session pool for reusing executor.Session objects.
+// Similar to how PostgreSQL reuses connections via a pool,
+// SessionPool allows HTTP handlers to reuse sessions between requests.
+type SessionPool struct {
+	sessions    chan *sessionEntry
+	factory     func() *executor.Session
+	idleTimeout time.Duration
+	stopCh      chan struct{}
+	closed      bool
+	mu          sync.Mutex
+	wg          sync.WaitGroup
+	active      int32
+	maxOpen     int
+}
+
+type sessionEntry struct {
+	session  *executor.Session
+	lastUsed time.Time
+}
+
+// NewSessionPool creates a new session pool.
+// factory — function to create a new session.
+// maxIdle — maximum number of idle sessions in the pool.
+// maxOpen — maximum number of simultaneously active sessions.
+// idleTimeout — maximum session idle time before closing.
+func NewSessionPool(factory func() *executor.Session, maxIdle, maxOpen int, idleTimeout time.Duration) *SessionPool {
+	if maxIdle <= 0 {
+		maxIdle = 10
+	}
+	if maxOpen <= 0 {
+		maxOpen = 100
+	}
+	if idleTimeout <= 0 {
+		idleTimeout = 5 * time.Minute
+	}
+
+	p := &SessionPool{
+		sessions:    make(chan *sessionEntry, maxIdle),
+		factory:     factory,
+		idleTimeout: idleTimeout,
+		stopCh:      make(chan struct{}),
+		maxOpen:     maxOpen,
+	}
+
+	p.wg.Add(1)
+	go p.cleanupLoop()
+
+	return p
+}
+
+// Get gets a session from the pool or creates a new one.
+func (p *SessionPool) Get() (*executor.Session, error) {
+	// Attempt to get from pool (non-blocking)
+	select {
+	case entry := <-p.sessions:
+		if entry != nil {
+			atomic.AddInt32(&p.active, 1)
+			entry.session.Reset()
+			return entry.session, nil
+		}
+	default:
+	}
+
+	// Check limit
+	if atomic.LoadInt32(&p.active) >= int32(p.maxOpen) {
+		return nil, fmt.Errorf("session pool exhausted: %d/%d active", atomic.LoadInt32(&p.active), p.maxOpen)
+	}
+
+	// Create new session
+	sess := p.factory()
+	atomic.AddInt32(&p.active, 1)
+	return sess, nil
+}
+
+// Put returns a session to the pool for reuse.
+func (p *SessionPool) Put(sess *executor.Session) {
+	if sess == nil {
+		return
+	}
+
+	atomic.AddInt32(&p.active, -1)
+
+	// Attempt to return to pool (non-blocking)
+	select {
+	case p.sessions <- &sessionEntry{
+		session:  sess,
+		lastUsed: time.Now(),
+	}:
+	default:
+		// Pool is full — close the session
+		sess.Close()
+	}
+}
+
+// Close closes the pool and all sessions in it.
+func (p *SessionPool) Close() {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.closed = true
+	p.mu.Unlock()
+
+	close(p.stopCh)
+	p.wg.Wait()
+
+	// Close all remaining sessions
+	for {
+		select {
+		case entry := <-p.sessions:
+			if entry != nil {
+				entry.session.Close()
+			}
+		default:
+			return
+		}
+	}
+}
+
+// Stats returns session pool statistics.
+func (p *SessionPool) Stats() SessionConnectionLimiterStats {
+	return SessionConnectionLimiterStats{
+		Active: int(atomic.LoadInt32(&p.active)),
+		Idle:   len(p.sessions),
+		Max:    p.maxOpen,
+	}
+}
+
+// SessionConnectionLimiterStats holds session pool statistics.
+type SessionConnectionLimiterStats struct {
+	Active int
+	Idle   int
+	Max    int
+}
+
+func (p *SessionPool) cleanupLoop() {
+	defer p.wg.Done()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-p.stopCh:
+			return
+		case <-ticker.C:
+			p.cleanIdleSessions()
+		}
+	}
+}
+
+func (p *SessionPool) cleanIdleSessions() {
+	now := time.Now()
+	for {
+		select {
+		case entry := <-p.sessions:
+			if entry == nil {
+				continue
+			}
+			if now.Sub(entry.lastUsed) >= p.idleTimeout {
+				entry.session.Close()
+			} else {
+				// Session is still alive — return to pool
+				select {
+				case p.sessions <- entry:
+				default:
+					entry.session.Close()
+				}
+			}
+		default:
+			return
+		}
+	}
 }

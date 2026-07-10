@@ -27,11 +27,11 @@ func setupCacheSession(t *testing.T) *Session {
 	return session
 }
 
-// TestResultCacheHitMiss проверяет что кэш работает: первый запрос — miss, повторный — hit.
+// TestResultCacheHitMiss verifies cache works: first query — miss, repeat — hit.
 func TestResultCacheHitMiss(t *testing.T) {
 	session := setupCacheSession(t)
 
-	// Первый запрос — MISS (кэш пуст)
+	// First query — MISS (cache empty)
 	start := time.Now()
 	res1 := executeSQL(t, session, "SELECT * FROM products WHERE id = 42;")
 	missDuration := time.Since(start)
@@ -39,7 +39,7 @@ func TestResultCacheHitMiss(t *testing.T) {
 		t.Fatalf("expected row with id=42, got %v", res1.Rows)
 	}
 
-	// Второй запрос — HIT (из кэша)
+	// Second query — HIT (from cache)
 	start = time.Now()
 	res2 := executeSQL(t, session, "SELECT * FROM products WHERE id = 42;")
 	hitDuration := time.Since(start)
@@ -59,19 +59,19 @@ func TestResultCacheHitMiss(t *testing.T) {
 	}
 }
 
-// TestResultCacheInvalidationOnInsert проверяет инвалидацию кэша при INSERT.
+// TestResultCacheInvalidationOnInsert checks cache invalidation on INSERT.
 func TestResultCacheInvalidationOnInsert(t *testing.T) {
 	session := setupCacheSession(t)
 
-	// Запрос COUNT — populating cache
+	// COUNT query — populating cache
 	res1 := executeSQL(t, session, "SELECT COUNT(*) FROM products;")
 	count1 := res1.Rows[0][0]
 	fmt.Printf("Before insert: count=%s\n", count1)
 
-	// Вставка новой строки
+	// Insert new row
 	executeSQL(t, session, "INSERT INTO products VALUES (9999, 'new', 0.0, 'new_cat');")
 
-	// Повторный запрос — должен вернуть обновлённый count
+	// Repeat query — should return updated count
 	res2 := executeSQL(t, session, "SELECT COUNT(*) FROM products;")
 	count2 := res2.Rows[0][0]
 	fmt.Printf("After insert: count=%s\n", count2)
@@ -81,7 +81,7 @@ func TestResultCacheInvalidationOnInsert(t *testing.T) {
 	}
 }
 
-// TestResultCacheInvalidationOnDelete проверяет инвалидацию кэша при DELETE.
+// TestResultCacheInvalidationOnDelete checks cache invalidation on DELETE.
 func TestResultCacheInvalidationOnDelete(t *testing.T) {
 	session := setupCacheSession(t)
 
@@ -98,15 +98,15 @@ func TestResultCacheInvalidationOnDelete(t *testing.T) {
 	}
 }
 
-// TestResultCacheDifferentQueries проверяет что разные запросы имеют разные ключи.
+// TestResultCacheDifferentQueries verifies different queries have different keys.
 func TestResultCacheDifferentQueries(t *testing.T) {
 	session := setupCacheSession(t)
 
-	// Запрос 1
+	// Query 1
 	executeSQL(t, session, "SELECT * FROM products WHERE id = 1;")
-	// Запрос 2 (другой WHERE)
+	// Query 2 (different WHERE)
 	executeSQL(t, session, "SELECT * FROM products WHERE id = 2;")
-	// Запрос 3 (другая функция)
+	// Query 3 (different function)
 	executeSQL(t, session, "SELECT LENGTH(name) FROM products WHERE id = 1;")
 
 	hits, _, _ := session.resultCache.Stats()
@@ -116,7 +116,7 @@ func TestResultCacheDifferentQueries(t *testing.T) {
 	}
 }
 
-// TestResultCacheTTL проверяет что кэш устаревает через TTL.
+// TestResultCacheTTL verifies cache expires through TTL.
 func TestResultCacheTTL(t *testing.T) {
 	session := setupCacheSession(t)
 	session.resultCache = NewResultCache(256, 100*time.Millisecond)
@@ -136,7 +136,7 @@ func TestResultCacheTTL(t *testing.T) {
 	}
 }
 
-// TestResultCachePerformanceCompare сравнивает скорость с кэшем и без.
+// TestResultCachePerformanceCompare compares speed with and without cache.
 func TestResultCachePerformanceCompare(t *testing.T) {
 	session := setupCacheSession(t)
 
@@ -145,14 +145,14 @@ func TestResultCachePerformanceCompare(t *testing.T) {
 		executeSQL(t, session, fmt.Sprintf("SELECT * FROM products WHERE id = %d;", i))
 	}
 
-	// Benchmark с кэшем
+	// Benchmark with cache
 	start := time.Now()
 	for i := 0; i < 1000; i++ {
 		executeSQL(t, session, fmt.Sprintf("SELECT * FROM products WHERE id = %d;", i%100))
 	}
 	cachedDuration := time.Since(start)
 
-	// Benchmark без кэша (очищаем кэш перед каждым запросом)
+	// Benchmark without cache (clear cache before each query)
 	start = time.Now()
 	for i := 0; i < 1000; i++ {
 		session.resultCache.InvalidateAll()

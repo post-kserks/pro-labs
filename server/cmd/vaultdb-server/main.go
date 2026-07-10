@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/audit"
 	"vaultdb/internal/auth"
 	"vaultdb/internal/config"
 	"vaultdb/internal/executor"
@@ -36,8 +37,8 @@ import (
 	"vaultdb/internal/wal"
 )
 
-// version и buildDate перезаписываются через ldflags при сборке
-// (единый источник истины — файл VERSION в корне репозитория).
+// version and buildDate are overwritten via ldflags at build time
+// (single source of truth — VERSION file in the repository root).
 var (
 	version   = "dev"
 	buildDate = "unknown"
@@ -86,7 +87,7 @@ func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *
 
 	w.OnAppend = func() { metricsCollector.IncWALEntries() }
 
-	pageStore, err := storage.NewPageStorageEngine(dataDir, w, txm)
+	pageStore, err := storage.NewPageStorageEngine(dataDir, w, txm, &storage.StorageOptions{BufferPoolPages: cfg.Storage.BufferPoolPages})
 	if err != nil {
 		logger.Error("failed to open page storage engine", "error", err)
 		os.Exit(1)
@@ -103,7 +104,7 @@ func setupStorage(cfg *config.Config, dataDir string, ctx context.Context, txm *
 	return pageStore, w
 }
 
-func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPort, monitorPort int, store storage.StorageEngine, authManager *auth.Manager, metricsCollector *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, embedder ai.Embedder, activeConnections func() int64, logger *slog.Logger, tlsCert, tlsKey string) <-chan error {
+func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPort, monitorPort int, store storage.StorageEngine, authManager *auth.Manager, metricsCollector *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, embedder ai.Embedder, activeConnections func() int64, logger *slog.Logger, tlsCert, tlsKey string, auditLog *audit.TableLog) <-chan error {
 	rateLimiter := httpserver.NewRateLimiter(cfg.Server.RateLimitRPS, cfg.Server.RateLimitBurst)
 	httpSrv := httpserver.New(httpserver.Config{
 		Host:                      host,
@@ -130,6 +131,8 @@ func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPor
 		TLSKeyFile:                tlsKey,
 		MaxLiveQuerySubscriptions: cfg.Server.LiveQueries.BufferSize,
 		MaxLiveQueryDurationSec:   cfg.Server.QueryTimeoutSec,
+		AuditTable:                auditLog,
+		AuditVerifyInterval:       time.Duration(cfg.Audit.VerifyIntervalSec) * time.Second,
 	})
 	httpErrCh := make(chan error, 1)
 	go func() {
@@ -239,6 +242,52 @@ func handleConnection(ctx context.Context, conn net.Conn, store storage.StorageE
 			continue
 		}
 
+		// Peek at message type to detect handshake
+		var rawMsg map[string]interface{}
+		if err := json.Unmarshal(line, &rawMsg); err != nil {
+			if !sendError(conn, "", "invalid JSON request", logger) {
+				return
+			}
+			continue
+		}
+
+		if msgType, _ := rawMsg["type"].(string); msgType == "handshake" {
+			var hs protocol.HandshakeRequest
+			if err := json.Unmarshal(line, &hs); err != nil {
+				if !sendError(conn, "", "invalid handshake", logger) {
+					return
+				}
+				continue
+			}
+
+			// Validate major version
+			if hs.ClientVersion != "" && len(hs.ClientVersion) > 0 && hs.ClientVersion[0] != '2' {
+				errResp := protocol.HandshakeResponse{
+					Type:            "handshake",
+					ProtocolVersion: "2.0",
+					Server:          "VaultDB",
+					ServerVersion:   version,
+				}
+				writeResponse(conn, errResp)
+				sendError(conn, "", "incompatible protocol version", logger)
+				return
+			}
+
+			resp := protocol.HandshakeResponse{
+				Type:              "handshake",
+				ProtocolVersion:   "2.0",
+				Server:            "VaultDB",
+				ServerVersion:     version,
+				SupportedFeatures: []string{"time_travel", "transactions", "prepared_statements"},
+			}
+			if err := writeResponse(conn, resp); err != nil {
+				return
+			}
+			continue
+		}
+
+		// Non-handshake: process as regular request (v1 compatible)
+
 		var req protocol.Request
 		if err := json.Unmarshal(line, &req); err != nil {
 			if !sendError(conn, "", "invalid JSON request", logger) {
@@ -301,8 +350,8 @@ func main() {
 	logger := setupLogger(os.Getenv("VAULTDB_LOG_LEVEL"))
 	cfg := loadConfig(*configPath, logger)
 
-	// CLI-флаги имеют приоритет над vaultdb.yaml: значения из конфига
-	// применяются только для флагов, которые не были заданы явно.
+	// CLI flags take priority over vaultdb.yaml: config values
+	// are applied only for flags that were not explicitly set.
 	setFlags := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 
@@ -354,6 +403,12 @@ func main() {
 		time.Duration(cfg.Server.LiveQueries.BlockTimeoutS)*time.Second,
 		cfg.Server.LiveQueries.BufferSize,
 		logger)
+
+	// Audit log table.
+	auditLog := audit.NewTableLog(store)
+	if err := auditLog.EnsureTable(); err != nil {
+		logger.Warn("failed to create audit log table", "error", err)
+	}
 
 	var activeConnections atomic.Int64
 
@@ -422,9 +477,10 @@ func main() {
 		logger.Error("failed to create auth manager", "error", err)
 		os.Exit(1)
 	}
+	authManager.SetLocalhostBypass(cfg.Auth.LocalhostBypass)
 
-	// Embedding-провайдер для SEMANTIC_MATCH/AI_EMBED. Без настроенного AI
-	// эти операции возвращают понятную ошибку (NoopEmbedder в executor).
+	// Embedding provider for SEMANTIC_MATCH/AI_EMBED. Without configured AI,
+	// these operations return a clear error (NoopEmbedder in executor).
 	var embedder ai.Embedder
 	if cfg.AI.Endpoint != "" {
 		apiKey := cfg.AI.APIKey
@@ -448,7 +504,7 @@ func main() {
 
 	httpErrCh := runHTTPServer(ctx, cfg, *host, *httpPort, *monitorPort, store, authManager, metricsCollector, txm, br, embedder, func() int64 {
 		return activeConnections.Load()
-	}, logger, *tlsCert, *tlsKey)
+	}, logger, *tlsCert, *tlsKey, auditLog)
 
 	maxRequestSize := cfg.Server.MaxRequestSizeBytes
 	if maxRequestSize <= 0 {
@@ -494,7 +550,7 @@ func main() {
 
 	// Connection pool
 	maxConns := cfg.Server.MaxConnections
-	connPool := pool.NewPool(poolInitialCapacity, maxConns, poolIdleTimeout, nil)
+	connPool := pool.NewConnectionLimiter(poolInitialCapacity, maxConns, poolIdleTimeout, nil)
 
 	go func() {
 		<-ctx.Done()

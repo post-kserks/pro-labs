@@ -14,14 +14,14 @@ import (
 	"time"
 )
 
-// Config — конфигурация TLS.
+// Config — TLS configuration.
 type Config struct {
-	CertFile string // путь к файлу сертификата
-	KeyFile  string // путь к файлу ключа
+	CertFile string // path to certificate file
+	KeyFile  string // path to key file
 	Enabled  bool
 }
 
-// LoadTLSConfig загружает TLS конфигурацию из файлов.
+// LoadTLSConfig loads TLS configuration from files.
 func LoadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -41,7 +41,7 @@ func LoadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	}, nil
 }
 
-// GenerateSelfSignedCert генерирует самоподписанный сертификат для тестов.
+// GenerateSelfSignedCert generates a self-signed certificate for tests.
 func GenerateSelfSignedCert(host string) (*tls.Certificate, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -84,7 +84,7 @@ func GenerateSelfSignedCert(host string) (*tls.Certificate, error) {
 	return &cert, nil
 }
 
-// SaveCertToFile сохраняет сертификат и ключ в файлы.
+// SaveCertToFile saves certificate and key to files.
 func SaveCertToFile(certPEM, keyPEM []byte, certFile, keyFile string) error {
 	if err := os.WriteFile(certFile, certPEM, 0640); err != nil {
 		return fmt.Errorf("write cert file: %w", err)
@@ -95,8 +95,8 @@ func SaveCertToFile(certPEM, keyPEM []byte, certFile, keyFile string) error {
 	return nil
 }
 
-// LoadMTLSConfig загружает TLS конфигурацию с поддержкой mTLS (mutual TLS).
-// Помимо серверного сертификата загружает CA для верификации клиентских сертификатов.
+// LoadMTLSConfig loads TLS configuration with mTLS (mutual TLS) support.
+// In addition to the server certificate, loads CA for verifying client certificates.
 func LoadMTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -128,7 +128,7 @@ func LoadMTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 	}, nil
 }
 
-// WrapListener оборачивает net.Listener в TLS listener.
+// WrapListener wraps a net.Listener in a TLS listener.
 func WrapListener(listener net.Listener, tlsConfig *tls.Config) net.Listener {
 	return tls.NewListener(listener, tlsConfig)
 }

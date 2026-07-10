@@ -2,11 +2,11 @@ package httpserver
 
 import (
 	"encoding/json"
-	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
+
+	"vaultdb/internal/iputil"
 )
 
 const maxRateLimitKeys = 100000
@@ -20,6 +20,14 @@ type RateLimiter struct {
 	cleanupInterval time.Duration
 	stopCh          chan struct{}
 	maxKeys         int
+	collector       metricsCollector
+}
+
+// metricsCollector is a minimal interface to avoid importing the metrics package.
+type metricsCollector interface {
+	IncRatelimitBlocked()
+	SetRatelimitActiveKeys(int64)
+	IncRatelimitEvictions()
 }
 
 // tokenBucket — token bucket for a single key.
@@ -29,8 +37,13 @@ type tokenBucket struct {
 	maxTokens float64
 }
 
-// NewRateLimiter создаёт новый rate limiter.
+// NewRateLimiter creates a new rate limiter.
 func NewRateLimiter(rate int, burst int) *RateLimiter {
+	return NewRateLimiterWithCollector(rate, burst, nil)
+}
+
+// NewRateLimiterWithCollector creates a rate limiter with an optional metrics collector.
+func NewRateLimiterWithCollector(rate int, burst int, c metricsCollector) *RateLimiter {
 	if rate <= 0 {
 		rate = 100
 	}
@@ -45,6 +58,7 @@ func NewRateLimiter(rate int, burst int) *RateLimiter {
 		cleanupInterval: 5 * time.Minute,
 		stopCh:          make(chan struct{}),
 		maxKeys:         maxRateLimitKeys,
+		collector:       c,
 	}
 
 	go rl.cleanupLoop()
@@ -52,7 +66,7 @@ func NewRateLimiter(rate int, burst int) *RateLimiter {
 	return rl
 }
 
-// Allow проверяет, разрешён ли запрос для данного ключа (IP address).
+// Allow checks whether a request is allowed for the given key (IP address).
 func (rl *RateLimiter) Allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -80,10 +94,22 @@ func (rl *RateLimiter) Allow(key string) bool {
 
 	if bucket.tokens >= 1 {
 		bucket.tokens--
+		rl.updateActiveKeysMetric()
 		return true
 	}
 
+	if rl.collector != nil {
+		rl.collector.IncRatelimitBlocked()
+	}
+	rl.updateActiveKeysMetric()
 	return false
+}
+
+// updateActiveKeysMetric updates the gauge for currently tracked keys.
+func (rl *RateLimiter) updateActiveKeysMetric() {
+	if rl.collector != nil {
+		rl.collector.SetRatelimitActiveKeys(int64(len(rl.tokens)))
+	}
 }
 
 // evictOldest removes the least recently used token bucket.
@@ -98,50 +124,16 @@ func (rl *RateLimiter) evictOldest() {
 	}
 	if oldestKey != "" {
 		delete(rl.tokens, oldestKey)
+		if rl.collector != nil {
+			rl.collector.IncRatelimitEvictions()
+		}
 	}
 }
 
-// extractClientIP extracts the real client IP from the request.
-// trustedProxies is a list of CIDR ranges of trusted reverse proxies.
-// If the request comes from a trusted proxy, X-Forwarded-For is used.
-// Otherwise, RemoteAddr is used directly — spoofed headers are ignored.
-func extractClientIP(r *http.Request, trustedProxies []net.IPNet) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-
-	clientIP := net.ParseIP(host)
-	isTrusted := false
-	if clientIP != nil {
-		for _, cidr := range trustedProxies {
-			if cidr.Contains(clientIP) {
-				isTrusted = true
-				break
-			}
-		}
-	}
-
-	if isTrusted {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.Split(xff, ",")
-			trimmed := strings.TrimSpace(parts[0])
-			if trimmed != "" {
-				return trimmed
-			}
-		}
-		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			return strings.TrimSpace(xri)
-		}
-	}
-
-	return host
-}
-
-// Middleware возвращает HTTP middleware для rate limiting.
+// Middleware returns HTTP middleware for rate limiting.
 func (rl *RateLimiter) Middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key := extractClientIP(r, nil)
+		key := iputil.ExtractClientIP(r, nil)
 
 		if !rl.Allow(key) {
 			w.Header().Set("Content-Type", "application/json")
@@ -157,7 +149,7 @@ func (rl *RateLimiter) Middleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// cleanupLoop периодически очищает неиспользуемые токены.
+// cleanupLoop periodically cleans up unused tokens.
 func (rl *RateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(rl.cleanupInterval)
 	defer ticker.Stop()
@@ -172,12 +164,12 @@ func (rl *RateLimiter) cleanupLoop() {
 	}
 }
 
-// Close останавливает фоновый cleanupLoop.
+// Close stops the background cleanupLoop.
 func (rl *RateLimiter) Close() {
 	close(rl.stopCh)
 }
 
-// doCleanup удаляет токены bucket которые не использовались более 5 минут.
+// doCleanup removes token buckets that have not been used for more than 5 minutes.
 func (rl *RateLimiter) doCleanup() {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()

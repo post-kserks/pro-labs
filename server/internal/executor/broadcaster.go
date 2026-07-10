@@ -9,19 +9,19 @@ import (
 	"vaultdb/internal/parser"
 )
 
-// DropPolicy определяет поведение при переполнении канала подписки.
+// DropPolicy defines behavior when the subscription channel overflows.
 type DropPolicy int
 
 const (
-	// PolicyDrop — отбросить обновление с логированием (поведение по умолчанию).
+	// PolicyDrop — drop update with logging (default behavior).
 	PolicyDrop DropPolicy = iota
-	// PolicyBlock — блокировать до освобождения места; по таймауту клиент отписывается.
+	// PolicyBlock — block until space is freed; on timeout, client is unsubscribed.
 	PolicyBlock
-	// PolicyEvict — вытеснить старейшее обновление и положить новое.
+	// PolicyEvict — evict the oldest update and insert the new one.
 	PolicyEvict
 )
 
-// ParseDropPolicy разбирает значение drop_policy из конфигурации.
+// ParseDropPolicy parses the drop_policy value from configuration.
 func ParseDropPolicy(s string) DropPolicy {
 	switch s {
 	case "block":
@@ -42,27 +42,27 @@ type Subscription struct {
 	DropPolicy   DropPolicy
 	BlockTimeout time.Duration
 
-	// notifyMu сериализует notify для одной подписки: NotifyTableChanged может
-	// запустить несколько горутин для одной подписки (на быстрых подряд
-	// изменениях таблицы), а политика PolicyEvict (drain + insert) корректна
-	// только при единственном писателе в канал. Мьютекс это гарантирует.
+	// notifyMu serializes notify for a single subscription: NotifyTableChanged can
+	// launch multiple goroutines for one subscription (on rapid consecutive
+	// table changes), and the PolicyEvict (drain + insert) policy is only correct
+	// with a single writer to the channel. The mutex guarantees this.
 	notifyMu     sync.Mutex
 	closed       atomic.Bool
 	snapshotTxID uint64
 }
 
-// Close закрывает канал подписки ровно один раз.
+// Close closes the subscription channel exactly once.
 func (s *Subscription) Close() {
 	if s.closed.CompareAndSwap(false, true) {
 		close(s.Send)
 	}
 }
 
-// notify доставляет обновление согласно политике подписки.
-// Возвращает false, если клиент должен быть отписан (block-таймаут).
+// notify delivers an update according to the subscription policy.
+// Returns false if the client should be unsubscribed (block timeout).
 func (s *Subscription) notify(res *Result, logger *slog.Logger) bool {
-	// Только один notify на подписку одновременно — иначе drain+insert в
-	// PolicyEvict гоняется между параллельными писателями.
+	// Only one notify per subscription at a time — otherwise drain+insert in
+	// PolicyEvict races between parallel writers.
 	s.notifyMu.Lock()
 	defer s.notifyMu.Unlock()
 
@@ -80,29 +80,29 @@ func (s *Subscription) notify(res *Result, logger *slog.Logger) bool {
 		case s.Send <- res:
 			return true
 		case <-time.After(timeout):
-			// Клиент слишком медленный — отписываем
+			// Client too slow — unsubscribe
 			logger.Warn("live query subscription timed out, unsubscribing",
 				"subscription", s.ID)
 			return false
 		}
 
 	case PolicyEvict:
-		// Один select: попытка отправить, при провале — дренировать и повторить.
-		// Это O(1), не цикл.
+		// Single select: attempt to send; on failure — drain and retry.
+		// This is O(1), not a loop.
 		select {
 		case s.Send <- res:
-			// успех с первой попытки
+			// success on first try
 		default:
-			// Канал полон: дренируем одно старое сообщение и вставляем новое.
+			// Channel full: drain one old message and insert the new one.
 			select {
 			case <-s.Send: // discard oldest
-			default: // канал уже пуст (race condition — ok)
+			default: // channel already empty (race condition — ok)
 			}
-			// Теперь место точно есть (мы единственный writer для этой подписки)
+			// Now there is definitely room (we are the only writer for this subscription)
 			select {
 			case s.Send <- res:
 			default:
-				// Если всё равно не влезло — кто-то ещё пишет параллельно.
+				// If it still didn't fit — someone else is writing in parallel.
 				logger.Warn("evict policy: could not insert after drain, dropping",
 					"session", s.ID)
 			}
@@ -142,7 +142,7 @@ func NewBroadcaster() *Broadcaster {
 	}
 }
 
-// Configure задаёт политику доставки Live Queries (вызывается при старте).
+// Configure sets the Live Queries delivery policy (called at startup).
 func (b *Broadcaster) Configure(policy DropPolicy, blockTimeout time.Duration, bufferSize int, logger *slog.Logger) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -158,7 +158,7 @@ func (b *Broadcaster) Configure(policy DropPolicy, blockTimeout time.Duration, b
 	}
 }
 
-// NewSubscription создаёт подписку с настроенными политикой и буфером.
+// NewSubscription creates a subscription with configured policy and buffer.
 func (b *Broadcaster) NewSubscription(id string, query *parser.SelectStatement, db string, snapshotTxID uint64) *Subscription {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -185,14 +185,14 @@ func (b *Broadcaster) Unsubscribe(id string) {
 	delete(b.subscriptions, id)
 }
 
-// NotifyTableChanged переоценивает и рассылает live-query подписки, чья базовая
-// таблица совпала с изменившейся.
+// NotifyTableChanged re-evaluates and sends live-query subscriptions whose base
+// table matched the changed one.
 //
-// ОГРАНИЧЕНИЕ: совпадение идёт только по основной таблице запроса
-// (s.Query.TableName) в той же БД. Live query с JOIN или подзапросом по другой
-// таблице НЕ будет переоценён при изменении этой другой таблицы — обновится
-// только при изменении своей основной таблицы. Полноценное отслеживание
-// зависимостей по всем читаемым таблицам пока не реализовано.
+// LIMITATION: matching is only by the query's base table
+// (s.Query.TableName) in the same database. A live query with JOIN or subquery on another
+// table will NOT be re-evaluated when that other table changes — it will only update
+// when its own base table changes. Full dependency tracking across all read tables
+// is not yet implemented.
 func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *ExecutionContext) {
 	// Snapshot matching subscriptions first so subscriber queries do not run
 	// while holding the broadcaster lock.

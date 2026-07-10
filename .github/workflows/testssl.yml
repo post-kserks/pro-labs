@@ -1,0 +1,79 @@
+name: TLS Security Scan (testssl.sh)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'server/internal/tls/**'
+      - 'server/cmd/vaultdb-server/**'
+      - 'Dockerfile'
+  schedule:
+    # Weekly on Monday at 3 AM
+    - cron: '0 3 * * 1'
+
+jobs:
+  testssl:
+    name: testssl.sh TLS scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t vaultdb-tls-test .
+
+      - name: Start server with TLS
+        run: |
+          docker run -d --name vaultdb-tls \
+            -p 15432:5432 -p 18080:8080 -p 15433:5433 \
+            -e VAULTDB_AUTH_ENABLED=false \
+            -e VAULTDB_TLS_CERT=/etc/ssl/certs/server.crt \
+            -e VAULTDB_TLS_KEY=/etc/ssl/certs/server.key \
+            vaultdb-tls-test
+
+          # Wait for server
+          for i in $(seq 1 30); do
+            if docker exec vaultdb-tls wget -qO /dev/null http://localhost:5433/health 2>/dev/null; then
+              echo "Server ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Install testssl.sh
+        run: |
+          git clone --depth 1 https://github.com/drwetter/testssl.sh.git /tmp/testssl
+          chmod +x /tmp/testssl/testssl.sh
+
+      - name: Run testssl.sh
+        run: |
+          /tmp/testssl/testssl.sh \
+            --severity HIGH \
+            --protocols \
+            --vulnerable \
+            --quiet \
+            --jsonfile testssl-results.json \
+            127.0.0.1:15433 || true
+
+      - name: Check results
+        run: |
+          # Fail if any CRITICAL or HIGH vulnerabilities found
+          if grep -q '"severity"\s*:\s*"CRITICAL"' testssl-results.json 2>/dev/null; then
+            echo "FAIL: Critical TLS vulnerability found"
+            exit 1
+          fi
+          if grep -q '"severity"\s*:\s*"HIGH"' testssl-results.json 2>/dev/null; then
+            echo "FAIL: High TLS vulnerability found"
+            exit 1
+          fi
+          echo "PASS: No critical or high TLS vulnerabilities"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testssl-results
+          path: testssl-results.json
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f vaultdb-tls || true

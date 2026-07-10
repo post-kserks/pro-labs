@@ -1,6 +1,6 @@
 package executor
 
-// Транзакции и prepared statements: BEGIN/COMMIT/ROLLBACK,
+// Transactions and prepared statements: BEGIN/COMMIT/ROLLBACK,
 // PREPARE/EXECUTE/DEALLOCATE.
 
 import (
@@ -44,22 +44,22 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("no active transaction")
 	}
 
-	// Читаем ops (из памяти или из spill файла)
+	// Read ops (from memory or from spill file)
 	ops, err := tx.ReadOps()
 	if err != nil {
 		return nil, fmt.Errorf("read transaction ops: %w", err)
 	}
 	opsCount := len(ops)
 
-	// Проверка конфликтов и применение выполняются под commit-локами только
-	// тех таблиц, которые затронуты транзакцией: коммиты по разным таблицам
-	// идут параллельно, а конфликт обнаруживается по версиям таблиц.
+	// Conflict checking and application are performed under commit locks only
+	// for tables affected by the transaction: commits on different tables
+	// run in parallel, and conflicts are detected by table versions.
 	var applied int
 	var applyErr error
 	commitErr := ctx.Session.TxManager.Commit(tx, func(pendingOps []txmanager.PendingOp) error {
-		// Commit уже держит commit-локи затронутых таблиц. Помечаем контекст,
-		// чтобы autocommit-обёртка (mutateUnderTableLock) НЕ брала те же
-		// нереентрантные локи повторно — иначе self-deadlock (Bug #2 guard).
+		// Commit already holds commit locks for affected tables. Mark the context
+		// so that the autocommit wrapper (mutateUnderTableLock) does NOT re-acquire the
+		// same non-reentrant locks — otherwise self-deadlock (Bug #2 guard).
 		ctx.InCommitApply = true
 		defer func() { ctx.InCommitApply = false }()
 		applied, applyErr = applyOps(ctx, pendingOps)
@@ -70,7 +70,7 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, commitErr
 	}
 	if applyErr != nil {
-		// Применение упало частично — откатываем уже применённые ops
+		// Application partially failed — roll back already applied ops
 		undoOps := ops[:applied]
 		if undoErr := undoAppliedOps(ctx, undoOps); undoErr != nil {
 			slog.Error("could not undo partial commit, data may be inconsistent",
@@ -84,10 +84,10 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("commit failed, no operations applied: %w", applyErr)
 	}
 
-	// Записать COMMIT в WAL с тем же txID, что и операции транзакции
+	// Write COMMIT to WAL with the same txID as the transaction operations
 	if ctx.WAL != nil {
 		if _, err := ctx.WAL.AppendWithTx(tx.ID, wal.OpCommit, nil); err != nil {
-			// Не смогли записать COMMIT — транзакция считается незакоммиченной
+			// Could not write COMMIT — transaction is considered uncommitted
 			undoAppliedOps(ctx, ops)
 			tx.Rollback()
 			ctx.Session.ClearActiveTx()
@@ -198,23 +198,23 @@ func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) (int, error) {
 	return len(ops), nil
 }
 
-// undoAppliedOps откатывает уже применённые операции в обратном порядке.
+// undoAppliedOps rolls back already applied operations in reverse order.
 func undoAppliedOps(ctx *ExecutionContext, ops []txmanager.PendingOp) error {
 	for i := len(ops) - 1; i >= 0; i-- {
 		op := ops[i]
 		var undoErr error
 		switch op.Type {
 		case "insert":
-			// Undo INSERT = DELETE вставленных строк
+			// Undo INSERT = DELETE inserted rows
 			undoErr = undoInsert(ctx, op)
 		case "update":
-			// Undo UPDATE = восстановить старые значения
+			// Undo UPDATE = restore old values
 			undoErr = undoUpdate(ctx, op)
 		case "delete":
-			// Undo DELETE = вставить обратно
+			// Undo DELETE = re-insert
 			undoErr = undoDelete(ctx, op)
 		case "truncate":
-			// Undo TRUNCATE = вставить обратно сохранённые строки
+			// Undo TRUNCATE = re-insert saved rows
 			undoErr = undoTruncate(ctx, op)
 		}
 		if undoErr != nil {
@@ -338,15 +338,15 @@ func undoUpdate(ctx *ExecutionContext, op txmanager.PendingOp) error {
 		}
 	}
 
-	// Восстанавливаем каждую строку ЕЁ СОБСТВЕННЫМИ старыми значениями.
-	// Нельзя сливать per-row карты в одну и применять ко всем индексам разом:
-	// у строк разные старые значения, и слияние оставило бы одно (последнее)
-	// и затёрло остальные — порча данных при откате.
+	// Restore each row with ITS OWN old values.
+	// Cannot merge per-row maps into one and apply to all indexes at once:
+	// rows have different old values, and merging would keep only the last one
+	// and overwrite the rest — data corruption on rollback.
 	//
-	// Идём по убыванию индекса: UpdateRows тумбстоунит старую версию и
-	// дописывает новую в конец, из-за чего позиции строк ПОСЛЕ изменённой
-	// сдвигаются. Обрабатывая от большего индекса к меньшему, мы не трогаем
-	// ещё не восстановленные (меньшие) индексы — они остаются валидными.
+	// Iterate indices in reverse order: UpdateRows tombstones the old version and
+	// appends the new one at the end, which shifts positions of rows AFTER the modified
+	// one. By processing from larger to smaller index, we don't touch
+	// not-yet-restored (smaller) indexes — they remain valid.
 	for i := len(restoreIndices) - 1; i >= 0; i-- {
 		if _, err := ctx.Storage.UpdateRows(op.DB, op.Table, []int{restoreIndices[i]}, restoreUpdates[i]); err != nil {
 			return err
@@ -425,15 +425,15 @@ func (c *ExecutePreparedCommand) Execute(ctx *ExecutionContext) (*Result, error)
 		return nil, fmt.Errorf("prepared statement '%s' not found", c.stmt.Name)
 	}
 
-	boundStmt, err := bindParams(ps.Query, c.stmt.Params)
+	boundStmt, err := BindParams(ps.Query, c.stmt.Params)
 	if err != nil {
 		return nil, err
 	}
 
-	// Plan cache is disabled: the cache key cannot include the actual SQL text
-	// (prepared statements store the parsed statement, not the original string),
-	// so different queries of the same type would share a stale cache entry.
-	// TODO: store original SQL in PreparedStatement and re-enable caching.
+	// Plan cache intentionally disabled for prepared statements. QueryHash keys
+	// on fully-bound SQL, so each parameter set produces a unique hash and the
+	// cache never hits. Enabling it requires re-keying on (stmt-name, param-types)
+	// across PlanCache.Get/Put, invalidation paths, and all callers.
 	cmd, err := CommandFactory(boundStmt)
 	if err != nil {
 		return nil, err
@@ -453,7 +453,7 @@ func (c *DeallocateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}, nil
 }
 
-func bindParams(stmt parser.Statement, params []parser.Value) (parser.Statement, error) {
+func BindParams(stmt parser.Statement, params []parser.Value) (parser.Statement, error) {
 	switch s := stmt.(type) {
 	case *parser.SelectStatement:
 		bound := *s

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	vaultcrypto "vaultdb/internal/crypto"
 )
 
 // ---------------------------------------------------------------------------
@@ -67,7 +69,7 @@ func TestReplayAfterCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 3; i < 6; i++ {
-		payload, _ := buildRecord(uint64(i+1), OpInsert, mustMarshal(t, map[string]interface{}{"i": i}))
+		payload, _ := buildRecord(uint64(i+1), OpInsert, mustMarshal(t, map[string]interface{}{"i": i}), nil)
 		f.Write(payload)
 	}
 	f.Close()
@@ -387,8 +389,8 @@ func TestScanAndTruncateResyncAfterCorrupt(t *testing.T) {
 	w.Close()
 
 	// Build corrupt entry: valid magic but bad CRC → triggers resync path
-	entry1, _ := buildRecord(1, OpInsert, mustMarshal(t, map[string]interface{}{"v": 1}))
-	entry2, _ := buildRecord(2, OpInsert, mustMarshal(t, map[string]interface{}{"v": 2}))
+	entry1, _ := buildRecord(1, OpInsert, mustMarshal(t, map[string]interface{}{"v": 1}), nil)
+	entry2, _ := buildRecord(2, OpInsert, mustMarshal(t, map[string]interface{}{"v": 2}), nil)
 
 	// Create a corrupt entry with valid magic "VDB1" but wrong CRC
 	corruptEntry := make([]byte, len(entry1))
@@ -463,9 +465,13 @@ func TestWriteFullPageImageBasic(t *testing.T) {
 		t.Fatalf("expected txID 1, got %d", entries[0].TxID)
 	}
 
-	var payload FullPageImagePayload
-	if err := jsonUnmarshal(t, entries[0].Payload, &payload); err != nil {
+	decoded, err := DecodeWALPayload(entries[0].Payload, entries[0].OpType)
+	if err != nil {
 		t.Fatal(err)
+	}
+	payload, ok := decoded.(FullPageImagePayload)
+	if !ok {
+		t.Fatalf("expected FullPageImagePayload, got %T", decoded)
 	}
 	if payload.DB != "mydb" {
 		t.Errorf("DB = %q, want %q", payload.DB, "mydb")
@@ -524,9 +530,13 @@ func TestWriteFullPageImageRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var payload FullPageImagePayload
-	if err := jsonUnmarshal(t, entries[0].Payload, &payload); err != nil {
+	decoded, err := DecodeWALPayload(entries[0].Payload, entries[0].OpType)
+	if err != nil {
 		t.Fatal(err)
+	}
+	payload, ok := decoded.(FullPageImagePayload)
+	if !ok {
+		t.Fatalf("expected FullPageImagePayload, got %T", decoded)
 	}
 	if !bytes.Equal(payload.PageData, original) {
 		t.Fatal("page data round-trip mismatch")
@@ -1035,7 +1045,214 @@ func mustMarshal(t *testing.T, v interface{}) []byte {
 	return b
 }
 
-func jsonUnmarshal(t *testing.T, data []byte, v interface{}) error {
+// ---------------------------------------------------------------------------
+// 10. WAL Encryption
+// ---------------------------------------------------------------------------
+
+func newTestEncryptionManager(t *testing.T) *vaultcrypto.EncryptionManager {
 	t.Helper()
-	return json.Unmarshal(data, v)
+	dek := make([]byte, 32)
+	for i := range dek {
+		dek[i] = byte(i)
+	}
+	em, err := vaultcrypto.NewEncryptionManager(dek, "test-key-v1")
+	if err != nil {
+		t.Fatalf("NewEncryptionManager failed: %v", err)
+	}
+	return em
+}
+
+func TestWALEncryptionRoundtrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vaultdb.wal")
+	w, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	em := newTestEncryptionManager(t)
+	w.SetEncryptionManager(em)
+
+	payload := map[string]interface{}{"key": "secret_value", "num": 42}
+	txID, err := w.Append(OpInsert, payload)
+	if err != nil {
+		t.Fatalf("Append failed: %v", err)
+	}
+	if txID == 0 {
+		t.Fatal("expected non-zero txID")
+	}
+
+	// Verify the record on disk has the encrypted flag set
+	w.Close()
+
+	w2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	// Must set encryption manager to read encrypted records
+	w2.SetEncryptionManager(em)
+
+	entries, err := w2.Recover()
+	if err != nil {
+		t.Fatalf("Recover failed: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(entries[0].Payload, &got); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got["key"] != "secret_value" {
+		t.Errorf("key = %v, want secret_value", got["key"])
+	}
+	if got["num"] != float64(42) {
+		t.Errorf("num = %v, want 42", got["num"])
+	}
+}
+
+func TestWALReadWithoutEncryptionFailsOnEncrypted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vaultdb.wal")
+	w, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	em := newTestEncryptionManager(t)
+	w.SetEncryptionManager(em)
+
+	_, err = w.Append(OpInsert, map[string]interface{}{"secret": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	// Reopen WITHOUT setting encryption manager
+	w2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	// Recovery should fail because records are encrypted but no EM is set
+	_, err = w2.Recover()
+	if err == nil {
+		t.Fatal("expected error when reading encrypted WAL without EncryptionManager")
+	}
+}
+
+func TestWALPlaintextStillWorks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vaultdb.wal")
+	w, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// No encryption manager set — plaintext mode
+	payload := map[string]interface{}{"data": "hello"}
+	txID, err := w.Append(OpInsert, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if txID != 1 {
+		t.Errorf("txID = %d, want 1", txID)
+	}
+
+	entries, err := w.Recover()
+	if err != nil {
+		t.Fatalf("Recover failed: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(entries[0].Payload, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["data"] != "hello" {
+		t.Errorf("data = %v, want hello", got["data"])
+	}
+}
+
+func TestWALEncryptionMultipleEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vaultdb.wal")
+	w, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	em := newTestEncryptionManager(t)
+	w.SetEncryptionManager(em)
+
+	for i := 0; i < 10; i++ {
+		_, err := w.Append(OpInsert, map[string]interface{}{"i": i})
+		if err != nil {
+			t.Fatalf("Append %d failed: %v", i, err)
+		}
+	}
+	w.Close()
+
+	w2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+	w2.SetEncryptionManager(em)
+
+	entries, err := w2.Recover()
+	if err != nil {
+		t.Fatalf("Recover failed: %v", err)
+	}
+	if len(entries) != 10 {
+		t.Fatalf("expected 10 entries, got %d", len(entries))
+	}
+	for i, e := range entries {
+		var got map[string]interface{}
+		if err := json.Unmarshal(e.Payload, &got); err != nil {
+			t.Fatalf("entry %d unmarshal: %v", i, err)
+		}
+		if got["i"] != float64(i) {
+			t.Errorf("entry %d: i = %v, want %d", i, got["i"], i)
+		}
+	}
+}
+
+func TestWALEncryptionWithAppendWithTx(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vaultdb.wal")
+	w, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	em := newTestEncryptionManager(t)
+	w.SetEncryptionManager(em)
+
+	_, err = w.AppendWithTx(100, OpInsert, map[string]interface{}{"tx": 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	w2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+	w2.SetEncryptionManager(em)
+
+	entries, err := w2.Recover()
+	if err != nil {
+		t.Fatalf("Recover failed: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].TxID != 100 {
+		t.Errorf("txID = %d, want 100", entries[0].TxID)
+	}
 }

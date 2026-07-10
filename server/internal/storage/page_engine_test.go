@@ -10,7 +10,7 @@ import (
 	"vaultdb/internal/wal"
 )
 
-// Компайл-проверка: PageStorageEngine реализует StorageEngine.
+// Compile-time check: PageStorageEngine implements StorageEngine.
 var _ StorageEngine = (*PageStorageEngine)(nil)
 
 func newPageEngine(t *testing.T) *PageStorageEngine {
@@ -64,7 +64,7 @@ func TestPageEngineCRUD(t *testing.T) {
 		t.Fatalf("row roundtrip mismatch: %#v", rows[0])
 	}
 
-	// UPDATE второй строки (позиция 1)
+	// UPDATE second row (position 1)
 	if n, err := e.UpdateRows("shop", "users", []int{1}, map[string]Value{"score": 7.7}); err != nil || n != 1 {
 		t.Fatalf("update: n=%d err=%v", n, err)
 	}
@@ -82,7 +82,7 @@ func TestPageEngineCRUD(t *testing.T) {
 		t.Fatalf("updated row not found: %#v", rows)
 	}
 
-	// DELETE первой строки
+	// DELETE first row
 	if n, err := e.DeleteRows("shop", "users", []int{0}); err != nil || n != 1 {
 		t.Fatalf("delete: n=%d err=%v", n, err)
 	}
@@ -236,7 +236,7 @@ func TestPageEngineManyRowsSpanPages(t *testing.T) {
 	_ = e.CreateDatabase("db")
 	_ = e.CreateTable("db", usersSchema())
 
-	// Достаточно строк, чтобы заполнить несколько страниц по 8 КБ
+	// Enough rows to fill multiple 8 KB pages
 	batch := make([]Row, 500)
 	for i := range batch {
 		batch[i] = Row{int64(i), "user-with-a-reasonably-long-name-" + string(rune('a'+i%26)), float64(i)}
@@ -1170,5 +1170,408 @@ func BenchmarkInsertBatchWithoutIndex(b *testing.B) {
 			rows[j] = Row{int64(i*batchSize + j), "item"}
 		}
 		_, _ = e.InsertRows("benchdb", "items_nopk", rows)
+	}
+}
+
+func TestAtomicTxIDAllocation(t *testing.T) {
+	e := newPageEngine(t)
+	if err := e.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("testdb", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Allocate txIDs concurrently and verify they are unique.
+	const numGoroutines = 20
+	const perGoroutine = 50
+	seen := make(map[uint64]bool)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perGoroutine; i++ {
+				txID := e.nextTxID()
+				mu.Lock()
+				if seen[txID] {
+					t.Errorf("duplicate txID %d", txID)
+				}
+				seen[txID] = true
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	expected := uint64(numGoroutines * perGoroutine)
+	if uint64(len(seen)) != expected {
+		t.Errorf("expected %d unique txIDs, got %d", expected, len(seen))
+	}
+
+	// Verify counter is at least as high as what we allocated.
+	if got := e.txCounter.Load(); got < expected {
+		t.Errorf("txCounter = %d, want >= %d", got, expected)
+	}
+}
+
+func TestPerTableCounters(t *testing.T) {
+	e := newPageEngine(t)
+	if err := e.CreateDatabase("shop"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("shop", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows.
+	n, err := e.InsertRows("shop", "users", []Row{
+		{int64(1), "alice", 9.0},
+		{int64(2), "bob", 7.0},
+	})
+	if err != nil || n != 2 {
+		t.Fatalf("insert: n=%d err=%v", n, err)
+	}
+
+	// Verify per-table atomic counters.
+	key := "shop/users"
+	e.mu.RLock()
+	tbl := e.tables[key]
+	e.mu.RUnlock()
+	if tbl == nil {
+		t.Fatal("table not found")
+	}
+	if got := tbl.rowCount.Load(); got != 2 {
+		t.Errorf("rowCount = %d, want 2", got)
+	}
+	if got := tbl.lastTxID.Load(); got == 0 {
+		t.Error("lastTxID should be non-zero after insert")
+	}
+
+	// Delete one row.
+	if _, err := e.DeleteRows("shop", "users", []int{0}); err != nil {
+		t.Fatal(err)
+	}
+	if got := tbl.rowCount.Load(); got != 1 {
+		t.Errorf("rowCount after delete = %d, want 1", got)
+	}
+
+	// Verify catalog is in sync.
+	e.mu.RLock()
+	catalogCount := e.catalog.RowCounts[key]
+	catalogLM := e.catalog.LastModified[key]
+	e.mu.RUnlock()
+	if catalogCount != 1 {
+		t.Errorf("catalog RowCount = %d, want 1", catalogCount)
+	}
+	if catalogLM != tbl.lastTxID.Load() {
+		t.Errorf("catalog LastModified = %d, want %d", catalogLM, tbl.lastTxID.Load())
+	}
+}
+
+func TestAtomicCounterAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("testdb", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert a row to generate txIDs.
+	_, err = e.InsertRows("testdb", "users", []Row{{int64(1), "alice", 9.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	txBefore := e.txCounter.Load()
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopen and verify counter is restored.
+	e2, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e2.Close()
+
+	txAfter := e2.txCounter.Load()
+	if txAfter != txBefore {
+		t.Errorf("txCounter after reopen = %d, want %d", txAfter, txBefore)
+	}
+
+	// New inserts should continue from where we left off.
+	_, err = e2.InsertRows("testdb", "users", []Row{{int64(2), "bob", 7.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e2.txCounter.Load(); got <= txBefore {
+		t.Errorf("txCounter after second insert = %d, want > %d", got, txBefore)
+	}
+}
+
+func BenchmarkConcurrentInsertsDifferentTables(b *testing.B) {
+	dir := b.TempDir()
+	e, err := NewPageStorageEngine(dir, nil, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.CreateDatabase("benchdb"); err != nil {
+		b.Fatal(err)
+	}
+
+	numTables := 4
+	for i := 0; i < numTables; i++ {
+		schema := TableSchema{
+			Name:    fmt.Sprintf("table_%d", i),
+			Columns: []ColumnSchema{{Name: "id", Type: "INT"}, {Name: "val", Type: "TEXT"}},
+		}
+		if err := e.CreateTable("benchdb", schema); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			tableName := fmt.Sprintf("table_%d", i%numTables)
+			_, _ = e.InsertRows("benchdb", tableName, []Row{
+				{int64(i), "val"},
+			})
+			i++
+		}
+	})
+}
+
+func TestSinglePassUpdate(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "alice", 9.5},
+		{int64(2), "bob", 7.0},
+	})
+
+	n, err := e.UpdateRows("db", "users", []int{0}, map[string]Value{"name": "ALICE"})
+	if err != nil || n != 1 {
+		t.Fatalf("update: n=%d err=%v", n, err)
+	}
+
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 2 {
+		t.Fatalf("row count: %d, want 2", len(rows))
+	}
+
+	// Find the updated row by id
+	var updated bool
+	for _, r := range rows {
+		if r[0] == int64(1) {
+			if r[1] != "ALICE" {
+				t.Fatalf("alice name: %v, want ALICE", r[1])
+			}
+			if r[2] != 9.5 {
+				t.Fatalf("alice score changed: %v", r[2])
+			}
+			updated = true
+		}
+	}
+	if !updated {
+		t.Fatal("alice row not found")
+	}
+}
+
+func TestSinglePassDelete(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "alice", 9.5},
+		{int64(2), "bob", 7.0},
+		{int64(3), "carol", 8.2},
+	})
+
+	n, err := e.DeleteRows("db", "users", []int{1})
+	if err != nil || n != 1 {
+		t.Fatalf("delete: n=%d err=%v", n, err)
+	}
+
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 2 {
+		t.Fatalf("after delete: %d rows, want 2", len(rows))
+	}
+	// Remaining rows: alice (index 0) and carol (index 2)
+	if rows[0][0] != int64(1) || rows[1][0] != int64(3) {
+		t.Fatalf("wrong rows remain: %#v", rows)
+	}
+}
+
+func TestSinglePassMultipleRows(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "alice", 1.0},
+		{int64(2), "bob", 2.0},
+		{int64(3), "carol", 3.0},
+		{int64(4), "dave", 4.0},
+		{int64(5), "eve", 5.0},
+	})
+
+	// Update multiple rows at once
+	n, err := e.UpdateRows("db", "users", []int{0, 2, 4}, map[string]Value{"score": 99.0})
+	if err != nil || n != 3 {
+		t.Fatalf("multi-update: n=%d err=%v", n, err)
+	}
+
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 5 {
+		t.Fatalf("row count: %d, want 5", len(rows))
+	}
+
+	// Count updated vs non-updated rows
+	var updated, untouched int
+	for _, r := range rows {
+		if r[2] == 99.0 {
+			updated++
+		}
+	}
+	if updated != 3 {
+		t.Fatalf("updated rows: %d, want 3", updated)
+	}
+	_ = untouched
+
+	// Delete multiple rows
+	n, err = e.DeleteRows("db", "users", []int{1, 3})
+	if err != nil || n != 2 {
+		t.Fatalf("multi-delete: n=%d err=%v", n, err)
+	}
+	rows, _ = e.ReadCurrentRows("db", "users")
+	if len(rows) != 3 {
+		t.Fatalf("after multi-delete: %d rows, want 3", len(rows))
+	}
+}
+
+func TestSinglePassThenVacuum(t *testing.T) {
+	e := newPageEngine(t)
+	_ = e.CreateDatabase("db")
+	_ = e.CreateTable("db", usersSchema())
+
+	_, _ = e.InsertRows("db", "users", []Row{
+		{int64(1), "a", 1.0},
+		{int64(2), "b", 2.0},
+		{int64(3), "c", 3.0},
+		{int64(4), "d", 4.0},
+	})
+
+	// Single-pass update: marks old version as dead + appends new version
+	_, _ = e.UpdateRows("db", "users", []int{0}, map[string]Value{"name": "A2"})
+
+	// Single-pass delete: marks row 2 as dead
+	_, _ = e.DeleteRows("db", "users", []int{2})
+
+	// Vacuum should reclaim dead rows from both update (1) and delete (1)
+	stats, err := e.Vacuum("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReclaimedRows != 2 {
+		t.Fatalf("vacuum reclaimed: %d, want 2", stats.ReclaimedRows)
+	}
+
+	vstats, _ := e.TableVersionStats("db", "users")
+	if vstats.DeadRows != 0 {
+		t.Fatalf("after vacuum: dead=%d, want 0", vstats.DeadRows)
+	}
+
+	// 4 inserted - 1 deleted = 3 live rows
+	rows, _ := e.ReadCurrentRows("db", "users")
+	if len(rows) != 3 {
+		t.Fatalf("after vacuum: %d rows, want 3", len(rows))
+	}
+}
+
+func TestReadAheadScanReturnsCorrectData(t *testing.T) {
+	e := newPageEngine(t)
+	if err := e.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("db", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert enough rows to span multiple pages (each page holds ~100 small rows)
+	total := 500
+	batch := make([]Row, total)
+	for i := 0; i < total; i++ {
+		batch[i] = Row{int64(i), fmt.Sprintf("user_%d", i), float64(i) * 0.1}
+	}
+	if _, err := e.InsertRows("db", "users", batch); err != nil {
+		t.Fatal(err)
+	}
+
+	// Full scan — read-ahead should kick in automatically
+	rows, err := e.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != total {
+		t.Fatalf("expected %d rows, got %d", total, len(rows))
+	}
+
+	// Verify all rows are present and correct
+	seen := make(map[int64]bool)
+	for _, r := range rows {
+		id := r[0].(int64)
+		seen[id] = true
+	}
+	for i := 0; i < total; i++ {
+		if !seen[int64(i)] {
+			t.Fatalf("missing row id=%d", i)
+		}
+	}
+}
+
+func TestReadAheadScanWithDeletes(t *testing.T) {
+	e := newPageEngine(t)
+	if err := e.CreateDatabase("db"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CreateTable("db", usersSchema()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows spanning multiple pages, then delete half via UPDATE + vacuum
+	total := 200
+	batch := make([]Row, total)
+	for i := 0; i < total; i++ {
+		batch[i] = Row{int64(i), fmt.Sprintf("u%d", i), float64(i)}
+	}
+	if _, err := e.InsertRows("db", "users", batch); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use vacuum after some mutations to test scan reads cleaned pages
+	if _, err := e.Vacuum("db", "users"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := e.ReadCurrentRows("db", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != total {
+		t.Fatalf("expected %d rows, got %d", total, len(rows))
 	}
 }

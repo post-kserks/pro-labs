@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"vaultdb/internal/index"
 	"vaultdb/internal/storage/heap"
@@ -13,10 +15,14 @@ import (
 	"vaultdb/internal/wal"
 )
 
-// ── Сканирование ──────────────────────────────────────────────────────────
+// readAheadPages is the number of pages to prefetch during sequential scans.
+// 16 pages = 128 KB — amortizes syscall overhead without excessive memory pressure.
+const readAheadPages = 16
 
-// pageIDAt переводит сквозной номер страницы в PageID (сегмент + страница).
-// tableID уникально идентифицирует таблицу в buffer pool.
+// ── Scanning ────────────────────────────────────────────────────────────────
+
+// pageIDAt converts a global page number to PageID (segment + page).
+// tableID uniquely identifies the table in the buffer pool.
 func pageIDAt(tableID uint32, global uint32) page.PageID {
 	return page.PageID{
 		TableID:   tableID,
@@ -25,7 +31,7 @@ func pageIDAt(tableID uint32, global uint32) page.PageID {
 	}
 }
 
-// tableIDFromPath вычисляет уникальный ID таблицы из пути.
+// tableIDFromPath computes a unique table ID from the path.
 func tableIDFromPath(path string) uint32 {
 	h := uint32(2166136261) // FNV-1a offset basis
 	for i := 0; i < len(path); i++ {
@@ -33,19 +39,46 @@ func tableIDFromPath(path string) uint32 {
 		h *= 16777619 // FNV-1a prime
 	}
 	if h == 0 {
-		h = 1 // избегаем нулевого ID
+		h = 1 // avoid zero ID
 	}
 	return h
 }
 
 type tupleVisitor func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (stop bool, err error)
 
-// scanTuples обходит все кортежи таблицы в порядке страниц/слотов.
+// scanTuples iterates all tuples of a table in page/slot order.
+// During sequential scans, pages are prefetched ahead of time (read-ahead).
 func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 	total, err := t.heap.PageCount()
 	if err != nil {
 		return err
 	}
+	if total == 0 {
+		return nil
+	}
+
+	// Kick off initial read-ahead for the first batch of pages.
+	var prefetchWg sync.WaitGroup
+	startPrefetch := func(from uint32) {
+		count := readAheadPages
+		if int(from)+count > int(total) {
+			count = int(total) - int(from)
+		}
+		if count <= 0 {
+			return
+		}
+		pids := make([]page.PageID, count)
+		for i := 0; i < count; i++ {
+			pids[i] = pageIDAt(t.tableID, from+uint32(i))
+		}
+		prefetchWg.Add(1)
+		go func() {
+			defer prefetchWg.Done()
+			e.bufPool.PrefetchPages(pids, t.heap)
+		}()
+	}
+	startPrefetch(0)
+
 	for g := uint32(0); g < total; g++ {
 		pid := pageIDAt(t.tableID, g)
 		pg, err := e.getPage(pid, t.heap, t.schema.Database, t.schema.Name)
@@ -74,15 +107,23 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 			}
 		}
 		e.unpinPage(pid, false)
+
+		// Trigger read-ahead for the next batch when we approach the edge
+		// of the currently prefetched window.
+		nextGlobal := g + 1
+		if nextGlobal < total && nextGlobal%readAheadPages == 0 {
+			startPrefetch(nextGlobal)
+		}
 	}
+	prefetchWg.Wait()
 	return nil
 }
 
-// ── Запись ────────────────────────────────────────────────────────────────
+// ── Writing ─────────────────────────────────────────────────────────────────
 
-// flushDirty сбрасывает грязную страницу на диск через heap файл.
+// flushDirty flushes a dirty page to disk via heap file.
 
-// appendTuplesLocked добавляет кортежи в конец таблицы; вызывается под write-локом.
+// appendTuplesLocked appends tuples to the end of the table; called under write lock.
 func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) error {
 	total, err := t.heap.PageCount()
 	if err != nil {
@@ -111,6 +152,7 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 
 	for _, tuple := range tuples {
 		for {
+			freshPage := false
 			if !havePage {
 				newPid, newPg, err := t.heap.AllocatePage(page.PageTypeHeap)
 				if err != nil {
@@ -119,27 +161,31 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 				newPid.TableID = t.tableID
 				e.bufPool.CachePage(newPid, newPg, t.heap, t.schema.Database, t.schema.Name)
 				pid, pg, havePage = newPid, newPg, true
+				freshPage = true
 			}
 			if _, err := pg.InsertTuple(tuple); err == nil {
 				break
 			}
-			// Страница полна — сбрасываем её и выделяем новую
+			// Page is full — flush it and allocate a new one
 			if err := flush(); err != nil {
 				return err
 			}
 			havePage = false
+
+			if freshPage {
+				return fmt.Errorf("tuple too large to fit on a page (%d bytes > %d usable)",
+					len(tuple), page.PageSize-page.PageHeaderSize-page.ItemPointerSize)
+			}
 		}
 	}
 	return flush()
 }
 
 func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (int, error) {
-	// Получаем txID под e.mu (быстро)
-	e.mu.Lock()
-	txID := e.nextTxLocked()
-	e.mu.Unlock()
+	// Get txID without global lock — atomic counter.
+	txID := e.nextTxID()
 
-	// Получаем ссылку на таблицу (освобождает e.mu)
+	// Get table reference (releases e.mu)
 	t, err := e.getTableForWrite(dbName, tableName)
 	if err != nil {
 		return 0, err
@@ -249,6 +295,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		}
 
 		for {
+			freshPage := false
 			if !havePage {
 				newPid, newPg, err := t.heap.AllocatePage(page.PageTypeHeap)
 				if err != nil {
@@ -258,6 +305,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 				e.bufPool.CachePage(newPid, newPg, t.heap, t.schema.Database, t.schema.Name)
 				pid, pg, havePage = newPid, newPg, true
 				cachedPageCount++
+				freshPage = true
 			}
 
 			if !pageLocked {
@@ -295,25 +343,37 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 			if havePage {
 				e.bufPool.UnpinPage(pid, false)
 			}
-			if err := t.heap.Sync(); err != nil {
-				return 0, err
-			}
 			havePage = false
+
+			if freshPage {
+				return 0, fmt.Errorf("tuple too large to fit on a page (%d bytes > %d usable)",
+					len(tuple), page.PageSize-page.PageHeaderSize-page.ItemPointerSize)
+			}
 		}
 	}
 
 	insertLockReleased = true
 	t.mu.Unlock()
 
-	if err := t.heap.Sync(); err != nil {
-		return 0, err
-	}
-
 	key := dbName + "/" + tableName
+
+	// Update per-table atomic counters (no lock needed).
+	t.rowCount.Add(int64(len(rows)))
+	t.lastTxID.Store(txID)
+
+	// Sync catalog under e.mu for persistence.
 	e.mu.Lock()
+	e.catalog.CurrentTxID = txID
 	e.catalog.LastModified[key] = txID
-	e.catalog.RowCounts[key] += len(rows)
+	e.catalog.RowCounts[key] = int(t.rowCount.Load())
 	startPos := e.catalog.RowCounts[key] - len(rows)
+	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
+		TxID:      txID,
+		Timestamp: time.Now(),
+	})
+	if len(e.catalog.TxTimes) > maxTxTimesEntries {
+		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
+	}
 	e.markCatalogDirty()
 	e.mu.Unlock()
 
@@ -329,22 +389,47 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	return len(rows), nil
 }
 
-// mutateRows помечает версии удалёнными и (для UPDATE) добавляет новые версии.
+// mutateRows marks versions as deleted and (for UPDATE) appends new versions.
 func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, updates map[string]Value, isDelete bool) (int, error) {
-	// Получаем txID под e.mu
-	e.mu.Lock()
-	txID := e.nextTxLocked()
-	e.mu.Unlock()
+	// Get txID without global lock — atomic counter.
+	txID := e.nextTxID()
 
-	t, err := e.getTableForWrite(dbName, tableName)
-	if err != nil {
-		return 0, err
+	useRowLocks := len(indices) <= 10
+
+	var t *pageTable
+	var err error
+	if useRowLocks {
+		// Small batch: lock individual rows instead of the whole table.
+		t, err = e.getTableForRead(dbName, tableName)
+		if err != nil {
+			return 0, err
+		}
+		// Acquire row-level exclusive locks on each target row.
+		for _, idx := range indices {
+			if err = e.rowLocks.LockRow(dbName, tableName, uint64(idx), txID, LockExclusive); err != nil {
+				t.mu.RUnlock()
+				return 0, err
+			}
+		}
+	} else {
+		// Bulk operation: fall back to table-level write lock.
+		t, err = e.getTableForWrite(dbName, tableName)
+		if err != nil {
+			return 0, err
+		}
 	}
 	mutateLockReleased := false
 	defer func() {
 		if !mutateLockReleased {
 			mutateLockReleased = true
-			t.mu.Unlock()
+			if useRowLocks {
+				for _, idx := range indices {
+					e.rowLocks.UnlockRow(dbName, tableName, uint64(idx), txID)
+				}
+				t.mu.RUnlock()
+			} else {
+				t.mu.Unlock()
+			}
 		}
 	}()
 
@@ -363,106 +448,86 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	affected := 0
 	pos := 0
 
-	var dirtyPid page.PageID
-	dirty := false
-	flushDirty := func() error {
-		if dirty {
-			e.bufPool.UnpinPage(dirtyPid, true)
-			dirty = false
-		}
-		return nil
+	type locatedTuple struct {
+		pid       page.PageID
+		slot      uint16
+		createdTx uint64
+		row       Row
 	}
+	var located []locatedTuple
 
-	// WAL: записываем каждую операцию ПЕРЕД изменением heap
-	// Важно: SlotNo должен быть физическим слотом, а не логической позицией
-	if e.wal != nil {
-		// Сначала сканируем чтобы найти физические слоты
-		var physicalSlots []struct {
-			pid  page.PageID
-			slot uint16
-		}
-		e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
-			if deletedTx != 0 {
-				return false, nil
-			}
-			matched := wanted[pos]
-			pos++
-			if matched {
-				physicalSlots = append(physicalSlots, struct {
-					pid  page.PageID
-					slot uint16
-				}{pid, slot})
-			}
+	// Single scan: collect physical slots AND row data simultaneously.
+	e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+		if deletedTx != 0 {
 			return false, nil
-		})
+		}
+		matched := wanted[pos]
+		pos++
+		if matched {
+			located = append(located, locatedTuple{
+				pid:       pid,
+				slot:      slot,
+				createdTx: createdTx,
+				row:       append(Row(nil), row...), // copy row data
+			})
+		}
+		return false, nil
+	})
 
-		// Записываем WAL с реальными физическими слотами
-		for _, ps := range physicalSlots {
+	// WAL recording using collected data.
+	if e.wal != nil {
+		for _, loc := range located {
 			payload := wal.WALPageDeletePayload{
 				DB:        dbName,
 				Table:     tableName,
-				SegmentNo: ps.pid.SegmentNo,
-				PageNo:    ps.pid.PageNo,
-				SlotNo:    ps.slot,
+				SegmentNo: loc.pid.SegmentNo,
+				PageNo:    loc.pid.PageNo,
+				SlotNo:    loc.slot,
 				XMax:      txID,
 			}
 			if _, err := e.wal.AppendWithTx(txID, wal.OpPageDelete, payload); err != nil {
 				return 0, fmt.Errorf("wal delete: %w", err)
 			}
 		}
-		pos = 0 // Сбрасываем позицию для следующего сканирования
 	}
 
-	err = e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
-		if deletedTx != 0 {
-			return false, nil
-		}
-		matched := wanted[pos]
-		pos++
-		if !matched {
-			return false, nil
+	// Apply mutations using collected data.
+	for _, loc := range located {
+		pg, err := e.getPage(loc.pid, t.heap, dbName, tableName)
+		if err != nil {
+			return 0, err
 		}
 
-		// Сбрасываем предыдущую грязную страницу, если перешли на новую
-		if dirty && dirtyPid != pid {
-			if err := flushDirty(); err != nil {
-				return true, err
-			}
-		}
-
-		// Помечаем текущую версию удалённой: in-place запись deleted_tx
-		tuple := pg.GetTuple(slot)
+		// Mark old tuple as deleted.
+		tuple := pg.GetTuple(loc.slot)
 		binary.LittleEndian.PutUint64(tuple[8:16], txID)
-		dirtyPid, dirty = pid, true
 
 		if !isDelete {
-			newRow := append(Row(nil), row...)
+			newRow := append(Row(nil), loc.row...)
 			for name, val := range updates {
 				idx, ok := colIndex[strings.ToLower(name)]
 				if !ok {
-					return true, fmt.Errorf("column '%s' does not exist", name)
+					e.bufPool.UnpinPageDirty(loc.pid, 0)
+					return 0, fmt.Errorf("column '%s' does not exist", name)
 				}
 				n, err := normalizeValue(val, t.schema.Columns[idx])
 				if err != nil {
-					return true, fmt.Errorf("column '%s': %w", name, err)
+					e.bufPool.UnpinPageDirty(loc.pid, 0)
+					return 0, fmt.Errorf("column '%s': %w", name, err)
 				}
 				newRow[idx] = n
 			}
 			encoded, err := encodePageTuple(txID, 0, newRow)
 			if err != nil {
-				return true, err
+				e.bufPool.UnpinPageDirty(loc.pid, 0)
+				return 0, err
 			}
 			newVersions = append(newVersions, encoded)
 			newRows = append(newRows, newRow)
 		}
+
 		affected++
-		return false, nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	if err := flushDirty(); err != nil {
-		return 0, err
+		e.bufPool.UnpinPageDirty(loc.pid, 0)
 	}
 
 	if len(newVersions) > 0 {
@@ -470,11 +535,8 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 			return 0, err
 		}
 	}
-	if err := t.heap.Sync(); err != nil {
-		return 0, err
-	}
 
-	// Обновляем индексы до освобождения t.mu (они не требуют e.mu)
+	// Update indexes before releasing t.mu (they don't need e.mu)
 	if affected > 0 {
 		e.updateIndexesOnDelete(dbName, tableName, indices)
 		if !isDelete && len(newRows) > 0 {
@@ -482,19 +544,40 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		}
 	}
 
-	// Освобождаем t.mu ПЕРЕД e.mu, чтобы избежать deadlock:
+	// Release t.mu BEFORE e.mu to avoid deadlock:
 	// t.mu → e.mu vs e.mu.RLock → t.mu
 	mutateLockReleased = true
-	t.mu.Unlock()
+	if useRowLocks {
+		for _, idx := range indices {
+			e.rowLocks.UnlockRow(dbName, tableName, uint64(idx), txID)
+		}
+		t.mu.RUnlock()
+	} else {
+		t.mu.Unlock()
+	}
 
 	key := dbName + "/" + tableName
-	e.mu.Lock()
-	e.catalog.LastModified[key] = txID
+
+	// Update per-table atomic counters.
+	t.lastTxID.Store(txID)
 	if isDelete {
-		e.catalog.RowCounts[key] -= affected
-		if e.catalog.RowCounts[key] < 0 {
-			e.catalog.RowCounts[key] = 0
+		t.rowCount.Add(-int64(affected))
+		if t.rowCount.Load() < 0 {
+			t.rowCount.Store(0)
 		}
+	}
+
+	// Sync catalog under e.mu for persistence.
+	e.mu.Lock()
+	e.catalog.CurrentTxID = txID
+	e.catalog.LastModified[key] = txID
+	e.catalog.RowCounts[key] = int(t.rowCount.Load())
+	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
+		TxID:      txID,
+		Timestamp: time.Now(),
+	})
+	if len(e.catalog.TxTimes) > maxTxTimesEntries {
+		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
 	}
 	e.markCatalogDirty()
 	e.mu.Unlock()
@@ -516,9 +599,8 @@ func (e *PageStorageEngine) UpdateRows(dbName, tableName string, indices []int, 
 // UpdateRowsDirect replaces rows at given indices with pre-computed new values.
 // Used when assignment expressions reference columns (e.g., SET amount = amount - 100).
 func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices []int, newValues []Row) (int, error) {
-	e.mu.Lock()
-	txID := e.nextTxLocked()
-	e.mu.Unlock()
+	// Get txID without global lock — atomic counter.
+	txID := e.nextTxID()
 
 	t, err := e.getTableForWrite(dbName, tableName)
 	if err != nil {
@@ -635,11 +717,8 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 			return 0, err
 		}
 	}
-	if err := t.heap.Sync(); err != nil {
-		return 0, err
-	}
 
-	// Обновляем индексы до освобождения t.mu (они не требуют e.mu)
+	// Update indexes before releasing t.mu (they don't need e.mu)
 	if affected > 0 {
 		e.updateIndexesOnDelete(dbName, tableName, indices)
 		if len(newRows) > 0 {
@@ -651,8 +730,21 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	t.mu.Unlock()
 
 	key := dbName + "/" + tableName
+
+	// Update per-table atomic counter.
+	t.lastTxID.Store(txID)
+
+	// Sync catalog under e.mu for persistence.
 	e.mu.Lock()
+	e.catalog.CurrentTxID = txID
 	e.catalog.LastModified[key] = txID
+	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
+		TxID:      txID,
+		Timestamp: time.Now(),
+	})
+	if len(e.catalog.TxTimes) > maxTxTimesEntries {
+		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
+	}
 	e.markCatalogDirty()
 	e.mu.Unlock()
 
@@ -732,9 +824,20 @@ func (e *PageStorageEngine) TruncateTable(dbName, tableName string) error {
 
 	// Update catalog
 	key := dbName + "/" + tableName
+	txID := e.nextTxID()
+	t.rowCount.Store(0)
+	t.lastTxID.Store(txID)
 	e.mu.Lock()
+	e.catalog.CurrentTxID = txID
 	e.catalog.RowCounts[key] = 0
-	e.catalog.LastModified[key] = e.nextTxLocked()
+	e.catalog.LastModified[key] = txID
+	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
+		TxID:      txID,
+		Timestamp: time.Now(),
+	})
+	if len(e.catalog.TxTimes) > maxTxTimesEntries {
+		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
+	}
 	if err := e.saveCatalogLocked(); err != nil {
 		e.mu.Unlock()
 		return fmt.Errorf("truncate: save catalog: %w", err)
@@ -767,9 +870,9 @@ func createFreshHeapFile(dir string) (*heap.HeapFile, error) {
 	return heap.CreateHeapFile(dir)
 }
 
-// ── Чтение ────────────────────────────────────────────────────────────────
+// ── Reading ─────────────────────────────────────────────────────────────────
 
-// readRows возвращает строки, видимые на момент asOf (0 = текущие версии).
+// readRows returns rows visible as of a given txID (0 = current versions).
 func (e *PageStorageEngine) readRows(dbName, tableName string, asOf uint64) ([]Row, error) {
 	t, err := e.getTableForRead(dbName, tableName)
 	if err != nil {
@@ -807,8 +910,8 @@ func (e *PageStorageEngine) ReadCurrentRows(dbName, tableName string) ([]Row, er
 	return e.readRows(dbName, tableName, 0)
 }
 
-// ReadSampleRows читает не более limit строк из таблицы.
-// Использует покаместный проход по страницам с остановкой при достижении лимита.
+// ReadSampleRows reads up to limit rows from a table.
+// Uses a page-by-page scan with early termination when the limit is reached.
 func (e *PageStorageEngine) ReadSampleRows(dbName, tableName string, limit int) ([]Row, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -885,11 +988,20 @@ func (e *PageStorageEngine) ReadRowsByPositions(dbName, tableName string, positi
 }
 
 func (e *PageStorageEngine) CountRows(dbName, tableName string) (int, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
 	key := dbName + "/" + tableName
+
+	// Try per-table atomic counter first (lock-free).
+	e.mu.RLock()
+	t, ok := e.tables[key]
+	e.mu.RUnlock()
+	if ok {
+		return int(t.rowCount.Load()), nil
+	}
+
+	// Fallback to catalog.
+	e.mu.RLock()
 	count, ok := e.catalog.RowCounts[key]
+	e.mu.RUnlock()
 	if !ok {
 		return 0, fmt.Errorf("table '%s' not found in database '%s'", tableName, dbName)
 	}

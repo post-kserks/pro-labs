@@ -135,13 +135,53 @@ Single statements outside an explicit transaction are auto-committed. Each auto-
 
 When a TCP connection drops with an active transaction, VaultDB automatically rolls back the transaction to prevent orphaned locks.
 
-## Isolation Level
+## Isolation Levels
 
-VaultDB provides **snapshot isolation** for reads within transactions:
+VaultDB supports multiple transaction isolation levels:
+
+### Snapshot Isolation (Default)
+
+The default isolation level provides snapshot isolation for reads within transactions:
 
 - Reads see a consistent snapshot from the time the transaction started
 - Writes are buffered until COMMIT
 - Conflicts are detected at COMMIT time via OCC
+
+### READ COMMITTED
+
+Each statement within a transaction sees data committed by other transactions before the statement started.
+
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED;
+SELECT * FROM accounts WHERE id = 1;  -- sees committed data at statement start
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+COMMIT;
+```
+
+### REPEATABLE READ
+
+All reads within a transaction see a snapshot from the start of the transaction.
+
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+SELECT * FROM accounts WHERE id = 1;  -- sees snapshot at transaction start
+-- Even if other transactions modify this row, we see the same data
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+COMMIT;
+```
+
+### SERIALIZABLE
+
+The strictest isolation level. Transactions appear to execute serially, even if run concurrently.
+
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+SELECT * FROM accounts WHERE id = 1;
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+COMMIT;
+```
+
+**Note:** All isolation levels use Optimistic Concurrency Control (OCC) for conflict detection. Conflicts are detected at COMMIT time, and transactions are aborted if conflicts are found.
 
 ## Spill-to-Disk
 

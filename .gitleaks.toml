@@ -1,0 +1,11 @@
+[[rules]]
+id = "vaultdb-api-token"
+description = "VaultDB API token"
+regex = '''vdb_sk_[a-f0-9]{32}'''
+tags = ["vaultdb", "token"]
+
+[[rules]]
+id = "vaultdb-encryption-passphrase"
+description = "Hardcoded encryption passphrase"
+regex = '''VAULTDB_ENCRYPTION_PASSPHRASE\s*=\s*["'][^"']{4,}["']'''
+tags = ["vaultdb", "encryption"]

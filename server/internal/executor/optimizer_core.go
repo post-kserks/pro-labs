@@ -7,7 +7,7 @@ import (
 	"vaultdb/internal/storage"
 )
 
-// AccessMethod тип доступа к данным.
+// AccessMethod data access type.
 type AccessMethod int
 
 const (
@@ -16,7 +16,7 @@ const (
 	IndexOnlyScan
 )
 
-// JoinMethod тип соединения.
+// JoinMethod join type.
 type JoinMethod int
 
 const (
@@ -33,7 +33,7 @@ const (
 	defaultFallbackRows = 100
 )
 
-// CostEstimate оценка стоимости плана.
+// CostEstimate plan cost estimate.
 type CostEstimate struct {
 	Cost          float64
 	EstimatedRows int
@@ -45,7 +45,7 @@ type Optimizer struct {
 	storage storage.StorageEngine
 }
 
-// NewOptimizer создаёт новый optimizer.
+// NewOptimizer creates a new optimizer.
 func NewOptimizer(store storage.StorageEngine) *Optimizer {
 	return &Optimizer{
 		stats:   NewStatisticsCollector(store),
@@ -53,7 +53,7 @@ func NewOptimizer(store storage.StorageEngine) *Optimizer {
 	}
 }
 
-// OptimizePlan оптимизирует SELECT запрос.
+// OptimizePlan optimizes SELECT query.
 func (o *Optimizer) OptimizePlan(dbName string, stmt *parser.SelectStatement) (*OptimizedPlan, error) {
 	o.decorrelateSubqueries(dbName, stmt)
 
@@ -84,7 +84,7 @@ func (o *Optimizer) rowCount(s *TableStatistics) int {
 	return s.RowCount
 }
 
-// OptimizedPlan оптимизированный план запроса.
+// OptimizedPlan optimized query plan.
 type OptimizedPlan struct {
 	Stmt              *parser.SelectStatement
 	TableStats        *TableStatistics
@@ -96,7 +96,7 @@ type OptimizedPlan struct {
 	DecorrelatedJoins []parser.JoinClause
 }
 
-// chooseAccessMethods выбирает лучший метод доступа для каждой таблицы.
+// chooseAccessMethods chooses the best access method for each table.
 func (o *Optimizer) chooseAccessMethods(dbName string, stmt *parser.SelectStatement, stats *TableStatistics) map[string]AccessMethod {
 	methods := make(map[string]AccessMethod)
 

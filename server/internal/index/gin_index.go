@@ -8,19 +8,19 @@ import (
 	"sync"
 )
 
-// GINIndex — Generalized Inverted Index для полнотекстового поиска и JSON.
+// GINIndex — Generalized Inverted Index for full-text search and JSON.
 type GINIndex struct {
 	mu        sync.RWMutex
 	name      string
 	column    string
 	colIndex  int
-	indexType string // "text" или "jsonb"
+	indexType string // "text" or "jsonb"
 
-	// Инвертированный индекс: токен → []int (позиции строк)
+	// Inverted index: token → []int (row positions)
 	data map[string][]int
-	// Обратный маппинг: позиция строки → токены
+	// Reverse mapping: row position → tokens
 	reverse map[int][]string
-	// JSONB: позиция строки → значение (для contains/contained_by)
+	// JSONB: row position → value (for contains/contained_by)
 	jsonValues map[int]string
 }
 
@@ -52,6 +52,18 @@ func (g *GINIndex) Type() string   { return "gin" }
 func (g *GINIndex) Name() string   { return g.name }
 func (g *GINIndex) Column() string { return g.column }
 func (g *GINIndex) ColIndex() int  { return g.colIndex }
+
+// Columns returns nil — GIN index does not support index-only scan.
+func (g *GINIndex) Columns() []string { return nil }
+
+// HasStoredColumns returns false — GIN index does not store columns.
+func (g *GINIndex) HasStoredColumns() bool { return false }
+
+// GetStoredColumns returns nil — GIN index does not store columns.
+func (g *GINIndex) GetStoredColumns(rowPos int) (map[string]interface{}, bool) {
+	return nil, false
+}
+
 func (g *GINIndex) RenameColumn(old, new string) {
 	g.mu.Lock()
 	g.column = new

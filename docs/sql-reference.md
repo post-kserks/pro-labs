@@ -71,6 +71,26 @@ CREATE INDEX idx_users_name_age ON users (name, age);  -- composite index
 DROP INDEX idx_users_email;
 ```
 
+### Table Partitioning
+
+```sql
+-- RANGE partitioning
+CREATE TABLE orders (
+    id INT,
+    order_date DATE,
+    amount FLOAT
+) PARTITION BY RANGE (order_date) (
+    PARTITION p2023 VALUES LESS THAN ('2024-01-01'),
+    PARTITION p2024 VALUES LESS THAN ('2025-01-01')
+);
+
+-- HASH partitioning
+CREATE TABLE sessions (
+    user_id INT,
+    data TEXT
+) PARTITION BY HASH (user_id) PARTITIONS 4;
+```
+
 ### DROP TABLE
 
 ```sql
@@ -93,6 +113,21 @@ DROP TABLE IF EXISTS users;
 ```sql
 INSERT INTO users (id, name, email) VALUES (1, 'Alice', 'alice@example.com');
 INSERT INTO users VALUES (2, 'Bob', 'bob@example.com', 25, CURRENT_TIMESTAMP);
+```
+
+### INSERT OR REPLACE
+
+If a row with the same PRIMARY KEY exists, it is replaced entirely:
+
+```sql
+INSERT OR REPLACE INTO users (id, name) VALUES (1, 'Alice Updated');
+```
+
+This is equivalent to:
+
+```sql
+INSERT INTO users (id, name) VALUES (1, 'Alice Updated')
+  ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name;
 ```
 
 ### UPSERT (ON CONFLICT)
@@ -119,6 +154,25 @@ DELETE FROM users WHERE id = 1;
 DELETE FROM users WHERE age < 18;
 ```
 
+### COPY
+
+Import and export data from/to files.
+
+```sql
+-- COPY FROM
+COPY users FROM '/path/to/users.csv' WITH (FORMAT CSV, HEADER true);
+COPY users FROM '/path/to/data.jsonl' WITH (FORMAT JSON);
+
+-- COPY TO
+COPY users TO '/path/to/output.csv' WITH (FORMAT CSV);
+COPY users TO '/path/to/output.jsonl' WITH (FORMAT JSON);
+```
+
+**Options:**
+- `FORMAT` — `CSV` or `JSON`
+- `HEADER` — `true` to skip header row on import (CSV only)
+- `DELIMITER` — field separator character (CSV only, default `,`)
+
 ---
 
 ## SELECT
@@ -131,6 +185,16 @@ SELECT id, name, email FROM users;
 SELECT DISTINCT age FROM users;
 ```
 
+### DISTINCT ON
+
+```sql
+SELECT DISTINCT ON (department) department, name, salary
+FROM employees
+ORDER BY department, salary DESC;
+```
+
+Returns the first row for each distinct value of the given expression(s), based on the ORDER BY clause.
+
 ### WHERE Clause
 
 ```sql
@@ -140,6 +204,22 @@ SELECT * FROM users WHERE name ILIKE '%alice%';  -- case-insensitive
 SELECT * FROM users WHERE id IN (1, 2, 3);
 SELECT * FROM users WHERE email IS NOT NULL;
 SELECT * FROM users WHERE age BETWEEN 20 AND 30;
+```
+
+### JSONB Operators in WHERE
+
+```sql
+-- -> operator (get JSON element)
+SELECT data->'name' FROM users;
+
+-- ->> operator (get text value)
+SELECT data->>'email' FROM users;
+
+-- @> operator (contains)
+SELECT * FROM users WHERE data @> '{"active": true}';
+
+-- ? operator (has key)
+SELECT * FROM users WHERE data ? 'name';
 ```
 
 ### ORDER BY
@@ -354,4 +434,90 @@ Shows table schema.
 SHOW DATABASES;
 SHOW TABLES;
 SHOW INDEXES ON users;
+SHOW ENCRYPTION STATUS;
+```
+
+`SHOW ENCRYPTION STATUS` displays encryption information for the current database:
+- `database` — database name
+- `encrypted` — yes/no
+- `algorithm` — encryption algorithm (e.g., AES-256-GCM)
+- `key_source` — key source type (passphrase, os_keychain, kms)
+
+---
+
+## VERIFY AUDIT LOG
+
+Verifies the integrity of the tamper-evident audit log chain.
+
+```sql
+VERIFY AUDIT LOG;
+-- Output: "Audit chain intact: 48392 entries verified, no tampering detected."
+```
+
+Checks that each audit log entry's hash chain is unbroken and no entries have been modified or removed.
+
+---
+
+## REVOKE TOKEN
+
+Revokes an authentication token, preventing it from being used for future requests.
+
+```sql
+REVOKE TOKEN 'vdb_sk_your_token_here';
+-- Output: "Token revoked successfully."
+```
+
+**Notes:**
+- Revoked tokens are rejected by the authentication manager
+- Token revocation is immediate and permanent
+- Revoked tokens are cleaned up after 24 hours
+- Requires admin privileges to execute
+
+---
+
+## MERGE
+
+Perform conditional INSERT or UPDATE based on a source dataset.
+
+```sql
+MERGE INTO target t
+USING source s
+ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET t.name = s.name
+WHEN NOT MATCHED THEN INSERT (id, name) VALUES (s.id, s.name);
+```
+
+---
+
+## TRUNCATE
+
+Remove all rows from a table.
+
+```sql
+TRUNCATE TABLE users;
+```
+
+---
+
+## SAVEPOINT
+
+Create a savepoint within a transaction for partial rollback.
+
+```sql
+BEGIN;
+INSERT INTO users VALUES (1, 'Alice');
+SAVEPOINT sp1;
+INSERT INTO users VALUES (2, 'Bob');
+ROLLBACK TO SAVEPOINT sp1;  -- undo only the second insert
+COMMIT;  -- only Alice is committed
+```
+
+---
+
+## HISTORY
+
+Query the version history of a row.
+
+```sql
+HISTORY users WHERE id = 1;
 ```

@@ -17,6 +17,13 @@ type InsertCommand struct {
 }
 
 func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+	// Fast path: single row, no conflicts, no returning, no tx active
+	if len(c.stmt.Rows) == 1 && c.stmt.OnConflict == nil && c.stmt.Returning == nil &&
+		c.stmt.SelectQuery == nil && !c.stmt.OrReplace &&
+		ctx.Session.GetActiveTx() == nil {
+		return c.fastPathInsert(ctx)
+	}
+
 	dbName, _ := requireCurrentDB(ctx)
 	if dbName != "" {
 		if err := enforceRLSPolicies(ctx, dbName, c.stmt.TableName); err != nil {
@@ -41,6 +48,99 @@ func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}, nil
 	}
 	return c.executeImmediate(ctx)
+}
+
+// fastPathInsert handles single-row inserts without table lock overhead.
+func (c *InsertCommand) fastPathInsert(ctx *ExecutionContext) (*Result, error) {
+	dbName, err := requireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := enforceRLSPolicies(ctx, dbName, c.stmt.TableName); err != nil {
+		return nil, err
+	}
+
+	schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle INFER SCHEMA
+	if len(schema.Columns) == 0 && len(c.stmt.Rows) > 0 {
+		inferredCols := make([]storage.ColumnSchema, 0, len(c.stmt.Rows[0]))
+		for i, expr := range c.stmt.Rows[0] {
+			val, _ := evalOperand(expr, nil, nil, ctx)
+			colType := inferType(val)
+			name := fmt.Sprintf("col%d", i)
+			if len(c.stmt.Columns) > i {
+				name = c.stmt.Columns[i]
+			}
+			inferredCols = append(inferredCols, storage.ColumnSchema{Name: name, Type: colType})
+		}
+		for _, col := range inferredCols {
+			if err := ctx.Storage.AlterTableAddColumn(dbName, c.stmt.TableName, col, nil); err != nil {
+				return nil, fmt.Errorf("infer schema failed: %w", err)
+			}
+		}
+		schema, err = ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	rowsToInsert, err := c.buildRows(schema, ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := fillAutoIncrementColumns(ctx, dbName, c.stmt.TableName, schema, rowsToInsert); err != nil {
+		return nil, err
+	}
+
+	if err := enforceForeignKeysOnInsert(ctx, dbName, c.stmt.TableName, rowsToInsert); err != nil {
+		return nil, err
+	}
+
+	// Validate NOT NULL and ENUM constraints
+	for j, col := range schema.Columns {
+		if col.NotNull && j < len(rowsToInsert[0]) && rowsToInsert[0][j] == nil {
+			return nil, fmt.Errorf("NOT NULL constraint failed for column '%s'", col.Name)
+		}
+		if col.Type == "ENUM" && len(col.EnumValues) > 0 && j < len(rowsToInsert[0]) && rowsToInsert[0][j] != nil {
+			val := valueToString(rowsToInsert[0][j])
+			valid := false
+			for _, ev := range col.EnumValues {
+				if val == ev {
+					valid = true
+					break
+				}
+			}
+			if !valid {
+				return nil, fmt.Errorf("invalid ENUM value '%s' for column '%s' (valid: %v)", val, col.Name, col.EnumValues)
+			}
+		}
+	}
+
+	// Validate CHECK constraints
+	for i, row := range rowsToInsert {
+		if err := enforceCheckConstraints(schema, row); err != nil {
+			return nil, fmt.Errorf("row %d: %w", i, err)
+		}
+	}
+
+	affected, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, rowsToInsert)
+	if err != nil {
+		return nil, err
+	}
+
+	notifyMutation(ctx, dbName, c.stmt.TableName)
+	if ctx.Session.planCache != nil {
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	}
+	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
+
+	return &Result{Type: "affected", Affected: affected}, nil
 }
 
 func (c *InsertCommand) executeImmediate(ctx *ExecutionContext) (*Result, error) {
@@ -73,6 +173,11 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 
 	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
+	}
+
+	// Convert INSERT OR REPLACE to ON CONFLICT DO UPDATE SET all columns
+	if c.stmt.OrReplace && c.stmt.OnConflict == nil {
+		c.stmt.OnConflict = &parser.OnConflictClause{Action: "UPDATE"}
 	}
 
 	schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
@@ -150,6 +255,11 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 
 	if c.stmt.OnConflict != nil {
 		return c.executeUpsert(ctx, dbName, schema, rowsToInsert)
+	}
+
+	// Route to partition if table is partitioned
+	if schema.PartitionBy != nil {
+		return c.executePartitionedInsert(ctx, dbName, schema, rowsToInsert)
 	}
 
 	affected, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, rowsToInsert)
@@ -294,12 +404,21 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 			}
 			if c.stmt.OnConflict.Action == "UPDATE" {
 				updates := make(map[string]storage.Value)
-				for _, assign := range c.stmt.OnConflict.Assignments {
-					val, err := evalOperand(assign.Value, row, schema, ctx)
-					if err != nil {
-						return nil, err
+				if len(c.stmt.OnConflict.Assignments) == 0 {
+					// INSERT OR REPLACE: update ALL columns
+					for i, col := range schema.Columns {
+						if i < len(row) && row[i] != nil {
+							updates[col.Name] = row[i]
+						}
 					}
-					updates[assign.Column] = val
+				} else {
+					for _, assign := range c.stmt.OnConflict.Assignments {
+						val, err := evalOperand(assign.Value, row, schema, ctx)
+						if err != nil {
+							return nil, err
+						}
+						updates[assign.Column] = val
+					}
 				}
 				_, err := ctx.Storage.UpdateRows(dbName, c.stmt.TableName, []int{conflictIdx}, updates)
 				if err != nil {
@@ -377,6 +496,9 @@ func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string
 			if col.NotNull && j < len(storageRow) && storageRow[j] == nil {
 				return nil, fmt.Errorf("INSERT ... SELECT: NOT NULL constraint failed for column '%s' in row %d", col.Name, ri)
 			}
+		}
+		if err := enforceCheckConstraints(schema, storageRow); err != nil {
+			return nil, fmt.Errorf("INSERT ... SELECT: row %d: %w", ri, err)
 		}
 		rowsToInsert = append(rowsToInsert, storageRow)
 	}
@@ -460,4 +582,39 @@ func applyComputedColumns(row storage.Row, schema *storage.TableSchema, ctx *Exe
 		}
 	}
 	return nil
+}
+
+// executePartitionedInsert routes rows to the correct partition for a partitioned table.
+func (c *InsertCommand) executePartitionedInsert(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, rowsToInsert []storage.Row) (*Result, error) {
+	pt := storage.NewPartitionedTable(schema)
+	if pt == nil {
+		return nil, fmt.Errorf("table '%s' has partition spec but could not initialize partition routing", c.stmt.TableName)
+	}
+
+	// Group rows by target partition
+	routes := make(map[string][]storage.Row)
+	for _, row := range rowsToInsert {
+		targetTable, err := pt.InsertRoute(row)
+		if err != nil {
+			return nil, fmt.Errorf("partition routing: %w", err)
+		}
+		routes[targetTable] = append(routes[targetTable], row)
+	}
+
+	totalAffected := 0
+	for targetTable, rows := range routes {
+		affected, err := ctx.Storage.InsertRows(dbName, targetTable, rows)
+		if err != nil {
+			return nil, fmt.Errorf("insert into partition '%s': %w", targetTable, err)
+		}
+		totalAffected += affected
+	}
+
+	notifyMutation(ctx, dbName, c.stmt.TableName)
+	if ctx.Session.planCache != nil {
+		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	}
+	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
+
+	return &Result{Type: "affected", Affected: totalAffected}, nil
 }

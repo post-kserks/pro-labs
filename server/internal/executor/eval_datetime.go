@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// parseTimestamp пытается распарсить строку как timestamp в различных форматах.
+// parseTimestamp attempts to parse a string as a timestamp in various formats.
 func parseTimestamp(s string) (time.Time, error) {
 	formats := []string{
 		time.RFC3339,
@@ -26,7 +26,7 @@ func parseTimestamp(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("cannot parse timestamp %q", s)
 }
 
-// sqlToGoLayout преобразует SQL формат даты в Go layout.
+// sqlToGoLayout converts SQL date format to Go layout.
 func sqlToGoLayout(layout string) string {
 	sqlTokens := []struct{ sql, goLayout string }{
 		{"YYYY", "2006"},
@@ -47,7 +47,7 @@ func sqlToGoLayout(layout string) string {
 	return result
 }
 
-// isIntervalString проверяет является ли строка SQL интервалом.
+// isIntervalString checks if a string is a SQL interval.
 func isIntervalString(s string) bool {
 	s = strings.TrimSpace(s)
 	s = strings.ToUpper(s)
@@ -57,7 +57,7 @@ func isIntervalString(s string) bool {
 		strings.HasSuffix(s, "YEARS")
 }
 
-// evalDateInterval вычисляет арифметику с интервалами дат.
+// evalDateInterval computes date interval arithmetic.
 func evalDateInterval(dateStr, intervalStr, op string) (interface{}, error) {
 	t, err := parseTimestamp(dateStr)
 	if err != nil {
@@ -120,27 +120,27 @@ func evalDateInterval(dateStr, intervalStr, op string) (interface{}, error) {
 	return t.Format(time.RFC3339), nil
 }
 
-// fnNow возвращает текущее время.
+// fnNow returns the current time.
 func fnNow(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return time.Now().UTC().Format(time.RFC3339), nil
 }
 
-// fnCurrentDate возвращает текущую дату.
+// fnCurrentDate returns the current date.
 func fnCurrentDate(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return time.Now().UTC().Format("2006-01-02"), nil
 }
 
-// fnCurrentTime возвращает текущее время.
+// fnCurrentTime returns the current time.
 func fnCurrentTime(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return time.Now().UTC().Format("15:04:05"), nil
 }
 
-// fnCurrentTimestamp возвращает текущий timestamp.
+// fnCurrentTimestamp returns the current timestamp.
 func fnCurrentTimestamp(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return time.Now().UTC().Format(time.RFC3339), nil
 }
 
-// fnDateTrunc округляет timestamp до указанной части.
+// fnDateTrunc truncates timestamp to the specified part.
 func fnDateTrunc(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("DATE_TRUNC requires 2 arguments")
@@ -168,7 +168,7 @@ func fnDateTrunc(args []interface{}, ctx *ExecutionContext) (interface{}, error)
 	}
 }
 
-// fnExtract извлекает часть из timestamp.
+// fnExtract extracts a part from a timestamp.
 func fnExtract(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	if len(args) < 1 || len(args) > 2 {
 		return nil, fmt.Errorf("EXTRACT requires 1 or 2 arguments")
@@ -208,7 +208,7 @@ func fnExtract(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	}
 }
 
-// fnAge вычисляет разницу во времени.
+// fnAge computes time difference.
 func fnAge(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	if len(args) < 1 || len(args) > 2 {
 		return nil, fmt.Errorf("AGE requires 1 or 2 arguments")
@@ -234,7 +234,7 @@ func fnAge(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return fmt.Sprintf("%d days %d hours %d mins %d secs", days, hours, minutes, seconds), nil
 }
 
-// fnToDate преобразует строку в дату.
+// fnToDate converts string to date.
 func fnToDate(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("TO_DATE requires 2 arguments")
@@ -249,7 +249,7 @@ func fnToDate(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return t.Format("2006-01-02"), nil
 }
 
-// fnToChar форматирует timestamp в строку.
+// fnToChar formats timestamp to string.
 func fnToChar(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("TO_CHAR requires 2 arguments")
@@ -262,7 +262,7 @@ func fnToChar(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return ts.Format(layout), nil
 }
 
-// fnToTimestamp преобразует строку в timestamp.
+// fnToTimestamp converts a string to a timestamp.
 func fnToTimestamp(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("TO_TIMESTAMP requires 2 arguments")
@@ -276,7 +276,7 @@ func fnToTimestamp(args []interface{}, ctx *ExecutionContext) (interface{}, erro
 	return t.Format(time.RFC3339), nil
 }
 
-// fnDateAdd прибавляет интервал к дате.
+// fnDateAdd adds an interval to a date.
 func fnDateAdd(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	if len(args) != 3 {
 		return nil, fmt.Errorf("DATE_ADD requires 3 arguments: date, amount, unit")
@@ -310,7 +310,7 @@ func fnDateAdd(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return t.Format(time.RFC3339), nil
 }
 
-// fnDateSub вычитает интервал из даты.
+// fnDateSub subtracts an interval from a date.
 func fnDateSub(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	if len(args) != 3 {
 		return nil, fmt.Errorf("DATE_SUB requires 3 arguments: date, amount, unit")
@@ -344,7 +344,7 @@ func fnDateSub(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return t.Format(time.RFC3339), nil
 }
 
-// fnDateDiff вычисляет разницу между двумя датами.
+// fnDateDiff computes difference between two dates.
 func fnDateDiff(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	if len(args) != 3 {
 		return nil, fmt.Errorf("DATE_DIFF requires 3 arguments: unit, date1, date2")

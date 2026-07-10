@@ -185,3 +185,81 @@ func TestMigrationAppliedOnce(t *testing.T) {
 		t.Fatal("second APPLY MIGRATION succeeded, want already-applied error")
 	}
 }
+
+func TestMigrationCreateValidation(t *testing.T) {
+	// Safe DDL should be allowed
+	safeCases := []string{
+		"CREATE TABLE new_table (id INT);",
+		"CREATE INDEX idx ON people (name);",
+		"ALTER TABLE people ADD COLUMN email TEXT;",
+		"INSERT INTO people (id, name) VALUES (10, 'frank');",
+		"UPDATE people SET name = 'alice2' WHERE id = 1;",
+		"DELETE FROM people WHERE id = 5;",
+		"SELECT * FROM people;",
+	}
+	for i, sql := range safeCases {
+		stmt, err := parser.Parse(sql)
+		if err != nil {
+			t.Fatalf("case %d: parse failed: %v", i, err)
+		}
+		if !isMigrationSafe(stmt) {
+			t.Errorf("case %d: expected safe but rejected: %s", i, sql)
+		}
+	}
+
+	// Unsafe statements should be rejected (H4: DROP TABLE/DROP INDEX no longer allowed)
+	unsafeCases := []string{
+		"CREATE DATABASE evil;",
+		"DROP DATABASE main;",
+		"CREATE TABLE _secret (data TEXT);",
+		"CREATE TABLE vaultdb_audit_log (data TEXT);",
+		"DROP TABLE people;",
+		"DROP INDEX idx;",
+		"ALTER TABLE people DROP COLUMN email;",
+		"ALTER TABLE people RENAME COLUMN name TO x;",
+		"ALTER TABLE people RENAME TO new_name;",
+	}
+	for i, sql := range unsafeCases {
+		stmt, err := parser.Parse(sql)
+		if err != nil {
+			t.Fatalf("case %d: parse failed: %v", i, err)
+		}
+		if isMigrationSafe(stmt) {
+			t.Errorf("case %d: expected unsafe but accepted: %s", i, sql)
+		}
+	}
+}
+
+func TestMigrationRejectsUnsafeAtCreate(t *testing.T) {
+	sess := newSmokeSession(t)
+
+	// CREATE MIGRATION with unsafe SQL should fail at CREATE time
+	stmt, err := parser.Parse("CREATE MIGRATION evil_db ('CREATE DATABASE malware;')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sess.Execute(stmt)
+	if err == nil {
+		t.Fatal("expected error creating migration with unsafe SQL, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsafe statements") {
+		t.Fatalf("expected 'unsafe statements' in error, got: %v", err)
+	}
+}
+
+func TestMigrationRejectsSystemTableAtCreate(t *testing.T) {
+	sess := newSmokeSession(t)
+
+	// CREATE MIGRATION targeting system table should fail
+	stmt, err := parser.Parse("CREATE MIGRATION sys_table ('CREATE TABLE _migrations (id INT);')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sess.Execute(stmt)
+	if err == nil {
+		t.Fatal("expected error creating migration targeting system table, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsafe statements") {
+		t.Fatalf("expected 'unsafe statements' in error, got: %v", err)
+	}
+}

@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"container/list"
 	"context"
 	"fmt"
 	"log/slog"
@@ -13,109 +12,128 @@ import (
 	"vaultdb/internal/wal"
 )
 
-const defaultBufferPoolCapacity = 1024
+const defaultBufferPoolCapacity = 16384 // 128MB with 8KB pages
 
-// BufferPool — LRU кэш для страниц с отложенной записью (write-back).
-// Сидит между page engine и HeapFile, кэширует прочитанные страницы в памяти.
+// maxUsageCount is the maximum usage count for clock-sweep (like PostgreSQL's BM_MAX_USAGE = 5).
+const maxUsageCount uint8 = 5
+
+// BufferPool — clock-sweep cache for pages with write-back policy.
+// Sits between the page engine and HeapFile, caching read pages in memory.
 //
-// Write-back: модификации применяются только в кэше. Страницы записываются
-// на диск при вытеснении, явном FlushAll/FlushDirtyPagesUpToLSN или
-// фоновой горутиной.
+// Write-back: modifications are applied only in the cache. Pages are written
+// to disk on eviction, explicit FlushAll/FlushDirtyPagesUpToLSN, or
+// by a background goroutine.
+//
+// Clock-sweep: instead of LRU, the clock-sweep algorithm with usage counts is used.
+// On page access, the usage count is incremented (up to maxUsageCount).
+// On eviction, the clock hand scans the array: pages with usage > 0 lose
+// one per pass (second chance), pages with usage == 0 are evicted.
 type BufferPool struct {
-	mu       sync.RWMutex
-	capacity int                           // максимальное количество страниц в кэше
-	cache    map[page.PageID]*list.Element // PageID → элемент в lru
-	lru      *list.List                    // двусвязный список для LRU (front = recently used)
-	count    int                           // текущее количество страниц в кэше
-	wal      *wal.WAL                      // WAL для записи full page images
-
-	// Background flush
-	bgFlushCancel context.CancelFunc // останавливает фоновую горутину
+	mu            sync.RWMutex
+	capacity      int                 // maximum number of pages in cache
+	cache         map[page.PageID]int // PageID → index in buffers
+	buffers       []*bufferEntry      // fixed-size array of buffer entries
+	clockHand     int                 // current clock hand position
+	count         int                 // current number of pages in cache
+	wal           *wal.WAL            // WAL for writing full page images
+	bgFlushCancel context.CancelFunc  // stops the background goroutine
 }
 
-// bufferEntry — запись в кэше.
+// bufferEntry — cache entry.
 type bufferEntry struct {
 	pid             page.PageID
 	page            *page.Page
-	hf              *heap.HeapFile // heap, из которого загружена страница (для write-back)
-	pinCnt          int            // количество активных пользователей (нельзя вытеснить)
-	imageWritten    bool           // full page image уже записан в WAL
-	db              string         // имя БД (для WAL full page image)
-	table           string         // имя таблицы (для WAL full page image)
-	dirty           bool           // страница была изменена и не записана на диск
-	lastModifiedLSN uint64         // LSN транзакции, последний раз изменившей страницу
+	hf              *heap.HeapFile // heap from which the page was loaded (for write-back)
+	pinCnt          int            // number of active users (cannot be evicted)
+	usageCount      uint8          // clock-sweep usage count (0..maxUsageCount)
+	imageWritten    bool           // full page image already written to WAL
+	db              string         // database name (for WAL full page image)
+	table           string         // table name (for WAL full page image)
+	dirty           bool           // page was modified and not yet written to disk
+	lastModifiedLSN uint64         // LSN of the transaction that last modified the page
 }
 
-// NewBufferPool создаёт новый buffer pool с указанным capacity.
+// NewBufferPool creates a new buffer pool with the given capacity.
 func NewBufferPool(capacity int) *BufferPool {
 	if capacity <= 0 {
 		capacity = defaultBufferPoolCapacity
 	}
 	return &BufferPool{
 		capacity: capacity,
-		cache:    make(map[page.PageID]*list.Element, capacity),
-		lru:      list.New(),
+		cache:    make(map[page.PageID]int, capacity),
+		buffers:  make([]*bufferEntry, capacity),
 	}
 }
 
-// SetWAL устанавливает WAL для записи full page images.
+// SetWAL sets the WAL for writing full page images.
 func (bp *BufferPool) SetWAL(w *wal.WAL) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 	bp.wal = w
 }
 
-// FetchPage загружает страницу из кэша или с диска.
-// Если страницы нет в кэше — читает из HeapFile и кэширует.
-// pinCnt увеличивается на 1; вызов UnpinRequired обязателен.
-// Опциональные db/table параметры используются для WAL full page image.
+// Reference increments the page usage count (second chance for clock-sweep).
+func (bp *BufferPool) Reference(buf *bufferEntry) {
+	if buf.usageCount < maxUsageCount {
+		buf.usageCount++
+	}
+}
+
+// FetchPage loads a page from cache or disk.
+// If the page is not in cache — reads from HeapFile and caches it.
+// pinCnt is incremented by 1; calling UnpinPage is required afterward.
+// Optional db/table parameters are used for WAL full page image.
 func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile, dbTable ...string) (*page.Page, int, error) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	// Проверяем кэш
-	if elem, ok := bp.cache[pid]; ok {
-		entry := elem.Value.(*bufferEntry)
+	// Check cache
+	if idx, ok := bp.cache[pid]; ok {
+		entry := bp.buffers[idx]
 		entry.pinCnt++
-		bp.lru.MoveToFront(elem)
+		bp.Reference(entry)
 		return entry.page, 0, nil
 	}
 
-	// Страницы нет в кэше — читаем с диска
+	// Page not in cache — read from disk
 	pg := &page.Page{}
 	if err := hf.ReadPage(pid, pg); err != nil {
 		return nil, 0, err
 	}
 
-	// Если кэш полон — вытесняем LRU
+	// If cache is full — evict via clock-sweep
 	for bp.count >= bp.capacity {
 		if err := bp.evict(); err != nil {
-			// Не удалось вытеснить (все страницы запинованы)
+			// Could not evict (all pages are pinned)
 			break
 		}
 	}
 
-	// Добавляем в кэш
+	// Find free slot
+	idx := bp.findEmptySlot()
+
+	// Add to cache
 	entry := &bufferEntry{
-		pid:    pid,
-		page:   pg,
-		hf:     hf,
-		pinCnt: 1,
+		pid:        pid,
+		page:       pg,
+		hf:         hf,
+		pinCnt:     1,
+		usageCount: 1,
 	}
 	if len(dbTable) >= 2 {
 		entry.db = dbTable[0]
 		entry.table = dbTable[1]
 	}
-	elem := bp.lru.PushFront(entry)
-	bp.cache[pid] = elem
+	bp.buffers[idx] = entry
+	bp.cache[pid] = idx
 	bp.count++
 
 	return pg, 0, nil
 }
 
-// CachePage добавляет свежевыделенную страницу в кэш (для write-back).
-// Используется для страниц, только что созданных через HeapFile.AllocatePage,
-// которые ещё не записаны на диск. Страница добавляется с pinCnt=1 и dirty=true.
+// CachePage adds a freshly allocated page to the cache (for write-back).
+// Used for pages just created via HeapFile.AllocatePage that have not yet been
+// written to disk. The page is added with pinCnt=1 and dirty=true.
 func (bp *BufferPool) CachePage(pid page.PageID, pg *page.Page, hf *heap.HeapFile, dbTable ...string) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
@@ -130,34 +148,37 @@ func (bp *BufferPool) CachePage(pid page.PageID, pg *page.Page, hf *heap.HeapFil
 		}
 	}
 
+	idx := bp.findEmptySlot()
+
 	entry := &bufferEntry{
-		pid:    pid,
-		page:   pg,
-		hf:     hf,
-		pinCnt: 1,
-		dirty:  true,
+		pid:        pid,
+		page:       pg,
+		hf:         hf,
+		pinCnt:     1,
+		usageCount: 1,
+		dirty:      true,
 	}
 	if len(dbTable) >= 2 {
 		entry.db = dbTable[0]
 		entry.table = dbTable[1]
 	}
-	elem := bp.lru.PushFront(entry)
-	bp.cache[pid] = elem
+	bp.buffers[idx] = entry
+	bp.cache[pid] = idx
 	bp.count++
 }
 
-// WritePreImage записывает full page image в WAL ДО модификации страницы
+// WritePreImage writes the full page image to WAL BEFORE modifying the page
 // (ARIES protocol: BEFORE image must be durable before page is modified).
-// Вызывается из InsertRows/mutateRows перед InsertTuple/MarkDeleted.
+// Called from InsertRows/mutateRows before InsertTuple/MarkDeleted.
 func (bp *BufferPool) WritePreImage(pid page.PageID) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	elem, ok := bp.cache[pid]
+	idx, ok := bp.cache[pid]
 	if !ok || bp.wal == nil {
 		return
 	}
-	entry := elem.Value.(*bufferEntry)
+	entry := bp.buffers[idx]
 	if entry.imageWritten {
 		return
 	}
@@ -169,16 +190,16 @@ func (bp *BufferPool) WritePreImage(pid page.PageID) {
 	}
 }
 
-// UnpinPage уменьшает pinCnt страницы и отмечает её как dirty при необходимости.
+// UnpinPage decrements the page pinCnt and marks it dirty if needed.
 func (bp *BufferPool) UnpinPage(pid page.PageID, dirty bool) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	elem, ok := bp.cache[pid]
+	idx, ok := bp.cache[pid]
 	if !ok {
 		return
 	}
-	entry := elem.Value.(*bufferEntry)
+	entry := bp.buffers[idx]
 	if entry.pinCnt > 0 {
 		entry.pinCnt--
 	}
@@ -187,16 +208,16 @@ func (bp *BufferPool) UnpinPage(pid page.PageID, dirty bool) {
 	}
 }
 
-// UnpinPageDirty уменьшает pinCnt, помечает страницу dirty и записывает LSN.
+// UnpinPageDirty decrements pinCnt, marks the page dirty, and records the LSN.
 func (bp *BufferPool) UnpinPageDirty(pid page.PageID, lsn uint64) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	elem, ok := bp.cache[pid]
+	idx, ok := bp.cache[pid]
 	if !ok {
 		return
 	}
-	entry := elem.Value.(*bufferEntry)
+	entry := bp.buffers[idx]
 	if entry.pinCnt > 0 {
 		entry.pinCnt--
 	}
@@ -204,54 +225,78 @@ func (bp *BufferPool) UnpinPageDirty(pid page.PageID, lsn uint64) {
 	entry.lastModifiedLSN = lsn
 }
 
-// InvalidatePage удаляет страницу из кэша (после прямой записи на диск).
+// InvalidatePage removes a page from the cache (after direct disk write).
 func (bp *BufferPool) InvalidatePage(pid page.PageID) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	if elem, ok := bp.cache[pid]; ok {
-		entry := elem.Value.(*bufferEntry)
-		if entry.pinCnt > 0 {
-			return
-		}
-		bp.lru.Remove(elem)
-		delete(bp.cache, pid)
-		bp.count--
+	idx, ok := bp.cache[pid]
+	if !ok {
+		return
 	}
+	entry := bp.buffers[idx]
+	if entry.pinCnt > 0 {
+		return
+	}
+	bp.buffers[idx] = nil
+	delete(bp.cache, pid)
+	bp.count--
 }
 
-// evict вытесняет самую старую незапинованную страницу из кэша.
-// Если страница dirty — записывает её на диск перед удалением.
-// Возвращает nil если удалось, ошибку если все страницы запинованы.
+// evict evicts a page using the clock-sweep algorithm.
+// Clock hand scans the array: if page is pinned — skip,
+// if usageCount > 0 — decrement and move on,
+// if usageCount == 0 — evict (flush dirty to disk).
 func (bp *BufferPool) evict() error {
-	for elem := bp.lru.Back(); elem != nil; elem = elem.Prev() {
-		entry := elem.Value.(*bufferEntry)
-		if entry.pinCnt > 0 {
+	// Limit the number of passes to avoid infinite loop
+	maxAttempts := bp.capacity * 2
+
+	for i := 0; i < maxAttempts; i++ {
+		idx := bp.clockHand
+		bp.clockHand = (bp.clockHand + 1) % bp.capacity
+
+		buf := bp.buffers[idx]
+		if buf == nil {
+			// Empty slot — use it
+			return nil
+		}
+
+		if buf.pinCnt > 0 {
+			// Pinned — skip
 			continue
 		}
-		if entry.dirty && entry.hf != nil {
-			if err := entry.hf.WritePage(entry.pid, entry.page); err != nil {
-				return fmt.Errorf("evict: flush dirty page %v: %w", entry.pid, err)
-			}
-			entry.dirty = false
-			entry.lastModifiedLSN = 0
+
+		if buf.usageCount > 0 {
+			// Second chance — decrement usage count
+			buf.usageCount--
+			continue
 		}
-		bp.lru.Remove(elem)
-		delete(bp.cache, entry.pid)
+
+		// Evict this page
+		if buf.dirty && buf.hf != nil {
+			if err := buf.hf.WritePage(buf.pid, buf.page); err != nil {
+				return fmt.Errorf("evict: flush dirty page %v: %w", buf.pid, err)
+			}
+			buf.dirty = false
+			buf.lastModifiedLSN = 0
+		}
+		bp.buffers[idx] = nil
+		delete(bp.cache, buf.pid)
 		bp.count--
 		return nil
 	}
+
 	return fmt.Errorf("evict: all pages pinned")
 }
 
-// FlushAll записывает все грязные страницы из кэша на диск.
+// FlushAll writes all dirty pages from cache to disk.
 func (bp *BufferPool) FlushAll() error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	for elem := bp.lru.Front(); elem != nil; elem = elem.Next() {
-		entry := elem.Value.(*bufferEntry)
-		if entry.dirty && entry.hf != nil {
+	for i := 0; i < bp.capacity; i++ {
+		entry := bp.buffers[i]
+		if entry != nil && entry.dirty && entry.hf != nil {
 			if err := entry.hf.WritePage(entry.pid, entry.page); err != nil {
 				return fmt.Errorf("FlushAll: %w", err)
 			}
@@ -262,14 +307,14 @@ func (bp *BufferPool) FlushAll() error {
 	return nil
 }
 
-// FlushDirtyPagesUpToLSN записывает dirty страницы, чей lastModifiedLSN <= maxLSN.
+// FlushDirtyPagesUpToLSN writes dirty pages whose lastModifiedLSN <= maxLSN.
 func (bp *BufferPool) FlushDirtyPagesUpToLSN(maxLSN uint64) error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	for elem := bp.lru.Front(); elem != nil; elem = elem.Next() {
-		entry := elem.Value.(*bufferEntry)
-		if entry.dirty && entry.lastModifiedLSN <= maxLSN && entry.hf != nil {
+	for i := 0; i < bp.capacity; i++ {
+		entry := bp.buffers[i]
+		if entry != nil && entry.dirty && entry.lastModifiedLSN <= maxLSN && entry.hf != nil {
 			if err := entry.hf.WritePage(entry.pid, entry.page); err != nil {
 				return fmt.Errorf("FlushDirtyPagesUpToLSN: %w", err)
 			}
@@ -280,60 +325,47 @@ func (bp *BufferPool) FlushDirtyPagesUpToLSN(maxLSN uint64) error {
 	return nil
 }
 
-// InvalidateTable удаляет незапинованные страницы таблицы из кэша.
+// InvalidateTable removes unpinned pages of a table from the cache.
 func (bp *BufferPool) InvalidateTable(tableID uint32) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	var toRemove []page.PageID
-	for pid := range bp.cache {
-		if pid.TableID == tableID {
-			toRemove = append(toRemove, pid)
-		}
-	}
-
-	for _, pid := range toRemove {
-		if elem, ok := bp.cache[pid]; ok {
-			entry := elem.Value.(*bufferEntry)
+	for i := 0; i < bp.capacity; i++ {
+		entry := bp.buffers[i]
+		if entry != nil && entry.pid.TableID == tableID {
 			if entry.pinCnt > 0 {
 				continue
 			}
-			bp.lru.Remove(elem)
-			delete(bp.cache, pid)
+			bp.buffers[i] = nil
+			delete(bp.cache, entry.pid)
 			bp.count--
 		}
 	}
 }
 
-// InvalidateTableForce удаляет ВСЕ страницы таблицы из кэша,
-// включая запинованные. Используется при DROP DATABASE/TABLE.
+// InvalidateTableForce removes ALL pages of a table from the cache,
+// including pinned ones. Used during DROP DATABASE/TABLE.
 func (bp *BufferPool) InvalidateTableForce(tableID uint32) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	var toRemove []page.PageID
-	for pid := range bp.cache {
-		if pid.TableID == tableID {
-			toRemove = append(toRemove, pid)
-		}
-	}
-
-	for _, pid := range toRemove {
-		if elem, ok := bp.cache[pid]; ok {
-			bp.lru.Remove(elem)
-			delete(bp.cache, pid)
+	for i := 0; i < bp.capacity; i++ {
+		entry := bp.buffers[i]
+		if entry != nil && entry.pid.TableID == tableID {
+			bp.buffers[i] = nil
+			delete(bp.cache, entry.pid)
 			bp.count--
 		}
 	}
 }
 
-// StartBackgroundFlush запускает фоновую горутину, которая периодически
-// сбрасывает dirty страницы на диск.
+// StartBackgroundFlush starts a background goroutine that periodically
+// flushes dirty pages to disk.
 func (bp *BufferPool) StartBackgroundFlush(ctx context.Context, interval time.Duration) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	// Останавливаем предыдущую горутину, если была
+	// Stop the previous goroutine if one was running
 	if bp.bgFlushCancel != nil {
 		bp.bgFlushCancel()
 	}
@@ -360,7 +392,7 @@ func (bp *BufferPool) StartBackgroundFlush(ctx context.Context, interval time.Du
 	}()
 }
 
-// Close останавливает фоновую горутину и сбрасывает dirty страницы.
+// Close stops the background goroutine and flushes dirty pages.
 func (bp *BufferPool) Close() {
 	bp.mu.Lock()
 	cancel := bp.bgFlushCancel
@@ -372,15 +404,61 @@ func (bp *BufferPool) Close() {
 	}
 }
 
-// Stats возвращает статистику кэша.
+// PrefetchPages loads pages into cache asynchronously for read-ahead during
+// sequential scans. Pages already in cache are skipped.
+// Read errors are logged but do not interrupt the caller — this is best-effort.
+func (bp *BufferPool) PrefetchPages(pids []page.PageID, hf *heap.HeapFile) {
+	for _, pid := range pids {
+		// Skip pages already in cache
+		bp.mu.RLock()
+		_, cached := bp.cache[pid]
+		bp.mu.RUnlock()
+		if cached {
+			continue
+		}
+
+		// Read from disk (no lock held)
+		pg := &page.Page{}
+		if err := hf.ReadPage(pid, pg); err != nil {
+			// Page might be beyond EOF or corrupt — silently skip
+			continue
+		}
+
+		// Insert into cache (acquires lock)
+		bp.mu.Lock()
+		if _, already := bp.cache[pid]; already {
+			bp.mu.Unlock()
+			continue
+		}
+		for bp.count >= bp.capacity {
+			if err := bp.evict(); err != nil {
+				bp.mu.Unlock()
+				return
+			}
+		}
+		idx := bp.findEmptySlot()
+		bp.buffers[idx] = &bufferEntry{
+			pid:        pid,
+			page:       pg,
+			hf:         hf,
+			pinCnt:     0,
+			usageCount: 1,
+		}
+		bp.cache[pid] = idx
+		bp.count++
+		bp.mu.Unlock()
+	}
+}
+
+// Stats returns cache statistics.
 func (bp *BufferPool) Stats() BufferPoolStats {
 	bp.mu.RLock()
 	defer bp.mu.RUnlock()
 
 	var dirtyCount int
-	for elem := bp.lru.Front(); elem != nil; elem = elem.Next() {
-		entry := elem.Value.(*bufferEntry)
-		if entry.dirty {
+	for i := 0; i < bp.capacity; i++ {
+		entry := bp.buffers[i]
+		if entry != nil && entry.dirty {
 			dirtyCount++
 		}
 	}
@@ -392,9 +470,26 @@ func (bp *BufferPool) Stats() BufferPoolStats {
 	}
 }
 
-// BufferPoolStats статистика buffer pool.
+// findEmptySlot finds the first empty slot in the buffer array.
+func (bp *BufferPool) findEmptySlot() int {
+	for i := 0; i < bp.capacity; i++ {
+		if bp.buffers[i] == nil {
+			return i
+		}
+	}
+	// Should not happen if count < capacity
+	return bp.clockHand % bp.capacity
+}
+
+// BufferPoolStats holds buffer pool statistics.
 type BufferPoolStats struct {
 	Capacity   int
 	Used       int
 	DirtyCount int
+}
+
+// StorageOptions contains storage configuration parameters,
+// passed from config.StorageConfig to avoid circular imports.
+type StorageOptions struct {
+	BufferPoolPages int
 }

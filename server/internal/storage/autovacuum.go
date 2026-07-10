@@ -7,12 +7,12 @@ import (
 	"time"
 )
 
-// AutoVacuum запускает vacuum для таблицы если доля устаревших строк
-// превышает threshold (по умолчанию 20%).
+// AutoVacuum runs vacuum for a table if the fraction of dead rows
+// exceeds the threshold (default 20%).
 type AutoVacuum struct {
 	engine    StorageEngine
 	threshold float64       // 0.2 = 20%
-	interval  time.Duration // как часто проверять
+	interval  time.Duration // how often to check
 	logger    *slog.Logger
 }
 

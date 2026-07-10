@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// Index — интерфейс для всех типов индексов.
+// Index — interface for all index types.
 type Index interface {
 	Name() string
 	Column() string
@@ -16,9 +16,13 @@ type Index interface {
 	Insert(value string, rowPos int)
 	Delete(rowPos int)
 	Rebuild(rows []IndexableRow)
+	// Index-only scan support
+	Columns() []string      // returns column names this index covers
+	HasStoredColumns() bool // true if index stores column data
+	GetStoredColumns(rowPos int) (map[string]interface{}, bool)
 }
 
-// NewByType создаёт индекс по типу.
+// NewByType creates an index by type.
 func NewByType(name, column string, colIndex int, indexType string) Index {
 	switch indexType {
 	case "btree":
@@ -36,7 +40,7 @@ func NewByType(name, column string, colIndex int, indexType string) Index {
 	}
 }
 
-// NewCompositeByType создаёт составной индекс.
+// NewCompositeByType creates a composite index.
 func NewCompositeByType(name string, columns []string, colIndices []int, indexType string) Index {
 	switch indexType {
 	case "btree":
@@ -46,12 +50,12 @@ func NewCompositeByType(name string, columns []string, colIndices []int, indexTy
 	}
 }
 
-// IndexManager хранит все индексы одной таблицы.
+// IndexManager stores all indexes for a single table.
 type IndexManager struct {
 	mu      sync.RWMutex
-	indexes map[string]Index // имя индекса → индекс
-	// byColumn даёт O(1) поиск индекса по столбцу (ключ — имя столбца
-	// в нижнем регистре, так как поиск регистронезависимый).
+	indexes map[string]Index // index name → index
+	// byColumn provides O(1) index lookup by column (key — lowercase column name
+	// since the lookup is case-insensitive).
 	byColumn map[string][]Index
 }
 
@@ -88,7 +92,7 @@ func (m *IndexManager) Remove(name string) {
 	m.removeFromColumn(idx)
 }
 
-// removeFromColumn удаляет индекс из byColumn; вызывается под write-локом.
+// removeFromColumn removes an index from byColumn; called under write lock.
 func (m *IndexManager) removeFromColumn(idx Index) {
 	key := columnKey(idx.Column())
 	col := m.byColumn[key]
@@ -103,8 +107,8 @@ func (m *IndexManager) removeFromColumn(idx Index) {
 	}
 }
 
-// RenameColumn переименовывает индексируемый столбец индекса и обновляет
-// byColumn-карту.
+// RenameColumn renames the indexed column of the index and updates
+// the byColumn map.
 func (m *IndexManager) RenameColumn(indexName, oldColumn, newColumn string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -125,7 +129,7 @@ func (m *IndexManager) Has(name string) bool {
 	return ok
 }
 
-// FindForColumn возвращает индекс для указанного столбца (если есть) за O(1).
+// FindForColumn returns an index for the given column (if any) in O(1).
 func (m *IndexManager) FindForColumn(column string) (Index, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -135,7 +139,7 @@ func (m *IndexManager) FindForColumn(column string) (Index, bool) {
 	return nil, false
 }
 
-// FindForColumnMultiple возвращает все индексы для указанного столбца.
+// FindForColumnMultiple returns all indexes for the given column.
 func (m *IndexManager) FindForColumnMultiple(column string) ([]Index, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -158,7 +162,7 @@ func (m *IndexManager) All() []Index {
 	return result
 }
 
-// RangeSearch выполняет range query по индексу (если это B-tree).
+// RangeSearch performs a range query on an index (if it's a B-tree).
 func (m *IndexManager) RangeSearch(column, low, high string) ([]int, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -168,7 +172,7 @@ func (m *IndexManager) RangeSearch(column, low, high string) ([]int, bool) {
 		return nil, false
 	}
 
-	// Ищем B-tree индекс
+	// Look for a B-tree index
 	for _, idx := range idxs {
 		if btree, ok := idx.(*BTreeIndex); ok {
 			return btree.Range(low, high), true
@@ -178,7 +182,7 @@ func (m *IndexManager) RangeSearch(column, low, high string) ([]int, bool) {
 	return nil, false
 }
 
-// FullTextSearch выполняет полнотекстовый поиск через GIN индекс.
+// FullTextSearch performs full-text search via a GIN index.
 func (m *IndexManager) FullTextSearch(column, query string) ([]int, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -197,7 +201,7 @@ func (m *IndexManager) FullTextSearch(column, query string) ([]int, bool) {
 	return nil, false
 }
 
-// RangeSearchGiST выполняет range query через GiST индекс.
+// RangeSearchGiST performs a range query via a GiST index.
 func (m *IndexManager) RangeSearchGiST(column string, min, max float64) ([]int, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -216,7 +220,7 @@ func (m *IndexManager) RangeSearchGiST(column string, min, max float64) ([]int, 
 	return nil, false
 }
 
-// OverlapSearchGiST выполняет overlap query через GiST индекс.
+// OverlapSearchGiST performs an overlap query via a GiST index.
 func (m *IndexManager) OverlapSearchGiST(column string, min, max float64) ([]int, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -235,7 +239,7 @@ func (m *IndexManager) OverlapSearchGiST(column string, min, max float64) ([]int
 	return nil, false
 }
 
-// SearchJSONBContains ищет JSONB строки, содержащие указанные ключи/значения.
+// SearchJSONBContains searches for JSONB rows containing the specified keys/values.
 func (m *IndexManager) SearchJSONBContains(column, query string) ([]int, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -254,7 +258,7 @@ func (m *IndexManager) SearchJSONBContains(column, query string) ([]int, bool) {
 	return nil, false
 }
 
-// SearchJSONBHasKey ищет JSONB строки, содержащие указанный ключ.
+// SearchJSONBHasKey searches for JSONB rows containing the specified key.
 func (m *IndexManager) SearchJSONBHasKey(column, key string) ([]int, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

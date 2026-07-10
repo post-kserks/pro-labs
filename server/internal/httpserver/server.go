@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/audit"
 	"vaultdb/internal/auth"
 	"vaultdb/internal/config"
 	"vaultdb/internal/executor"
 	"vaultdb/internal/metrics"
+	"vaultdb/internal/pool"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
 )
@@ -42,8 +44,17 @@ type Config struct {
 	RateLimiter               *RateLimiter
 	TLSCertFile               string
 	TLSKeyFile                string
+	TLSMinVersion             string // "1.2" or "1.3"
+	TLSEnforce                bool
+	TLSRedirectHTTP           bool
+	AuthRequireTLSForToken    bool
 	MaxLiveQuerySubscriptions int
 	MaxLiveQueryDurationSec   int
+	SessionPoolMaxIdle        int
+	SessionPoolMaxOpen        int
+	SessionPoolIdleTimeoutSec int
+	AuditTable                *audit.TableLog
+	AuditVerifyInterval       time.Duration
 }
 
 type Server struct {
@@ -53,8 +64,8 @@ type Server struct {
 	txm                 *txmanager.Manager
 	br                  *executor.Broadcaster
 	activeSubscriptions atomic.Int64
-	nextSubID           atomic.Int64
 	sessions            *sessionStore
+	sessionPool         *pool.SessionPool
 }
 
 // sessionStore manages HTTP transaction sessions keyed by session ID.
@@ -145,13 +156,27 @@ func New(cfg Config) *Server {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Auth == nil {
-		mgr, err := auth.New(false, nil, cfg.Logger, 60, 10, 300)
+		mgr, err := auth.NewWithCollector(false, nil, cfg.Logger, 60, 10, 300, cfg.Metrics)
 		if err != nil {
 			cfg.Logger.Error("failed to create auth manager", "error", err)
 			cfg.Logger.Warn("continuing with auth disabled")
 			mgr, _ = auth.NewDisabled()
 		}
 		cfg.Auth = mgr
+	}
+	cfg.Auth.SetLocalhostBypass(config.Default().Auth.LocalhostBypass)
+	if cfg.Storage != nil {
+		cfg.Auth.SetDataDir(cfg.Storage.DataDir())
+	}
+	if cfg.AuditTable != nil {
+		cfg.Auth.SetAuditFunc(func(actor, action, target, detail string) {
+			cfg.AuditTable.Append(audit.Entry{
+				Actor:  actor,
+				Action: action,
+				Target: target,
+				Detail: detail,
+			})
+		})
 	}
 	if cfg.ActiveConnections == nil {
 		cfg.ActiveConnections = func() int64 { return 0 }
@@ -181,10 +206,36 @@ func New(cfg Config) *Server {
 		txm:       txm,
 		br:        br,
 		sessions:  newSessionStore(),
+		sessionPool: pool.NewSessionPool(
+			func() *executor.Session {
+				return newSessionWithConfig(cfg)
+			},
+			cfg.SessionPoolMaxIdle,
+			cfg.SessionPoolMaxOpen,
+			time.Duration(cfg.SessionPoolIdleTimeoutSec)*time.Second,
+		),
 	}
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	tlsEnabled := s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != ""
+
+	if s.cfg.TLSEnforce && !tlsEnabled {
+		return fmt.Errorf("TLS enforcement is enabled but TLS is not configured (cert_file=%q, key_file=%q)", s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+	}
+
+	if !tlsEnabled {
+		s.cfg.Logger.Warn("SECURITY WARNING: TLS is disabled — auth tokens are transmitted in plaintext. Enable TLS (tls.cert_file + tls.key_file) in production.")
+		if s.cfg.AuthRequireTLSForToken {
+			s.cfg.Logger.Warn("auth.require_tls_for_token is enabled — requests with auth tokens will be rejected when TLS is not active")
+		}
+	}
+
+	// Start audit chain verifier if configured.
+	if s.cfg.AuditTable != nil && s.cfg.AuditVerifyInterval > 0 {
+		s.cfg.AuditTable.StartVerifier(s.cfg.AuditVerifyInterval, s.cfg.Logger)
+	}
+
 	apiServer := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port),
 		Handler:           s.corsMiddleware(s.apiMux()),
@@ -205,8 +256,12 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	if s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != "" {
+		minVer := uint16(tls.VersionTLS12)
+		if s.cfg.TLSMinVersion == "1.3" {
+			minVer = tls.VersionTLS13
+		}
 		tlsCfg := &tls.Config{
-			MinVersion: tls.VersionTLS12,
+			MinVersion: minVer,
 			CipherSuites: []uint16{
 				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
 				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
@@ -258,11 +313,17 @@ func (s *Server) Start(ctx context.Context) error {
 	_ = monitorServer.Shutdown(shutdownCtx)
 
 	s.sessions.stop()
+	s.sessionPool.Close()
+
+	// Stop audit chain verifier.
+	if s.cfg.AuditTable != nil {
+		s.cfg.AuditTable.StopVerifier()
+	}
 
 	return nil
 }
 
-func (s *Server) apiMux() *http.ServeMux {
+func (s *Server) apiMux() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/query", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleQuery))))
@@ -273,11 +334,14 @@ func (s *Server) apiMux() *http.ServeMux {
 	mux.HandleFunc("/api/docs/openapi.json", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleOpenAPI))))
 	mux.HandleFunc("/api/databases", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleListDatabases))))
 	mux.HandleFunc("/api/databases/", s.withRateLimit(s.cfg.Auth.Middleware(s.handleDatabasesSubroutes)))
+	mux.HandleFunc("/api/v2/handshake", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleHandshake))))
 
 	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleHealth))
 	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
 	mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics))))
 	mux.HandleFunc("/dashboard", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleDashboard)))
+	mux.HandleFunc("/admin/security-status", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleSecurityStatus)))
+	mux.HandleFunc("/admin/revoke-token", s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleRevokeToken)))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" || r.URL.Path == "/ready" || r.URL.Path == "/metrics" {
@@ -286,10 +350,10 @@ func (s *Server) apiMux() *http.ServeMux {
 		http.NotFound(w, r)
 	})
 
-	return mux
+	return withPanicRecovery(s.withHTTPRedirect(s.withRequireTLSForToken(s.withTLSEnforcement(mux))))
 }
 
-func (s *Server) monitorMux() *http.ServeMux {
+func (s *Server) monitorMux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleMonitorHealth))
 	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
@@ -298,5 +362,5 @@ func (s *Server) monitorMux() *http.ServeMux {
 	} else {
 		mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.handleMetrics)))
 	}
-	return mux
+	return withPanicRecovery(s.withHTTPRedirect(s.withRequireTLSForToken(s.withTLSEnforcement(mux))))
 }

@@ -10,9 +10,9 @@ import (
 	"vaultdb/internal/protocol"
 )
 
-// sendError отправляет ошибку клиенту. Возвращает false, если запись в сокет
-// не удалась (клиент отвалился) — в этом случае обрабатывать соединение дальше
-// бессмысленно.
+// sendError sends an error to the client. Returns false if socket write
+// failed (client disconnected) — in that case, handling the connection further
+// is pointless.
 func sendError(conn net.Conn, id, message string, logger *slog.Logger) bool {
 	resp := protocol.Response{
 		ID:      id,
@@ -31,13 +31,13 @@ func sendError(conn net.Conn, id, message string, logger *slog.Logger) bool {
 	return true
 }
 
-// sanitizeErrorMessage удаляет внутренние детали из сообщений об ошибках
-// перед отправкой клиенту. Whitelist подход: безопасные сообщения проходят,
-// всё остальное заменяется на generic "internal error".
+// sanitizeErrorMessage strips internal details from error messages
+// before sending to the client. Whitelist approach: safe messages pass through,
+// everything else is replaced with a generic "internal error".
 func sanitizeErrorMessage(msg string) string {
 	lower := strings.ToLower(msg)
 
-	// Безопасные паттерны — можно показать клиенту
+	// Safe patterns — safe to show to the client
 	safePatterns := []string{
 		"no active database",
 		"does not exist",
@@ -76,7 +76,7 @@ func sanitizeErrorMessage(msg string) string {
 		}
 	}
 
-	// Всё остальное — generic ошибка без деталей
+	// Everything else — generic error without details
 	return "internal error"
 }
 
@@ -107,7 +107,7 @@ func sendResult(conn net.Conn, id string, result *executor.Result) error {
 	return writeResponse(conn, resp)
 }
 
-func writeResponse(conn net.Conn, response protocol.Response) error {
+func writeResponse(conn net.Conn, response interface{}) error {
 	bytes, err := json.Marshal(response)
 	if err != nil {
 		return err

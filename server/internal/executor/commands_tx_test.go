@@ -111,9 +111,9 @@ func TestCommitInsert(t *testing.T) {
 }
 
 func TestBufferedOpsVisibleToOwnTxButNotOthers(t *testing.T) {
-	// Read-your-own-writes (Bug #1): своя транзакция видит буферизованную
-	// вставку через tx-overlay, но ДРУГАЯ сессия — нет, пока нет COMMIT (Bug #1
-	// isolation). Сессии делят один storage/txmanager.
+	// Read-your-own-writes (Bug #1): own transaction sees buffered
+	// insert via tx-overlay, but ANOTHER session does not until COMMIT (Bug #1
+	// isolation). Sessions share one storage/txmanager.
 	dir := t.TempDir()
 	txm := txmanager.NewManager()
 	store, err := storage.NewPageStorageEngine(dir, nil, txm)
@@ -132,13 +132,13 @@ func TestBufferedOpsVisibleToOwnTxButNotOthers(t *testing.T) {
 	executeSQL(t, sessA, "BEGIN;")
 	executeSQL(t, sessA, "INSERT INTO items VALUES (1, 'apple', 10);")
 
-	// Своя транзакция видит вставку.
+	// Own transaction sees the insert.
 	resA := executeSQL(t, sessA, "SELECT * FROM items;")
 	if len(resA.Rows) != 1 {
 		t.Fatalf("own tx: expected 1 row (read-your-writes), got %d", len(resA.Rows))
 	}
 
-	// Другая сессия (вне транзакции) НЕ видит незакоммиченную вставку.
+	// Other session (outside transaction) does NOT see the uncommitted insert.
 	resB := executeSQL(t, sessB, "SELECT * FROM items;")
 	if len(resB.Rows) != 0 {
 		t.Fatalf("other session: expected 0 rows before commit, got %d", len(resB.Rows))
@@ -146,7 +146,7 @@ func TestBufferedOpsVisibleToOwnTxButNotOthers(t *testing.T) {
 
 	executeSQL(t, sessA, "COMMIT;")
 
-	// Свежая сессия видит закоммиченную строку (без влияния per-session кэша).
+	// Fresh session sees the committed row (no per-session cache influence).
 	sessC := NewSession(store, nil, txm, nil)
 	executeSQL(t, sessC, "USE txdb;")
 	resC := executeSQL(t, sessC, "SELECT * FROM items;")
@@ -268,10 +268,10 @@ func TestWALAbortOnRollback(t *testing.T) {
 	}
 }
 
-// TestUndoUpdatePartialCommitPerRowRestore: при откате частично применённого
-// коммита один UPDATE, затронувший несколько строк с РАЗНЫМИ старыми
-// значениями, должен восстановить каждой строке ЕЁ значение, а не одно общее.
-// Регресс на слияние per-row карт в mergedUpdates (порча данных).
+// TestUndoUpdatePartialCommitPerRowRestore: when rolling back a partially applied
+// commit, a single UPDATE that affected multiple rows with DIFFERENT old
+// values must restore each row's OWN value, not a single common one.
+// Regression from merging per-row maps in mergedUpdates (data corruption).
 func TestUndoUpdatePartialCommitPerRowRestore(t *testing.T) {
 	session := setupTxSession(t)
 	executeSQL(t, session, "CREATE TABLE accounts (id INT, balance INT);")
@@ -280,10 +280,10 @@ func TestUndoUpdatePartialCommitPerRowRestore(t *testing.T) {
 	executeSQL(t, session, "INSERT INTO accounts VALUES (2, 20);")
 
 	executeSQL(t, session, "BEGIN;")
-	// Один UPDATE на две строки с разными старыми значениями (10 и 20).
+	// One UPDATE on two rows with different old values (10 and 20).
 	executeSQL(t, session, "UPDATE accounts SET balance = 500 WHERE id <= 2;")
-	// Второй UPDATE падает на apply (CHECK balance>=0) → частичный коммит,
-	// первый UPDATE откатывается, и обе строки должны вернуть СВОИ 10 и 20.
+	// Second UPDATE fails on apply (CHECK balance>=0) → partial commit,
+	// first UPDATE is rolled back, and both rows must restore THEIR 10 and 20.
 	executeSQL(t, session, "UPDATE accounts SET balance = -5 WHERE id = 2;")
 	executeSQLExpectError(t, session, "COMMIT;")
 
@@ -297,7 +297,7 @@ func TestUndoUpdatePartialCommitPerRowRestore(t *testing.T) {
 	}
 }
 
-// TestTruncateRollback: после TRUNCATE + ROLLBACK данные должны быть восстановлены.
+// TestTruncateRollback: after TRUNCATE + ROLLBACK data must be restored.
 func TestTruncateRollback(t *testing.T) {
 	session := setupTxSession(t)
 
@@ -374,25 +374,25 @@ func TestTruncatePartialCommitFailure(t *testing.T) {
 	}
 }
 
-// TestSessionCloseWithActiveTx: Close() на сессии с активной транзакцией
-// должен вызвать Rollback(), а не молча обнулить ActiveTx.
+// TestSessionCloseWithActiveTx: Close() on a session with an active transaction
+// should call Rollback(), not silently nil out ActiveTx.
 func TestSessionCloseWithActiveTx(t *testing.T) {
 	session := setupTxSession(t)
 	executeSQL(t, session, "INSERT INTO items VALUES (1, 'apple', 10);")
 
-	// Начинаем транзакцию и добавляем строку
+	// Start a transaction and add a row
 	executeSQL(t, session, "BEGIN;")
 	executeSQL(t, session, "INSERT INTO items VALUES (2, 'banana', 20);")
 
-	// Проверяем что транзакция активна
+	// Check that transaction is active
 	if !session.IsInTx() {
 		t.Fatal("expected active transaction before close")
 	}
 
-	// Close() должен откатить транзакцию
+	// Close() should roll back the transaction
 	session.Close()
 
-	// После close транзакция не должна быть активна
+	// After close, transaction should not be active
 	session.mu.RLock()
 	tx := session.ActiveTx
 	session.mu.RUnlock()
@@ -400,8 +400,8 @@ func TestSessionCloseWithActiveTx(t *testing.T) {
 		t.Fatal("ActiveTx should be nil after Close()")
 	}
 
-	// Проверяем что данные откатались — новая сессия видит только ту строку,
-	// что была закоммичена до BEGIN
+	// Check that data rolled back — new session only sees the row
+	// that was committed before BEGIN
 	dir := t.TempDir()
 	txm := txmanager.NewManager()
 	store, err := storage.NewPageStorageEngine(dir, nil, txm)
@@ -421,8 +421,8 @@ func TestSessionCloseWithActiveTx(t *testing.T) {
 	}
 }
 
-// TestRollbackClearsTxState: RollbackCommand должен корректно очищать
-// транзакцию и возвращать корректное количество отменённых операций.
+// TestRollbackClearsTxState: RollbackCommand should correctly clean up
+// the transaction and return the correct count of discarded operations.
 func TestRollbackClearsTxState(t *testing.T) {
 	session := setupTxSession(t)
 
@@ -449,7 +449,7 @@ func TestRollbackClearsTxState(t *testing.T) {
 	}
 }
 
-// TestRollbackEmptyTx: RollbackCommand на пустой транзакции (без ops).
+// TestRollbackEmptyTx: RollbackCommand on an empty transaction (no ops).
 func TestRollbackEmptyTx(t *testing.T) {
 	session := setupTxSession(t)
 

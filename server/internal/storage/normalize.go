@@ -10,8 +10,8 @@ import (
 
 var validIdentRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-// ValidateObjectName проверяет имя объекта БД на безопасность и корректность.
-// Объединяет проверки path traversal (storage) и синтаксиса (executor).
+// ValidateObjectName checks a database object name for safety and correctness.
+// Combines path traversal (storage) and syntax (executor) checks.
 func ValidateObjectName(name string) error {
 	if len(name) == 0 {
 		return fmt.Errorf("object name cannot be empty")
@@ -62,7 +62,7 @@ func normalizeValue(value interface{}, col ColumnSchema) (Value, error) {
 			return nil, fmt.Errorf("expected BOOL, got %T", value)
 		}
 		return boolVal, nil
-	case "TEXT", "VARCHAR":
+	case "TEXT", "VARCHAR", "BLOB":
 		strVal, ok := value.(string)
 		if !ok {
 			return nil, fmt.Errorf("expected %s, got %T", col.Type, value)

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	crypto_rand "crypto/rand"
 	"fmt"
 	"strconv"
@@ -8,12 +9,13 @@ import (
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/wasmudf"
 )
 
-// builtinFunc — тип функции для builtin функций SQL.
+// builtinFunc — function type for builtin SQL functions.
 type builtinFunc func(args []interface{}, ctx *ExecutionContext) (interface{}, error)
 
-// builtinFuncs — карта встроенных SQL функций.
+// builtinFuncs — map of builtin SQL functions.
 var builtinFuncs = map[string]builtinFunc{
 	"NOW":                  fnNow,
 	"UPPER":                fnUpper,
@@ -83,7 +85,7 @@ var builtinFuncs = map[string]builtinFunc{
 	"JSONB_EXTRACT_PATH":   fnJsonbExtractPath,
 }
 
-// evalFunctionCall вычисляет вызов функции.
+// evalFunctionCall evaluates a function call.
 func evalFunctionCall(fn *parser.FunctionCall, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
 	args := make([]interface{}, len(fn.Args))
 	for i, arg := range fn.Args {
@@ -109,7 +111,7 @@ func evalFunctionCall(fn *parser.FunctionCall, row storage.Row, schema *storage.
 	return nil, fmt.Errorf("unknown function: %s", name)
 }
 
-// executeSubquery выполняет скалярный подзапрос.
+// executeSubquery executes a scalar subquery.
 func executeSubquery(sub *parser.SubqueryExpr, outerRow storage.Row, outerSchema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
 	var cmd parser.Statement
 	if sel, ok := sub.Query.(*parser.SelectStatement); ok {
@@ -153,7 +155,7 @@ func executeSubquery(sub *parser.SubqueryExpr, outerRow storage.Row, outerSchema
 	return val, nil
 }
 
-// injectOuterColumns подставляет значения внешних столбцов в подзапрос.
+// injectOuterColumns injects outer column values into a subquery.
 func injectOuterColumns(expr parser.Expression, outerRow storage.Row, outerSchema *storage.TableSchema) parser.Expression {
 	switch e := expr.(type) {
 	case *parser.BinaryExpr:
@@ -233,7 +235,7 @@ func injectOuterColumns(expr parser.Expression, outerRow storage.Row, outerSchem
 	}
 }
 
-// parseJSONArray парсит JSON массив.
+// parseJSONArray parses a JSON array.
 func parseJSONArray(s string) []interface{} {
 	raw, err := storage.DecodeJSON([]byte(s))
 	if err != nil {
@@ -246,7 +248,7 @@ func parseJSONArray(s string) []interface{} {
 	return arr
 }
 
-// generateUUID генерирует UUID v4.
+// generateUUID generates a UUID v4.
 func generateUUID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := crypto_rand.Read(b); err != nil {
@@ -257,7 +259,7 @@ func generateUUID() (string, error) {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
-// executeUserDefinedFunction выполняет пользовательскую функцию.
+// executeUserDefinedFunction executes a user-defined function.
 func executeUserDefinedFunction(dbName, funcName string, args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	fd, err := loadObject(ctx, dbName, objTypeFunction, funcName)
 	if err != nil {
@@ -268,11 +270,19 @@ func executeUserDefinedFunction(dbName, funcName string, args []interface{}, ctx
 	}
 	body, _ := fd["body"].(string)
 	params, _ := fd["params"].([]interface{})
+	language, _ := fd["language"].(string)
+	opts, _ := fd["options"].(map[string]string)
 
 	if body == "" {
 		return nil, fmt.Errorf("function '%s' has no body", funcName)
 	}
 
+	// WASM UDF path
+	if strings.EqualFold(language, "wasm") {
+		return executeWASMFunction(body, opts, args)
+	}
+
+	// SQL UDF path
 	bodyStmt, err := parser.Parse(body)
 	if err != nil {
 		return nil, fmt.Errorf("function '%s' body parse: %w", funcName, err)
@@ -315,7 +325,41 @@ func executeUserDefinedFunction(dbName, funcName string, args []interface{}, ctx
 	return val, nil
 }
 
-// substituteParam подставляет значение параметра в выражение.
+// executeWASMFunction runs a WASM user-defined function.
+func executeWASMFunction(wasmPath string, opts map[string]string, args []interface{}) (interface{}, error) {
+	// Strip file:// prefix if present
+	wasmPath = strings.TrimPrefix(wasmPath, "file://")
+
+	memLimit, timeout, err := wasmudf.ParseOptions(opts)
+	if err != nil {
+		return nil, fmt.Errorf("WASM options: %w", err)
+	}
+
+	// Convert memory limit from bytes to pages (64 KB each) for wazero.
+	var maxPages uint32
+	if memLimit > 0 {
+		maxPages = memLimit / (64 * 1024)
+		if maxPages == 0 {
+			maxPages = 1 // enforce at least 1 page if limit < 64 KB
+		}
+	}
+
+	rt, err := wasmudf.NewRuntimeWithLimits(maxPages, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("WASM runtime: %w", err)
+	}
+	defer rt.Close()
+
+	fn, err := rt.LoadModule(wasmPath)
+	if err != nil {
+		return nil, fmt.Errorf("WASM load: %w", err)
+	}
+	fn.Timeout = timeout
+
+	return fn.Call(context.Background(), args)
+}
+
+// substituteParam substitutes a parameter value into an expression.
 func substituteParam(expr parser.Expression, paramName string, paramValue interface{}) parser.Expression {
 	switch e := expr.(type) {
 	case *parser.BinaryExpr:

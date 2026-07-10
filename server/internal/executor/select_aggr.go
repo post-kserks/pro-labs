@@ -270,7 +270,7 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 		// Calculate result for this group
 		resultRow := make([]string, len(c.stmt.Columns))
 		// We need a virtual row for HAVING evaluation if it uses aggregates
-		virtualRow := make(storage.Row, len(c.stmt.Columns))
+		virtualRow := storage.GetRowWithLen(len(c.stmt.Columns))
 
 		for i, col := range c.stmt.Columns {
 			if aggregators[i] != nil {
@@ -332,6 +332,7 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 			}
 		}
 
+		storage.PutRow(virtualRow)
 		resultRows = append(resultRows, resultRow)
 	}
 

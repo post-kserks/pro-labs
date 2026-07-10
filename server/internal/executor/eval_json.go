@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
 	"vaultdb/internal/ai"
+	"vaultdb/internal/fts"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -19,22 +19,19 @@ const (
 	embeddingTimeout       = 10 * time.Second
 )
 
-// evalFtsMatch выполняет полнотекстовый поиск (FTS_MATCH и @@).
+// evalFtsMatch performs full-text search (FTS_MATCH and @@).
 func evalFtsMatch(left, right interface{}) (bool, error) {
 	return evalFtsMatchScored(valueToString(left), valueToString(right)) > ftsScoreThreshold, nil
 }
 
-// evalFtsMatchScored вычисляет score полнотекстового совпадения.
+// evalFtsMatchScored computes the full-text match score.
 func evalFtsMatchScored(text, query string) float64 {
-	text = strings.ToLower(text)
-	query = strings.ToLower(query)
-
-	queryTerms := strings.Fields(query)
+	queryTerms := fts.Tokenize(query)
 	if len(queryTerms) == 0 {
 		return 1.0
 	}
 
-	textTerms := strings.Fields(text)
+	textTerms := fts.Tokenize(text)
 	if len(textTerms) == 0 {
 		return 0.0
 	}
@@ -53,7 +50,7 @@ func evalFtsMatchScored(text, query string) float64 {
 	return score
 }
 
-// evalJsonContains проверяет содержит ли JSON объект/массив все ключи/элементы другого.
+// evalJsonContains checks if a JSON object/array contains all keys/elements of another.
 func evalJsonContains(left, right interface{}) (interface{}, error) {
 	leftStr := valueToString(left)
 	rightStr := valueToString(right)
@@ -112,7 +109,7 @@ func jsonValuesEqual(a, b interface{}) bool {
 	return string(aj) == string(bj)
 }
 
-// evalJsonContainedBy проверяет содержится ли JSON объект/массив внутри другого.
+// evalJsonContainedBy checks if a JSON object/array is contained within another.
 func evalJsonContainedBy(left, right interface{}) (interface{}, error) {
 	leftStr := valueToString(left)
 	rightStr := valueToString(right)
@@ -164,7 +161,7 @@ func evalJsonContainedBy(left, right interface{}) (interface{}, error) {
 	return true, nil
 }
 
-// evalJsonHasKey проверяет наличие ключа в JSON объекте.
+// evalJsonHasKey checks for the presence of a key in a JSON object.
 func evalJsonHasKey(left, right interface{}) (interface{}, error) {
 	leftStr := valueToString(left)
 	key := valueToString(right)
@@ -180,7 +177,7 @@ func evalJsonHasKey(left, right interface{}) (interface{}, error) {
 	return exists, nil
 }
 
-// evalJsonMerge объединяет два JSON объекта.
+// evalJsonMerge merges two JSON objects.
 func evalJsonMerge(left, right interface{}) (interface{}, error) {
 	leftStr := valueToString(left)
 	rightStr := valueToString(right)
@@ -207,7 +204,7 @@ func evalJsonMerge(left, right interface{}) (interface{}, error) {
 	return string(data), nil
 }
 
-// evalOperandRaw извлекает raw value из parser expression.
+// evalOperandRaw extracts raw value from parser expression.
 func evalOperandRaw(expr parser.Expression) interface{} {
 	if expr == nil {
 		return nil
@@ -222,7 +219,7 @@ func evalOperandRaw(expr parser.Expression) interface{} {
 	}
 }
 
-// evalSemanticMatch сравнивает операнды по косинусной близости.
+// evalSemanticMatch compares operands by cosine similarity.
 func evalSemanticMatch(left, right interface{}, ctx *ExecutionContext) (bool, error) {
 	v1, err := operandVector(left, ctx)
 	if err != nil {
@@ -237,7 +234,7 @@ func evalSemanticMatch(left, right interface{}, ctx *ExecutionContext) (bool, er
 	return sim > semanticMatchThreshold, nil
 }
 
-// operandVector превращает операнд в вектор.
+// operandVector converts an operand to a vector.
 func operandVector(val interface{}, ctx *ExecutionContext) ([]float64, error) {
 	if v, err := toVector(val); err == nil {
 		return v, nil
@@ -245,7 +242,7 @@ func operandVector(val interface{}, ctx *ExecutionContext) ([]float64, error) {
 	return embedText(ctx, valueToString(val))
 }
 
-// embedText вызывает настроенный embedding-провайдер с таймаутом.
+// embedText calls the configured embedding provider with a timeout.
 func embedText(ctx *ExecutionContext, text string) ([]float64, error) {
 	var embedder ai.Embedder = ai.NoopEmbedder{}
 	var baseCtx context.Context = context.Background()
@@ -299,7 +296,7 @@ func cosineSimilarity(v1, v2 []float64) float64 {
 	return dot / (math.Sqrt(n1) * math.Sqrt(n2))
 }
 
-// evalJsonPath вычисляет JSON path выражение (->, ->>).
+// evalJsonPath evaluates a JSON path expression (->, ->>).
 func evalJsonPath(e *parser.JsonPathExpr, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
 	left, err := evalOperand(e.Left, row, schema, ctx)
 	if err != nil {
@@ -335,4 +332,25 @@ func evalJsonPath(e *parser.JsonPathExpr, row storage.Row, schema *storage.Table
 		return valueToString(val), nil
 	}
 	return val, nil
+}
+
+// evalJSONAccess evaluates JSONB expression operators (@>, ?).
+func evalJSONAccess(e *parser.JSONAccess, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
+	left, err := evalOperand(e.Expr, row, schema, ctx)
+	if err != nil {
+		return nil, err
+	}
+	right, err := evalOperand(e.Argument, row, schema, ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	switch e.Operator {
+	case "@>":
+		return evalJsonContains(left, right)
+	case "?":
+		return evalJsonHasKey(left, right)
+	default:
+		return nil, fmt.Errorf("unsupported JSONB operator '%s'", e.Operator)
+	}
 }

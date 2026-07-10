@@ -284,6 +284,13 @@ func (p *sqlParser) parseShow() (Statement, error) {
 	case lexer.TOKEN_DATABASES:
 		p.advance()
 		return &ShowDatabasesStatement{}, nil
+	case lexer.TOKEN_ENCRYPTION:
+		p.advance() // ENCRYPTION
+		if p.current().Type != lexer.TOKEN_IDENT || strings.ToUpper(p.current().Literal) != "STATUS" {
+			return nil, p.expectedError("STATUS", p.current())
+		}
+		p.advance() // STATUS
+		return &ShowEncryptionStatusStatement{}, nil
 	case lexer.TOKEN_TABLES:
 		p.advance()
 		stmt := &ShowTablesStatement{}
@@ -307,7 +314,7 @@ func (p *sqlParser) parseShow() (Statement, error) {
 		}
 		return &ShowIndexesStatement{TableName: tableName}, nil
 	default:
-		return nil, p.expectedError("DATABASES, TABLES or INDEXES", p.current())
+		return nil, p.expectedError("DATABASES, TABLES, INDEXES or ENCRYPTION", p.current())
 	}
 }
 
@@ -356,6 +363,11 @@ func (p *sqlParser) parseCreate() (Statement, error) {
 		return p.parseCreateProcedure()
 	case lexer.TOKEN_INDEX:
 		return p.parseCreateIndex()
+	case lexer.TOKEN_IDENT:
+		if strings.ToUpper(p.current().Literal) == "ROLE" {
+			return p.parseCreateRole()
+		}
+		return nil, p.expectedError("DATABASE, TABLE, VIEW, INDEX or ROLE", p.current())
 	default:
 		return nil, p.expectedError("DATABASE, TABLE, VIEW or INDEX", p.current())
 	}
@@ -396,6 +408,13 @@ func (p *sqlParser) parseCreateFunction() (Statement, error) {
 		returnType = strings.ToUpper(typeTok.Literal)
 		p.advance()
 	}
+	// LANGUAGE may appear before or after AS
+	lang := "SQL"
+	if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "LANGUAGE" {
+		p.advance()
+		lang = strings.ToUpper(p.current().Literal)
+		p.advance()
+	}
 	if err := p.consume(lexer.TOKEN_AS, "AS"); err != nil {
 		return nil, err
 	}
@@ -416,13 +435,43 @@ func (p *sqlParser) parseCreateFunction() (Statement, error) {
 		}
 		body = strings.TrimSpace(body)
 	}
-	lang := "SQL"
-	if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "LANGUAGE" {
+	// LANGUAGE may also appear after AS
+	if lang == "SQL" && p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "LANGUAGE" {
 		p.advance()
 		lang = strings.ToUpper(p.current().Literal)
 		p.advance()
 	}
-	return &CreateFunctionStatement{Name: funcName, Params: params, ReturnType: returnType, Body: body, Language: lang}, nil
+	// Optional WITH clause for WASM options
+	var options map[string]string
+	if p.current().Type == lexer.TOKEN_WITH {
+		p.advance()
+		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+			return nil, err
+		}
+		options = make(map[string]string)
+		for p.current().Type != lexer.TOKEN_RPAREN && p.current().Type != lexer.TOKEN_EOF {
+			key, err := p.consumeIdent("option key")
+			if err != nil {
+				return nil, err
+			}
+			if err := p.consume(lexer.TOKEN_EQ, "'='"); err != nil {
+				return nil, err
+			}
+			if p.current().Type != lexer.TOKEN_STRING_LIT {
+				return nil, p.expectedError("option value string", p.current())
+			}
+			val := p.current().Literal
+			p.advance()
+			options[strings.ToLower(key)] = val
+			if p.current().Type == lexer.TOKEN_COMMA {
+				p.advance()
+			}
+		}
+		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+			return nil, err
+		}
+	}
+	return &CreateFunctionStatement{Name: funcName, Params: params, ReturnType: returnType, Body: body, Language: lang, Options: options}, nil
 }
 
 func (p *sqlParser) parseCreateProcedure() (Statement, error) {
@@ -453,6 +502,13 @@ func (p *sqlParser) parseCreateProcedure() (Statement, error) {
 	if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 		return nil, err
 	}
+	// LANGUAGE may appear before or after AS
+	lang := "SQL"
+	if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "LANGUAGE" {
+		p.advance()
+		lang = strings.ToUpper(p.current().Literal)
+		p.advance()
+	}
 	if err := p.consume(lexer.TOKEN_AS, "AS"); err != nil {
 		return nil, err
 	}
@@ -473,13 +529,64 @@ func (p *sqlParser) parseCreateProcedure() (Statement, error) {
 		}
 		body = strings.TrimSpace(body)
 	}
-	lang := "SQL"
-	if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "LANGUAGE" {
+	// LANGUAGE may also appear after AS
+	if lang == "SQL" && p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "LANGUAGE" {
 		p.advance()
 		lang = strings.ToUpper(p.current().Literal)
 		p.advance()
 	}
-	return &CreateProcedureStatement{Name: procName, Params: params, Body: body, Language: lang}, nil
+	// Optional WITH clause for WASM options
+	var options map[string]string
+	if p.current().Type == lexer.TOKEN_WITH {
+		p.advance()
+		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+			return nil, err
+		}
+		options = make(map[string]string)
+		for p.current().Type != lexer.TOKEN_RPAREN && p.current().Type != lexer.TOKEN_EOF {
+			key, err := p.consumeIdent("option key")
+			if err != nil {
+				return nil, err
+			}
+			if err := p.consume(lexer.TOKEN_EQ, "'='"); err != nil {
+				return nil, err
+			}
+			if p.current().Type != lexer.TOKEN_STRING_LIT {
+				return nil, p.expectedError("option value string", p.current())
+			}
+			val := p.current().Literal
+			p.advance()
+			options[strings.ToLower(key)] = val
+			if p.current().Type == lexer.TOKEN_COMMA {
+				p.advance()
+			}
+		}
+		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+			return nil, err
+		}
+	}
+	return &CreateProcedureStatement{Name: procName, Params: params, Body: body, Language: lang, Options: options}, nil
+}
+
+func (p *sqlParser) parseCreateRole() (Statement, error) {
+	p.advance() // ROLE
+	name, err := p.consumeIdent("role name")
+	if err != nil {
+		return nil, err
+	}
+	password := ""
+	if p.current().Type == lexer.TOKEN_WITH {
+		p.advance() // WITH
+		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "PASSWORD" {
+			p.advance() // PASSWORD
+			if p.current().Type != lexer.TOKEN_STRING_LIT {
+				return nil, p.expectedError("password string", p.current())
+			}
+			password = p.current().Literal
+			p.advance()
+		}
+	}
+	return &CreateRoleStatement{Name: name, Password: password}, nil
 }
 
 func (p *sqlParser) parseCreateTable() (Statement, error) {
@@ -537,7 +644,25 @@ func (p *sqlParser) parseCreateTable() (Statement, error) {
 		return nil, fmt.Errorf("syntax error: CREATE TABLE requires at least one column")
 	}
 
-	return &CreateTableStatement{TableName: tableName, Columns: columns, IfNotExists: ifNotExists}, nil
+	encrypted := false
+	if p.current().Type == lexer.TOKEN_ENCRYPTED {
+		p.advance()
+		encrypted = true
+	}
+
+	// Parse optional PARTITION BY clause
+	var partitionBy *PartitionSpec
+	if p.current().Type == lexer.TOKEN_PARTITION && p.peek().Type == lexer.TOKEN_BY {
+		p.advance() // PARTITION
+		p.advance() // BY
+		spec, err := p.parsePartitionSpec()
+		if err != nil {
+			return nil, err
+		}
+		partitionBy = spec
+	}
+
+	return &CreateTableStatement{TableName: tableName, Columns: columns, IfNotExists: ifNotExists, Encrypted: encrypted, PartitionBy: partitionBy}, nil
 }
 
 func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
@@ -668,6 +793,11 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 		col.NotNull = true
 	}
 
+	if p.current().Type == lexer.TOKEN_ENCRYPTED {
+		p.advance()
+		col.Encrypted = true
+	}
+
 	return col, nil
 }
 
@@ -686,6 +816,9 @@ func (p *sqlParser) parseColumnType() (string, int, error) {
 	case lexer.TOKEN_TEXT:
 		p.advance()
 		return "TEXT", 0, nil
+	case lexer.TOKEN_BLOB:
+		p.advance()
+		return "BLOB", 0, nil
 	case lexer.TOKEN_VARCHAR:
 		p.advance()
 		if p.current().Type == lexer.TOKEN_LPAREN {
@@ -841,6 +974,24 @@ func (p *sqlParser) parseDrop() (Statement, error) {
 		return &DropProcedureStatement{Name: name}, nil
 	case lexer.TOKEN_INDEX:
 		return p.parseDropIndex()
+	case lexer.TOKEN_IDENT:
+		if strings.ToUpper(p.current().Literal) == "ROLE" {
+			p.advance() // ROLE
+			ifExists := false
+			if p.current().Type == lexer.TOKEN_IF {
+				p.advance() // IF
+				if err := p.consume(lexer.TOKEN_EXISTS, "EXISTS"); err != nil {
+					return nil, err
+				}
+				ifExists = true
+			}
+			name, err := p.consumeIdent("role name")
+			if err != nil {
+				return nil, err
+			}
+			return &DropRoleStatement{Name: name, IfExists: ifExists}, nil
+		}
+		return nil, p.expectedError("DATABASE, TABLE, VIEW, INDEX or ROLE", p.current())
 	default:
 		return nil, p.expectedError("DATABASE, TABLE, VIEW or INDEX", p.current())
 	}
@@ -1015,4 +1166,204 @@ func (p *sqlParser) parseUse() (Statement, error) {
 		return nil, err
 	}
 	return &UseDatabaseStatement{DatabaseName: name}, nil
+}
+
+func (p *sqlParser) parseGrant() (Statement, error) {
+	p.advance() // GRANT
+
+	privileges, err := p.parsePrivilegeList()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_ON, "ON"); err != nil {
+		return nil, err
+	}
+	on, err := p.parseObjectName()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_TO, "TO"); err != nil {
+		return nil, err
+	}
+	to, err := p.consumeIdent("role name")
+	if err != nil {
+		return nil, err
+	}
+	return &GrantStatement{Privileges: privileges, On: on, To: to}, nil
+}
+
+func (p *sqlParser) parseRevoke() (Statement, error) {
+	p.advance() // REVOKE
+
+	privileges, err := p.parsePrivilegeList()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_ON, "ON"); err != nil {
+		return nil, err
+	}
+	on, err := p.parseObjectName()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_FROM, "FROM"); err != nil {
+		return nil, err
+	}
+	from, err := p.consumeIdent("role name")
+	if err != nil {
+		return nil, err
+	}
+	return &RevokeStatement{Privileges: privileges, On: on, From: from}, nil
+}
+
+// parseObjectName parses an object name for GRANT/REVOKE, accepting either
+// an identifier or the * wildcard.
+func (p *sqlParser) parseObjectName() (string, error) {
+	if p.current().Type == lexer.TOKEN_STAR {
+		p.advance()
+		return "*", nil
+	}
+	return p.consumeIdent("object name")
+}
+
+func (p *sqlParser) parsePrivilegeList() ([]string, error) {
+	var privileges []string
+	for {
+		tok := p.current()
+		upper := strings.ToUpper(tok.Literal)
+		switch upper {
+		case "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALL":
+			privileges = append(privileges, upper)
+			p.advance()
+		default:
+			if len(privileges) == 0 {
+				return nil, p.expectedError("privilege name (SELECT, INSERT, UPDATE, DELETE, CREATE, ALL)", tok)
+			}
+			return privileges, nil
+		}
+		if p.current().Type == lexer.TOKEN_COMMA {
+			p.advance()
+			continue
+		}
+		break
+	}
+	return privileges, nil
+}
+
+func (p *sqlParser) parsePartitionSpec() (*PartitionSpec, error) {
+	// Expect RANGE or HASH
+	var partType string
+	switch p.current().Type {
+	case lexer.TOKEN_RANGE:
+		partType = "RANGE"
+		p.advance()
+	case lexer.TOKEN_HASH:
+		partType = "HASH"
+		p.advance()
+	default:
+		return nil, p.expectedError("RANGE or HASH", p.current())
+	}
+
+	// Parse column list: (col) or (col1, col2)
+	if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+		return nil, err
+	}
+	cols, err := p.parseColumnList()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+		return nil, err
+	}
+
+	spec := &PartitionSpec{
+		Type:    partType,
+		Columns: cols,
+	}
+
+	switch partType {
+	case "RANGE":
+		// Parse partition definitions: PARTITION p_name VALUES LESS THAN (value)
+		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+			return nil, err
+		}
+		for {
+			if p.current().Type == lexer.TOKEN_RPAREN {
+				p.advance()
+				break
+			}
+			def, err := p.parsePartitionDef()
+			if err != nil {
+				return nil, err
+			}
+			spec.Partitions = append(spec.Partitions, *def)
+			if p.current().Type == lexer.TOKEN_COMMA {
+				p.advance()
+			}
+		}
+	case "HASH":
+		// Parse PARTITIONS N
+		if p.current().Type == lexer.TOKEN_PARTITIONS {
+			p.advance()
+			tok := p.current()
+			if tok.Type != lexer.TOKEN_INT_LIT {
+				return nil, p.expectedError("partition count", tok)
+			}
+			n, err := strconv.Atoi(tok.Literal)
+			if err != nil {
+				return nil, fmt.Errorf("invalid partition count: %w", err)
+			}
+			if n <= 0 {
+				return nil, fmt.Errorf("partition count must be positive")
+			}
+			spec.NumParts = n
+			p.advance()
+		} else {
+			spec.NumParts = 1
+		}
+	}
+
+	return spec, nil
+}
+
+func (p *sqlParser) parsePartitionDef() (*PartitionDef, error) {
+	// PARTITION name VALUES LESS THAN (value_or_maxvalue)
+	if err := p.consume(lexer.TOKEN_PARTITION, "PARTITION"); err != nil {
+		return nil, err
+	}
+	name, err := p.consumeIdent("partition name")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_VALUES, "VALUES"); err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_LESS, "LESS"); err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_THAN, "THAN"); err != nil {
+		return nil, err
+	}
+	if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+		return nil, err
+	}
+
+	var bound interface{}
+	if p.current().Type == lexer.TOKEN_MAXVALUE {
+		bound = nil // MAXVALUE → no upper bound
+		p.advance()
+	} else {
+		val, err := p.parseExpression()
+		if err != nil {
+			return nil, err
+		}
+		// Store as a Value expression for later evaluation
+		bound = val
+	}
+
+	if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+		return nil, err
+	}
+
+	return &PartitionDef{Name: name, Bound: bound}, nil
 }

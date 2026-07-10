@@ -1,17 +1,23 @@
 package parser
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseValidStatements(t *testing.T) {
 	queries := []string{
 		"CREATE DATABASE mydb;",
+		"CREATE DATABASE IF NOT EXISTS mydb;",
 		"DROP DATABASE mydb;",
+		"DROP DATABASE IF EXISTS mydb;",
 		"USE mydb;",
 		"CREATE TABLE heroes (id INT, name VARCHAR(100), alive BOOL);",
 		"DROP TABLE heroes;",
 		"SHOW DATABASES;",
 		"SHOW TABLES;",
 		"SHOW TABLES FROM mydb;",
+		"SHOW ENCRYPTION STATUS;",
 		"DESCRIBE heroes;",
 		"DESCRIBE heroes FROM mydb;",
 		"SELECT * FROM heroes;",
@@ -32,6 +38,10 @@ func TestParseValidStatements(t *testing.T) {
 		"ALTER TABLE heroes ADD COLUMN age INT;",
 		"ALTER TABLE heroes DROP COLUMN alive;",
 		"ALTER TABLE heroes RENAME COLUMN level TO exp;",
+		"ARCHIVE AUDIT LOG TO '/tmp/audit.json';",
+		"ARCHIVE AUDIT LOG TO '/tmp/audit.json' KEEP 100;",
+		"ARCHIVE AUDIT LOG;",
+		"ARCHIVE AUDIT LOG KEEP 50;",
 	}
 
 	for _, query := range queries {
@@ -656,6 +666,110 @@ func TestParseCreateFunction(t *testing.T) {
 	if fn.Language != "PLPGSQL" {
 		t.Fatalf("expected language 'PLPGSQL', got %q", fn.Language)
 	}
+}
+
+func TestParseCreateFunctionWASM(t *testing.T) {
+	t.Run("LANGUAGE WASM before AS", func(t *testing.T) {
+		stmt, err := Parse("CREATE FUNCTION hash_pii(value) RETURNS TEXT LANGUAGE WASM AS 'file:///plugins/hash_pii.wasm';")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		fn, ok := stmt.(*CreateFunctionStatement)
+		if !ok {
+			t.Fatalf("expected *CreateFunctionStatement, got %T", stmt)
+		}
+		if fn.Name != "hash_pii" {
+			t.Fatalf("expected function name 'hash_pii', got %q", fn.Name)
+		}
+		if fn.Language != "WASM" {
+			t.Fatalf("expected language 'WASM', got %q", fn.Language)
+		}
+		if fn.Body != "file:///plugins/hash_pii.wasm" {
+			t.Fatalf("expected body 'file:///plugins/hash_pii.wasm', got %q", fn.Body)
+		}
+		if fn.Options != nil {
+			t.Fatalf("expected nil options, got %v", fn.Options)
+		}
+	})
+
+	t.Run("LANGUAGE WASM with WITH options", func(t *testing.T) {
+		stmt, err := Parse("CREATE FUNCTION hash_pii(value) RETURNS TEXT LANGUAGE WASM AS 'file:///plugins/hash_pii.wasm' WITH (memory_limit = '16MB', timeout = '100ms');")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		fn, ok := stmt.(*CreateFunctionStatement)
+		if !ok {
+			t.Fatalf("expected *CreateFunctionStatement, got %T", stmt)
+		}
+		if fn.Language != "WASM" {
+			t.Fatalf("expected language 'WASM', got %q", fn.Language)
+		}
+		if fn.Options == nil {
+			t.Fatal("expected non-nil options")
+		}
+		if fn.Options["memory_limit"] != "16MB" {
+			t.Fatalf("expected memory_limit '16MB', got %q", fn.Options["memory_limit"])
+		}
+		if fn.Options["timeout"] != "100ms" {
+			t.Fatalf("expected timeout '100ms', got %q", fn.Options["timeout"])
+		}
+	})
+
+	t.Run("existing SQL function still works", func(t *testing.T) {
+		stmt, err := Parse("CREATE FUNCTION calc_price(qty, price) RETURNS FLOAT LANGUAGE SQL AS 'SELECT qty * price';")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		fn, ok := stmt.(*CreateFunctionStatement)
+		if !ok {
+			t.Fatalf("expected *CreateFunctionStatement, got %T", stmt)
+		}
+		if fn.Language != "SQL" {
+			t.Fatalf("expected language 'SQL', got %q", fn.Language)
+		}
+		if fn.Body != "SELECT qty * price" {
+			t.Fatalf("expected body 'SELECT qty * price', got %q", fn.Body)
+		}
+	})
+}
+
+func TestParseCreateProcedureWASM(t *testing.T) {
+	t.Run("LANGUAGE WASM before AS", func(t *testing.T) {
+		stmt, err := Parse("CREATE PROCEDURE run_wasm() LANGUAGE WASM AS 'file:///plugins/runner.wasm';")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		proc, ok := stmt.(*CreateProcedureStatement)
+		if !ok {
+			t.Fatalf("expected *CreateProcedureStatement, got %T", stmt)
+		}
+		if proc.Name != "run_wasm" {
+			t.Fatalf("expected procedure name 'run_wasm', got %q", proc.Name)
+		}
+		if proc.Language != "WASM" {
+			t.Fatalf("expected language 'WASM', got %q", proc.Language)
+		}
+		if proc.Body != "file:///plugins/runner.wasm" {
+			t.Fatalf("expected body 'file:///plugins/runner.wasm', got %q", proc.Body)
+		}
+	})
+
+	t.Run("LANGUAGE WASM with WITH options", func(t *testing.T) {
+		stmt, err := Parse("CREATE PROCEDURE run_wasm() LANGUAGE WASM AS 'file:///plugins/runner.wasm' WITH (timeout = '500ms');")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		proc, ok := stmt.(*CreateProcedureStatement)
+		if !ok {
+			t.Fatalf("expected *CreateProcedureStatement, got %T", stmt)
+		}
+		if proc.Options == nil {
+			t.Fatal("expected non-nil options")
+		}
+		if proc.Options["timeout"] != "500ms" {
+			t.Fatalf("expected timeout '500ms', got %q", proc.Options["timeout"])
+		}
+	})
 }
 
 func TestParseCreateIndex(t *testing.T) {
@@ -1872,28 +1986,33 @@ func TestParseJsonbComparisonOperators(t *testing.T) {
 		name     string
 		query    string
 		op       string
-		checkCol bool // check in column expression instead of WHERE
+		checkCol bool   // check in column expression instead of WHERE
+		exprType string // "BinaryExpr" or "JSONAccess"
 	}{
 		{
-			name:  "jsonb contains @>",
-			query: "SELECT * FROM t WHERE data @> 'val';",
-			op:    "@>",
+			name:     "jsonb contains @>",
+			query:    "SELECT * FROM t WHERE data @> 'val';",
+			op:       "@>",
+			exprType: "JSONAccess",
 		},
 		{
-			name:  "jsonb contained by <@",
-			query: "SELECT * FROM t WHERE data <@ 'val';",
-			op:    "<@",
+			name:     "jsonb contained by <@",
+			query:    "SELECT * FROM t WHERE data <@ 'val';",
+			op:       "<@",
+			exprType: "BinaryExpr",
 		},
 		{
-			name:  "jsonb has key ?",
-			query: "SELECT * FROM t WHERE data ? 'name';",
-			op:    "?",
+			name:     "jsonb has key ?",
+			query:    "SELECT * FROM t WHERE data ? 'name';",
+			op:       "?",
+			exprType: "JSONAccess",
 		},
 		{
 			name:     "jsonb merge ||",
 			query:    "SELECT data || other FROM t;",
 			op:       "||",
 			checkCol: true,
+			exprType: "BinaryExpr",
 		},
 	}
 
@@ -1916,12 +2035,23 @@ func TestParseJsonbComparisonOperators(t *testing.T) {
 				}
 				expr = sel.Where
 			}
-			bin, ok := expr.(*BinaryExpr)
-			if !ok {
-				t.Fatalf("expected *BinaryExpr, got %T", expr)
-			}
-			if bin.Operator != tc.op {
-				t.Fatalf("expected operator %q, got %q", tc.op, bin.Operator)
+			switch tc.exprType {
+			case "BinaryExpr":
+				bin, ok := expr.(*BinaryExpr)
+				if !ok {
+					t.Fatalf("expected *BinaryExpr, got %T", expr)
+				}
+				if bin.Operator != tc.op {
+					t.Fatalf("expected operator %q, got %q", tc.op, bin.Operator)
+				}
+			case "JSONAccess":
+				ja, ok := expr.(*JSONAccess)
+				if !ok {
+					t.Fatalf("expected *JSONAccess, got %T", expr)
+				}
+				if ja.Operator != tc.op {
+					t.Fatalf("expected operator %q, got %q", tc.op, ja.Operator)
+				}
 			}
 		})
 	}
@@ -2992,6 +3122,72 @@ func TestParseDropTableIfExists(t *testing.T) {
 	})
 }
 
+func TestParseCreateDatabaseIfNotExists(t *testing.T) {
+	t.Run("IF NOT EXISTS", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE IF NOT EXISTS mydb;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if !create.IfNotExists {
+			t.Fatal("expected IfNotExists to be true")
+		}
+		if create.DatabaseName != "mydb" {
+			t.Fatalf("expected database name 'mydb', got %q", create.DatabaseName)
+		}
+	})
+
+	t.Run("without IF NOT EXISTS", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE mydb;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if create.IfNotExists {
+			t.Fatal("expected IfNotExists to be false")
+		}
+	})
+}
+
+func TestParseDropDatabaseIfExists(t *testing.T) {
+	t.Run("IF EXISTS", func(t *testing.T) {
+		stmt, err := Parse("DROP DATABASE IF EXISTS mydb;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		drop, ok := stmt.(*DropDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *DropDatabaseStatement, got %T", stmt)
+		}
+		if !drop.IfExists {
+			t.Fatal("expected IfExists to be true")
+		}
+		if drop.DatabaseName != "mydb" {
+			t.Fatalf("expected database name 'mydb', got %q", drop.DatabaseName)
+		}
+	})
+
+	t.Run("without IF EXISTS", func(t *testing.T) {
+		stmt, err := Parse("DROP DATABASE mydb;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		drop, ok := stmt.(*DropDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *DropDatabaseStatement, got %T", stmt)
+		}
+		if drop.IfExists {
+			t.Fatal("expected IfExists to be false")
+		}
+	})
+}
+
 func TestParseCreateTableWithSerial(t *testing.T) {
 	t.Run("SERIAL PRIMARY KEY", func(t *testing.T) {
 		stmt, err := Parse("CREATE TABLE t (id SERIAL PRIMARY KEY);")
@@ -3193,4 +3389,567 @@ func TestParseCreateTableWithGeneratedIdentity(t *testing.T) {
 			t.Error("expected PrimaryKey to be false")
 		}
 	})
+}
+
+func TestParseCreateTableWithBlob(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		wantTypes []string
+	}{
+		{
+			name:      "BLOB type",
+			sql:       "CREATE TABLE t (data BLOB);",
+			wantTypes: []string{"BLOB"},
+		},
+		{
+			name:      "BLOB with other types",
+			sql:       "CREATE TABLE t (id INT, name TEXT, data BLOB);",
+			wantTypes: []string{"INT", "TEXT", "BLOB"},
+		},
+		{
+			name:      "multiple BLOB columns",
+			sql:       "CREATE TABLE t (enc_data BLOB, image BLOB);",
+			wantTypes: []string{"BLOB", "BLOB"},
+		},
+		{
+			name:      "BLOB with NOT NULL",
+			sql:       "CREATE TABLE t (data BLOB NOT NULL);",
+			wantTypes: []string{"BLOB"},
+		},
+		{
+			name:      "BLOB with DEFAULT",
+			sql:       "CREATE TABLE t (data BLOB DEFAULT '')",
+			wantTypes: []string{"BLOB"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := Parse(tt.sql)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tt.sql, err)
+			}
+			create, ok := stmt.(*CreateTableStatement)
+			if !ok {
+				t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+			}
+			if len(create.Columns) != len(tt.wantTypes) {
+				t.Fatalf("expected %d columns, got %d", len(tt.wantTypes), len(create.Columns))
+			}
+			for i, want := range tt.wantTypes {
+				if create.Columns[i].DataType != want {
+					t.Errorf("column %d (%s): DataType = %q, want %q", i, create.Columns[i].Name, create.Columns[i].DataType, want)
+				}
+			}
+		})
+	}
+}
+
+func TestParseCreateDatabaseEncrypted(t *testing.T) {
+	t.Run("ENCRYPTED WITH KEY", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE mydb ENCRYPTED WITH KEY 'secret123';")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if !create.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+		if create.EncryptionKey != "secret123" {
+			t.Fatalf("expected EncryptionKey 'secret123', got %q", create.EncryptionKey)
+		}
+	})
+
+	t.Run("ENCRYPTED without KEY", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE mydb ENCRYPTED;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if !create.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+		if create.EncryptionKey != "" {
+			t.Fatalf("expected empty EncryptionKey, got %q", create.EncryptionKey)
+		}
+	})
+
+	t.Run("IF NOT EXISTS ENCRYPTED WITH KEY", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE IF NOT EXISTS mydb ENCRYPTED WITH KEY 'mykey';")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if !create.IfNotExists {
+			t.Fatal("expected IfNotExists to be true")
+		}
+		if !create.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+		if create.EncryptionKey != "mykey" {
+			t.Fatalf("expected EncryptionKey 'mykey', got %q", create.EncryptionKey)
+		}
+	})
+
+	t.Run("not encrypted", func(t *testing.T) {
+		stmt, err := Parse("CREATE DATABASE mydb;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateDatabaseStatement)
+		if !ok {
+			t.Fatalf("expected *CreateDatabaseStatement, got %T", stmt)
+		}
+		if create.Encrypted {
+			t.Fatal("expected Encrypted to be false")
+		}
+	})
+}
+
+func TestParseCreateTableEncrypted(t *testing.T) {
+	t.Run("ENCRYPTED table", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id INT) ENCRYPTED;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if !create.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+	})
+
+	t.Run("not encrypted table", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id INT);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if create.Encrypted {
+			t.Fatal("expected Encrypted to be false")
+		}
+	})
+
+	t.Run("IF NOT EXISTS ENCRYPTED", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE IF NOT EXISTS t (id INT) ENCRYPTED;")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if !create.IfNotExists {
+			t.Fatal("expected IfNotExists to be true")
+		}
+		if !create.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+	})
+}
+
+func TestParseCreateTableWithEncryptedColumn(t *testing.T) {
+	t.Run("single encrypted column", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (secret TEXT ENCRYPTED);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 1 {
+			t.Fatalf("expected 1 column, got %d", len(create.Columns))
+		}
+		if !create.Columns[0].Encrypted {
+			t.Fatal("expected column Encrypted to be true")
+		}
+	})
+
+	t.Run("mixed encrypted and non-encrypted columns", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id INT, secret TEXT ENCRYPTED, name VARCHAR(100));")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 3 {
+			t.Fatalf("expected 3 columns, got %d", len(create.Columns))
+		}
+		if create.Columns[0].Encrypted {
+			t.Fatal("expected column 'id' Encrypted to be false")
+		}
+		if !create.Columns[1].Encrypted {
+			t.Fatal("expected column 'secret' Encrypted to be true")
+		}
+		if create.Columns[2].Encrypted {
+			t.Fatal("expected column 'name' Encrypted to be false")
+		}
+	})
+
+	t.Run("encrypted column with other constraints", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (secret TEXT NOT NULL ENCRYPTED);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		col := create.Columns[0]
+		if !col.NotNull {
+			t.Fatal("expected NotNull to be true")
+		}
+		if !col.Encrypted {
+			t.Fatal("expected Encrypted to be true")
+		}
+	})
+}
+
+func TestParseShowEncryptionStatus(t *testing.T) {
+	stmt, err := Parse("SHOW ENCRYPTION STATUS;")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if _, ok := stmt.(*ShowEncryptionStatusStatement); !ok {
+		t.Fatalf("expected *ShowEncryptionStatusStatement, got %T", stmt)
+	}
+	if stmt.StatementType() != "SHOW_ENCRYPTION_STATUS" {
+		t.Fatalf("expected StatementType SHOW_ENCRYPTION_STATUS, got %s", stmt.StatementType())
+	}
+}
+
+func TestParseInsertOrReplace(t *testing.T) {
+	stmt, err := Parse("INSERT OR REPLACE INTO users (id, name) VALUES (1, 'Alice');")
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	ins, ok := stmt.(*InsertStatement)
+	if !ok {
+		t.Fatalf("expected *InsertStatement, got %T", stmt)
+	}
+	if !ins.OrReplace {
+		t.Error("expected OrReplace=true")
+	}
+	if ins.TableName != "users" {
+		t.Errorf("expected table 'users', got '%s'", ins.TableName)
+	}
+	if len(ins.Columns) != 2 || ins.Columns[0] != "id" || ins.Columns[1] != "name" {
+		t.Errorf("expected columns [id, name], got %v", ins.Columns)
+	}
+	if len(ins.Rows) != 1 || len(ins.Rows[0]) != 2 {
+		t.Errorf("expected 1 row with 2 values, got %d rows with %d values", len(ins.Rows), len(ins.Rows[0]))
+	}
+}
+
+func TestParseInsertWithoutOrReplace(t *testing.T) {
+	stmt, err := Parse("INSERT INTO users (id, name) VALUES (1, 'Alice');")
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	ins, ok := stmt.(*InsertStatement)
+	if !ok {
+		t.Fatalf("expected *InsertStatement, got %T", stmt)
+	}
+	if ins.OrReplace {
+		t.Error("expected OrReplace=false")
+	}
+}
+
+func TestParseInsertOrReplaceWithoutColumns(t *testing.T) {
+	stmt, err := Parse("INSERT OR REPLACE INTO users VALUES (1, 'Alice');")
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	ins := stmt.(*InsertStatement)
+	if !ins.OrReplace {
+		t.Error("expected OrReplace=true")
+	}
+	if len(ins.Columns) != 0 {
+		t.Errorf("expected no columns, got %v", ins.Columns)
+	}
+}
+
+func TestParseInsertOrReplaceError(t *testing.T) {
+	_, err := Parse("INSERT OR INTO users VALUES (1, 'Alice');")
+	if err == nil {
+		t.Fatal("expected error for 'INSERT OR INTO'")
+	}
+}
+
+func TestParseDistinctOn(t *testing.T) {
+	cases := []struct {
+		name       string
+		query      string
+		distinctOn int  // expected number of DISTINCT ON expressions
+		distinct   bool // expected DISTINCT flag
+	}{
+		{
+			name:       "DISTINCT ON single column",
+			query:      "SELECT DISTINCT ON (name) * FROM t;",
+			distinctOn: 1,
+			distinct:   true,
+		},
+		{
+			name:       "DISTINCT ON multiple columns",
+			query:      "SELECT DISTINCT ON (name, age) * FROM t;",
+			distinctOn: 2,
+			distinct:   true,
+		},
+		{
+			name:       "DISTINCT ON with expressions",
+			query:      "SELECT DISTINCT ON (data->>'category') * FROM t;",
+			distinctOn: 1,
+			distinct:   true,
+		},
+		{
+			name:       "DISTINCT without ON",
+			query:      "SELECT DISTINCT * FROM t;",
+			distinctOn: 0,
+			distinct:   true,
+		},
+		{
+			name:       "no DISTINCT",
+			query:      "SELECT * FROM t;",
+			distinctOn: 0,
+			distinct:   false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := Parse(tc.query)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tc.name, err)
+			}
+			sel, ok := stmt.(*SelectStatement)
+			if !ok {
+				t.Fatalf("expected *SelectStatement, got %T", stmt)
+			}
+			if sel.Distinct != tc.distinct {
+				t.Fatalf("expected Distinct=%v, got %v", tc.distinct, sel.Distinct)
+			}
+			if len(sel.DistinctOn) != tc.distinctOn {
+				t.Fatalf("expected %d DISTINCT ON expressions, got %d", tc.distinctOn, len(sel.DistinctOn))
+			}
+		})
+	}
+}
+
+func TestParseJSONAccessOperators(t *testing.T) {
+	cases := []struct {
+		name    string
+		query   string
+		op      string
+		inWhere bool
+	}{
+		{
+			name:    "JSONB contains @> in WHERE",
+			query:   "SELECT * FROM t WHERE data @> '{\"a\": 1}';",
+			op:      "@>",
+			inWhere: true,
+		},
+		{
+			name:    "JSONB has key ? in WHERE",
+			query:   "SELECT * FROM t WHERE data ? 'name';",
+			op:      "?",
+			inWhere: true,
+		},
+		{
+			name:    "JSONB contains @> in SELECT",
+			query:   "SELECT data @> '{\"a\": 1}' FROM t;",
+			op:      "@>",
+			inWhere: false,
+		},
+		{
+			name:    "JSONB has key ? in SELECT",
+			query:   "SELECT data ? 'name' FROM t;",
+			op:      "?",
+			inWhere: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := Parse(tc.query)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tc.name, err)
+			}
+			sel, ok := stmt.(*SelectStatement)
+			if !ok {
+				t.Fatalf("expected *SelectStatement, got %T", stmt)
+			}
+			var expr Expression
+			if tc.inWhere {
+				expr = sel.Where
+			} else {
+				expr = sel.Columns[0].Expr
+			}
+			ja, ok := expr.(*JSONAccess)
+			if !ok {
+				t.Fatalf("expected *JSONAccess, got %T", expr)
+			}
+			if ja.Operator != tc.op {
+				t.Fatalf("expected operator %q, got %q", tc.op, ja.Operator)
+			}
+		})
+	}
+}
+
+func TestParseCreateTablePartitionByRange(t *testing.T) {
+	sql := `CREATE TABLE orders (
+		id INT,
+		order_date DATE,
+		amount FLOAT
+	) PARTITION BY RANGE (order_date) (
+		PARTITION p2023 VALUES LESS THAN ('2024-01-01'),
+		PARTITION p2024 VALUES LESS THAN ('2025-01-01'),
+		PARTITION p2025 VALUES LESS THAN (MAXVALUE)
+	);`
+	stmt, err := Parse(sql)
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	create, ok := stmt.(*CreateTableStatement)
+	if !ok {
+		t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+	}
+	if create.PartitionBy == nil {
+		t.Fatal("expected PartitionBy to be set")
+	}
+	if create.PartitionBy.Type != "RANGE" {
+		t.Errorf("expected partition type RANGE, got %s", create.PartitionBy.Type)
+	}
+	if len(create.PartitionBy.Columns) != 1 || create.PartitionBy.Columns[0] != "order_date" {
+		t.Errorf("expected partition columns [order_date], got %v", create.PartitionBy.Columns)
+	}
+	if len(create.PartitionBy.Partitions) != 3 {
+		t.Fatalf("expected 3 partitions, got %d", len(create.PartitionBy.Partitions))
+	}
+	if create.PartitionBy.Partitions[0].Name != "p2023" {
+		t.Errorf("expected partition name p2023, got %s", create.PartitionBy.Partitions[0].Name)
+	}
+	if create.PartitionBy.Partitions[2].Bound != nil {
+		t.Error("expected last partition bound to be nil (MAXVALUE)")
+	}
+}
+
+func TestParseCreateTablePartitionByHash(t *testing.T) {
+	sql := `CREATE TABLE sessions (
+		user_id INT,
+		data TEXT
+	) PARTITION BY HASH (user_id) PARTITIONS 4;`
+	stmt, err := Parse(sql)
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	create, ok := stmt.(*CreateTableStatement)
+	if !ok {
+		t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+	}
+	if create.PartitionBy == nil {
+		t.Fatal("expected PartitionBy to be set")
+	}
+	if create.PartitionBy.Type != "HASH" {
+		t.Errorf("expected partition type HASH, got %s", create.PartitionBy.Type)
+	}
+	if len(create.PartitionBy.Columns) != 1 || create.PartitionBy.Columns[0] != "user_id" {
+		t.Errorf("expected partition columns [user_id], got %v", create.PartitionBy.Columns)
+	}
+	if create.PartitionBy.NumParts != 4 {
+		t.Errorf("expected 4 partitions, got %d", create.PartitionBy.NumParts)
+	}
+}
+
+func TestParseCreateTableNoPartition(t *testing.T) {
+	sql := `CREATE TABLE t (id INT, name TEXT);`
+	stmt, err := Parse(sql)
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	create, ok := stmt.(*CreateTableStatement)
+	if !ok {
+		t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+	}
+	if create.PartitionBy != nil {
+		t.Error("expected PartitionBy to be nil for non-partitioned table")
+	}
+}
+
+// --- Parser Recursion Depth Limit Tests ---
+
+func TestParserDepthLimitSubquery(t *testing.T) {
+	// Build a deeply nested subquery: SELECT (SELECT (SELECT ... 1 ...))
+	depth := defaultMaxParserDepth + 5
+	query := ""
+	for i := 0; i < depth; i++ {
+		query += "SELECT ("
+	}
+	query += "1"
+	for i := 0; i < depth; i++ {
+		query += ")"
+	}
+	query += ";"
+
+	_, err := parse(query)
+	if err == nil {
+		t.Fatalf("expected depth limit error for %d nested subqueries", depth)
+	}
+	if !strings.Contains(err.Error(), "too deeply nested") {
+		t.Fatalf("expected 'too deeply nested' error, got: %v", err)
+	}
+}
+
+func TestParserDepthLimitExists(t *testing.T) {
+	// Build deeply nested EXISTS: SELECT * FROM t WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 ...))
+	depth := defaultMaxParserDepth + 5
+	query := "SELECT * FROM t WHERE "
+	for i := 0; i < depth; i++ {
+		query += "EXISTS (SELECT 1 WHERE "
+	}
+	query += "1=1"
+	for i := 0; i < depth; i++ {
+		query += ")"
+	}
+	query += ";"
+
+	_, err := parse(query)
+	if err == nil {
+		t.Fatalf("expected depth limit error for %d nested EXISTS", depth)
+	}
+	if !strings.Contains(err.Error(), "too deeply nested") {
+		t.Fatalf("expected 'too deeply nested' error, got: %v", err)
+	}
+}
+
+func TestParserDepthLimitWithinBounds(t *testing.T) {
+	// Queries within the depth limit should parse fine
+	query := "SELECT * FROM t WHERE x IN (SELECT id FROM t2 WHERE y IN (SELECT z FROM t3));"
+	_, err := Parse(query)
+	if err != nil {
+		t.Fatalf("Parse returned unexpected error: %v", err)
+	}
+}
+
+func TestParserDepthLimitDefault(t *testing.T) {
+	// Verify the default max depth is 32
+	if defaultMaxParserDepth != 32 {
+		t.Fatalf("defaultMaxParserDepth = %d, want 32", defaultMaxParserDepth)
+	}
 }

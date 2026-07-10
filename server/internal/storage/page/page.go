@@ -23,6 +23,9 @@ const (
 	MaxSegmentSize = 1 << 30
 	// PagesPerSegment is the number of pages in a full segment (131072).
 	PagesPerSegment = MaxSegmentSize / PageSize
+	// EncryptedOnDiskPageSize is the on-disk size of one encrypted page:
+	// VDBE header (20) + plaintext page (8192) + GCM tag (16) = 8228 bytes.
+	EncryptedOnDiskPageSize = EncryptedPageHeaderSize + PageSize + GCMTagSize
 )
 
 // Page types stored in PageHeader.PageType.
@@ -56,6 +59,22 @@ type PageID struct {
 // FileOffset returns the byte offset of the page inside its segment file.
 func (p PageID) FileOffset() int64 {
 	return int64(p.PageNo) * PageSize
+}
+
+// Bytes encodes the PageID as a little-endian byte slice for use as
+// additional data in authenticated encryption.
+func (p PageID) Bytes() []byte {
+	b := make([]byte, 10)
+	binary.LittleEndian.PutUint32(b[0:4], p.TableID)
+	binary.LittleEndian.PutUint16(b[4:6], p.SegmentNo)
+	binary.LittleEndian.PutUint32(b[6:10], p.PageNo)
+	return b
+}
+
+// EncryptedFileOffset returns the byte offset for an encrypted page,
+// which has a larger on-disk footprint than a plaintext page.
+func (p PageID) EncryptedFileOffset() int64 {
+	return int64(p.PageNo) * EncryptedOnDiskPageSize
 }
 
 // PageHeader is the fixed 28-byte header at the start of every page.

@@ -12,16 +12,16 @@ import (
 	"vaultdb/internal/txmanager"
 )
 
-// TestChaosRecovery проверяет целостность данных при серийных аварийных завершениях.
+// TestChaosRecovery verifies data integrity during serial crash recovery.
 //
-// Page engine пишет данные напрямую в heap-файлы (не через WAL). WAL используется
-// только для page-engine операций (вставка/удаление кортежей на страницы). При crash
-// recovery heap-файлы уже содержат закоммиченные данные — replay WAL не требуется
-// для basic durability (в отличие от FileStorageEngine, где WAL был единственным
-// источником правды).
+// Page engine writes data directly to heap files (not via WAL). WAL is used
+// only for page-engine operations (inserting/deleting tuples onto pages). On crash
+// recovery heap files already contain committed data — WAL replay is not required
+// for basic durability (unlike FileStorageEngine where WAL was the only
+// source of truth).
 //
-// Данный тест проверяет: (1) данные сохраняются при normal shutdown,
-// (2) corrupt WAL tail не ломает recovery, (3) данные кумулятивно растут.
+// This test verifies: (1) data is preserved on normal shutdown,
+// (2) corrupt WAL tail does not break recovery, (3) data grows cumulatively.
 func TestChaosRecovery(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping chaos test in short mode")
@@ -52,7 +52,7 @@ func TestChaosRecovery(t *testing.T) {
 				runSQL(t, exec, sess, fmt.Sprintf("CREATE TABLE %s (id INT, val TEXT);", tableName))
 			}
 
-			// 2. Нагрузка
+			// 2. Workload
 			var wg sync.WaitGroup
 			sess := &Session{currentDB: dbName}
 			for i := 0; i < numWorkers; i++ {
@@ -75,12 +75,12 @@ func TestChaosRecovery(t *testing.T) {
 			}
 			wg.Wait()
 
-			// 3. Graceful shutdown — heap-файлы содержат данные
+			// 3. Graceful shutdown — heap files contain data
 			store.Close()
 
 			t.Logf("Cycle %d: Shutdown. Expected rows so far: %d", cycle, expectedCount.Load())
 
-			// 4. Проверяем что данные восстанавливаются из heap-файлов
+			// 4. Check that data is recovered from heap files
 			txm2 := txmanager.NewManager()
 			storeRecover, err := storage.NewPageStorageEngine(dbPath, nil, txm2)
 			if err != nil {

@@ -27,7 +27,6 @@ VaultDB supports the following column types. Every value in a column must confor
 | `ENUM` | String | Listed values only | `'active'` |
 | `UUID` | String (UUIDv4 format) | — | `'550e8400-...'` |
 | `INTERVAL` | String | — | `'3 days'` |
-| `JSONB` | String | — | See JSONB section |
 
 ## INTEGER
 

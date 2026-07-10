@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"vaultdb/internal/index"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -68,6 +69,7 @@ func (m *MockStorage) DropDatabase(name string) error {
 
 func (m *MockStorage) FinalCheckpoint() error { return nil }
 func (m *MockStorage) Close() error           { return nil }
+func (m *MockStorage) DataDir() string        { return "" }
 
 // ReadOnlyEngine
 
@@ -187,7 +189,8 @@ func (m *MockStorage) TableModifiedSince(db, table string, txID uint64) (bool, e
 	return false, nil
 }
 
-func (m *MockStorage) CurrentTxID() uint64 { return 1 }
+func (m *MockStorage) CurrentTxID() uint64   { return 1 }
+func (m *MockStorage) SchemaVersion() uint64 { return 1 }
 
 func (m *MockStorage) ListIndexes(dbName, tableName string) ([]string, error) {
 	var names []string
@@ -214,6 +217,11 @@ func (m *MockStorage) FindIndexForColumn(dbName, tableName, column string) (stri
 		}
 	}
 	return "", false
+}
+
+func (m *MockStorage) GetIndex(dbName, tableName, indexName string) (index.Index, bool) {
+	// MockStorage doesn't track full index objects, return nil
+	return nil, false
 }
 
 func (m *MockStorage) IndexLookup(dbName, tableName, column, value string) ([]int, bool) {

@@ -14,11 +14,15 @@ type AsOfClause struct {
 
 // DDL.
 type CreateDatabaseStatement struct {
-	DatabaseName string
+	DatabaseName  string
+	IfNotExists   bool
+	Encrypted     bool
+	EncryptionKey string
 }
 
 type DropDatabaseStatement struct {
 	DatabaseName string
+	IfExists     bool
 }
 
 type UseDatabaseStatement struct {
@@ -30,6 +34,8 @@ type ShowDatabasesStatement struct{}
 type ShowTablesStatement struct {
 	DatabaseName string // empty means current session database
 }
+
+type ShowEncryptionStatusStatement struct{}
 
 type DescribeTableStatement struct {
 	TableName    string
@@ -47,6 +53,7 @@ type ColumnDef struct {
 	PrimaryKey    bool
 	Unique        bool
 	AutoIncrement bool
+	Encrypted     bool
 }
 
 type CreateTableStatement struct {
@@ -54,6 +61,22 @@ type CreateTableStatement struct {
 	Columns     []ColumnDef
 	InferSchema bool
 	IfNotExists bool
+	Encrypted   bool
+	PartitionBy *PartitionSpec // nil = no partitioning
+}
+
+// PartitionSpec describes how a table is partitioned.
+type PartitionSpec struct {
+	Type       string         // "RANGE", "HASH"
+	Columns    []string       // partition key columns
+	Partitions []PartitionDef // RANGE: explicit partition definitions
+	NumParts   int            // HASH: number of partitions
+}
+
+// PartitionDef defines a single partition in a RANGE-partitioned table.
+type PartitionDef struct {
+	Name  string      // partition name (e.g., "p2023")
+	Bound interface{} // upper bound value for RANGE (nil = MAXVALUE)
 }
 
 type DropTableStatement struct {
@@ -101,9 +124,10 @@ type SelectStatement struct {
 	AsOf         *AsOfClause
 	CTEs         []CTEDefinition // WITH clause definitions
 	Distinct     bool            // SELECT DISTINCT
+	DistinctOn   []Expression    // DISTINCT ON (expr1, expr2, ...) — nil means no DISTINCT ON
 }
 
-// CTEDefinition — определение CTE в WITH clause.
+// CTEDefinition — CTE definition in WITH clause.
 type CTEDefinition struct {
 	Name    string
 	Columns []string  // optional column aliases
@@ -129,12 +153,12 @@ type MergeStatement struct {
 	Returning      []SelectColumn
 }
 
-// MergeWhenClause — WHEN MATCHED THEN ... или WHEN NOT MATCHED THEN ...
+// MergeWhenClause — WHEN MATCHED THEN ... or WHEN NOT MATCHED THEN ...
 type MergeWhenClause struct {
-	Action      string         // "UPDATE" или "INSERT"
-	Assignments []Assignment   // для UPDATE
-	Columns     []string       // для INSERT
-	Values      [][]Expression // для INSERT
+	Action      string         // "UPDATE" or "INSERT"
+	Assignments []Assignment   // for UPDATE
+	Columns     []string       // for INSERT
+	Values      [][]Expression // for INSERT
 	SelectQuery Statement      // INSERT ... SELECT (alternative to Values)
 }
 
@@ -233,13 +257,14 @@ type InsertStatement struct {
 	SelectQuery Statement         // INSERT ... SELECT (SelectStatement or SetOperationStatement)
 	OnConflict  *OnConflictClause // INSERT ... ON CONFLICT DO ...
 	Returning   []SelectColumn    // RETURNING clause
+	OrReplace   bool              // INSERT OR REPLACE (SQLite compatibility)
 }
 
-// OnConflictClause — ON CONFLICT clause для UPSERT.
+// OnConflictClause — ON CONFLICT clause for UPSERT.
 type OnConflictClause struct {
 	Columns     []string     // conflict target columns (UNIQUE index)
-	Action      string       // "NOTHING" или "UPDATE"
-	Assignments []Assignment // для ON CONFLICT DO UPDATE SET
+	Action      string       // "NOTHING" or "UPDATE"
+	Assignments []Assignment // for ON CONFLICT DO UPDATE SET
 }
 
 type Assignment struct {
@@ -266,6 +291,19 @@ type DeleteStatement struct {
 type VacuumStatement struct {
 	TableName string // empty means vacuum all tables in current DB
 	Analyze   bool   // true = VACUUM ANALYZE: show statistics
+}
+
+type CopyStatement struct {
+	TableName string
+	Filename  string // file path, "STDIN", or "STDOUT"
+	IsFrom    bool   // true = COPY FROM, false = COPY TO
+	Options   CopyOptions
+}
+
+type CopyOptions struct {
+	Format    string // "CSV" or "JSON"
+	Header    bool   // CSV only: has header row
+	Delimiter string // CSV delimiter (default ",")
 }
 
 // Index statements
@@ -313,8 +351,9 @@ type CreateFunctionStatement struct {
 	Name       string
 	Params     []string
 	ReturnType string
-	Body       string // SQL expression body
-	Language   string // "SQL" by default
+	Body       string            // SQL expression body or WASM file path
+	Language   string            // "SQL" by default
+	Options    map[string]string // WASM options: memory_limit, timeout
 }
 
 type DropFunctionStatement struct {
@@ -325,8 +364,9 @@ type DropFunctionStatement struct {
 type CreateProcedureStatement struct {
 	Name     string
 	Params   []string
-	Body     string // SQL body
-	Language string // "SQL" by default
+	Body     string            // SQL body or WASM file path
+	Language string            // "SQL" by default
+	Options  map[string]string // WASM options: memory_limit, timeout
 }
 
 type DropProcedureStatement struct {
@@ -381,86 +421,134 @@ type EnableRlsStatement struct {
 	TableName string
 }
 
-func (*CreateDatabaseStatement) statementNode()  {}
-func (*DropDatabaseStatement) statementNode()    {}
-func (*UseDatabaseStatement) statementNode()     {}
-func (*ShowDatabasesStatement) statementNode()   {}
-func (*ShowTablesStatement) statementNode()      {}
-func (*DescribeTableStatement) statementNode()   {}
-func (*CreateTableStatement) statementNode()     {}
-func (*DropTableStatement) statementNode()       {}
-func (*AlterTableStatement) statementNode()      {}
-func (*SelectStatement) statementNode()          {}
-func (*ExplainStatement) statementNode()         {}
-func (*HistoryStatement) statementNode()         {}
-func (*InsertStatement) statementNode()          {}
-func (*UpdateStatement) statementNode()          {}
-func (*DeleteStatement) statementNode()          {}
-func (*VacuumStatement) statementNode()          {}
-func (*CreateIndexStatement) statementNode()     {}
-func (*DropIndexStatement) statementNode()       {}
-func (*ShowIndexesStatement) statementNode()     {}
-func (*BeginStatement) statementNode()           {}
-func (*CommitStatement) statementNode()          {}
-func (*RollbackStatement) statementNode()        {}
-func (*PrepareStatement) statementNode()         {}
-func (*ExecuteStatement) statementNode()         {}
-func (*DeallocateStatement) statementNode()      {}
-func (*SetOperationStatement) statementNode()    {}
-func (*MigrationStatement) statementNode()       {}
-func (*CreatePolicyStatement) statementNode()    {}
-func (*EnableRlsStatement) statementNode()       {}
-func (*CTEStatement) statementNode()             {}
-func (*CreateViewStatement) statementNode()      {}
-func (*DropViewStatement) statementNode()        {}
-func (*CreateTriggerStatement) statementNode()   {}
-func (*DropTriggerStatement) statementNode()     {}
-func (*CreateFunctionStatement) statementNode()  {}
-func (*DropFunctionStatement) statementNode()    {}
-func (*CreateProcedureStatement) statementNode() {}
-func (*DropProcedureStatement) statementNode()   {}
-func (*CallProcedureStatement) statementNode()   {}
+// VerifyAuditLogStatement represents "VERIFY AUDIT LOG".
+type VerifyAuditLogStatement struct{}
+
+// ArchiveAuditLogStatement represents "ARCHIVE AUDIT LOG [TO 'path'] [KEEP N]".
+type ArchiveAuditLogStatement struct {
+	Path      string // output file path (empty = use config default)
+	KeepCount int    // number of recent entries to keep after archive (0 = truncate all)
+}
+
+// RBAC statements
+type CreateRoleStatement struct {
+	Name     string
+	Password string
+}
+
+type DropRoleStatement struct {
+	Name     string
+	IfExists bool
+}
+
+type GrantStatement struct {
+	Privileges []string
+	On         string
+	To         string
+}
+
+type RevokeStatement struct {
+	Privileges []string
+	On         string
+	From       string
+}
+
+func (*CreateDatabaseStatement) statementNode()       {}
+func (*DropDatabaseStatement) statementNode()         {}
+func (*UseDatabaseStatement) statementNode()          {}
+func (*ShowDatabasesStatement) statementNode()        {}
+func (*ShowTablesStatement) statementNode()           {}
+func (*ShowEncryptionStatusStatement) statementNode() {}
+func (*DescribeTableStatement) statementNode()        {}
+func (*CreateTableStatement) statementNode()          {}
+func (*DropTableStatement) statementNode()            {}
+func (*AlterTableStatement) statementNode()           {}
+func (*SelectStatement) statementNode()               {}
+func (*ExplainStatement) statementNode()              {}
+func (*HistoryStatement) statementNode()              {}
+func (*InsertStatement) statementNode()               {}
+func (*UpdateStatement) statementNode()               {}
+func (*DeleteStatement) statementNode()               {}
+func (*VacuumStatement) statementNode()               {}
+func (*CopyStatement) statementNode()                 {}
+func (*CreateIndexStatement) statementNode()          {}
+func (*DropIndexStatement) statementNode()            {}
+func (*ShowIndexesStatement) statementNode()          {}
+func (*BeginStatement) statementNode()                {}
+func (*CommitStatement) statementNode()               {}
+func (*RollbackStatement) statementNode()             {}
+func (*PrepareStatement) statementNode()              {}
+func (*ExecuteStatement) statementNode()              {}
+func (*DeallocateStatement) statementNode()           {}
+func (*SetOperationStatement) statementNode()         {}
+func (*MigrationStatement) statementNode()            {}
+func (*CreatePolicyStatement) statementNode()         {}
+func (*EnableRlsStatement) statementNode()            {}
+func (*VerifyAuditLogStatement) statementNode()       {}
+func (*ArchiveAuditLogStatement) statementNode()      {}
+func (*CreateRoleStatement) statementNode()           {}
+func (*DropRoleStatement) statementNode()             {}
+func (*GrantStatement) statementNode()                {}
+func (*RevokeStatement) statementNode()               {}
+func (*CTEStatement) statementNode()                  {}
+func (*CreateViewStatement) statementNode()           {}
+func (*DropViewStatement) statementNode()             {}
+func (*CreateTriggerStatement) statementNode()        {}
+func (*DropTriggerStatement) statementNode()          {}
+func (*CreateFunctionStatement) statementNode()       {}
+func (*DropFunctionStatement) statementNode()         {}
+func (*CreateProcedureStatement) statementNode()      {}
+func (*DropProcedureStatement) statementNode()        {}
+func (*CallProcedureStatement) statementNode()        {}
 
 func (*CreateDatabaseStatement) StatementType() string { return "CREATE_DATABASE" }
 
-func (*DropDatabaseStatement) StatementType() string    { return "DROP_DATABASE" }
-func (*UseDatabaseStatement) StatementType() string     { return "USE_DATABASE" }
-func (*ShowDatabasesStatement) StatementType() string   { return "SHOW_DATABASES" }
-func (*ShowTablesStatement) StatementType() string      { return "SHOW_TABLES" }
-func (*DescribeTableStatement) StatementType() string   { return "DESCRIBE_TABLE" }
-func (*CreateTableStatement) StatementType() string     { return "CREATE_TABLE" }
-func (*DropTableStatement) StatementType() string       { return "DROP_TABLE" }
-func (*AlterTableStatement) StatementType() string      { return "ALTER_TABLE" }
-func (*SelectStatement) StatementType() string          { return "SELECT" }
-func (*ExplainStatement) StatementType() string         { return "EXPLAIN" }
-func (*HistoryStatement) StatementType() string         { return "HISTORY" }
-func (*InsertStatement) StatementType() string          { return "INSERT" }
-func (*UpdateStatement) StatementType() string          { return "UPDATE" }
-func (*DeleteStatement) StatementType() string          { return "DELETE" }
-func (*VacuumStatement) StatementType() string          { return "VACUUM" }
-func (*CreateIndexStatement) StatementType() string     { return "CREATE_INDEX" }
-func (*DropIndexStatement) StatementType() string       { return "DROP_INDEX" }
-func (*ShowIndexesStatement) StatementType() string     { return "SHOW_INDEXES" }
-func (*BeginStatement) StatementType() string           { return "BEGIN" }
-func (*CommitStatement) StatementType() string          { return "COMMIT" }
-func (*RollbackStatement) StatementType() string        { return "ROLLBACK" }
-func (*PrepareStatement) StatementType() string         { return "PREPARE" }
-func (*ExecuteStatement) StatementType() string         { return "EXECUTE" }
-func (*DeallocateStatement) StatementType() string      { return "DEALLOCATE" }
-func (*SetOperationStatement) StatementType() string    { return "SET_OPERATION" }
-func (*MigrationStatement) StatementType() string       { return "MIGRATION" }
-func (*CreatePolicyStatement) StatementType() string    { return "CREATE_POLICY" }
-func (*EnableRlsStatement) StatementType() string       { return "ENABLE_RLS" }
-func (*CTEStatement) StatementType() string             { return "CTE" }
-func (*CreateViewStatement) StatementType() string      { return "CREATE_VIEW" }
-func (*DropViewStatement) StatementType() string        { return "DROP_VIEW" }
-func (*CreateTriggerStatement) StatementType() string   { return "CREATE_TRIGGER" }
-func (*DropTriggerStatement) StatementType() string     { return "DROP_TRIGGER" }
-func (*CreateFunctionStatement) StatementType() string  { return "CREATE_FUNCTION" }
-func (*DropFunctionStatement) StatementType() string    { return "DROP_FUNCTION" }
-func (*CreateProcedureStatement) StatementType() string { return "CREATE_PROCEDURE" }
-func (*DropProcedureStatement) StatementType() string   { return "DROP_PROCEDURE" }
-func (*CallProcedureStatement) StatementType() string   { return "CALL_PROCEDURE" }
+func (*DropDatabaseStatement) StatementType() string         { return "DROP_DATABASE" }
+func (*UseDatabaseStatement) StatementType() string          { return "USE_DATABASE" }
+func (*ShowDatabasesStatement) StatementType() string        { return "SHOW_DATABASES" }
+func (*ShowTablesStatement) StatementType() string           { return "SHOW_TABLES" }
+func (*ShowEncryptionStatusStatement) StatementType() string { return "SHOW_ENCRYPTION_STATUS" }
+func (*DescribeTableStatement) StatementType() string        { return "DESCRIBE_TABLE" }
+func (*CreateTableStatement) StatementType() string          { return "CREATE_TABLE" }
+func (*DropTableStatement) StatementType() string            { return "DROP_TABLE" }
+func (*AlterTableStatement) StatementType() string           { return "ALTER_TABLE" }
+func (*SelectStatement) StatementType() string               { return "SELECT" }
+func (*ExplainStatement) StatementType() string              { return "EXPLAIN" }
+func (*HistoryStatement) StatementType() string              { return "HISTORY" }
+func (*InsertStatement) StatementType() string               { return "INSERT" }
+func (*UpdateStatement) StatementType() string               { return "UPDATE" }
+func (*DeleteStatement) StatementType() string               { return "DELETE" }
+func (*VacuumStatement) StatementType() string               { return "VACUUM" }
+func (*CopyStatement) StatementType() string                 { return "COPY" }
+func (*CreateIndexStatement) StatementType() string          { return "CREATE_INDEX" }
+func (*DropIndexStatement) StatementType() string            { return "DROP_INDEX" }
+func (*ShowIndexesStatement) StatementType() string          { return "SHOW_INDEXES" }
+func (*BeginStatement) StatementType() string                { return "BEGIN" }
+func (*CommitStatement) StatementType() string               { return "COMMIT" }
+func (*RollbackStatement) StatementType() string             { return "ROLLBACK" }
+func (*PrepareStatement) StatementType() string              { return "PREPARE" }
+func (*ExecuteStatement) StatementType() string              { return "EXECUTE" }
+func (*DeallocateStatement) StatementType() string           { return "DEALLOCATE" }
+func (*SetOperationStatement) StatementType() string         { return "SET_OPERATION" }
+func (*MigrationStatement) StatementType() string            { return "MIGRATION" }
+func (*CreatePolicyStatement) StatementType() string         { return "CREATE_POLICY" }
+func (*EnableRlsStatement) StatementType() string            { return "ENABLE_RLS" }
+func (*VerifyAuditLogStatement) StatementType() string       { return "VERIFY_AUDIT_LOG" }
+func (*ArchiveAuditLogStatement) StatementType() string      { return "ARCHIVE_AUDIT_LOG" }
+func (*CreateRoleStatement) StatementType() string           { return "CREATE_ROLE" }
+func (*DropRoleStatement) StatementType() string             { return "DROP_ROLE" }
+func (*GrantStatement) StatementType() string                { return "GRANT" }
+func (*RevokeStatement) StatementType() string               { return "REVOKE" }
+func (*CTEStatement) StatementType() string                  { return "CTE" }
+func (*CreateViewStatement) StatementType() string           { return "CREATE_VIEW" }
+func (*DropViewStatement) StatementType() string             { return "DROP_VIEW" }
+func (*CreateTriggerStatement) StatementType() string        { return "CREATE_TRIGGER" }
+func (*DropTriggerStatement) StatementType() string          { return "DROP_TRIGGER" }
+func (*CreateFunctionStatement) StatementType() string       { return "CREATE_FUNCTION" }
+func (*DropFunctionStatement) StatementType() string         { return "DROP_FUNCTION" }
+func (*CreateProcedureStatement) StatementType() string      { return "CREATE_PROCEDURE" }
+func (*DropProcedureStatement) StatementType() string        { return "DROP_PROCEDURE" }
+func (*CallProcedureStatement) StatementType() string        { return "CALL_PROCEDURE" }
 
 // Expression is the root interface for all WHERE expressions.
 type Expression interface {
@@ -582,6 +670,16 @@ type JsonPathExpr struct {
 	Op   string // -> or ->>
 	Path string
 }
+
+// JSONAccess represents JSONB operators: @>, ?.
+// Unlike JsonPathExpr (->, ->>), these use an Expression argument.
+type JSONAccess struct {
+	Expr     Expression
+	Operator string // "@>", "?"
+	Argument Expression
+}
+
+func (*JSONAccess) expressionNode() {}
 
 // ComparisonSubqueryExpr handles: x > ALL (SELECT ...), x = ANY (SELECT ...), etc.
 type ComparisonSubqueryExpr struct {
