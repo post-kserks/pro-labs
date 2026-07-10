@@ -32,6 +32,9 @@ func ensureColumnIndex(ctx *ExecutionContext, schema *storage.TableSchema) {
 // When columnIndex is non-nil, unqualified lookups use the O(1) cache first,
 // falling back to linear scan only for qualified (table.column) names.
 func resolveColumn(row storage.Row, schema *storage.TableSchema, name string, columnIndex map[string]int) (interface{}, error) {
+	if schema == nil {
+		return nil, fmt.Errorf("column %q: no schema available", name)
+	}
 	// Fast path: use cached index for unqualified names.
 	if columnIndex != nil && !strings.Contains(name, ".") {
 		if idx, ok := columnIndex[strings.ToLower(name)]; ok && idx < len(row) {
