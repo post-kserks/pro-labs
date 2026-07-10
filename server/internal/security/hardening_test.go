@@ -361,7 +361,8 @@ func TestHardeningMultipleLargeInserts(t *testing.T) {
 	execSQL(t, sess, "CREATE TABLE batchbig (id INT, data TEXT);")
 
 	// Insert many large rows — check for memory leaks or panics
-	largeVal := strings.Repeat("B", 10*1024) // 10KB per row
+	// Max usable tuple size is ~8KB (PageSize=8192 - headers), so use 7KB
+	largeVal := strings.Repeat("B", 7*1024) // 7KB per row
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
