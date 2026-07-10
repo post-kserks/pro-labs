@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows || !cgo
 
 package crypto
 
@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-// DPAPISource is a stub on non-Windows platforms.
+// DPAPISource is a stub on non-Windows or non-CGO platforms.
 type DPAPISource struct {
 	blobPath string
 }
@@ -22,4 +22,12 @@ func (s *DPAPISource) Name() string {
 
 func (s *DPAPISource) GetKEK(_ context.Context) ([]byte, error) {
 	return nil, fmt.Errorf("DPAPI not supported on this platform")
+}
+
+func protect(data []byte) ([]byte, error) {
+	return nil, fmt.Errorf("dpapi: not available on this platform (requires windows + cgo)")
+}
+
+func unprotect(blob []byte) ([]byte, error) {
+	return nil, fmt.Errorf("dpapi: not available on this platform (requires windows + cgo)")
 }
