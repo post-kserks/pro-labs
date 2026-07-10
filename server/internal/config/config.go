@@ -54,7 +54,7 @@ type StorageConfig struct {
 	Engine           string `yaml:"engine"`
 	DataDir          string `yaml:"data_dir"`
 	ResultCacheSize  int    `yaml:"result_cache_size"`
-	ResultCacheTTL_s int    `yaml:"result_cache_ttl_seconds"`
+	ResultCacheTTLS int    `yaml:"result_cache_ttl_seconds"`
 	BufferPoolPages  int    `yaml:"buffer_pool_pages"`
 }
 
@@ -157,7 +157,7 @@ func Default() *Config {
 			Engine:           "page",
 			DataDir:          "./data",
 			ResultCacheSize:  DefaultResultCacheSize,
-			ResultCacheTTL_s: DefaultResultCacheTTL,
+			ResultCacheTTLS: DefaultResultCacheTTL,
 			BufferPoolPages:  DefaultBufferPoolPages,
 		},
 		Auth: AuthConfig{
@@ -243,8 +243,8 @@ func validateConfig(cfg *Config) error {
 	if cfg.Storage.ResultCacheSize == 0 {
 		cfg.Storage.ResultCacheSize = DefaultResultCacheSize
 	}
-	if cfg.Storage.ResultCacheTTL_s == 0 {
-		cfg.Storage.ResultCacheTTL_s = DefaultResultCacheTTL
+	if cfg.Storage.ResultCacheTTLS == 0 {
+		cfg.Storage.ResultCacheTTLS = DefaultResultCacheTTL
 	}
 	if cfg.Storage.BufferPoolPages == 0 {
 		cfg.Storage.BufferPoolPages = DefaultBufferPoolPages
