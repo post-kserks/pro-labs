@@ -16,11 +16,13 @@ func GetRow() Row {
 
 // PutRow returns a Row to the pool for reuse.
 // Rows with excessive capacity (>256) are discarded to prevent pool bloat.
+// SA6002 is suppressed: sync.Pool requires interface{}, slice wrapping is the
+// standard pattern for pooling slices.
 func PutRow(r Row) {
 	if cap(r) > 256 {
 		return
 	}
-	rowPool.Put(r[:0]) //nolint:sa6002
+	rowPool.Put(r[:0])
 }
 
 // GetRowWithLen retrieves a Row from the pool with the specified length.
