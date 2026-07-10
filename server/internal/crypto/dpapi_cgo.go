@@ -63,6 +63,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"unsafe"
 )
 
@@ -80,7 +81,31 @@ func (s *DPAPISource) Name() string {
 }
 
 func (s *DPAPISource) GetKEK(_ context.Context) ([]byte, error) {
-	return nil, fmt.Errorf("DPAPI not yet fully implemented on Windows")
+	// Try to load existing protected blob
+	data, err := os.ReadFile(s.blobPath)
+	if err == nil {
+		return unprotect(data)
+	}
+	if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("dpapi: read blob: %w", err)
+	}
+
+	// No blob exists — generate new key, protect it, store it
+	key, err := GenerateKey()
+	if err != nil {
+		return nil, fmt.Errorf("dpapi: generate key: %w", err)
+	}
+
+	protected, err := protect(key)
+	if err != nil {
+		return nil, fmt.Errorf("dpapi: protect key: %w", err)
+	}
+
+	if err := os.WriteFile(s.blobPath, protected, 0600); err != nil {
+		return nil, fmt.Errorf("dpapi: write blob: %w", err)
+	}
+
+	return key, nil
 }
 
 func protect(data []byte) ([]byte, error) {
