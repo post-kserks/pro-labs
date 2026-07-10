@@ -24,7 +24,7 @@ func evalFtsMatch(left, right interface{}) (bool, error) {
 	return evalFtsMatchScored(valueToString(left), valueToString(right)) > ftsScoreThreshold, nil
 }
 
-// evalFtsMatchScored вычисляет score полноtextового совпадения.
+// evalFtsMatchScored computes the full-text match score.
 func evalFtsMatchScored(text, query string) float64 {
 	queryTerms := fts.Tokenize(query)
 	if len(queryTerms) == 0 {

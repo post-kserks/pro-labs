@@ -865,7 +865,7 @@ func hashRow(row []string) [32]byte {
 	return out
 }
 
-// distinctRows удаляет дубликаты строк из результата.
+// distinctRows removes duplicate rows from the result.
 func distinctRows(rows [][]string) [][]string {
 	seen := make(map[[32]byte]bool)
 	result := make([][]string, 0, len(rows))

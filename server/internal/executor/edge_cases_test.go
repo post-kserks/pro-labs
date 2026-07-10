@@ -100,7 +100,7 @@ func TestEdgeMaxSizeVarchar(t *testing.T) {
 func TestEdgeUnicodeEmoji(t *testing.T) {
 	session := newEdgeSession(t)
 	mustExec(t, session, "CREATE TABLE edge_unicode (id INT, val TEXT)")
-	mustExec(t, session, `INSERT INTO edge_unicode VALUES (1, 'Привет мир')`)
+	mustExec(t, session, `INSERT INTO edge_unicode VALUES (1, 'Hello world')`)
 	mustExec(t, session, `INSERT INTO edge_unicode VALUES (2, '日本語テスト')`)
 	mustExec(t, session, `INSERT INTO edge_unicode VALUES (3, '🚀🎉🔥')`)
 	mustExec(t, session, `INSERT INTO edge_unicode VALUES (4, 'émojis et accents: café résumé')`)
@@ -111,7 +111,7 @@ func TestEdgeUnicodeEmoji(t *testing.T) {
 	}
 
 	res = executeSQL(t, session, "SELECT val FROM edge_unicode ORDER BY id")
-	if res.Rows[0][0] != "Привет мир" {
+	if res.Rows[0][0] != "Hello world" {
 		t.Errorf("row 1: got %q, want 'Hello world'", res.Rows[0][0])
 	}
 	if res.Rows[1][0] != "日本語テスト" {
