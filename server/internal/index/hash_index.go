@@ -11,7 +11,7 @@ type IndexableRow struct {
 	Data      []interface{}
 }
 
-// HashIndex — in-memory хэш-индекс на один столбец таблицы.
+// HashIndex — in-memory hash index for a single table column.
 // Хранит маппинг: значение_столбца → []int (индексы строк в data-файле).
 type HashIndex struct {
 	mu       sync.RWMutex
@@ -22,7 +22,7 @@ type HashIndex struct {
 	// Основное хранилище: ключ → список позиций строк
 	data map[string][]int
 
-	// Обратный маппинг: позиция строки → ключ
+	// Reverse mapping: позиция строки → ключ
 	// Нужен для UPDATE (удалить старую запись из индекса)
 	reverse map[int]string
 }

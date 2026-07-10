@@ -72,8 +72,8 @@ func (e *PageStorageEngine) recoverIncompleteRewrites() {
 
 // rewriteTable перезаписывает все живые строки таблицы функцией transform
 // (используется ADD/DROP COLUMN, когда меняется арность строк).
-// Перед началом и после завершения эмитятся WAL-записи OpRewriteBegin/OpRewriteCommit.
-// Используется безопасный подход: данные пишутся во временную директорию,
+// Before start and after completion эмитятся WAL-записи OpRewriteBegin/OpRewriteCommit.
+// A safe approach is used: данные пишутся во временную директорию,
 // затем атомарно заменяют оригинальную.
 func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchema, transform func(Row) Row) error {
 	t, err := e.getTableLocked(db, table, true)

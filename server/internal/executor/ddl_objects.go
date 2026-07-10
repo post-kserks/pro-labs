@@ -8,7 +8,7 @@ import (
 	"vaultdb/internal/storage"
 )
 
-// objectType — типы DDL-объектов, хранимых в _objects.
+// objectType — types of DDL objects stored in _objects.
 const (
 	objTypeView      = "view"
 	objTypeTrigger   = "trigger"
@@ -16,12 +16,12 @@ const (
 	objTypeProcedure = "procedure"
 )
 
-// systemTableName — имя виртуальной таблицы для хранения DDL-объектов.
+// systemTableName — name of the virtual table for storing DDL objects.
 const systemTableName = "_objects"
 
-// objectRow — представление DDL-объекта как строка таблицы.
-// Колонки: name TEXT, type TEXT, definition TEXT.
-// ensureSystemTable создаёт таблицу _objects, если она ещё не существует.
+// objectRow — DDL object representation as a table row.
+// Columns: name TEXT, type TEXT, definition TEXT.
+// ensureSystemTable creates the _objects table if it does not exist yet.
 func ensureSystemTable(ctx *ExecutionContext, dbName string) error {
 	if ctx.Storage.TableExists(dbName, systemTableName) {
 		return nil
@@ -38,8 +38,8 @@ func ensureSystemTable(ctx *ExecutionContext, dbName string) error {
 	return ctx.Storage.CreateTable(dbName, schema)
 }
 
-// storeObject сохраняет DDL-объект (view/trigger/function/procedure) через storage engine.
-// Если объект с таким именем и типом уже существует — обновляет definition.
+// storeObject stores a DDL object (view/trigger/function/procedure) via storage engine.
+// If an object with the same name and type already exists — updates the definition.
 func storeObject(ctx *ExecutionContext, dbName, objType, name string, definition interface{}) error {
 	if err := ensureSystemTable(ctx, dbName); err != nil {
 		return fmt.Errorf("store object: %w", err)
@@ -50,13 +50,13 @@ func storeObject(ctx *ExecutionContext, dbName, objType, name string, definition
 		return fmt.Errorf("store object: marshal definition: %w", err)
 	}
 
-	// Проверяем существование
+	// Check existence
 	existing, err := ctx.Storage.ReadCurrentRows(dbName, systemTableName)
 	if err != nil {
 		return fmt.Errorf("store object: %w", err)
 	}
 
-	// Ищем существующую запись и сохраняем её created_at
+	// Find existing record and preserve its created_at
 	var existingIdx []int
 	var createdAt int64
 	for i, row := range existing {
@@ -70,19 +70,19 @@ func storeObject(ctx *ExecutionContext, dbName, objType, name string, definition
 		}
 	}
 
-	// Удаляем старую запись
+	// Delete old record
 	if len(existingIdx) > 0 {
 		if _, err := ctx.Storage.DeleteRows(dbName, systemTableName, existingIdx); err != nil {
 			return fmt.Errorf("store object: delete old: %w", err)
 		}
 	}
 
-	// Используем существующий created_at или текущее время
+	// Use existing created_at or current time
 	if createdAt == 0 {
 		createdAt = time.Now().Unix()
 	}
 
-	// Вставляем новую
+	// Insert new one
 	newRow := storage.Row{name, objType, string(defJSON), createdAt}
 	if _, err := ctx.Storage.InsertRows(dbName, systemTableName, []storage.Row{newRow}); err != nil {
 		return fmt.Errorf("store object: insert: %w", err)
@@ -91,8 +91,8 @@ func storeObject(ctx *ExecutionContext, dbName, objType, name string, definition
 	return nil
 }
 
-// loadObject загружает DDL-объект по имени и типу.
-// Возвращает definition как map (распакованный JSON) или nil, если не найден.
+// loadObject loads a DDL object by name and type.
+// Returns definition as a map (decoded JSON) or nil if not found.
 func loadObject(ctx *ExecutionContext, dbName, objType, name string) (map[string]interface{}, error) {
 	rows, err := ctx.Storage.ReadCurrentRows(dbName, systemTableName)
 	if err != nil {
@@ -115,9 +115,9 @@ func loadObject(ctx *ExecutionContext, dbName, objType, name string) (map[string
 	return nil, nil
 }
 
-// loadObjectBody загружает тело (body) DDL-объекта.
+// loadObjectBody loads the body of a DDL object.
 
-// deleteObject удаляет DDL-объект по имени и типу.
+// deleteObject deletes a DDL object by name and type.
 func deleteObject(ctx *ExecutionContext, dbName, objType, name string) error {
 	rows, err := ctx.Storage.ReadCurrentRows(dbName, systemTableName)
 	if err != nil {
@@ -141,9 +141,9 @@ func deleteObject(ctx *ExecutionContext, dbName, objType, name string) error {
 	return nil
 }
 
-// listObjectsByType возвращает список имён объектов указанного типа.
+// listObjectsByType returns a list of object names of the given type.
 
-// loadAllObjectsByType загружает все объекты указанного типа.
+// loadAllObjectsByType loads all objects of the given type.
 func loadAllObjectsByType(ctx *ExecutionContext, dbName, objType string) ([]map[string]interface{}, error) {
 	rows, err := ctx.Storage.ReadCurrentRows(dbName, systemTableName)
 	if err != nil {
@@ -219,6 +219,6 @@ func addViewPolicy(ctx *ExecutionContext, dbName, viewName string, policy storag
 	return storeObject(ctx, dbName, objTypeView, viewName, def)
 }
 
-// objectExists проверяет, существует ли объект с указанным именем и типом.
+// objectExists checks whether an object with the given name and type exists.
 
-// objectNamesToCSV конвертирует список имён в строку через запятую.
+// objectNamesToCSV converts a list of names to a comma-separated string.

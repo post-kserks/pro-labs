@@ -37,8 +37,8 @@ import (
 	"vaultdb/internal/wal"
 )
 
-// version и buildDate перезаписываются через ldflags при сборке
-// (единый источник истины — файл VERSION в корне репозитория).
+// version and buildDate are overwritten via ldflags at build time
+// (single source of truth — VERSION file in the repository root).
 var (
 	version   = "dev"
 	buildDate = "unknown"
@@ -350,8 +350,8 @@ func main() {
 	logger := setupLogger(os.Getenv("VAULTDB_LOG_LEVEL"))
 	cfg := loadConfig(*configPath, logger)
 
-	// CLI-флаги имеют приоритет над vaultdb.yaml: значения из конфига
-	// применяются только для флагов, которые не были заданы явно.
+	// CLI flags take priority over vaultdb.yaml: config values
+	// are applied only for flags that were not explicitly set.
 	setFlags := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 
@@ -479,8 +479,8 @@ func main() {
 	}
 	authManager.SetLocalhostBypass(cfg.Auth.LocalhostBypass)
 
-	// Embedding-провайдер для SEMANTIC_MATCH/AI_EMBED. Без настроенного AI
-	// эти операции возвращают понятную ошибку (NoopEmbedder в executor).
+	// Embedding provider for SEMANTIC_MATCH/AI_EMBED. Without configured AI,
+	// these operations return a clear error (NoopEmbedder in executor).
 	var embedder ai.Embedder
 	if cfg.AI.Endpoint != "" {
 		apiKey := cfg.AI.APIKey

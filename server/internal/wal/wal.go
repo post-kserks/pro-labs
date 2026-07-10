@@ -30,10 +30,10 @@ const (
 	OpCheckpoint     byte = 0xF0
 
 	// Page engine operations
-	OpPageInsert     byte = 0x20 // вставка tuple на страницу
-	OpPageDelete     byte = 0x21 // пометка tuple как dead (XMax)
-	OpPageUpdateXMax byte = 0x22 // обновление XMax (при DELETE/UPDATE)
-	OpPageNewPage    byte = 0x23 // выделение новой страницы
+	OpPageInsert     byte = 0x20 // insert tuple into page
+	OpPageDelete     byte = 0x21 // mark tuple as dead (XMax)
+	OpPageUpdateXMax byte = 0x22 // update XMax (on DELETE/UPDATE)
+	OpPageNewPage    byte = 0x23 // allocate new page
 	OpVacuumBegin    byte = 0x30
 	OpVacuumCommit   byte = 0x31
 	OpAbort          byte = 0x40
@@ -49,7 +49,7 @@ const (
 	OpTruncateTable byte = 0x64
 
 	// Full page image for torn page protection
-	OpFullPageImage byte = 0x70 // полный образ страницы перед модификацией
+	OpFullPageImage byte = 0x70 // full page image before modification
 )
 
 const (
@@ -64,65 +64,65 @@ type Entry struct {
 	Encrypted bool // true if payload is still ciphertext (EM was nil during read)
 }
 
-// WALPageInsertPayload — payload для OpPageInsert
+// WALPageInsertPayload — payload for OpPageInsert
 type WALPageInsertPayload struct {
 	DB        string
 	Table     string
 	SegmentNo uint16
 	PageNo    uint32
 	SlotNo    uint16
-	XID       uint64 // транзакция, создавшая tuple
-	TupleData []byte // полные данные tuple (header + attrs)
+	XID       uint64 // transaction that created the tuple
+	TupleData []byte // full tuple data (header + attrs)
 }
 
-// WALPageDeletePayload — payload для OpPageDelete/OpPageUpdateXMax
+// WALPageDeletePayload — payload for OpPageDelete/OpPageUpdateXMax
 type WALPageDeletePayload struct {
 	DB        string
 	Table     string
 	SegmentNo uint16
 	PageNo    uint32
 	SlotNo    uint16
-	XMax      uint64 // XID транзакции удаляющей tuple
+	XMax      uint64 // XID of the transaction deleting the tuple
 }
 
-// WALVacuumPayload — payload для OpVacuumBegin/OpVacuumCommit
+// WALVacuumPayload — payload for OpVacuumBegin/OpVacuumCommit
 type WALVacuumPayload struct {
 	DB         string
 	Table      string
 	ShadowPath string
 }
 
-// WALSchemaWritePayload — payload для OpSchemaWrite
+// WALSchemaWritePayload — payload for OpSchemaWrite
 type WALSchemaWritePayload struct {
 	DB     string
 	Table  string
 	Schema string // JSON schema
 }
 
-// WALRewritePayload — payload для OpRewriteBegin/OpRewriteCommit
+// WALRewritePayload — payload for OpRewriteBegin/OpRewriteCommit
 type WALRewritePayload struct {
 	DB    string
 	Table string
 }
 
-// WALTruncateTablePayload — payload для OpTruncateTable
+// WALTruncateTablePayload — payload for OpTruncateTable
 type WALTruncateTablePayload struct {
 	DB    string
 	Table string
 }
 
-// CheckpointPayload — payload для OpCheckpoint
+// CheckpointPayload — payload for OpCheckpoint
 type CheckpointPayload struct {
 	LSN uint64
 }
 
-// FullPageImagePayload — payload для OpFullPageImage (защита от torn pages)
+// FullPageImagePayload — payload for OpFullPageImage (torn page protection)
 type FullPageImagePayload struct {
 	DB        string
 	Table     string
 	SegmentNo uint16
 	PageNo    uint32
-	PageData  []byte // полный образ страницы (8KB)
+	PageData  []byte // full page image (8KB)
 }
 
 // WALRecord is a pre-built WAL record ready for batched writing.
@@ -507,12 +507,12 @@ func (w *WAL) Append(opType byte, payload interface{}) (uint64, error) {
 	return w.appendBytesLocked(opType, payloadBytes)
 }
 
-// Checkpoint усекает WAL после checkpoint. Для корректного checkpoint
-// используйте WriteCheckpointRecord() + сохранение каталога + TruncateWAL().
-// Этот метод усекает WAL ДО сохранения каталога — crash между truncate и
-// сохранением каталога приведёт к потере всех записей.
+// Checkpoint truncates WAL after checkpoint. For correct checkpoint
+// use WriteCheckpointRecord() + catalog save + TruncateWAL().
+// This method truncates WAL BEFORE saving catalog — crash between truncate and
+// catalog save will lose all entries.
 //
-// Deprecated: используйте doCheckpoint() в page_engine.go.
+// Deprecated: use doCheckpoint() in page_engine.go.
 func (w *WAL) Checkpoint() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -540,10 +540,10 @@ func (w *WAL) Checkpoint() error {
 	return nil
 }
 
-// WriteCheckpointRecord записывает checkpoint record в WAL и синхронизирует,
-// но НЕ усекает файл. Возвращает LSN (TxID) checkpoint записи.
-// Используется doCheckpoint для порядка: сначала checkpoint record,
-// потом сохранение каталога (чтобы recovery могла определить checkpoint LSN).
+// WriteCheckpointRecord writes a checkpoint record to WAL and syncs,
+// but does NOT truncate the file. Returns LSN (TxID) of the checkpoint record.
+// Used by doCheckpoint for ordering: checkpoint record first,
+// then catalog save (so recovery can determine checkpoint LSN).
 func (w *WAL) WriteCheckpointRecord() (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -566,9 +566,9 @@ func (w *WAL) WriteCheckpointRecord() (uint64, error) {
 	return txID, nil
 }
 
-// TruncateWAL усекает WAL файл после checkpoint.
-// Вызывается после сохранения каталога, чтобы recovery могла
-// определить checkpoint LSN из каталога перед чтением WAL.
+// TruncateWAL truncates WAL file after checkpoint.
+// Called after saving catalog so recovery can
+// determine checkpoint LSN from catalog before reading WAL.
 func (w *WAL) TruncateWAL() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -658,7 +658,7 @@ func (w *WAL) SetEncryptionManager(em *crypto.EncryptionManager) {
 	w.em = em
 }
 
-// AppendWithTx записывает запись в WAL с указанным txID (не инкрементирует автоматически).
+// AppendWithTx writes a WAL entry with the given txID (does not auto-increment).
 func (w *WAL) AppendWithTx(txID uint64, opType byte, payload interface{}) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -670,8 +670,8 @@ func (w *WAL) AppendWithTx(txID uint64, opType byte, payload interface{}) (uint6
 	return w.appendBytesLockedWithTx(txID, opType, payloadBytes)
 }
 
-// WriteFullPageImage записывает полный образ страницы в WAL для защиты от torn pages.
-// Вызывается ПЕРЕД модификацией страницы на диске.
+// WriteFullPageImage writes a full page image to WAL for torn page protection.
+// Called BEFORE modifying the page on disk.
 func (w *WAL) WriteFullPageImage(txID uint64, db, table string, segmentNo uint16, pageNo uint32, pageData []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -1172,8 +1172,8 @@ func (w *WAL) scanAndTruncate() (uint64, error) {
 	return maxTxID, nil
 }
 
-// AnalyzeTransactions анализирует WAL потоково, не загружая все записи в память.
-// Определяет какие транзакции закоммичены, а какие остались незавершёнными.
+// AnalyzeTransactions analyzes WAL streaming, without loading all entries into memory.
+// Determines which transactions are committed and which remain in-progress.
 func (w *WAL) AnalyzeTransactions() (committed map[uint64]bool, inProgress map[uint64]bool, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -1217,9 +1217,9 @@ func (w *WAL) AnalyzeTransactions() (committed map[uint64]bool, inProgress map[u
 	return committed, inProgress, nil
 }
 
-// Replay воспроизводит все записи WAL, вызывая callback для каждой операции.
-// Записи сначала собираются под w.mu, затем callback вызывается без удержания
-// блокировки — это предотвращает deadlock WAL↔PageEngine (Bug lock ordering).
+// Replay replays all WAL entries, calling a callback for each operation.
+// Entries are first collected under w.mu, then callback is called without holding
+// the lock — this prevents WAL↔PageEngine deadlock (Bug lock ordering).
 func (w *WAL) Replay(callback func(Entry) error) error {
 	w.mu.Lock()
 
@@ -1257,9 +1257,9 @@ func (w *WAL) Replay(callback func(Entry) error) error {
 	return nil
 }
 
-// ReplayTransaction воспроизводит записи конкретной транзакции.
-// Записи сначала собираются под w.mu, затем callback вызывается без удержания
-// блокировки — предотвращает deadlock WAL↔PageEngine.
+// ReplayTransaction replays entries of a specific transaction.
+// Entries are first collected under w.mu, then callback is called without holding
+// the lock — prevents WAL↔PageEngine deadlock.
 func (w *WAL) ReplayTransaction(txID uint64, callback func(Entry) error) error {
 	w.mu.Lock()
 
@@ -1299,7 +1299,7 @@ func (w *WAL) ReplayTransaction(txID uint64, callback func(Entry) error) error {
 	return nil
 }
 
-// Flush синхронизирует WAL файл на диск и возвращает текущий LSN.
+// Flush syncs WAL file to disk and returns current LSN.
 func (w *WAL) Flush() (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -1311,7 +1311,7 @@ func (w *WAL) Flush() (uint64, error) {
 	return w.nextTxID.Load(), nil
 }
 
-// FindLastVacuumCommit ищет последний OpVacuumCommit для указанной таблицы потоково.
+// FindLastVacuumCommit searches for the last OpVacuumCommit for the given table streaming.
 func (w *WAL) FindLastVacuumCommit(db, table string) (bool, uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

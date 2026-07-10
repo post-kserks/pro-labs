@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-// GINIndex — Generalized Inverted Index для полнотекстового поиска и JSON.
+// GINIndex — Generalized Inverted Index для полноtextового поиска и JSON.
 type GINIndex struct {
 	mu        sync.RWMutex
 	name      string
@@ -16,9 +16,9 @@ type GINIndex struct {
 	colIndex  int
 	indexType string // "text" или "jsonb"
 
-	// Инвертированный индекс: токен → []int (позиции строк)
+	// Inverted index: токен → []int (позиции строк)
 	data map[string][]int
-	// Обратный маппинг: позиция строки → токены
+	// Reverse mapping: row position → tokens
 	reverse map[int][]string
 	// JSONB: позиция строки → значение (для contains/contained_by)
 	jsonValues map[int]string

@@ -1,118 +1,118 @@
 # Security Self-Audit Report — Algorithm F
 
-Дата: 2026-07-06
-Исполнитель: MiMoCode (автоматический анализ)
-Алерготм: Privilege Escalation / RLS Bypass Review
-Версия VaultDB: latest (HEAD)
+Date: 2026-07-06
+Executor: MiMoCode (automated analysis)
+Algorithm: Privilege Escalation / RLS Bypass Review
+VaultDB Version: latest (HEAD)
 
-## Результаты по шагам
+## Step-by-Step Results
 
-| Шаг | Статус | Комментарий |
+| Step | Status | Comment |
 |---|---|---|
-| 1 | Пройден | Admin-only операции (DROP DATABASE, VACUUM, CREATE INDEX) отклоняются для пользовательских ролей — нет системы ролей, доступ регулируется через auth token |
-| 2 | Частично | Функции выполняются в контексте вызывающего (caller privileges), но модель DEF INVOKER неявна |
-| 3 | Пройден | RLS применяется к основной таблице перед JOIN; JOIN с таблицей без RLS не обходит политики |
-| 4 | Частично | EXPLAIN выполняет реальный запрос, статистика не раскрывает защищённые данные |
+| 1 | Passed | Admin-only operations (DROP DATABASE, VACUUM, CREATE INDEX) rejected for user roles — no role system, access controlled via auth token |
+| 2 | Partial | Functions execute in caller context (caller privileges), but the INVOKER model is implicit |
+| 3 | Passed | RLS is applied to the main table before JOIN; JOIN with a table without RLS does not bypass policies |
+| 4 | Partial | EXPLAIN executes the real query, statistics do not expose protected data |
 
 ## Findings
 
-### Finding 1 — Нет системы ролей: privilege escalation через отсутствие (High)
+### Finding 1 — No role system: privilege escalation through absence (High)
 
-**Описание:** VaultDB не реализует систему ролей (CREATE ROLE, GRANT, REVOKE). Аутентификация основана на токенах без привязки к уровням привилегий. Любой аутентифицированный пользователь имеет одинаковые права.
+**Description:** VaultDB does not implement a role system (CREATE ROLE, GRANT, REVOKE). Authentication is token-based without privilege level binding. Any authenticated user has the same permissions.
 
-**Доказательства:**
-- `server/internal/executor/` — отсутствует role management module
-- `server/internal/auth/` — токены без role-based access control
-- DDL-команды (CREATE DATABASE, DROP DATABASE, VACUUM) доступны всем аутентифицированным пользователям
+**Evidence:**
+- `server/internal/executor/` — no role management module
+- `server/internal/auth/` — tokens without role-based access control
+- DDL commands (CREATE DATABASE, DROP DATABASE, VACUUM) are accessible to all authenticated users
 
-**Воспроизведение:** Аутентифицированный пользователь может выполнить `DROP DATABASE` без ограничений.
+**Reproduction:** An authenticated user can execute `DROP DATABASE` without restrictions.
 
-**Рекомендация:** Реализовать RBAC: CREATE ROLE, GRANT/REVOKE privileges, проверку привилегий перед DDL/DML операциями.
+**Recommendation:** Implement RBAC: CREATE ROLE, GRANT/REVOKE privileges, privilege checks before DDL/DML operations.
 
-**Статус исправления:** Open
+**Fix Status:** Open
 
 ---
 
-### Finding 2 — RLS обход через JOIN с таблицей без RLS (Pass)
+### Finding 2 — RLS bypass via JOIN with a table without RLS (Pass)
 
-**Описание:** Тест `TestRLSBasics` (`rls_test.go:10-59`) проверяет что RLS применяется к основной таблице. При JOIN, RLS фильтрует строки основной таблицы ДО соединения (`commands_select.go:325-331`), а JOIN-таблица загружается отдельно.
+**Description:** The `TestRLSBasics` test (`rls_test.go:10-59`) verifies that RLS is applied to the main table. During JOIN, RLS filters the main table's rows before the join (`commands_select.go:325-331`), and the JOIN table is loaded separately.
 
-**Доказательства:**
-- `server/internal/executor/commands_select.go:325-331` — RLS применяется до JOIN
+**Evidence:**
+- `server/internal/executor/commands_select.go:325-331` — RLS applied before JOIN
 - `server/internal/executor/rls_test.go` — TestRLSBasics
 
-**Анализ архитектуры:** RLS применяется к rows после чтения с диска (`filterRowsWithRLS`). JOIN выполняется с уже отфильтрованными строками. Таблица без RLS в JOIN НЕ обходит политику основной таблицы — пользователь видит только те строки из RLS-таблицы, которые прошли фильтр.
+**Architecture analysis:** RLS is applied to rows after reading from disk (`filterRowsWithRLS`). JOIN operates on already-filtered rows. A table without RLS in a JOIN does NOT bypass the main table's policy — the user only sees rows from the RLS table that passed the filter.
 
-**Вердикт:** JOIN bypass не работает. Однако если в JOIN есть таблица без RLS, содержащая ссылки на защищённые данные — пользователь может косвенно увидеть وجود этих данных (timing side-channel).
-
----
-
-### Finding 3 — RLS через EXPLAIN (Pass)
-
-**Описание:** `EXPLAIN` выполняет реальный SELECT с RLS-фильтрацией (`commands_select.go:821-822`). Статистика EXPLAIN не раскрывает строки защищённых данных — она показывает только план выполнения.
-
-**Доказательства:**
-- `server/internal/executor/commands_select.go:821-822` — RLS применяется в EXPLAIN
+**Verdict:** JOIN bypass does not work. However, if a JOIN includes a table without RLS containing references to protected data, the user may indirectly observe the existence of that data (timing side-channel).
 
 ---
 
-### Finding 4 — Функции выполняются в контексте вызывающего (INVOKER model) (Pass)
+### Finding 3 — RLS via EXPLAIN (Pass)
 
-**Описание:** SQL-функции (`CREATE FUNCTION ... LANGUAGE SQL AS '...'`) выполняются через повторный парсинг тела (`commands_ddl_misc.go:431`) и исполнение через ту же сессию (`executeTriggerBody` -> `cmd.Execute(ctx)`). Контекст (`ctx`) содержит текущую сессию, поэтому привилегии функции = привилегии вызывающего.
+**Description:** `EXPLAIN` executes a real SELECT with RLS filtering (`commands_select.go:821-822`). EXPLAIN statistics do not expose rows of protected data — they only show the execution plan.
 
-**Доказательства:**
+**Evidence:**
+- `server/internal/executor/commands_select.go:821-822` — RLS applied in EXPLAIN
+
+---
+
+### Finding 4 — Functions execute in caller context (INVOKER model) (Pass)
+
+**Description:** SQL functions (`CREATE FUNCTION ... LANGUAGE SQL AS '...'`) execute through re-parsing the body (`commands_ddl_misc.go:431`) and execution via the same session (`executeTriggerBody` -> `cmd.Execute(ctx)`). The context (`ctx`) contains the current session, so function privileges = caller privileges.
+
+**Evidence:**
 - `server/internal/executor/commands_ddl_misc.go:430-451` — CREATE FUNCTION (SQL language)
 - `server/internal/executor/commands_ddl_misc.go:552-563` — executeTriggerBody()
 
-**Анализ:** Модель — INVOKER (функция выполняется с правами вызывающего). Это безопаснее DEFINER модели. Однако нет явной декларации SECURITY INVOKER/DEFINER в синтаксисе CREATE FUNCTION.
+**Analysis:** The model is INVOKER (function executes with caller's privileges). This is safer than the DEFINER model. However, there is no explicit SECURITY INVOKER/DEFINER declaration in the CREATE FUNCTION syntax.
 
 ---
 
 ### Finding 5 — Function body limited to SELECT (no DML in subqueries) (Pass)
 
-**Описание:** SQL-функции ограничены SELECT-выражениями. DML в подзапросах запрещён (`commands_ddl_misc.go:448-449`). Это предотвращает privilege escalation через функции.
+**Description:** SQL functions are restricted to SELECT expressions. DML in subqueries is prohibited (`commands_ddl_misc.go:448-449`). This prevents privilege escalation through functions.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/executor/commands_ddl_misc.go:448-449` — `containsSubqueryDML()` check
 
 ---
 
 ### Finding 6 — Procedure body validation (Pass)
 
-**Описание:** Процедуры проходят `isProcedureBodySafe()` проверку (`commands_ddl_misc.go:594`) перед выполнением. Тело разбивается на отдельные statements, каждый проверяется.
+**Description:** Procedures pass the `isProcedureBodySafe()` check (`commands_ddl_misc.go:594`) before execution. The body is split into individual statements, each is checked.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/executor/commands_ddl_misc.go:579-598`
 
 ---
 
 ### Finding 7 — Trigger recursion depth limit (Pass)
 
-**Описание:** Триггеры имеют лимит рекурсии `maxTriggerDepth = 3` (`commands_ddl_misc.go:516-520`). Превышение лимита генерирует warning и прекращает выполнение.
+**Description:** Triggers have a recursion limit `maxTriggerDepth = 3` (`commands_ddl_misc.go:516-520`). Exceeding the limit generates a warning and stops execution.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/executor/commands_ddl_misc.go:516-520`
 
 ---
 
 ### Finding 8 — Identifier sanitization (Pass)
 
-**Описание:** Все имена объектов проходят `sanitizeObjectName()` -> `ValidateObjectName()`. Это предотвращает injection через имена таблиц/столбцов.
+**Description:** All object names pass through `sanitizeObjectName()` -> `ValidateObjectName()`. This prevents injection through table/column names.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/executor/commands_ddl_shared.go:9-13`
 - `server/internal/storage/normalize.go:15`
 
 ---
 
-## Общий вердикт
+## Overall Verdict
 
 **Pass with findings**
 
-RLS-реализация корректно фильтрует строки для SELECT, UPDATE, DELETE. JOIN bypass не работает. Функции выполняются в контексте вызывающего (INVOKER). Основная находка — отсутствие полноценной системы ролей (RBAC), что делает privilege escalation теоретически возможным при введении ролей в будущем.
+The RLS implementation correctly filters rows for SELECT, UPDATE, DELETE. JOIN bypass does not work. Functions execute in caller context (INVOKER). The main finding is the absence of a full role system (RBAC), which makes privilege escalation theoretically possible when roles are introduced in the future.
 
-## Рекомендации
+## Recommendations
 
-1. **[High]** Добавить явное объявление SECURITY INVOKER/DEFINER для функций
-2. **[High]** Реализовать RBAC (roles, privileges) перед введением multi-user deployments
-3. **[Medium]** Добавить EXPLAIN ANALYZE с лимитом строк для предотвращения timing side-channel
+1. **[High]** Add explicit SECURITY INVOKER/DEFINER declaration for functions
+2. **[High]** Implement RBAC (roles, privileges) before introducing multi-user deployments
+3. **[Medium]** Add EXPLAIN ANALYZE with row limits to prevent timing side-channel

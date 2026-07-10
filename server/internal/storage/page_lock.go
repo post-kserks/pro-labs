@@ -8,13 +8,13 @@ import (
 
 const maxLocksBeforeEviction = 10000
 
-// PageLockManager управляет блокировками на уровне страниц.
+// PageLockManager manages page-level locks.
 // Позволяет конкурентные записи в разные страницы одной таблицы.
 type PageLockManager struct {
 	locks sync.Map // map[page.PageID]*sync.RWMutex
 }
 
-// NewPageLockManager создаёт новый менеджер блокировок.
+// NewPageLockManager creates a new lock manager.
 func NewPageLockManager() *PageLockManager {
 	return &PageLockManager{}
 }
@@ -30,13 +30,13 @@ func (pm *PageLockManager) getLock(pid page.PageID) *sync.RWMutex {
 	return actual.(*sync.RWMutex)
 }
 
-// RLockPage блокирует страницу для чтения.
+// RLockPage блокирует страницу for reads.
 func (pm *PageLockManager) RLockPage(pid page.PageID) {
 	lock := pm.getLock(pid)
 	lock.RLock()
 }
 
-// UnlockPage снимает блокировку чтения со страницы.
+// UnlockPage releases read lock on page.
 func (pm *PageLockManager) UnlockPage(pid page.PageID) {
 	v, ok := pm.locks.Load(pid)
 	if ok {
@@ -46,13 +46,13 @@ func (pm *PageLockManager) UnlockPage(pid page.PageID) {
 	}
 }
 
-// LockPage блокирует страницу для записи.
+// LockPage блокирует страницу for writes.
 func (pm *PageLockManager) LockPage(pid page.PageID) {
 	lock := pm.getLock(pid)
 	lock.Lock()
 }
 
-// UnlockPageWrite снимает блокировку записи со страницы.
+// UnlockPageWrite releases write lock on page.
 func (pm *PageLockManager) UnlockPageWrite(pid page.PageID) {
 	v, ok := pm.locks.Load(pid)
 	if ok {
@@ -62,7 +62,7 @@ func (pm *PageLockManager) UnlockPageWrite(pid page.PageID) {
 	}
 }
 
-// LockTable блокирует все страницы таблицы для записи (для ALTER TABLE и т.п.).
+// LockTable блокирует все страницы таблицы for writes (для ALTER TABLE и т.п.).
 func (pm *PageLockManager) LockTable(pids []page.PageID) {
 	sortedPids := make([]page.PageID, len(pids))
 	copy(sortedPids, pids)
@@ -73,7 +73,7 @@ func (pm *PageLockManager) LockTable(pids []page.PageID) {
 	}
 }
 
-// UnlockTable снимает блокировки со всех страниц таблицы.
+// UnlockTable releases locks on all pages of a table.
 func (pm *PageLockManager) UnlockTable(pids []page.PageID) {
 	for _, pid := range pids {
 		pm.UnlockPageWrite(pid)
@@ -121,7 +121,7 @@ func (pm *PageLockManager) EvictUnused() int {
 	return removed
 }
 
-// sortPageIDs сортирует PageID для предотвращения deadlock.
+// sortPageIDs сортирует PageID to prevent deadlock.
 func sortPageIDs(pids []page.PageID) {
 	for i := 1; i < len(pids); i++ {
 		for j := i; j > 0; j-- {

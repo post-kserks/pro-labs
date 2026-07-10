@@ -6,9 +6,9 @@ import (
 	"vaultdb/internal/storage"
 )
 
-// valuesEqual сравнивает два значения типа storage.Value.
-// Использует типобезопасное сравнение: сначала числа, потом строки, потом булевы,
-// и только в крайнем случае fmt.Sprintf как fallback.
+// valuesEqual compares two storage.Value values.
+// Uses type-safe comparison: first numbers, then strings, then bools,
+// and only as a last resort falls back to fmt.Sprintf.
 func valuesEqual(a, b storage.Value) bool {
 	if a == nil && b == nil {
 		return true
@@ -50,7 +50,7 @@ func valuesEqual(a, b storage.Value) bool {
 	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 }
 
-// rowsEqual сравнивает две строки таблицы поэлементно.
+// rowsEqual compares two table rows element by element.
 func rowsEqual(a, b storage.Row) bool {
 	if len(a) != len(b) {
 		return false

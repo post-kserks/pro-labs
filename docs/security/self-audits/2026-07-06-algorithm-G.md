@@ -1,160 +1,160 @@
 # Security Self-Audit Report — Algorithm G
 
-Дата: 2026-07-06
-Исполнитель: MiMoCode (автоматический анализ)
-Алерготм: Denial of Service / Resource Exhaustion Review
-Версия VaultDB: latest (HEAD)
+Date: 2026-07-06
+Executor: MiMoCode (automated analysis)
+Algorithm: Denial of Service / Resource Exhaustion Review
+VaultDB Version: latest (HEAD)
 
-## Результаты по шагам
+## Step-by-Step Results
 
-| Шаг | Статус | Комментарий |
+| Step | Status | Comment |
 |---|---|---|
-| 1 | Пройден | Query timeout реализован через context.WithTimeout |
-| 2 | Пройден | Max request size лимит через http.MaxBytesReader |
-| 3 | Пройден | Rate limiting через token bucket |
-| 4 | Частично | COPY FROM не поддерживает STDIN, файловый ввод без row limit |
-| 5 | Частично | Parser recursion limit отсутствует, trigger depth limited до 3 |
-| 6 | Пройден | Connection limits через конфигурацию |
+| 1 | Passed | Query timeout implemented via context.WithTimeout |
+| 2 | Passed | Max request size limited via http.MaxBytesReader |
+| 3 | Passed | Rate limiting via token bucket |
+| 4 | Partial | COPY FROM does not support STDIN, file input has no row limit |
+| 5 | Partial | Parser recursion limit missing, trigger depth limited to 3 |
+| 6 | Passed | Connection limits configurable |
 
 ## Findings
 
-### Finding 1 — Query Timeout: context.WithTimeout реализован (Pass)
+### Finding 1 — Query Timeout: context.WithTimeout implemented (Pass)
 
-**Описание:** Каждый запрос выполняется с таймаутом через `context.WithTimeout` (`executor.go:252-255`). Таймаут конфигурируется через `QueryTimeoutSec` (default: 30 сек).
+**Description:** Each query is executed with a timeout via `context.WithTimeout` (`executor.go:252-255`). Timeout is configured via `QueryTimeoutSec` (default: 30 seconds).
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/executor/executor.go:251-255` — `context.WithTimeout(queryCtx, queryTimeout)`
 - `server/internal/config/config.go:93` — `DefaultQueryTimeoutSec = 30`
 
-**Вердикт:** CORRECT — таймаут применяется к каждому запросу.
+**Verdict:** CORRECT — timeout is applied to each query.
 
 ---
 
 ### Finding 2 — Max Request Size: http.MaxBytesReader (Pass)
 
-**Описание:** HTTP-запросы ограничены `MaxRequestSizeBytes` (default: 64MB). Используется `http.MaxBytesReader` перед декодированием JSON.
+**Description:** HTTP requests are limited by `MaxRequestSizeBytes` (default: 64MB). `http.MaxBytesReader` is used before JSON decoding.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/httpserver/server_handlers.go:75` — `r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))`
 - `server/internal/config/config.go:89` — `DefaultMaxRequestSize = 64 * 1024 * 1024`
 
-**Вердикт:** CORRECT — oversized body отклоняется с 413.
+**Verdict:** CORRECT — oversized body is rejected with 413.
 
 ---
 
 ### Finding 3 — Rate Limiting: Token Bucket (Pass)
 
-**Описание:** Реализован token bucket rate limiter (`ratelimit.go`). Ключ — клиентский IP. По умолчанию: 100 RPS, burst 200. При превышении — 429 Too Many Requests.
+**Description:** A token bucket rate limiter is implemented (`ratelimit.go`). Key is client IP. Default: 100 RPS, burst 200. On excess — 429 Too Many Requests.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/httpserver/ratelimit.go:33-87` — RateLimiter implementation
 - `server/internal/config/config.go:102-103` — `DefaultRateLimitRPS = 100`, `DefaultRateLimitBurst = 200`
 - `server/internal/httpserver/ratelimit.go:62-63` — maxKeys = 100000 (prevents memory exhaustion)
 
-**Дополнительно:** Rate limiter имеет LRU eviction при превышении 100k ключей (`ratelimit.go:62-64`), предотвращая memory exhaustion через spoofed IPs.
+**Additional:** Rate limiter has LRU eviction when exceeding 100k keys (`ratelimit.go:62-64`), preventing memory exhaustion through spoofed IPs.
 
-**Вердикт:** CORRECT — multiple protection layers.
+**Verdict:** CORRECT — multiple protection layers.
 
 ---
 
 ### Finding 4 — HTTP Server Timeouts (Pass)
 
-**Описание:** HTTP-сервер настроен с timeouts:
+**Description:** HTTP server is configured with timeouts:
 - ReadHeaderTimeout: 5s
 - ReadTimeout: 15s
 - WriteTimeout: 60s
 - IdleTimeout: 120s
 - MaxHeaderBytes: 1MB
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/httpserver/server.go:213-221`
 
-**Вердикт:** CORRECT — slowloris-style attacks mitigated.
+**Verdict:** CORRECT — slowloris-style attacks mitigated.
 
 ---
 
 ### Finding 5 — Connection Limits: Configurable (Pass)
 
-**Описание:** `MaxConnections` конфигурируется (default: 1000). TCP keepalive и idle timeout также настраиваются.
+**Description:** `MaxConnections` is configurable (default: 1000). TCP keepalive and idle timeout are also configurable.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/config/config.go:94` — `DefaultMaxConnections = 1000`
 - `server/internal/config/config.go:97-98` — TCP keepalive/idle timeout
 
 ---
 
-### Finding 6 — COPY FROM: отсутствует лимит на количество строк (Medium)
+### Finding 6 — COPY FROM: no row count limit (Medium)
 
-**Описание:** `COPY FROM` загружает все строки из файла без ограничения количества. Огромный файл CSV может исчерпать память.
+**Description:** `COPY FROM` loads all rows from a file without limiting the count. A massive CSV file can exhaust memory.
 
-**Доказательства:**
-- `server/internal/executor/commands_copy.go:160-202` — readCopyData() загружает все строки в `[]storage.Row`
+**Evidence:**
+- `server/internal/executor/commands_copy.go:160-202` — readCopyData() loads all rows into `[]storage.Row`
 
-**Воспроизведение:** Создать CSV-файл с 10M строк и выполнить `COPY FROM`.
+**Reproduction:** Create a CSV file with 10M rows and execute `COPY FROM`.
 
-**Рекомендация:** Добавить `max_copy_rows` параметр или лимит на размер CSV-файла.
+**Recommendation:** Add a `max_copy_rows` parameter or a CSV file size limit.
 
-**Статус исправления:** Open
-
----
-
-### Finding 7 — Parser: отсутствует лимит на глубину рекурсии (Medium)
-
-**Описание:** Парсер не имеет явного лимита на глубину вложенных выражений (подзапросы, CTE, вложенные括ировки). Глубоко вложенные запросы могут вызвать stack overflow.
-
-**Доказательства:**
-- `server/internal/parser/` — отсутствует depth limit в парсере
-- Trigger depth ограничен до 3 (`commands_ddl_misc.go:516`), но парсер — нет
-
-**Воспроизведение:** Создать запрос с 1000+ уровней вложенности подзапросов.
-
-**Рекомендация:** Добавить `maxParseDepth` параметр в парсер.
-
-**Статус исправления:** Open
+**Fix Status:** Open
 
 ---
 
-### Finding 8 — Prepared Statements: лимит 1000 (Pass)
+### Finding 7 — Parser: no recursion depth limit (Medium)
 
-**Описание:** Максимальное количество prepared statements на сессию — 1000 (default). При превышении — ошибка.
+**Description:** The parser has no explicit limit on the depth of nested expressions (subqueries, CTEs, nested parentheses). Deeply nested queries can cause a stack overflow.
 
-**Доказательства:**
+**Evidence:**
+- `server/internal/parser/` — no depth limit in the parser
+- Trigger depth is limited to 3 (`commands_ddl_misc.go:516`), but the parser is not
+
+**Reproduction:** Create a query with 1000+ nesting levels of subqueries.
+
+**Recommendation:** Add a `maxParseDepth` parameter to the parser.
+
+**Fix Status:** Open
+
+---
+
+### Finding 8 — Prepared Statements: limit of 1000 (Pass)
+
+**Description:** Maximum number of prepared statements per session is 1000 (default). On excess — error.
+
+**Evidence:**
 - `server/internal/executor/session.go:189` — `len(s.PreparedStatements) >= s.maxPreparedStmts`
 
 ---
 
-### Finding 9 — Live Query Subscriptions: лимит 1000 (Pass)
+### Finding 9 — Live Query Subscriptions: limit of 1000 (Pass)
 
-**Описание:** Максимальное количество активных live query подписок — 1000 (default).
+**Description:** Maximum number of active live query subscriptions is 1000 (default).
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/httpserver/server_middleware.go:28` — `DefaultMaxLiveQuerySubscriptions = 1000`
 
 ---
 
-### Finding 10 — Max Rows: лимит 1M строк (Pass)
+### Finding 10 — Max Rows: limit of 1M rows (Pass)
 
-**Описание:** SELECT результат ограничен 1M строк (default). Защита от unbounded result sets.
+**Description:** SELECT result is limited to 1M rows (default). Protection against unbounded result sets.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/config/config.go:96` — `DefaultMaxRows = 1000000`
 
 ---
 
-## Общий вердикт
+## Overall Verdict
 
 **Pass with findings**
 
-VaultDB имеет многоуровневую защиту от DoS:
+VaultDB has multi-layered DoS protection:
 - Query timeout, max request size, rate limiting
 - HTTP server timeouts, connection limits
 - Prepared statement limits, live query limits
 - Max rows limit
 
-Находки — отсутствие row limit для COPY и parser recursion limit. Обе — Medium severity.
+Findings — missing row limit for COPY and parser recursion limit. Both are Medium severity.
 
-## Рекомендации
+## Recommendations
 
-1. **[Medium]** Добавить `max_copy_rows` параметр для COPY FROM
-2. **[Medium]** Добавить `maxParseDepth` в парсер
-3. **[Low]** Добавить метрики для мониторинга rate limiting и connection exhaustion
+1. **[Medium]** Add `max_copy_rows` parameter for COPY FROM
+2. **[Medium]** Add `maxParseDepth` to the parser
+3. **[Low]** Add metrics for monitoring rate limiting and connection exhaustion

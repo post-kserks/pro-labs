@@ -143,7 +143,7 @@ func TestMiddlewareDisabled(t *testing.T) {
 func TestRateLimiterSweepBoundsMemory(t *testing.T) {
 	rl := newAuthRateLimiter(1, 100, 1, nil) // окно 1с, блок 1с
 
-	// Заполняем тысячей разных IP с одной (недостаточной для блокировки) ошибкой.
+	// Fill with thousands of different IPs с одной (недостаточной для блокировки) ошибкой.
 	for i := 0; i < 1000; i++ {
 		rl.recordFailure(fmt.Sprintf("10.0.%d.%d", i/256, i%256))
 	}
@@ -155,7 +155,7 @@ func TestRateLimiterSweepBoundsMemory(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 	rl.recordFailure("172.16.0.1")
 
-	// Все старые записи (последняя попытка вне окна, не заблокированы) должны уйти.
+	// All old entries (последняя попытка вне окна, не заблокированы) должны уйти.
 	if got := len(rl.attempts); got > 5 {
 		t.Fatalf("expected stale attempt entries to be swept, got %d", got)
 	}

@@ -19,10 +19,10 @@ import (
 // 16 pages = 128 KB — amortizes syscall overhead without excessive memory pressure.
 const readAheadPages = 16
 
-// ── Сканирование ──────────────────────────────────────────────────────────
+// ── Scanning ────────────────────────────────────────────────────────────────
 
-// pageIDAt переводит сквозной номер страницы в PageID (сегмент + страница).
-// tableID уникально идентифицирует таблицу в buffer pool.
+// pageIDAt converts a global page number to PageID (segment + page).
+// tableID uniquely identifies the table in the buffer pool.
 func pageIDAt(tableID uint32, global uint32) page.PageID {
 	return page.PageID{
 		TableID:   tableID,
@@ -31,7 +31,7 @@ func pageIDAt(tableID uint32, global uint32) page.PageID {
 	}
 }
 
-// tableIDFromPath вычисляет уникальный ID таблицы из пути.
+// tableIDFromPath computes a unique table ID from the path.
 func tableIDFromPath(path string) uint32 {
 	h := uint32(2166136261) // FNV-1a offset basis
 	for i := 0; i < len(path); i++ {
@@ -39,15 +39,15 @@ func tableIDFromPath(path string) uint32 {
 		h *= 16777619 // FNV-1a prime
 	}
 	if h == 0 {
-		h = 1 // избегаем нулевого ID
+		h = 1 // avoid zero ID
 	}
 	return h
 }
 
 type tupleVisitor func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (stop bool, err error)
 
-// scanTuples обходит все кортежи таблицы в порядке страниц/слотов.
-// При последовательном сканировании страницы prefetchаются заранее (read-ahead).
+// scanTuples iterates all tuples of a table in page/slot order.
+// During sequential scans, pages are prefetched ahead of time (read-ahead).
 func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 	total, err := t.heap.PageCount()
 	if err != nil {
@@ -119,11 +119,11 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 	return nil
 }
 
-// ── Запись ────────────────────────────────────────────────────────────────
+// ── Writing ─────────────────────────────────────────────────────────────────
 
-// flushDirty сбрасывает грязную страницу на диск через heap файл.
+// flushDirty flushes a dirty page to disk via heap file.
 
-// appendTuplesLocked добавляет кортежи в конец таблицы; вызывается под write-локом.
+// appendTuplesLocked appends tuples to the end of the table; called under write lock.
 func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) error {
 	total, err := t.heap.PageCount()
 	if err != nil {
@@ -166,7 +166,7 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 			if _, err := pg.InsertTuple(tuple); err == nil {
 				break
 			}
-			// Страница полна — сбрасываем её и выделяем новую
+			// Page is full — flush it and allocate a new one
 			if err := flush(); err != nil {
 				return err
 			}
@@ -185,7 +185,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	// Get txID without global lock — atomic counter.
 	txID := e.nextTxID()
 
-	// Получаем ссылку на таблицу (освобождает e.mu)
+	// Get table reference (releases e.mu)
 	t, err := e.getTableForWrite(dbName, tableName)
 	if err != nil {
 		return 0, err
@@ -389,7 +389,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	return len(rows), nil
 }
 
-// mutateRows помечает версии удалёнными и (для UPDATE) добавляет новые версии.
+// mutateRows marks versions as deleted and (for UPDATE) appends new versions.
 func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, updates map[string]Value, isDelete bool) (int, error) {
 	// Get txID without global lock — atomic counter.
 	txID := e.nextTxID()
@@ -536,7 +536,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		}
 	}
 
-	// Обновляем индексы до освобождения t.mu (они не требуют e.mu)
+	// Update indexes before releasing t.mu (they don't need e.mu)
 	if affected > 0 {
 		e.updateIndexesOnDelete(dbName, tableName, indices)
 		if !isDelete && len(newRows) > 0 {
@@ -544,7 +544,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		}
 	}
 
-	// Освобождаем t.mu ПЕРЕД e.mu, чтобы избежать deadlock:
+	// Release t.mu BEFORE e.mu to avoid deadlock:
 	// t.mu → e.mu vs e.mu.RLock → t.mu
 	mutateLockReleased = true
 	if useRowLocks {
@@ -718,7 +718,7 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 		}
 	}
 
-	// Обновляем индексы до освобождения t.mu (они не требуют e.mu)
+	// Update indexes before releasing t.mu (they don't need e.mu)
 	if affected > 0 {
 		e.updateIndexesOnDelete(dbName, tableName, indices)
 		if len(newRows) > 0 {
@@ -870,9 +870,9 @@ func createFreshHeapFile(dir string) (*heap.HeapFile, error) {
 	return heap.CreateHeapFile(dir)
 }
 
-// ── Чтение ────────────────────────────────────────────────────────────────
+// ── Reading ─────────────────────────────────────────────────────────────────
 
-// readRows возвращает строки, видимые на момент asOf (0 = текущие версии).
+// readRows returns rows visible as of a given txID (0 = current versions).
 func (e *PageStorageEngine) readRows(dbName, tableName string, asOf uint64) ([]Row, error) {
 	t, err := e.getTableForRead(dbName, tableName)
 	if err != nil {
@@ -910,8 +910,8 @@ func (e *PageStorageEngine) ReadCurrentRows(dbName, tableName string) ([]Row, er
 	return e.readRows(dbName, tableName, 0)
 }
 
-// ReadSampleRows читает не более limit строк из таблицы.
-// Использует покаместный проход по страницам с остановкой при достижении лимита.
+// ReadSampleRows reads up to limit rows from a table.
+// Uses a page-by-page scan with early termination when the limit is reached.
 func (e *PageStorageEngine) ReadSampleRows(dbName, tableName string, limit int) ([]Row, error) {
 	if limit <= 0 {
 		return nil, nil

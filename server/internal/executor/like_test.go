@@ -33,7 +33,7 @@ func TestEvalLike(t *testing.T) {
 		{"a.b", "a.b", true},
 		{"axb", "a.b", false},
 		{"price (usd)", "%(usd)%", true},
-		// Многострочный текст: % покрывает \n
+		// Многострочный text: % покрывает \n
 		{"line1\nline2", "line1%line2", true},
 	}
 

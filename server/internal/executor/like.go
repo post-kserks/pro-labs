@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-// compiledPattern — разобранный LIKE-паттерн. Для паттернов только с '%'
+// compiledPattern — compiled LIKE pattern. Для паттернов только с '%'
 // используется быстрый путь на strings (в разы быстрее regexp); для паттернов
 // с '_' компилируется regexp — один раз, дальше берётся из кэша.
 type compiledPattern struct {
@@ -24,12 +24,12 @@ func (cp *compiledPattern) match(text string) bool {
 	return cp.re.MatchString(text)
 }
 
-// matchSegments проверяет текст против паттерна, разбитого по '%':
+// matchSegments проверяет text против паттерна, разбитого по '%':
 // первый сегмент — префикс, последний — суффикс, промежуточные должны
 // встречаться по порядку между ними.
 func matchSegments(text string, segs []string) bool {
 	if len(segs) == 1 {
-		// Паттерн без '%' — точное совпадение
+		// Pattern without '%' — точное совпадение
 		return text == segs[0]
 	}
 	if !strings.HasPrefix(text, segs[0]) {
@@ -58,7 +58,7 @@ func matchSegments(text string, segs []string) bool {
 
 func compilePattern(pattern string) (*compiledPattern, error) {
 	if !strings.Contains(pattern, "_") {
-		// Только '%' и литералы — быстрый путь без regexp
+		// Only '%' and literals — быстрый путь без regexp
 		return &compiledPattern{
 			simple:   true,
 			segments: strings.Split(pattern, "%"),
@@ -86,7 +86,7 @@ func compilePattern(pattern string) (*compiledPattern, error) {
 	return &compiledPattern{re: re}, nil
 }
 
-// likeCache — LRU-кэш скомпилированных паттернов: запрос вида
+// likeCache — LRU cache of compiled patterns: запрос вида
 // WHERE name LIKE '%x%' по миллиону строк компилирует паттерн один раз,
 // а не миллион.
 type likePatternCache struct {
@@ -119,7 +119,7 @@ func (c *likePatternCache) getOrCompile(pattern string) (*compiledPattern, error
 	}
 	c.mu.Unlock()
 
-	// Компилируем без блокировки: компиляция может быть дорогой
+	// Compile without holding lock: компиляция может быть дорогой
 	cp, err := compilePattern(pattern)
 	if err != nil {
 		return nil, err
@@ -128,7 +128,7 @@ func (c *likePatternCache) getOrCompile(pattern string) (*compiledPattern, error
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.entries[pattern]; ok {
-		// Кто-то успел скомпилировать параллельно
+		// Someone compiled it in parallel
 		c.order.MoveToFront(el)
 		return el.Value.(*likeCacheEntry).compiled, nil
 	}

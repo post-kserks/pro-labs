@@ -17,12 +17,12 @@ import (
 	"time"
 )
 
-// Embedder генерирует векторное представление текста.
+// Embedder генерирует векторное представление textа.
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float64, error)
 }
 
-// HTTPEmbedder вызывает OpenAI / Ollama / любой совместимый embeddings API.
+// HTTPEmbedder calls OpenAI / Ollama / any compatible embeddings API.
 type HTTPEmbedder struct {
 	Endpoint string // например https://api.openai.com/v1/embeddings
 	Model    string // например text-embedding-3-small или nomic-embed-text
@@ -30,7 +30,7 @@ type HTTPEmbedder struct {
 	Client   *http.Client
 }
 
-// NewHTTPEmbedder создаёт embedder для OpenAI-совместимого API.
+// NewHTTPEmbedder creates an embedder for OpenAI-compatible API.
 func NewHTTPEmbedder(endpoint, model, apiKey string) *HTTPEmbedder {
 	return &HTTPEmbedder{
 		Endpoint: endpoint,
@@ -153,7 +153,7 @@ func isRetryable(err error) bool {
 	return false
 }
 
-// NoopEmbedder — заглушка, когда AI не настроен. Явно возвращает ошибку
+// NoopEmbedder — stub when AI is not configured. Явно возвращает ошибку
 // вместо тихого mock-результата.
 type NoopEmbedder struct{}
 
@@ -164,8 +164,8 @@ func (NoopEmbedder) Embed(_ context.Context, _ string) ([]float64, error) {
 			"(and VAULTDB_AI_API_KEY if required) to enable SEMANTIC_MATCH and AI_EMBED")
 }
 
-// MockEmbedder — детерминированный keyword-based embedder для тестов.
-// Не является ML-моделью и не должен использоваться в продакшене.
+// MockEmbedder — deterministic keyword-based embedder for tests.
+// Не является ML-моделью и should not be used in production.
 type MockEmbedder struct{}
 
 func (MockEmbedder) Embed(_ context.Context, text string) ([]float64, error) {

@@ -12,16 +12,16 @@ import (
 const defaultResultCacheSize = 256
 const defaultResultCacheTTL = 30 * time.Second
 
-// CachedResult — кэшированный результат SELECT запроса.
+// CachedResult — cached SELECT query result.
 type CachedResult struct {
 	result    *Result
-	tables    map[string]bool // затронутые таблицы (для инвалидации)
+	tables    map[string]bool // affected tables (for invalidation)
 	createdAt time.Time
 }
 
-// ResultCache — LRU кэш результатов SELECT запросов.
-// Автоматически инвалидируется при INSERT/UPDATE/DELETE.
-// Поддерживает TTL для устаревших записей.
+// ResultCache — LRU cache for SELECT query results.
+// Automatically invalidated on INSERT/UPDATE/DELETE.
+// Supports TTL for stale entries.
 type ResultCache struct {
 	mu        sync.RWMutex
 	cache     map[string]*list.Element
@@ -37,7 +37,7 @@ type resultCacheEntry struct {
 	value *CachedResult
 }
 
-// NewResultCache создаёт новый кэш результатов.
+// NewResultCache creates a new result cache.
 func NewResultCache(maxSize int, ttl time.Duration) *ResultCache {
 	if maxSize <= 0 {
 		maxSize = defaultResultCacheSize
@@ -53,7 +53,7 @@ func NewResultCache(maxSize int, ttl time.Duration) *ResultCache {
 	}
 }
 
-// Get возвращает кэшированный результат или nil если не найден/устарел.
+// Get returns cached result or nil if not found/expired.
 func (rc *ResultCache) Get(key string) *Result {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
@@ -66,25 +66,25 @@ func (rc *ResultCache) Get(key string) *Result {
 
 	entry := elem.Value.(*resultCacheEntry)
 
-	// Проверяем TTL
+	// Check TTL
 	if time.Since(entry.value.createdAt) > rc.ttl {
 		rc.removeEntry(elem)
 		rc.missCount++
 		return nil
 	}
 
-	// Перемещаем в начало LRU
+	// Move to front of LRU
 	rc.lru.MoveToFront(elem)
 	rc.hitCount++
 	return entry.value.result
 }
 
-// Put сохраняет результат в кэш.
+// Put stores result in cache.
 func (rc *ResultCache) Put(key string, result *Result, tables map[string]bool) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
-	// Если ключ уже есть — обновляем
+	// If key already exists — update
 	if elem, ok := rc.cache[key]; ok {
 		entry := elem.Value.(*resultCacheEntry)
 		entry.value = &CachedResult{
@@ -96,7 +96,7 @@ func (rc *ResultCache) Put(key string, result *Result, tables map[string]bool) {
 		return
 	}
 
-	// Если кэш полон — удаляем LRU
+	// If cache is full — evict LRU
 	for rc.lru.Len() >= rc.maxSize {
 		back := rc.lru.Back()
 		if back == nil {
@@ -117,7 +117,7 @@ func (rc *ResultCache) Put(key string, result *Result, tables map[string]bool) {
 	rc.cache[key] = elem
 }
 
-// Invalidate удаляет все записи, затронутые указанной таблицей.
+// Invalidate removes all entries affected by the given table.
 func (rc *ResultCache) Invalidate(tableName string) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
@@ -134,7 +134,7 @@ func (rc *ResultCache) Invalidate(tableName string) {
 	}
 }
 
-// InvalidateAll очищает весь кэш.
+// InvalidateAll clears the entire cache.
 func (rc *ResultCache) InvalidateAll() {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
@@ -142,7 +142,7 @@ func (rc *ResultCache) InvalidateAll() {
 	rc.lru.Init()
 }
 
-// Stats возвращает статистику кэша.
+// Stats returns cache statistics.
 func (rc *ResultCache) Stats() (hits, misses, size int64) {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
@@ -155,7 +155,7 @@ func (rc *ResultCache) removeEntry(elem *list.Element) {
 	rc.lru.Remove(elem)
 }
 
-// ResultCacheKey строит ключ кэша для SELECT запроса.
+// ResultCacheKey builds cache key for SELECT query.
 func ResultCacheKey(stmt *parser.SelectStatement, dbName string) string {
 	key := dbName + ":"
 	if stmt.TableName != "" {

@@ -22,7 +22,7 @@ func TestJSONBMergeOperator(t *testing.T) {
 	}
 	t.Logf("|| merge result: %s", result.Rows[0][0])
 
-	// Проверяем что результат содержит оба ключа
+	// Check that результат содержит оба ключа
 	merged := result.Rows[0][0]
 	if merged == "" {
 		t.Fatal("expected non-empty merge result")

@@ -31,7 +31,7 @@ func setupCacheSession(t *testing.T) *Session {
 func TestResultCacheHitMiss(t *testing.T) {
 	session := setupCacheSession(t)
 
-	// Первый запрос — MISS (кэш пуст)
+	// First query — MISS (кэш пуст)
 	start := time.Now()
 	res1 := executeSQL(t, session, "SELECT * FROM products WHERE id = 42;")
 	missDuration := time.Since(start)
@@ -39,7 +39,7 @@ func TestResultCacheHitMiss(t *testing.T) {
 		t.Fatalf("expected row with id=42, got %v", res1.Rows)
 	}
 
-	// Второй запрос — HIT (из кэша)
+	// Second query — HIT (из кэша)
 	start = time.Now()
 	res2 := executeSQL(t, session, "SELECT * FROM products WHERE id = 42;")
 	hitDuration := time.Since(start)
@@ -63,15 +63,15 @@ func TestResultCacheHitMiss(t *testing.T) {
 func TestResultCacheInvalidationOnInsert(t *testing.T) {
 	session := setupCacheSession(t)
 
-	// Запрос COUNT — populating cache
+	// COUNT query — populating cache
 	res1 := executeSQL(t, session, "SELECT COUNT(*) FROM products;")
 	count1 := res1.Rows[0][0]
 	fmt.Printf("Before insert: count=%s\n", count1)
 
-	// Вставка новой строки
+	// Insert new row
 	executeSQL(t, session, "INSERT INTO products VALUES (9999, 'new', 0.0, 'new_cat');")
 
-	// Повторный запрос — должен вернуть обновлённый count
+	// Repeat query — должен вернуть обновлённый count
 	res2 := executeSQL(t, session, "SELECT COUNT(*) FROM products;")
 	count2 := res2.Rows[0][0]
 	fmt.Printf("After insert: count=%s\n", count2)
@@ -102,11 +102,11 @@ func TestResultCacheInvalidationOnDelete(t *testing.T) {
 func TestResultCacheDifferentQueries(t *testing.T) {
 	session := setupCacheSession(t)
 
-	// Запрос 1
+	// Query 1
 	executeSQL(t, session, "SELECT * FROM products WHERE id = 1;")
-	// Запрос 2 (другой WHERE)
+	// Query 2 (другой WHERE)
 	executeSQL(t, session, "SELECT * FROM products WHERE id = 2;")
-	// Запрос 3 (другая функция)
+	// Query 3 (другая функция)
 	executeSQL(t, session, "SELECT LENGTH(name) FROM products WHERE id = 1;")
 
 	hits, _, _ := session.resultCache.Stats()
@@ -145,14 +145,14 @@ func TestResultCachePerformanceCompare(t *testing.T) {
 		executeSQL(t, session, fmt.Sprintf("SELECT * FROM products WHERE id = %d;", i))
 	}
 
-	// Benchmark с кэшем
+	// Benchmark with cache
 	start := time.Now()
 	for i := 0; i < 1000; i++ {
 		executeSQL(t, session, fmt.Sprintf("SELECT * FROM products WHERE id = %d;", i%100))
 	}
 	cachedDuration := time.Since(start)
 
-	// Benchmark без кэша (очищаем кэш перед каждым запросом)
+	// Benchmark without cache (очищаем кэш перед каждым запросом)
 	start = time.Now()
 	for i := 0; i < 1000; i++ {
 		session.resultCache.InvalidateAll()

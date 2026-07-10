@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-// CompositeIndex — составной индекс по нескольким столбцам.
+// CompositeIndex — composite index on multiple columns.
 // Ключ = конкатенация значений столбцов через разделитель.
 type CompositeIndex struct {
 	mu       sync.RWMutex
@@ -22,7 +22,7 @@ type CompositeIndex struct {
 	reverse map[int]string
 }
 
-// NewCompositeIndex создаёт составной индекс.
+// NewCompositeIndex creates a composite index.
 func NewCompositeIndex(name string, columns []string, colIndex []int) *CompositeIndex {
 	return &CompositeIndex{
 		name:     name,

@@ -1,23 +1,23 @@
 # Security Self-Audit Report — Algorithm D
 
-Дата: 2026-07-06
-Исполнитель: MiMoCode Agent
-Алгоритм: D — Network / Transport Review
-Версия VaultDB: Current (main branch)
+Date: 2026-07-06
+Executor: MiMoCode Agent
+Algorithm: D — Network / Transport Review
+VaultDB Version: Current (main branch)
 
-## Результаты по шагам
+## Step-by-Step Results
 
-| Шаг | Статус | Комментарий |
+| Step | Status | Comment |
 |---|---|---|
-| 1 | Пройден | TLS конфигурация проверена |
-| 2 | Пройден | TLS 1.0/1.1 disabled (MinVersion = TLS 1.2) |
-| 3 | Пройден | Strong cipher suites (AES-GCM + ECDHE) |
-| 4 | Пройден | Auth tokens передаются через Bearer header / X-VaultDB-Token header |
-| 5 | Пройден | mTLS support available |
+| 1 | Passed | TLS configuration verified |
+| 2 | Passed | TLS 1.0/1.1 disabled (MinVersion = TLS 1.2) |
+| 3 | Passed | Strong cipher suites (AES-GCM + ECDHE) |
+| 4 | Passed | Auth tokens transmitted via Bearer header / X-VaultDB-Token header |
+| 5 | Passed | mTLS support available |
 
-## Шаг 1: TLS Configuration
+## Step 1: TLS Configuration
 
-**Источник:** `server/internal/tls/tls.go:25-42`
+**Source:** `server/internal/tls/tls.go:25-42`
 
 ```go
 func LoadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
@@ -39,20 +39,20 @@ func LoadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 }
 ```
 
-## Шаг 2: TLS 1.0/1.1 Disabled
+## Step 2: TLS 1.0/1.1 Disabled
 
-**Анализ:**
-- `MinVersion: tls.VersionTLS12` — TLS 1.0 и 1.1 отключены
-- TLS 1.3 поддерживается (default in Go 1.13+)
-- Нет включения insecure protocols
+**Analysis:**
+- `MinVersion: tls.VersionTLS12` — TLS 1.0 and 1.1 are disabled
+- TLS 1.3 is supported (default in Go 1.13+)
+- No insecure protocols are enabled
 
-**Результат:** PASS — TLS 1.0/1.1 disabled.
+**Result:** PASS — TLS 1.0/1.1 disabled.
 
-## Шаг 3: Cipher Suite Configuration
+## Step 3: Cipher Suite Configuration
 
-**Анализ cipher suites:**
+**Cipher suite analysis:**
 
-| Cipher Suite | Протокол | Безопасность |
+| Cipher Suite | Protocol | Security |
 |---|---|---|
 | TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 | ECDHE + AES-256-GCM | Strong |
 | TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 | ECDHE + AES-256-GCM | Strong |
@@ -63,17 +63,17 @@ func LoadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 - X25519 — modern, fast, secure
 - P-256 — NIST standard, widely supported
 
-**Анализ:**
-- Все cipher suites используют ECDHE (forward secrecy)
+**Analysis:**
+- All cipher suites use ECDHE (forward secrecy)
 - AES-GCM — authenticated encryption (no padding oracle attacks)
-- Нет слабых cipher suites (RC4, DES, 3DES, MD5)
-- Нет静态 key exchange (DHE, RSA key exchange)
+- No weak cipher suites (RC4, DES, 3DES, MD5)
+- No static key exchange (DHE, RSA key exchange)
 
-**Результат:** PASS — strong cipher suites only.
+**Result:** PASS — strong cipher suites only.
 
-## Шаг 4: Auth Token Transport
+## Step 4: Auth Token Transport
 
-**Источник:** `server/internal/auth/manager.go:283-292`
+**Source:** `server/internal/auth/manager.go:283-292`
 
 ```go
 func tokenFromRequest(r *http.Request) string {
@@ -88,24 +88,24 @@ func tokenFromRequest(r *http.Request) string {
 }
 ```
 
-**Анализ:**
-- Токены передаются через HTTP headers (Bearer / X-VaultDB-Token)
-- Query parameter tokens отклоняются (manager_test.go:52-66):
+**Analysis:**
+- Tokens are transmitted via HTTP headers (Bearer / X-VaultDB-Token)
+- Query parameter tokens are rejected (manager_test.go:52-66):
   ```go
   func TestMiddlewareAcceptsQueryParamToken(t *testing.T) {
       // Query param token rejected for SSE endpoints
       // Query param token rejected for non-SSE endpoints
   }
   ```
-- TLS required для production (рекомендовано)
+- TLS required for production (recommended)
 
-**Результат:** PASS — tokens в headers, не в URLs.
+**Result:** PASS — tokens in headers, not in URLs.
 
-**Примечание:** Если TLS не включен, токены передаются в открытом виде. Рекомендуется强制 TLS в production.
+**Note:** If TLS is not enabled, tokens are transmitted in plaintext. Enforcing TLS in production is recommended.
 
-## Шаг 5: mTLS Support
+## Step 5: mTLS Support
 
-**Источник:** `server/internal/tls/tls.go:98-129`
+**Source:** `server/internal/tls/tls.go:98-129`
 
 ```go
 func LoadMTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
@@ -120,27 +120,27 @@ func LoadMTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 }
 ```
 
-**Анализ:**
-- mTLS включается через конфигурацию
-- `RequireAndVerifyClientCert` — клиентский сертификат обязателен
-- CA pool загружается из файла
+**Analysis:**
+- mTLS is enabled via configuration
+- `RequireAndVerifyClientCert` — client certificate is mandatory
+- CA pool is loaded from a file
 
-**Результат:** PASS — mTLS supported and correctly configured.
+**Result:** PASS — mTLS supported and correctly configured.
 
 ## Findings
 
 ### Finding 1 — Self-Signed Cert Uses RSA 2048 (Low)
-**Описание:** `server/internal/tls/tls.go:46` — `GenerateSelfSignedCert` использует RSA 2048:
+**Description:** `server/internal/tls/tls.go:46` — `GenerateSelfSignedCert` uses RSA 2048:
 ```go
 priv, err := rsa.GenerateKey(rand.Reader, 2048)
 ```
 
-**Рекомендация:** Для production использовать RSA 3072+ или ECDSA P-256/P-384. Self-signed cert для тестов — acceptable.
+**Recommendation:** For production, use RSA 3072+ or ECDSA P-256/P-384. Self-signed cert for testing is acceptable.
 
-**Статус исправления:** Accepted Risk (test-only function)
+**Fix Status:** Accepted Risk (test-only function)
 
 ### Finding 2 — No TLS Enforcement in Config (Medium)
-**Описание:** Конфигурация не требует TLS для production:
+**Description:** The configuration does not require TLS for production:
 ```go
 // config.go
 type AuthConfig struct {
@@ -150,14 +150,14 @@ type AuthConfig struct {
 }
 ```
 
-Нет валидации что TLS включен в production.
+There is no validation that TLS is enabled in production.
 
-**Рекомендация:** Добавить validation что TLS cert/key файла существуют при `auth.enabled: true`.
+**Recommendation:** Add validation that TLS cert/key files exist when `auth.enabled: true`.
 
-**Статус исправления:** Open (enhancement)
+**Fix Status:** Open (enhancement)
 
-### Finding 3 — localhost Auth Bypass (Medium)
-**Описание:** `server/internal/auth/manager.go:240-243` — auth bypass для localhost:
+### Finding 3 — Localhost Auth Bypass (Medium)
+**Description:** `server/internal/auth/manager.go:240-243` — auth bypass for localhost:
 ```go
 if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
     next(w, r)
@@ -165,12 +165,12 @@ if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
 }
 ```
 
-Если сервер слушает на 0.0.0.0, атакующий может обойти auth через proxy.
+If the server listens on 0.0.0.0, an attacker can bypass auth via proxy.
 
-**Рекомендация:** Ограничить localhost bypass только для development mode.
+**Recommendation:** Restrict localhost bypass to development mode only.
 
-**Статус исправления:** Accepted Risk (development convenience)
+**Fix Status:** Accepted Risk (development convenience)
 
-## Общий вердикт
+## Overall Verdict
 
-**Pass** — TLS конфигурация strong: TLS 1.2 minimum, AES-GCM cipher suites, ECDHE forward secrecy, mTLS support. Три low/medium findings (RSA 2048, no TLS enforcement, localhost bypass).
+**Pass** — TLS configuration is strong: TLS 1.2 minimum, AES-GCM cipher suites, ECDHE forward secrecy, mTLS support. Three low/medium findings (RSA 2048, no TLS enforcement, localhost bypass).

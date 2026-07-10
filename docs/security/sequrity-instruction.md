@@ -1,107 +1,107 @@
-# VaultDB Security Assurance — Техническое задание
-## Автоматизация проверки безопасности + алгоритмы самостоятельного аудита
+# VaultDB Security Assurance — Technical Specification
+## Security Verification Automation + Self-Audit Algorithms
 
 ---
 
-| Атрибут | Значение |
+| Attribute | Value |
 |---|---|
-| Документ | VaultDB Security Assurance TZ v1.0.0 |
-| Связь с другими документами | Реализует Фазу 0 и Фазу 3 из VaultDB Strategic Roadmap |
-| Статус | Активен |
-| Важная оговорка | Этот документ — внутренняя гигиена, НЕ замена независимого внешнего security-аудита |
+| Document | VaultDB Security Assurance TZ v1.0.0 |
+| Relationship to other documents | Implements Phase 0 and Phase 3 from VaultDB Strategic Roadmap |
+| Status | Active |
+| Important caveat | This document is internal hygiene, NOT a replacement for independent external security audits |
 
 ---
 
-## 1. Область действия и модель угроз
+## 1. Scope and Threat Model
 
-### 1.1 Что покрывает документ
+### 1.1 What the Document Covers
 
-Два параллельных трека:
+Two parallel tracks:
 
-**Трек A — Автоматизация.** Инструменты, встроенные в CI/CD, которые
-проверяют код и работающий сервер без участия человека: статический
-анализ, fuzzing, сканирование зависимостей, динамическое тестирование
-запущенного сервера.
+**Track A — Automation.** Tools built into CI/CD that
+verify code and the running server without human involvement: static
+analysis, fuzzing, dependency scanning, dynamic testing
+of the running server.
 
-**Трек B — Ручные алгоритмы.** Пошаговые процедуры для инженера,
-которые нельзя (пока) полностью автоматизировать: анализ архитектурных
-решений, проверка криптографических примитивов на предмет логических
-ошибок, review privilege escalation сценариев.
+**Track B — Manual Algorithms.** Step-by-step procedures for engineers
+that cannot (yet) be fully automated: analysis of architectural
+decisions, checking cryptographic primitives for logical
+errors, reviewing privilege escalation scenarios.
 
-### 1.2 Модель угроз VaultDB (адаптация STRIDE под СУБД)
+### 1.2 VaultDB Threat Model (STRIDE adaptation for DBMS)
 
-| Категория угрозы | Применительно к VaultDB | Приоритет |
+| Threat Category | Applied to VaultDB | Priority |
 |---|---|---|
-| Injection | SQL injection через PREPARE/EXECUTE/CREATE FUNCTION, protocol injection через кастомный протокол | Критический |
-| Broken Authentication | Обход токена, подделка HMAC, timing-атаки на сравнение токенов | Критический |
-| Broken Access Control | Обход RLS-политик, privilege escalation между ролями | Критический |
-| Cryptographic Failures | Слабый DEK, утечка ключа в логи/дампы памяти, неправильный nonce reuse в AES-GCM | Критический |
-| Data Integrity | Подмена страниц heap, подмена WAL-записей, обход hash-chain audit log | Высокий |
-| Denial of Service | Исчерпание памяти через большие запросы, zip-bomb в COPY, connection exhaustion | Высокий |
-| Insecure Deserialization | Некорректный парсинг протокольных сообщений приводящий к RCE/panic | Высокий |
-| Supply Chain | Уязвимые зависимости (Go modules, npm для Web UI), скомпрометированный Docker base image | Средний |
-| Security Misconfiguration | TLS отключён по умолчанию, auth отключён в dev-конфиге попавшем в prod | Средний |
-| Information Disclosure | Утечка деталей через сообщения об ошибках, timing side-channel в сравнении паролей/токенов | Средний |
+| Injection | SQL injection via PREPARE/EXECUTE/CREATE FUNCTION, protocol injection via custom protocol | Critical |
+| Broken Authentication | Token bypass, HMAC forgery, timing attacks on token comparison | Critical |
+| Broken Access Control | RLS policy bypass, privilege escalation between roles | Critical |
+| Cryptographic Failures | Weak DEK, key leakage to logs/memory dumps, incorrect nonce reuse in AES-GCM | Critical |
+| Data Integrity | Heap page tampering, WAL record tampering, hash-chain audit log bypass | High |
+| Denial of Service | Memory exhaustion via large queries, zip-bomb in COPY, connection exhaustion | High |
+| Insecure Deserialization | Incorrect parsing of protocol messages leading to RCE/panic | High |
+| Supply Chain | Vulnerable dependencies (Go modules, npm for Web UI), compromised Docker base image | Medium |
+| Security Misconfiguration | TLS disabled by default, auth disabled in dev config that ends up in production | Medium |
+| Information Disclosure | Leakage of details through error messages, timing side-channel in password/token comparison | Medium |
 
 ---
 
-## 2. Содержание
+## 2. Contents
 
-3. Трек A — Автоматизированный security-конвейер
-4. SAST — статический анализ
-5. Сканирование зависимостей и supply chain
+3. Track A — Automated Security Pipeline
+4. SAST — Static Analysis
+5. Dependency and Supply Chain Scanning
 6. Secret Scanning
-7. Fuzzing — расширенный набор
-8. DAST — динамическое тестирование запущенного сервера
-9. Сканирование Docker-образа
-10. Трек B — Алгоритмы ручного самоаудита
-11. Классификация серьёзности и SLA
-12. Расписание проверок
-13. Отчётность
-14. Распределение задач
-15. Чеклист приёмки
+7. Fuzzing — Extended Set
+8. DAST — Dynamic Testing of the Running Server
+9. Docker Image Scanning
+10. Track B — Manual Self-Audit Algorithms
+11. Severity Classification and SLA
+12. Verification Schedule
+13. Reporting
+14. Task Distribution
+15. Acceptance Checklist
 
 ---
 
-## 3. Трек A — Автоматизированный security-конвейер
+## 3. Track A — Automated Security Pipeline
 
-### 3.1 Общая схема конвейера
+### 3.1 Overall Pipeline Diagram
 
 ```
-pre-commit hook (локально, до коммита)
+pre-commit hook (locally, before commit)
   - gitleaks (secrets)
   - gofmt + go vet
         |
         v
-PR gate (обязателен для мержа)
+PR gate (required for merge)
   - gosec (SAST)
-  - govulncheck (известные CVE в зависимостях)
+  - govulncheck (known CVEs in dependencies)
   - go test -race (concurrency)
-  - semgrep custom rules (VaultDB-специфичные паттерны)
+  - semgrep custom rules (VaultDB-specific patterns)
         |
         v
-Nightly (полный прогон, не блокирует разработку)
-  - FuzzParse, FuzzProtocol, FuzzEncryption (2 часа каждый)
-  - DAST против тестового инстанса (SQLi, auth bypass попытки)
-  - Trivy сканирование Docker-образа
+Nightly (full run, does not block development)
+  - FuzzParse, FuzzProtocol, FuzzEncryption (2 hours each)
+  - DAST against test instance (SQLi, auth bypass attempts)
+  - Trivy Docker image scan
         |
         v
 Weekly
-  - Ручной алгоритм из Трека B (по ротации подсистем)
-  - Regression benchmark полный прогон
+  - Manual algorithm from Track B (subsystem rotation)
+  - Regression benchmark full run
         |
         v
-Перед релизом (major/minor версия)
-  - Полный прогон всех ручных алгоритмов Трека B
-  - testssl.sh против TLS-конфигурации
-  - Обновление security-отчёта в docs/security/
+Before release (major/minor version)
+  - Full run of all Track B manual algorithms
+  - testssl.sh against TLS configuration
+  - Update security report in docs/security/
 ```
 
 ---
 
-## 4. SAST — статический анализ
+## 4. SAST — Static Analysis
 
-### 4.1 gosec — базовый статический анализ Go
+### 4.1 gosec — Basic Go Static Analysis
 
 ```yaml
 # .github/workflows/security.yml
@@ -120,20 +120,20 @@ sast-gosec:
         sarif_file: gosec-results.sarif
 ```
 
-Обязательные правила gosec для VaultDB (не отключать без явного обоснования
-в комментарии вида `#nosec G-XXX -- причина`):
+Mandatory gosec rules for VaultDB (do not disable without explicit justification
+in a comment like `#nosec G-XXX -- reason`):
 
-| Правило | Проверяет | Критичность для VaultDB |
+| Rule | Checks | Criticality for VaultDB |
 |---|---|---|
-| G101 | Хардкод секретов в коде | Критично — прямое пересечение с TDE |
-| G201/G202 | SQL-запросы через конкатенацию строк | Критично — прямое пересечение с injection |
-| G401/G402/G403 | Слабая криптография (MD5, DES, малый размер RSA) | Критично — пересечение с encryption TZ |
-| G404 | math/rand вместо crypto/rand для security-контекста | Критично — nonce, DEK, токены должны использовать crypto/rand |
-| G304 | Path traversal при работе с файлами | Высокий — актуально для COPY FROM/TO, data_dir |
+| G101 | Hardcoded secrets in code | Critical — direct intersection with TDE |
+| G201/G202 | SQL queries via string concatenation | Critical — direct intersection with injection |
+| G401/G402/G403 | Weak cryptography (MD5, DES, small RSA) | Critical — intersection with encryption TZ |
+| G404 | math/rand instead of crypto/rand in security context | Critical — nonce, DEK, tokens must use crypto/rand |
+| G304 | Path traversal when working with files | High — relevant for COPY FROM/TO, data_dir |
 
-### 4.2 semgrep — кастомные правила под архитектуру VaultDB
+### 4.2 semgrep — Custom Rules for VaultDB Architecture
 
-Общие правила не ловят специфичные для VaultDB паттерны. Пишем свои.
+Generic rules don't catch VaultDB-specific patterns. We write our own.
 
 ```yaml
 # .semgrep/vaultdb-sql-injection.yml
@@ -143,10 +143,10 @@ rules:
     languages: [go]
     severity: ERROR
     message: >
-      Обнаружена конкатенация пользовательского ввода в строку,
-      которая затем передаётся в parser.Parse(). Это потенциальная
-      SQL injection даже при наличии AST-парсера — если конкатенация
-      происходит ДО парсинга, а не после (bind parameters).
+      User input concatenation detected into a string that is then
+      passed to parser.Parse(). This is a potential SQL injection
+      even with an AST parser — if concatenation happens BEFORE
+      parsing, not after (bind parameters).
     patterns:
       - pattern: |
           $STR := $A + $USERINPUT + $B
@@ -159,8 +159,8 @@ rules:
     languages: [go]
     severity: ERROR
     message: >
-      math/rand используется в криптографическом контексте (nonce/DEK/token).
-      Обязателен crypto/rand.
+      math/rand is used in a cryptographic context (nonce/DEK/token).
+      crypto/rand is required.
     patterns:
       - pattern-either:
           - pattern: math/rand.Read(...)
@@ -176,8 +176,8 @@ rules:
     languages: [go]
     severity: WARNING
     message: >
-      Функция работает с DEK/passphrase, но не вызывает Zeroize()
-      перед выходом из области видимости. Ключ может остаться в памяти.
+      Function works with DEK/passphrase but does not call Zeroize()
+      before exiting scope. The key may remain in memory.
     patterns:
       - pattern-inside: |
           func $FUNC(...) {
@@ -190,23 +190,23 @@ rules:
 ```
 
 ```bash
-# Запуск в CI
+# Run in CI
 semgrep --config .semgrep/ --error --json --output semgrep-results.json ./server
 ```
 
-### 4.3 staticcheck — дополнительный уровень
+### 4.3 staticcheck — Additional Level
 
 ```bash
 staticcheck ./...
-# ловит игнорируемые ошибки (_ = err), что напрямую связано
-# с найденными в код-ревью проблемами (sendError)
+# catches ignored errors (_ = err), which is directly related
+# to issues found in code review (sendError)
 ```
 
 ---
 
-## 5. Сканирование зависимостей и supply chain
+## 5. Dependency and Supply Chain Scanning
 
-### 5.1 govulncheck — известные CVE в Go-зависимостях
+### 5.1 govulncheck — Known CVEs in Go Dependencies
 
 ```yaml
 supply-chain-go:
@@ -216,12 +216,12 @@ supply-chain-go:
       run: go install golang.org/x/vuln/cmd/govulncheck@latest
     - name: Scan
       run: govulncheck ./...
-      # Обязателен для PR gate — падает при найденной эксплуатируемой уязвимости
-      # (govulncheck умеет отличать "уязвимость есть в зависимости" от
-      # "уязвимый код реально вызывается" — меньше ложных срабатываний)
+      # Required for PR gate — fails on found exploitable vulnerability
+      # (govulncheck can distinguish "vulnerability exists in dependency" from
+      # "vulnerable code is actually called" — fewer false positives)
 ```
 
-### 5.2 npm audit для Web UI
+### 5.2 npm audit for Web UI
 
 ```yaml
 supply-chain-npm:
@@ -233,7 +233,7 @@ supply-chain-npm:
         npm audit signatures
 ```
 
-### 5.3 Dependabot / автоматическое обновление
+### 5.3 Dependabot / Automatic Updates
 
 ```yaml
 # .github/dependabot.yml
@@ -259,15 +259,15 @@ updates:
 
 ### 5.4 SBOM (Software Bill of Materials)
 
-Enterprise-заказчики часто требуют SBOM для compliance (Executive Order
-14028 в США, аналогичные требования в других юрисдикциях).
+Enterprise customers often require SBOM for compliance (Executive Order
+14028 in the US, similar requirements in other jurisdictions).
 
 ```bash
-# Генерация SBOM в формате CycloneDX при каждом релизе
+# Generate SBOM in CycloneDX format at each release
 go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
 cyclonedx-gomod mod -json -output sbom.json ./server
 
-# Прикладывается к каждому GitHub Release как артефакт
+# Attached to each GitHub Release as an artifact
 ```
 
 ---
@@ -287,7 +287,7 @@ repos:
 ```
 
 ```yaml
-# CI — повторная проверка на случай обхода pre-commit
+# CI — re-check in case pre-commit was bypassed
 secret-scan:
   runs-on: ubuntu-latest
   steps:
@@ -296,10 +296,10 @@ secret-scan:
         GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 ```
 
-### 6.2 Кастомные правила под VaultDB-специфичные секреты
+### 6.2 Custom Rules for VaultDB-Specific Secrets
 
 ```toml
-# .gitleaks.toml — дополнительные правила
+# .gitleaks.toml — additional rules
 
 [[rules]]
 id = "vaultdb-api-token"
@@ -314,14 +314,14 @@ regex = '''VAULTDB_ENCRYPTION_PASSPHRASE\s*=\s*["'][^"']{4,}["']'''
 tags = ["vaultdb", "encryption"]
 ```
 
-### 6.3 Проверка что секреты не попадают в логи (runtime-проверка)
+### 6.3 Verification that Secrets Don't Leak into Logs (Runtime Check)
 
 ```go
 // tools/security/log_secret_test.go
 
-// TestNoSecretsInLogs запускает сервер, выполняет операции с токенами
-// и ключами, перехватывает весь вывод логов и проверяет отсутствие
-// известных секретных паттернов.
+// TestNoSecretsInLogs starts the server, performs operations with tokens
+// and keys, captures all log output and verifies the absence of
+// known secret patterns.
 func TestNoSecretsInLogs(t *testing.T) {
     var logBuf bytes.Buffer
     srv := startTestServer(t, &logBuf)
@@ -341,18 +341,18 @@ func TestNoSecretsInLogs(t *testing.T) {
 
 ---
 
-## 7. Fuzzing — расширенный набор
+## 7. Fuzzing — Extended Set
 
-Дополняет FuzzParse из Strategic Roadmap Фазы 0 специфичными для
-security fuzz-целями.
+Supplements FuzzParse from Strategic Roadmap Phase 0 with
+security-specific fuzz targets.
 
-### 7.1 FuzzProtocol — протокольный фаззинг
+### 7.1 FuzzProtocol — Protocol Fuzzing
 
 ```go
 // internal/server/fuzz_protocol_test.go
 
-// FuzzProtocol проверяет что сервер не падает и не зависает
-// на произвольных байтах, отправленных как protocol-сообщение.
+// FuzzProtocol checks that the server does not crash or hang
+// on arbitrary bytes sent as a protocol message.
 func FuzzProtocol(f *testing.F) {
     f.Add([]byte(`{"id":"1","token":"x","query":"SELECT 1;"}` + "\n"))
     f.Add([]byte(`{`))
@@ -371,14 +371,14 @@ func FuzzProtocol(f *testing.F) {
 }
 ```
 
-### 7.2 FuzzEncryption — фаззинг расшифровки
+### 7.2 FuzzEncryption — Decryption Fuzzing
 
 ```go
 // internal/crypto/fuzz_decrypt_test.go
 
-// FuzzDecryptPage проверяет что попытка расшифровать произвольные
-// (повреждённые/подделанные) байты как зашифрованную страницу
-// корректно возвращает ошибку, а не паникует.
+// FuzzDecryptPage checks that attempting to decrypt arbitrary
+// (corrupted/tampered) bytes as an encrypted page
+// correctly returns an error instead of panicking.
 func FuzzDecryptPage(f *testing.F) {
     em, _ := crypto.NewEncryptionManager(testDEK, "v1")
 
@@ -398,7 +398,7 @@ func FuzzDecryptPage(f *testing.F) {
 }
 ```
 
-### 7.3 FuzzWALRecovery — фаззинг recovery на повреждённом WAL
+### 7.3 FuzzWALRecovery — Recovery Fuzzing on Corrupted WAL
 
 ```go
 // internal/wal/fuzz_recovery_test.go
@@ -430,9 +430,9 @@ func FuzzWALRecovery(f *testing.F) {
 
 ---
 
-## 8. DAST — динамическое тестирование запущенного сервера
+## 8. DAST — Dynamic Testing of the Running Server
 
-### 8.1 Автоматизированные атаки через собственный протокол
+### 8.1 Automated Attacks via Custom Protocol
 
 ```go
 // tools/security/dast/injection_attempts.go
@@ -455,7 +455,7 @@ func TestDASTSQLInjection(t *testing.T) {
 }
 ```
 
-### 8.2 Тестирование обхода аутентификации
+### 8.2 Authentication Bypass Testing
 
 ```go
 // tools/security/dast/auth_bypass.go
@@ -484,7 +484,7 @@ func TestDASTAuthBypass(t *testing.T) {
 }
 ```
 
-### 8.3 Timing-атака на сравнение токенов
+### 8.3 Timing Attack on Token Comparison
 
 ```go
 // tools/security/dast/timing_attack_test.go
@@ -512,11 +512,11 @@ func TestTokenComparisonTiming(t *testing.T) {
 }
 ```
 
-Требование к реализации (следствие этого теста): проверка токена
-обязана использовать `subtle.ConstantTimeCompare` или эквивалент,
-а не прямое сравнение строк/хешей через `==`.
+Implementation requirement (consequence of this test): token verification
+must use `subtle.ConstantTimeCompare` or equivalent,
+not direct string/hash comparison via `==`.
 
-### 8.4 TLS-конфигурация — testssl.sh
+### 8.4 TLS Configuration — testssl.sh
 
 ```bash
 #!/usr/bin/env bash
@@ -528,13 +528,13 @@ docker run --rm -it drwetter/testssl.sh \
     --vulnerable \
     "${VAULTDB_HOST}:${VAULTDB_TLS_PORT}"
 
-# Обязательные критерии прохождения:
-#   - TLS 1.0/1.1 отключены
-#   - Слабые cipher suites отсутствуют
-#   - Нет уязвимости к Heartbleed/POODLE/BEAST
+# Mandatory pass criteria:
+#   - TLS 1.0/1.1 disabled
+#   - Weak cipher suites absent
+#   - No vulnerability to Heartbleed/POODLE/BEAST
 ```
 
-### 8.5 Rate limiting / DoS-устойчивость
+### 8.5 Rate Limiting / DoS Resilience
 
 ```go
 // tools/security/dast/dos_test.go
@@ -578,10 +578,10 @@ func TestLargePayloadDoS(t *testing.T) {
 
 ---
 
-## 9. Сканирование Docker-образа
+## 9. Docker Image Scanning
 
 ```yaml
-# CI — Trivy сканирование финального образа
+# CI — Trivy scanning of the final image
 
 docker-security-scan:
   runs-on: ubuntu-latest
@@ -611,307 +611,307 @@ docker run --rm vaultdb-scan-target sh -c "echo test" 2>&1 | grep -q "executable
 
 ---
 
-## 10. Трек B — Алгоритмы ручного самоаудита
+## 10. Track B — Manual Self-Audit Algorithms
 
-Каждый алгоритм имеет фиксированную структуру: Предусловие -> Шаги ->
-Ожидаемый результат -> Критерий провала. Выполняется инженером по
-расписанию (раздел 12), результат фиксируется в отчёте (раздел 13).
+Each algorithm has a fixed structure: Preconditions -> Steps ->
+Expected Result -> Failure Criteria. Executed by an engineer on
+a schedule (section 12), results recorded in a report (section 13).
 
 ---
 
-### Алгоритм A — SQL Injection Manual Review
+### Algorithm A — SQL Injection Manual Review
 
-**Предусловие:** доступ к исходному коду internal/parser, internal/executor.
+**Preconditions:** Access to source code of internal/parser, internal/executor.
 
-**Шаги:**
+**Steps:**
 
-1. Построить список всех мест, где строка проходит через parser.Parse()
-   более одного раза за жизненный цикл запроса (миграции, CREATE FUNCTION,
-   EXECUTE с параметрами, CALL).
+1. Build a list of all places where a string passes through parser.Parse()
+   more than once during a query lifecycle (migrations, CREATE FUNCTION,
+   EXECUTE with parameters, CALL).
    ```bash
    grep -rn "parser.Parse(" server/internal/ | grep -v "_test.go"
    ```
-2. Для каждого найденного места — проверить: строка, передаваемая в
-   Parse(), построена из константы кода ИЛИ из значения, прошедшего
-   через типизированный Value (bind parameter), а не через прямую
-   конкатенацию с пользовательским string.
-3. Явно протестировать PREPARE/EXECUTE с payload, содержащим SQL
-   мета-символы в значении параметра (не в самом запросе):
+2. For each found location — verify: the string passed to
+   Parse() is built from a code constant OR from a value that passed
+   through a typed Value (bind parameter), not through direct
+   concatenation with a user string.
+3. Explicitly test PREPARE/EXECUTE with a payload containing SQL
+   meta-characters in the parameter value (not in the query itself):
    ```sql
    PREPARE p AS SELECT * FROM users WHERE name = $1;
    EXECUTE p('''; DROP TABLE users; --');
    ```
-   Ожидаемо: строка ищется буквально как значение, DROP TABLE не
-   выполняется.
-4. Проверить CREATE FUNCTION ... LANGUAGE SQL AS '...' — тело функции
-   не должно позволять выполнение дополнительных statements сверх
-   объявленных при вызове.
-5. Проверить обработку идентификаторов (имена таблиц/столбцов) отдельно
-   от значений — идентификаторы не параметризуются как Value, поэтому
-   требуют отдельной проверки на инъекцию через information_schema-подобные
-   системные запросы, если такие есть.
+   Expected: the string is searched literally as a value, DROP TABLE does
+   not execute.
+4. Check CREATE FUNCTION ... LANGUAGE SQL AS '...' — the function body
+   must not allow execution of additional statements beyond
+   those declared at call time.
+5. Check identifier handling (table/column names) separately
+   from values — identifiers are not parameterized as Value, therefore
+   require separate injection checks via information_schema-like
+   system queries, if any exist.
 
-**Ожидаемый результат:** ни один тест-кейс из шага 3 не приводит к
-выполнению незаявленной операции.
+**Expected Result:** no test case from step 3 results in
+execution of an undeclared operation.
 
-**Критерий провала:** любое непреднамеренное выполнение DDL/DML сверх
-исходно заявленного оператора — Critical severity, блокирует релиз.
+**Failure Criteria:** any unintended execution of DDL/DML beyond
+the originally declared statement — Critical severity, blocks release.
 
 ---
 
-### Алгоритм B — Authentication & Authorization Review
+### Algorithm B — Authentication & Authorization Review
 
-**Предусловие:** запущенный тестовый инстанс с настроенной аутентификацией.
+**Preconditions:** Running test instance with authentication configured.
 
-**Шаги:**
+**Steps:**
 
-1. Проверить формат хранения токенов — убедиться что в tokens.json
-   (или его аналоге для page engine) нет plaintext-значений:
+1. Check token storage format — verify that tokens.json
+   (or its equivalent for the page engine) contains no plaintext values:
    ```bash
    grep -E "vdb_sk_[a-f0-9]{32}" data/auth/tokens.json && echo "FAIL: plaintext token found"
    ```
-2. Проверить что ValidateToken использует constant-time comparison:
+2. Verify that ValidateToken uses constant-time comparison:
    ```bash
    grep -A5 "func.*ValidateToken" server/internal/auth/manager.go | grep -q "subtle.ConstantTimeCompare\|hmac.Equal" \
        || echo "FAIL: possible non-constant-time comparison"
    ```
-3. Проверить, что VAULTDB_AUTH_SECRET (HMAC-секрет) обязателен в
-   production-режиме и не имеет дефолтного захардкоженного значения.
-4. Если реализован RLS (CREATE POLICY) — проверить обход политики через:
-   - прямой доступ администратора без роли
-   - SQL-инъекцию в USING (...) выражение политики
-   - обход через JOIN с таблицей без RLS, раскрывающий данные
-     защищённой таблицы косвенно
-5. Проверить срок жизни токенов — есть ли механизм отзыва
-   (revocation) скомпрометированного токена без перезапуска сервера.
+3. Verify that VAULTDB_AUTH_SECRET (HMAC secret) is mandatory in
+   production mode and has no hardcoded default value.
+4. If RLS is implemented (CREATE POLICY) — check policy bypass via:
+   - direct admin access without a role
+   - SQL injection in the USING (...) policy expression
+   - bypass via JOIN with a table without RLS, exposing data
+     from the protected table indirectly
+5. Check token lifetime — is there a revocation mechanism
+   for compromised tokens without server restart.
 
-**Ожидаемый результат:** все токены в хранилище — только хеши; сравнение
-constant-time; RLS не обходится ни одним из трёх векторов шага 4.
+**Expected Result:** all tokens in storage are hashes only; comparison
+is constant-time; RLS cannot be bypassed by any of the three vectors in step 4.
 
-**Критерий провала:** обнаружение plaintext-токена, timing-разница
-более 15% между совпадающим и несовпадающим кандидатом, либо
-любой рабочий обход RLS — Critical severity.
+**Failure Criteria:** detection of a plaintext token, timing difference
+greater than 15% between matching and non-matching candidates, or
+any working RLS bypass — Critical severity.
 
 ---
 
-### Алгоритм C — Encryption at Rest Review
+### Algorithm C — Encryption at Rest Review
 
-**Предусловие:** БД с включённым TDE (ENCRYPTED), доступ к сырым
-файлам heap на диске.
+**Preconditions:** Database with TDE enabled (ENCRYPTED), access to raw
+heap files on disk.
 
-**Шаги:**
+**Steps:**
 
-1. Создать БД с шифрованием, вставить заведомо узнаваемую строку
-   ("UNIQUE_MARKER_STRING_12345"), выполнить checkpoint.
-2. Сделать hexdump/strings по файлу .heap на диске:
+1. Create an encrypted database, insert a deliberately recognizable string
+   ("UNIQUE_MARKER_STRING_12345"), perform a checkpoint.
+2. Run hexdump/strings on the .heap file on disk:
    ```bash
    strings data/databases/secure_test/tables/*/0000.heap | grep "UNIQUE_MARKER"
    ```
-   Ожидаемо: ничего не найдено — строка не видна в открытом виде.
-3. Аналогично для WAL-файла:
+   Expected: nothing found — the string is not visible in plaintext.
+3. Similarly for the WAL file:
    ```bash
    strings data/wal/vaultdb.wal | grep "UNIQUE_MARKER"
    ```
-4. Проверить что при изменении одного байта в середине зашифрованной
-   страницы сервер обнаруживает нарушение целостности (GCM auth tag
-   fail), а не молча возвращает повреждённые данные.
-5. Проверить что DEK не остаётся в файле подкачки/core dump —
-   получить core dump и поискать байты DEK:
+4. Verify that when a single byte is modified in the middle of an encrypted
+   page, the server detects the integrity violation (GCM auth tag
+   failure) instead of silently returning corrupted data.
+5. Verify that DEK does not remain in the swap file/core dump —
+   obtain a core dump and search for DEK bytes:
    ```bash
    gcore <pid>
    strings core.<pid> | grep -f <(echo -n "$KNOWN_DEK_HEX")
    ```
-6. Проверить ротацию KEK — убедиться что после rotate-kek старый
-   KEK физически не требуется для чтения данных.
+6. Verify KEK rotation — confirm that after rotate-kek the old
+   KEK is not physically required to read data.
 
-**Ожидаемый результат:** шаги 2, 3 — маркер не найден нигде на диске.
-Шаг 4 — явная ошибка аутентификации. Шаг 5 — DEK не найден в дампе
-после явного вызова Zeroize().
+**Expected Result:** steps 2, 3 — marker not found anywhere on disk.
+Step 4 — explicit authentication error. Step 5 — DEK not found in dump
+after explicit Zeroize() call.
 
-**Критерий провала:** обнаружение читаемых данных на диске в любом виде
-(heap, WAL, core dump) при включённом шифровании — Critical severity,
-блокирует любые заявления о TDE.
-
----
-
-### Алгоритм D — Network / Transport Review
-
-**Предусловие:** сервер с TLS включённым и выключенным (два прогона).
-
-**Шаги:**
-
-1. С TLS выключенным — снять трафик через tcpdump/Wireshark между
-   клиентом и сервером, убедиться что видны данные в открытом виде.
-2. С TLS включённым — повторить перехват, убедиться что данные
-   нечитаемы в захваченном трафике.
-3. Прогнать testssl.sh (раздел 8.4), проверить отсутствие TLS 1.0/1.1,
-   небезопасных cipher suites, самоподписанных сертификатов в production.
-4. Проверить обработку некорректных/просроченных клиентских
-   сертификатов при включённом mTLS.
-
-**Ожидаемый результат:** TLS 1.3 (или минимум 1.2 с сильными cipher
-suites), корректная работа mTLS при его включении.
-
-**Критерий провала:** активный TLS 1.0/1.1, слабые cipher suites в
-production-профиле — High severity.
+**Failure Criteria:** detection of readable data on disk in any form
+(heap, WAL, core dump) with encryption enabled — Critical severity,
+blocks any TDE claims.
 
 ---
 
-### Алгоритм E — WAL / Recovery Tamper Review
+### Algorithm D — Network / Transport Review
 
-**Предусловие:** сервер с WAL, доступ к остановке процесса в произвольный момент.
+**Preconditions:** Server with TLS enabled and disabled (two runs).
 
-**Шаги:**
+**Steps:**
 
-1. Запустить транзакцию из N операций, остановить сервер (kill -9)
-   после операции N/2, до COMMIT.
-2. Перезапустить, проверить что ни одна из N/2 операций не применена.
-3. Повторить с остановкой ПОСЛЕ записи COMMIT в WAL, но до применения
-   к heap — проверить что recovery доводит транзакцию до конца (redo).
-4. Вручную подменить байт в середине WAL-записи (после checksum),
-   перезапустить — recovery должен обнаружить повреждение через CRC32.
-5. Проверить поведение при повреждении в зашифрованном WAL —
-   расшифровка с неверным GCM tag должна давать чёткую ошибку.
+1. With TLS disabled — capture traffic via tcpdump/Wireshark between
+   client and server, verify that data is visible in plaintext.
+2. With TLS enabled — repeat the capture, verify that data
+   is unreadable in captured traffic.
+3. Run testssl.sh (section 8.4), check for absence of TLS 1.0/1.1,
+   insecure cipher suites, self-signed certificates in production.
+4. Check handling of incorrect/expired client
+   certificates with mTLS enabled.
 
-**Ожидаемый результат:** во всех сценариях — либо полный rollback,
-либо полный redo, никогда не частичное/неопределённое состояние.
+**Expected Result:** TLS 1.3 (or minimum 1.2 with strong cipher
+suites), correct mTLS operation when enabled.
 
-**Критерий провала:** любое частичное применение транзакции после
-краша — Critical severity, прямое нарушение ACID-гарантий.
-
----
-
-### Алгоритм F — Privilege Escalation / RLS Bypass Review
-
-**Предусловие:** минимум две роли настроены (admin, user) с разными RLS-политиками.
-
-**Шаги:**
-
-1. Подключиться токеном роли user, попытаться выполнить операции,
-   зарезервированные за admin (DROP DATABASE, VACUUM, CREATE INDEX
-   на чужой таблице) — все должны быть отклонены.
-2. Проверить обход через CREATE FUNCTION ... LANGUAGE SQL — функция,
-   созданная пользователем user, не должна выполняться с правами
-   создателя выше собственных прав вызывающего (явно решить, какая
-   модель принята — DEFINER или INVOKER).
-3. Проверить обход RLS через составной запрос (JOIN, подзапрос,
-   агрегатную функцию).
-4. Проверить обход через EXPLAIN — план выполнения не должен
-   раскрывать данные защищённых строк через оценки статистики.
-
-**Ожидаемый результат:** ни один из векторов не даёт доступ за пределы
-разрешённого политикой.
-
-**Критерий провала:** любой рабочий обход — Critical severity.
+**Failure Criteria:** active TLS 1.0/1.1, weak cipher suites in
+production profile — High severity.
 
 ---
 
-### Алгоритм G — Denial of Service / Resource Exhaustion Review
+### Algorithm E — WAL / Recovery Tamper Review
 
-**Предусловие:** тестовый инстанс с настроенными лимитами.
+**Preconditions:** Server with WAL, ability to stop the process at any point.
 
-**Шаги:**
+**Steps:**
 
-1. Прогнать автоматизированные тесты 8.5 (connection exhaustion, large payload).
-2. Проверить EXPLAIN ANALYZE на заведомо дорогой запрос — сервер должен
-   иметь возможность прервать долгий запрос по таймауту.
-3. Проверить поведение COPY FROM с некорректным/бесконечным потоком данных.
-4. Проверить лимиты на глубину рекурсии в парсере.
+1. Start a transaction with N operations, stop the server (kill -9)
+   after operation N/2, before COMMIT.
+2. Restart, verify that none of the N/2 operations are applied.
+3. Repeat with stopping AFTER the COMMIT write in WAL, but before applying
+   to heap — verify that recovery completes the transaction (redo).
+4. Manually tamper with a byte in the middle of a WAL record (after
+   checksum), restart — recovery should detect corruption via CRC32.
+5. Check behavior with corruption in encrypted WAL —
+   decryption with incorrect GCM tag should produce a clear error.
 
-**Ожидаемый результат:** все сценарии дают контролируемый отказ.
+**Expected Result:** in all scenarios — either complete rollback
+or complete redo, never partial/undefined state.
 
-**Критерий провала:** OOM-kill сервера или зависание дольше заданного
-таймаута — High severity.
+**Failure Criteria:** any partial transaction application after
+a crash — Critical severity, direct violation of ACID guarantees.
 
 ---
 
-### Алгоритм H — Audit Log Tamper Review
+### Algorithm F — Privilege Escalation / RLS Bypass Review
 
-**Предусловие:** audit log с hash-chain включён.
+**Preconditions:** Minimum two roles configured (admin, user) with different RLS policies.
 
-**Шаги:**
+**Steps:**
 
-1. Выполнить серию DDL-операций, зафиксировать состояние audit log.
-2. Напрямую (в обход SQL-интерфейса) изменить значение одной записи в
-   середине лога.
-3. Выполнить VERIFY AUDIT LOG — убедиться что подмена обнаружена.
-4. Проверить что audit log недоступен на запись через обычный
-   INSERT/UPDATE/DELETE от любой роли.
-5. Проверить ротацию/архивирование audit log — хеш-цепочка должна
-   продолжаться через границу архивных файлов.
+1. Connect with user role token, attempt to execute operations
+   reserved for admin (DROP DATABASE, VACUUM, CREATE INDEX
+   on another user's table) — all should be rejected.
+2. Check bypass via CREATE FUNCTION ... LANGUAGE SQL — a function
+   created by the user role must not execute with creator
+   privileges exceeding the caller's own privileges (explicitly decide which
+   model is adopted — DEFINER or INVOKER).
+3. Check RLS bypass via compound queries (JOIN, subquery,
+   aggregate function).
+4. Check bypass via EXPLAIN — the execution plan must not
+   expose data from protected rows through statistics estimates.
 
-**Ожидаемый результат:** любая подмена обнаруживается.
+**Expected Result:** no vector provides access beyond
+what the policy permits.
 
-**Критерий провала:** необнаруженная подмена записи — Critical
+**Failure Criteria:** any working bypass — Critical severity.
+
+---
+
+### Algorithm G — Denial of Service / Resource Exhaustion Review
+
+**Preconditions:** Test instance with configured limits.
+
+**Steps:**
+
+1. Run automated tests from section 8.5 (connection exhaustion, large payload).
+2. Check EXPLAIN ANALYZE on a deliberately expensive query — the server should
+   have the ability to abort long queries by timeout.
+3. Check COPY FROM behavior with an incorrect/infinite data stream.
+4. Check recursion depth limits in the parser.
+
+**Expected Result:** all scenarios produce a controlled failure.
+
+**Failure Criteria:** OOM-kill of the server or hang exceeding the
+configured timeout — High severity.
+
+---
+
+### Algorithm H — Audit Log Tamper Review
+
+**Preconditions:** Audit log with hash-chain enabled.
+
+**Steps:**
+
+1. Execute a series of DDL operations, record the audit log state.
+2. Directly (bypassing the SQL interface) modify the value of one record in
+   the middle of the log.
+3. Execute VERIFY AUDIT LOG — verify that tampering is detected.
+4. Verify that the audit log is not writable via regular
+   INSERT/UPDATE/DELETE from any role.
+5. Check audit log rotation/archiving — the hash chain should
+   continue across archive file boundaries.
+
+**Expected Result:** any tampering is detected.
+
+**Failure Criteria:** undetected record tampering — Critical
 severity.
 
 ---
 
-## 11. Классификация серьёзности и SLA
+## 11. Severity Classification and SLA
 
-| Severity | Определение | SLA на исправление | Блокирует релиз |
+| Severity | Definition | Fix SLA | Blocks Release |
 |---|---|---|---|
-| Critical | Обход аутентификации, SQL injection, утечка ключей шифрования, обход RLS, порча данных при краше | Немедленно | Да |
-| High | DoS без аутентификации, слабый TLS, отсутствие rate limiting, timing-атака | В течение текущей итерации | Да, для minor/major |
-| Medium | Отсутствие best-practice, избыточная информация в ошибках | В течение месяца | Нет |
-| Low | Стилистические замечания | По возможности | Нет |
+| Critical | Authentication bypass, SQL injection, encryption key leakage, RLS bypass, data corruption on crash | Immediately | Yes |
+| High | DoS without authentication, weak TLS, missing rate limiting, timing attack | Within current iteration | Yes, for minor/major |
+| Medium | Missing best practices, excessive information in errors | Within a month | No |
+| Low | Stylistic issues | As possible | No |
 
 ---
 
-## 12. Расписание проверок
+## 12. Verification Schedule
 
-| Проверка | Частота | Блокирует |
+| Verification | Frequency | Blocks |
 |---|---|---|
-| gitleaks (pre-commit) | При каждом коммите | Локальный коммит |
-| gosec, govulncheck, race-tests | Каждый PR | Мерж PR |
-| semgrep custom rules | Каждый PR | Мерж PR |
-| FuzzParse, FuzzProtocol, FuzzEncryption, FuzzWALRecovery | Nightly, 2 часа каждый | Алертит |
-| DAST (injection, auth bypass, timing) | Nightly | Алертит |
-| Trivy Docker scan | Nightly + релиз | Релиз при Critical/High |
-| Ручные алгоритмы A-H (ротация) | Еженедельно | Фиксируется в отчёте |
-| Полный прогон всех алгоритмов A-H | Перед major/minor релизом | Да |
-| testssl.sh | Перед релизом | Да, при слабом TLS |
-| SBOM генерация | При каждом релизе | Нет, обязательный артефакт |
-| Независимый внешний security-аудит | Раз в год / перед крупной сделкой | Отдельное решение |
+| gitleaks (pre-commit) | Every commit | Local commit |
+| gosec, govulncheck, race-tests | Every PR | PR merge |
+| semgrep custom rules | Every PR | PR merge |
+| FuzzParse, FuzzProtocol, FuzzEncryption, FuzzWALRecovery | Nightly, 2 hours each | Alerts |
+| DAST (injection, auth bypass, timing) | Nightly | Alerts |
+| Trivy Docker scan | Nightly + release | Release on Critical/High |
+| Manual algorithms A-H (rotation) | Weekly | Recorded in report |
+| Full run of all algorithms A-H | Before major/minor release | Yes |
+| testssl.sh | Before release | Yes, on weak TLS |
+| SBOM generation | Every release | No, mandatory artifact |
+| Independent external security audit | Once a year / before major deal | Separate decision |
 
 ---
 
-## 13. Отчётность
+## 13. Reporting
 
-### 13.1 Формат отчёта по ручному алгоритму
+### 13.1 Manual Algorithm Report Format
 
 ```markdown
 # Security Self-Audit Report — Algorithm [A-H]
 
-Дата: 2025-XX-XX
-Исполнитель: [имя]
-Алгоритм: [название]
-Версия VaultDB: X.Y.Z
+Date: 2025-XX-XX
+Executor: [name]
+Algorithm: [name]
+VaultDB Version: X.Y.Z
 
-## Результаты по шагам
+## Step-by-Step Results
 
-| Шаг | Статус | Комментарий |
+| Step | Status | Comment |
 |---|---|---|
-| 1 | Пройден | |
-| 2 | Пройден | |
-| 3 | Частично | Обнаружено X, детали в Findings |
-| 4 | Провален | Критично — см. Findings |
+| 1 | Passed | |
+| 2 | Passed | |
+| 3 | Partial | Found X, details in Findings |
+| 4 | Failed | Critical — see Findings |
 
 ## Findings
 
 ### Finding 1 — [Severity]
-Описание: ...
-Как воспроизвести: ...
-Рекомендация: ...
-Статус исправления: Open / In Progress / Fixed / Accepted Risk
+Description: ...
+How to reproduce: ...
+Recommendation: ...
+Fix Status: Open / In Progress / Fixed / Accepted Risk
 
-## Общий вердикт
+## Overall Verdict
 [Pass / Pass with findings / Fail]
 ```
 
-Отчёты накапливаются в docs/security/self-audits/YYYY-MM-DD-algorithm-X.md.
+Reports are accumulated in docs/security/self-audits/YYYY-MM-DD-algorithm-X.md.
 
-### 13.2 Дашборд статуса безопасности
+### 13.2 Security Status Dashboard
 
 ```json
 GET /admin/security-status
@@ -945,57 +945,57 @@ GET /admin/security-status
 
 ---
 
-## 14. Распределение задач
+## 14. Task Distribution
 
-| Задача | Ответственный | Приоритет |
+| Task | Owner | Priority |
 |---|---|---|
-| CI-интеграция gosec + govulncheck + semgrep | Dev3 | Немедленно |
-| gitleaks pre-commit + CI | Dev4 | Немедленно |
-| FuzzProtocol, FuzzEncryption, FuzzWALRecovery | Dev2 + Dev3 | Немедленно |
-| DAST-скрипты (injection, auth bypass, timing) | Dev3 | Высокий |
-| testssl.sh интеграция + TLS review | Dev3 | Высокий |
-| Trivy Docker scan в CI | Dev4 | Высокий |
-| SBOM генерация | Dev4 | Средний |
-| Constant-time token comparison (если ещё не сделано) | Dev3 | Критично, до релиза |
-| Ручные алгоритмы A-H — первый полный прогон | Вся команда | Высокий |
-| Security dashboard endpoint | Dev3 | Средний |
-| Документация процесса + шаблоны отчётов | Dev1 | Средний |
+| CI integration of gosec + govulncheck + semgrep | Dev3 | Immediately |
+| gitleaks pre-commit + CI | Dev4 | Immediately |
+| FuzzProtocol, FuzzEncryption, FuzzWALRecovery | Dev2 + Dev3 | Immediately |
+| DAST scripts (injection, auth bypass, timing) | Dev3 | High |
+| testssl.sh integration + TLS review | Dev3 | High |
+| Trivy Docker scan in CI | Dev4 | High |
+| SBOM generation | Dev4 | Medium |
+| Constant-time token comparison (if not already done) | Dev3 | Critical, before release |
+| Manual algorithms A-H — first full run | Entire team | High |
+| Security dashboard endpoint | Dev3 | Medium |
+| Process documentation + report templates | Dev1 | Medium |
 
 ---
 
-## 15. Чеклист приёмки
+## 15. Acceptance Checklist
 
-### Автоматизация (Трек A)
+### Automation (Track A)
 
-| # | Критерий | Проверка |
+| # | Criterion | Verification |
 |---|---|---|
-| 1 | gosec встроен в PR gate, падает на Critical/High находках | Тестовый PR с намеренной уязвимостью |
-| 2 | semgrep custom rules ловят SQL string concat паттерн | Тестовый коммит с уязвимым кодом |
-| 3 | govulncheck блокирует PR при известной эксплуатируемой CVE | Тест с уязвимой зависимостью |
-| 4 | gitleaks блокирует коммит с тестовым секретом | Тестовый коммит |
-| 5 | FuzzProtocol работает 2+ часа nightly без падения сервера | CI лог |
-| 6 | FuzzEncryption не находит паник на произвольных байтах | CI лог |
-| 7 | Trivy scan падает на Critical уязвимости в образе | Тестовый образ с уязвимой зависимостью |
-| 8 | DAST timing-attack тест проходит (ratio менее 1.15) | CI лог |
-| 9 | testssl.sh не находит TLS 1.0/1.1/слабых cipher suites | Отчёт testssl.sh |
+| 1 | gosec integrated into PR gate, fails on Critical/High findings | Test PR with intentional vulnerability |
+| 2 | semgrep custom rules catch SQL string concat pattern | Test commit with vulnerable code |
+| 3 | govulncheck blocks PR on known exploitable CVE | Test with vulnerable dependency |
+| 4 | gitleaks blocks commit with test secret | Test commit |
+| 5 | FuzzProtocol runs 2+ hours nightly without server crash | CI log |
+| 6 | FuzzEncryption finds no panics on arbitrary bytes | CI log |
+| 7 | Trivy scan fails on Critical vulnerability in image | Test image with vulnerable dependency |
+| 8 | DAST timing-attack test passes (ratio less than 1.15) | CI log |
+| 9 | testssl.sh finds no TLS 1.0/1.1/weak cipher suites | testssl.sh report |
 
-### Ручные алгоритмы (Трек B)
+### Manual Algorithms (Track B)
 
-| # | Критерий | Проверка |
+| # | Criterion | Verification |
 |---|---|---|
-| 10 | Алгоритм A выполнен, ни один injection payload не сработал | Отчёт |
-| 11 | Алгоритм B выполнен, токены только в виде хешей, timing constant | Отчёт |
-| 12 | Алгоритм C выполнен, данные не найдены в открытом виде на диске | Отчёт |
-| 13 | Алгоритм D выполнен, TLS 1.3 подтверждён | Отчёт |
-| 14 | Алгоритм E выполнен, транзакции атомарны при любой точке краша | Отчёт |
-| 15 | Алгоритм F выполнен, RLS не обходится ни одним вектором | Отчёт |
-| 16 | Алгоритм G выполнен, DoS-сценарии дают контролируемый отказ | Отчёт |
-| 17 | Алгоритм H выполнен, подмена audit log обнаруживается | Отчёт |
+| 10 | Algorithm A completed, no injection payload succeeded | Report |
+| 11 | Algorithm B completed, tokens stored as hashes only, constant-time comparison | Report |
+| 12 | Algorithm C completed, data not found in plaintext on disk | Report |
+| 13 | Algorithm D completed, TLS 1.3 confirmed | Report |
+| 14 | Algorithm E completed, transactions atomic at any crash point | Report |
+| 15 | Algorithm F completed, RLS not bypassable by any vector | Report |
+| 16 | Algorithm G completed, DoS scenarios produce controlled failure | Report |
+| 17 | Algorithm H completed, audit log tampering detected | Report |
 
-### Процесс
+### Process
 
-| # | Критерий |
+| # | Criterion |
 |---|---|
-| 18 | Все 8 отчётов ручных алгоритмов сохранены в docs/security/self-audits/ |
-| 19 | Security dashboard endpoint отдаёт актуальные данные |
-| 20 | Ни одного открытого Critical finding перед объявлением релиза |
+| 18 | All 8 manual algorithm reports saved in docs/security/self-audits/ |
+| 19 | Security dashboard endpoint serves current data |
+| 20 | No open Critical findings before declaring release |

@@ -127,7 +127,7 @@ type SelectStatement struct {
 	DistinctOn   []Expression    // DISTINCT ON (expr1, expr2, ...) — nil means no DISTINCT ON
 }
 
-// CTEDefinition — определение CTE в WITH clause.
+// CTEDefinition — CTE definition в WITH clause.
 type CTEDefinition struct {
 	Name    string
 	Columns []string  // optional column aliases

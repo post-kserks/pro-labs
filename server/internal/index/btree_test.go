@@ -9,7 +9,7 @@ import (
 func TestBTreeInsertAndLookup(t *testing.T) {
 	idx := NewBTreeIndex("test_idx", "id", 0)
 
-	// Вставляем значения
+	// Insert values
 	idx.Insert("10", 0)
 	idx.Insert("20", 1)
 	idx.Insert("30", 2)
@@ -33,7 +33,7 @@ func TestBTreeInsertAndLookup(t *testing.T) {
 func TestBTreeRange(t *testing.T) {
 	idx := NewBTreeIndex("test_idx", "id", 0)
 
-	// Вставляем значения с нулевым паддингом для корректной сортировки
+	// Insert values с нулевым паддингом для корректной сортировки
 	for i := 0; i < 100; i++ {
 		key := fmt.Sprintf("%04d", i*10) // 0000, 0010, 0020, ..., 0990
 		idx.Insert(key, i)
@@ -61,20 +61,20 @@ func TestBTreeRange(t *testing.T) {
 func TestBTreeDelete(t *testing.T) {
 	idx := NewBTreeIndex("test_idx", "id", 0)
 
-	// Вставляем значения
+	// Insert values
 	idx.Insert("10", 0)
 	idx.Insert("20", 1)
 	idx.Insert("30", 2)
 
-	// Удаляем
+	// Delete
 	idx.Delete(1)
 
-	// Проверяем что удалено
+	// Check that удалено
 	if _, ok := idx.Lookup("20"); ok {
 		t.Error("Lookup(20) should return false after delete")
 	}
 
-	// Проверяем что остались
+	// Check that остались
 	if positions, ok := idx.Lookup("10"); !ok || len(positions) != 1 {
 		t.Errorf("Lookup(10) after delete = %v, want [0]", positions)
 	}
@@ -86,12 +86,12 @@ func TestBTreeDelete(t *testing.T) {
 func TestBTreeRebuild(t *testing.T) {
 	idx := NewBTreeIndex("test_idx", "id", 0)
 
-	// Вставляем значения
+	// Insert values
 	idx.Insert("10", 0)
 	idx.Insert("20", 1)
 	idx.Insert("30", 2)
 
-	// Rebuild с новыми данными
+	// Rebuild with new data
 	rows := []IndexableRow{
 		{DeletedTx: 0, Data: []interface{}{int64(100)}},
 		{DeletedTx: 0, Data: []interface{}{int64(200)}},
@@ -99,12 +99,12 @@ func TestBTreeRebuild(t *testing.T) {
 	}
 	idx.Rebuild(rows)
 
-	// Проверяем что старые значения удалены
+	// Check that старые значения удалены
 	if _, ok := idx.Lookup("10"); ok {
 		t.Error("Lookup(10) should return false after rebuild")
 	}
 
-	// Проверяем новые значения
+	// Check new values
 	if positions, ok := idx.Lookup("100"); !ok || len(positions) != 1 {
 		t.Errorf("Lookup(100) after rebuild = %v, want [0]", positions)
 	}
@@ -116,12 +116,12 @@ func TestBTreeRebuild(t *testing.T) {
 func TestBTreeMultipleValuesPerKey(t *testing.T) {
 	idx := NewBTreeIndex("test_idx", "id", 0)
 
-	// Вставляем несколько строк с одним ключом
+	// Insert multiple rows с одним ключом
 	idx.Insert("10", 0)
 	idx.Insert("10", 1)
 	idx.Insert("10", 2)
 
-	// Проверяем что все позиции найдены
+	// Check that все позиции найдены
 	positions, ok := idx.Lookup("10")
 	if !ok {
 		t.Error("Lookup(10) should return true")
@@ -152,13 +152,13 @@ func TestBTreeConcurrent(t *testing.T) {
 func TestBTreeLargeDataset(t *testing.T) {
 	idx := NewBTreeIndex("test_idx", "id", 0)
 
-	// Вставляем 1000 значений с нулевым паддингом
+	// Insert 1000 values с нулевым паддингом
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("%04d", i)
 		idx.Insert(key, i)
 	}
 
-	// Проверяем что все значения найдены
+	// Check that все значения найдены
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("%04d", i)
 		if _, ok := idx.Lookup(key); !ok {

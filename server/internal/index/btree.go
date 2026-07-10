@@ -18,7 +18,7 @@ func (e *btreeEntry) Less(than gbtree.Item) bool {
 	return e.key < than.(*btreeEntry).key
 }
 
-// BTreeIndex — B-tree индекс для range queries и ordering.
+// BTreeIndex — B-tree index for range queries and ordering.
 type BTreeIndex struct {
 	tree     *gbtree.BTree
 	mu       sync.RWMutex
@@ -26,7 +26,7 @@ type BTreeIndex struct {
 	column   string
 	colIndex int
 
-	// Обратный маппинг: позиция строки → ключ
+	// Reverse mapping: позиция строки → ключ
 	reverse map[int]string
 
 	// Index-only scan: stored columns per row position

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// queryClass — категория запроса для счётчиков. Набор известен заранее,
+// queryClass — query category for counters. Набор известен заранее,
 // поэтому на горячем пути используются прямые atomic-счётчики без sync.Map.
 type queryClass int
 
@@ -29,7 +29,7 @@ var queryClassNames = [numQueryClasses]string{
 	"select", "insert", "update", "delete", "ddl", "explain", "transaction", "other",
 }
 
-// QueryCounters — счётчики ok/error по каждой категории запросов.
+// QueryCounters — ok/error counters for each query category.
 type QueryCounters struct {
 	ok  [numQueryClasses]atomic.Int64
 	err [numQueryClasses]atomic.Int64
@@ -59,15 +59,15 @@ func classify(queryType string) queryClass {
 	}
 }
 
-// Collector хранит все метрики сервера и умеет сериализовать их
+// Collector stores all server metrics и умеет сериализовать их
 // в Prometheus text format.
 type Collector struct {
 	startTime time.Time
 
-	// Счётчики запросов по категориям (прямые atomic, без sync.Map)
+	// Query counters by category (прямые atomic, без sync.Map)
 	queries QueryCounters
 
-	// Гистограмма времени выполнения (в секундах)
+	// Execution time histogram (в секундах)
 	histBuckets []float64
 	histCounts  []atomic.Int64
 	histSum     atomic.Int64
@@ -80,27 +80,27 @@ type Collector struct {
 	latencyCount int
 	latencyCap   int
 
-	// Gauge метрики
+	// Gauge metrics
 	activeConns atomic.Int64
 
-	// WAL метрики
+	// WAL metrics
 	walEntries     atomic.Int64
 	walCheckpoints atomic.Int64
 
-	// Индексные метрики
+	// Index metrics
 	indexHits   atomic.Int64
 	indexMisses atomic.Int64
 
-	// Метрики хранилища (обновляются периодически)
+	// Storage metrics (обновляются периодически)
 	storageMu   sync.RWMutex
 	storageRows map[string]map[string]int64
 
-	// Rate limiter метрики
+	// Rate limiter metrics
 	ratelimitBlockedTotal   atomic.Int64
 	ratelimitActiveKeys     atomic.Int64
 	ratelimitEvictionsTotal atomic.Int64
 
-	// Auth rate limiter метрики
+	// Auth rate limiter metrics
 	authBlockedIPs          atomic.Int64
 	authFailedAttemptsTotal atomic.Int64
 }
@@ -191,7 +191,7 @@ func sanitizeMetricLabel(s string) string {
 	return s
 }
 
-// UpdateStorageRows обновляет статистику хранилища.
+// UpdateStorageRows updates storage statistics.
 // Вызывается периодически (каждые 30 секунд) из фоновой горутины.
 func (c *Collector) UpdateStorageRows(db, table string, count int64) {
 	c.storageMu.Lock()
@@ -202,7 +202,7 @@ func (c *Collector) UpdateStorageRows(db, table string, count int64) {
 	c.storageRows[db][table] = count
 }
 
-// CleanStaleStorageRows удаляет метрики таблиц, которые больше не существуют.
+// CleanStaleStorageRows removes metrics for tables that no longer exist.
 // activeTables — map[db]set(tableNames).
 func (c *Collector) CleanStaleStorageRows(activeTables map[string]map[string]bool) {
 	c.storageMu.Lock()
@@ -264,7 +264,7 @@ func (c *Collector) Render() string {
 			queryClassNames[class], c.queries.err[class].Load())
 	}
 
-	// ── Гистограмма времени выполнения ────────────────────────────────
+	// ── Execution time histogram ────────────────────────────────
 
 	b.WriteString("\n# HELP vaultdb_query_duration_seconds Query duration\n")
 	b.WriteString("# TYPE vaultdb_query_duration_seconds histogram\n")
@@ -295,7 +295,7 @@ func (c *Collector) Render() string {
 		fmt.Fprintf(&b, "vaultdb_query_duration_percentile{quantile=\"0.99\"} %g\n", p99)
 	}
 
-	// ── Gauge метрики ─────────────────────────────────────────────────
+	// ── Gauge metrics ─────────────────────────────────────────────────
 
 	fmt.Fprintf(&b,
 		"\n# HELP vaultdb_active_connections Active TCP connections\n"+
@@ -309,7 +309,7 @@ func (c *Collector) Render() string {
 			"vaultdb_uptime_seconds %d\n",
 		int64(time.Since(c.startTime).Seconds()))
 
-	// ── WAL метрики ───────────────────────────────────────────────────
+	// ── WAL metrics ───────────────────────────────────────────────────
 
 	fmt.Fprintf(&b,
 		"\n# HELP vaultdb_wal_entries_total WAL entries written\n"+
@@ -323,7 +323,7 @@ func (c *Collector) Render() string {
 			"vaultdb_wal_checkpoint_total %d\n",
 		c.walCheckpoints.Load())
 
-	// ── Индексные метрики ─────────────────────────────────────────────
+	// ── Index metrics ─────────────────────────────────────────────
 
 	fmt.Fprintf(&b,
 		"\n# HELP vaultdb_index_lookups_total Index lookup hits and misses\n"+
@@ -377,7 +377,7 @@ func (c *Collector) Render() string {
 		}
 	}
 
-	// ── Rate limiter метрики ────────────────────────────────────────
+	// ── Rate limiter metrics ────────────────────────────────────────
 
 	fmt.Fprintf(&b,
 		"\n# HELP vaultdb_ratelimit_blocked_total Requests blocked by rate limiter\n"+
@@ -397,7 +397,7 @@ func (c *Collector) Render() string {
 			"vaultdb_ratelimit_evictions_total %d\n",
 		c.ratelimitEvictionsTotal.Load())
 
-	// ── Auth rate limiter метрики ────────────────────────────────────
+	// ── Auth rate limiter metrics ────────────────────────────────────
 
 	fmt.Fprintf(&b,
 		"\n# HELP vaultdb_auth_blocked_ips Currently blocked IPs in auth rate limiter\n"+

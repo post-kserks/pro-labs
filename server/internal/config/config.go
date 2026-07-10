@@ -1,4 +1,4 @@
-// Package config загружает vaultdb.yaml.
+// Package config loads vaultdb.yaml.
 package config
 
 import (
@@ -11,14 +11,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// LiveQueriesConfig управляет поведением Live Queries при медленных клиентах.
+// LiveQueriesConfig controls Live Query behavior for slow clients.
 type LiveQueriesConfig struct {
 	BufferSize    int    `yaml:"buffer_size"`
 	DropPolicy    string `yaml:"drop_policy"`
 	BlockTimeoutS int    `yaml:"block_timeout_s"`
 }
 
-// TLSConfig — параметры TLS.
+// TLSConfig — TLS parameters.
 type TLSConfig struct {
 	Enabled      bool   `yaml:"enabled"`
 	CertFile     string `yaml:"cert_file"`
@@ -28,7 +28,7 @@ type TLSConfig struct {
 	RedirectHTTP bool   `yaml:"redirect_http"` // auto redirect HTTP to HTTPS
 }
 
-// ServerConfig — сетевые параметры сервера.
+// ServerConfig — server network parameters.
 type ServerConfig struct {
 	Host                string            `yaml:"host"`
 	Port                int               `yaml:"port"`
@@ -49,7 +49,7 @@ type ServerConfig struct {
 	TLS                 TLSConfig         `yaml:"tls"`
 }
 
-// StorageConfig — параметры хранилища.
+// StorageConfig — storage parameters.
 type StorageConfig struct {
 	Engine           string `yaml:"engine"`
 	DataDir          string `yaml:"data_dir"`
@@ -58,7 +58,7 @@ type StorageConfig struct {
 	BufferPoolPages  int    `yaml:"buffer_pool_pages"`
 }
 
-// AuthConfig — параметры аутентификации.
+// AuthConfig — authentication parameters.
 type AuthConfig struct {
 	Enabled            bool   `yaml:"enabled"`
 	MTLSEnabled        bool   `yaml:"mtls_enabled"`
@@ -70,7 +70,7 @@ type AuthConfig struct {
 	RequireTLSForToken bool   `yaml:"require_tls_for_token"`
 }
 
-// AIConfig — параметры внешнего embedding-провайдера для SEMANTIC_MATCH/AI_EMBED.
+// AIConfig — external embedding provider parameters for SEMANTIC_MATCH/AI_EMBED.
 type AIConfig struct {
 	Provider     string `yaml:"provider"`
 	Endpoint     string `yaml:"endpoint"`
@@ -80,7 +80,7 @@ type AIConfig struct {
 	CacheSize    int    `yaml:"cache_size"`
 }
 
-// EncryptionConfig — параметры Transparent Data Encryption (TDE).
+// EncryptionConfig — Transparent Data Encryption (TDE) parameters.
 type EncryptionConfig struct {
 	Enabled        bool   `yaml:"enabled"`
 	KeySource      string `yaml:"key_source"`    // passphrase | os_keychain | kms
@@ -89,14 +89,14 @@ type EncryptionConfig struct {
 	EncryptWAL     bool   `yaml:"encrypt_wal"`
 }
 
-// AuditConfig — параметры журналирования аудита.
+// AuditConfig — audit logging parameters.
 type AuditConfig struct {
 	ArchivePath       string `yaml:"archive_path"`
 	ArchiveKeepCount  int    `yaml:"archive_keep_count"`
 	VerifyIntervalSec int    `yaml:"verify_interval_sec"`
 }
 
-// Config — корневая конфигурация vaultdb.yaml.
+// Config — root configuration of vaultdb.yaml.
 type Config struct {
 	Server     ServerConfig     `yaml:"server"`
 	Storage    StorageConfig    `yaml:"storage"`
@@ -107,7 +107,7 @@ type Config struct {
 }
 
 const (
-	DefaultMaxRequestSize         = 64 * 1024 * 1024 // 64 МБ
+	DefaultMaxRequestSize         = 64 * 1024 * 1024 // 64 MB
 	DefaultLiveQueryBuffer        = 256
 	DefaultLiveQueryPolicy        = "drop"
 	DefaultLiveQueryBlockTimeout  = 5
@@ -129,7 +129,7 @@ const (
 	DefaultAuditVerifyIntervalSec = 300 // 5 minutes
 )
 
-// Default возвращает конфигурацию со значениями по умолчанию.
+// Default returns configuration with default values.
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -173,8 +173,8 @@ func Default() *Config {
 	}
 }
 
-// Load читает конфигурацию из файла. Отсутствующие ключи получают значения
-// по умолчанию. Если path пустой — возвращаются значения по умолчанию.
+// Load reads configuration from a file. Missing keys get
+// default values. If path is empty — default values are returned.
 func Load(path string) (*Config, error) {
 	cfg := Default()
 	if path == "" {
@@ -359,7 +359,7 @@ func validateConfig(cfg *Config) error {
 	return nil
 }
 
-// ApplyEnvOverrides применяет переменные окружения, перекрывая значения из файла.
+// ApplyEnvOverrides applies environment variables, overriding file values.
 func ApplyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("VAULTDB_HOST"); v != "" {
 		cfg.Server.Host = v
@@ -426,8 +426,8 @@ func envBoolValue(v string) bool {
 	}
 }
 
-// Reload перезагружает конфигурацию из файла.
-// Возвращает ошибку если конфиг невалиден.
+// Reload reloads configuration from a file.
+// Returns an error if config is invalid.
 func Reload(path string) (*Config, error) {
 	return Load(path)
 }

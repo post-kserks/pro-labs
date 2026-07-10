@@ -1,130 +1,130 @@
 # Security Self-Audit Report — Algorithm E
 
-Дата: 2026-07-06
-Исполнитель: MiMoCode (автоматический анализ)
-Алерготм: WAL / Recovery Tamper Review
-Версия VaultDB: latest (HEAD)
+Date: 2026-07-06
+Executor: MiMoCode (automated analysis)
+Algorithm: WAL / Recovery Tamper Review
+VaultDB Version: latest (HEAD)
 
-## Результаты по шагам
+## Step-by-Step Results
 
-| Шаг | Статус | Комментарий |
+| Step | Status | Comment |
 |---|---|---|
-| 1 | Пройден | Транзакция из N операций, проверка что незакоммиченные записи не применяются |
-| 2 | Пройден | Recovery откатывает незавершённые транзакции |
-| 3 | Пройден | Recovery применяет закоммиченные записи через redo |
-| 4 | Пройден | CRC32 checksum обнаруживает подмену байтов в WAL-записи |
-| 5 | Пройден | Зашифрованный WAL с неверным GCM tag отчётливо отвергается |
+| 1 | Passed | Transaction with N operations, verification that uncommitted records are not applied |
+| 2 | Passed | Recovery rolls back incomplete transactions |
+| 3 | Passed | Recovery applies committed records via redo |
+| 4 | Passed | CRC32 checksum detects byte tampering in WAL records |
+| 5 | Passed | Encrypted WAL with incorrect GCM tag is clearly rejected |
 
 ## Findings
 
-### Finding 1 — SyncBatchSize: потеря до 64 записей при crash (Medium)
+### Finding 1 — SyncBatchSize: up to 64 records lost on crash (Medium)
 
-**Описание:** WAL использует `SyncBatchSize = 64` (по умолчанию) — fsync выполняется каждые 64 записи, а не после каждой. При crash до fsync теряются до 64 последних записей WAL.
+**Description:** WAL uses `SyncBatchSize = 64` (default) — fsync is performed every 64 records, not after each one. On crash before fsync, up to the last 64 WAL records are lost.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/wal/wal.go:487` — `SyncBatchSize: 64`
-- `server/internal/wal/wal.go:745-757` — fsync batching логика
+- `server/internal/wal/wal.go:745-757` — fsync batching logic
 
-**Воспроизведение:** Записать 65 операций, вызвать kill -9 до fsync. Recovery покажет только первые 64 операции.
+**Reproduction:** Write 65 operations, trigger kill -9 before fsync. Recovery will show only the first 64 operations.
 
-**Рекомендация:** Это осознанный trade-off throughput vs durability. Документировать поведение. Для production с высокой durability — установить `SyncBatchSize: 1` или `0`.
+**Recommendation:** This is an intentional trade-off between throughput and durability. Document the behavior. For production with high durability requirements — set `SyncBatchSize: 1` or `0`.
 
-**Статус исправления:** Accepted Risk (design trade-off)
+**Fix Status:** Accepted Risk (design trade-off)
 
 ---
 
-### Finding 2 — scanAndTruncate: корректное обнаружение повреждённого хвоста (Pass)
+### Finding 2 — scanAndTruncate: correct detection of corrupted tail (Pass)
 
-**Описание:** При открытии WAL, `scanAndTruncate()` (`wal.go:1086-1173`) сканирует записи, обнаруживает CRC32 mismatch, пытается resync по магическим байтам "VDB1", и усекает файл до последней валидной позиции.
+**Description:** When opening the WAL, `scanAndTruncate()` (`wal.go:1086-1173`) scans records, detects CRC32 mismatches, attempts resync via "VDB1" magic bytes, and truncates the file to the last valid position.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/wal/wal.go:1086-1173` — scanAndTruncate()
 - `server/internal/wal/corrupt_tail_test.go` — TestRecoverAfterCorruptTail
 
-**Вердикт:** CORRUPT WAL обнаруживается и обрабатывается корректно.
+**Verdict:** CORRUPT WAL is correctly detected and handled.
 
 ---
 
-### Finding 3 — Partial writes защищены через CRC32 (Pass)
+### Finding 3 — Partial writes protected via CRC32 (Pass)
 
-**Описание:** Каждая запись WAL содержит CRC32 checksum覆盖所有 заголовков и payload (`wal.go:1014`). При чтении checksum проверяется инкрементально (`wal.go:1057-1061`). Partial write (torn record) приводит к mismatch и отбрасыванию записи.
+**Description:** Each WAL record contains a CRC32 checksum covering all headers and payload (`wal.go:1014`). During reading, the checksum is verified incrementally (`wal.go:1057-1061`). Partial writes (torn records) result in a mismatch and the record is discarded.
 
-**Доказательства:**
-- `server/internal/wal/wal.go:995-1018` — buildRecord с CRC32
-- `server/internal/wal/wal.go:1050-1061` — readEntryFrom с проверкой CRC
+**Evidence:**
+- `server/internal/wal/wal.go:995-1018` — buildRecord with CRC32
+- `server/internal/wal/wal.go:1050-1061` — readEntryFrom with CRC check
 
 ---
 
-### Finding 4 — Encrypted WAL: GCM tag failure корректно обнаруживается (Pass)
+### Finding 4 — Encrypted WAL: GCM tag failure correctly detected (Pass)
 
-**Описание:** При расшифровке WAL-записи используется `DecryptPage()` (`wal.go:1069`). Неверный ключ или повреждённые данные вызывают ошибку расшифровки, которая прерывает recovery.
+**Description:** When decrypting a WAL record, `DecryptPage()` is used (`wal.go:1069`). An incorrect key or corrupted data triggers a decryption error, which interrupts recovery.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/wal/wal.go:1063-1077` — decrypt branch
 
 ---
 
-### Finding 5 — Full Page Image (FPI) защита от torn pages (Pass)
+### Finding 5 — Full Page Image (FPI) protection against torn pages (Pass)
 
-**Описание:** WAL поддерживает `OpFullPageImage` (`wal.go:52`) — перед модификацией страницы записывается полный образ (8KB). При recovery сначала применяется FPI, затем DML-операции.
+**Description:** WAL supports `OpFullPageImage` (`wal.go:52`) — before page modification, a full image (8KB) is written. During recovery, FPI is applied first, then DML operations.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/wal/wal.go:52` — OpFullPageImage constant
 - `server/internal/wal/wal.go:673-692` — WriteFullPageImage()
 - `server/internal/storage/crash_test.go:1033-1134` — TestFullPageWriteRecovery
 
 ---
 
-### Finding 6 — Checkpoint порядок: record → catalog → truncate (Pass)
+### Finding 6 — Checkpoint order: record → catalog → truncate (Pass)
 
-**Описание:** `doCheckpoint()` в page engine выполняет: (1) записывает checkpoint record в WAL, (2) сохраняет каталог, (3) усекает WAL. Если crash происходит между (2) и (3), recovery восстановит каталог из checkpoint record LSN.
+**Description:** `doCheckpoint()` in the page engine performs: (1) writes checkpoint record to WAL, (2) saves catalog, (3) truncates WAL. If a crash occurs between (2) and (3), recovery restores the catalog from the checkpoint record LSN.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/wal/wal.go:543-583` — WriteCheckpointRecord() + TruncateWAL()
 
 ---
 
-### Finding 7 — Catalog recalculation при recovery (Pass)
+### Finding 7 — Catalog recalculation during recovery (Pass)
 
-**Описание:** После WAL replay, catalog пересчитывается из heap файлов (`TestCatalogRecalculationAfterWALRecovery`). Это гарантирует что catalog всегда согласован с реальным состоянием данных.
+**Description:** After WAL replay, the catalog is recalculated from heap files (`TestCatalogRecalculationAfterWALRecovery`). This ensures the catalog is always consistent with the actual data state.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/storage/crash_test.go:1136-1244`
 
 ---
 
 ### Finding 8 — Incomplete vacuum/rewrite cleanup (Pass)
 
-**Описание:** Recovery обнаруживает незавершённые операции vacuum (`.vacuum` shadow directory) и rewrite (`.rewrite.tmp` directory) и удаляет их.
+**Description:** Recovery detects incomplete vacuum (`.vacuum` shadow directory) and rewrite (`.rewrite.tmp` directory) operations and removes them.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/storage/crash_test.go:739-850` — TestAlterTableRewriteRecovery
 - `server/internal/storage/crash_test.go:920-1031` — TestVacuumRecovery
 
 ---
 
-## Покрытие тестами crash-сценариев
+## Crash Scenario Test Coverage
 
-| Сценарий | Тест | Статус |
+| Scenario | Test | Status |
 |---|---|---|
-| Crash после INSERT без COMMIT | TestWALRecoveryAfterCrash | Pass |
-| Partial write в WAL | TestWALRecoveryWithPartialWrite | Pass |
-| Crash после DELETE | TestWALRecoveryAfterDelete | Pass |
-| Crash при concurrent inserts | TestConcurrentCrashMixedWorkload | Pass |
-| Corrupt tail в WAL | TestRecoverAfterCorruptTail | Pass |
-| Corrupt page на диске (torn page) | TestFullPageWriteRecovery | Pass |
+| Crash after INSERT without COMMIT | TestWALRecoveryAfterCrash | Pass |
+| Partial write in WAL | TestWALRecoveryWithPartialWrite | Pass |
+| Crash after DELETE | TestWALRecoveryAfterDelete | Pass |
+| Crash during concurrent inserts | TestConcurrentCrashMixedWorkload | Pass |
+| Corrupt tail in WAL | TestRecoverAfterCorruptTail | Pass |
+| Corrupt page on disk (torn page) | TestFullPageWriteRecovery | Pass |
 | Incomplete ALTER TABLE rewrite | TestAlterTableRewriteRecovery | Pass |
 | Incomplete vacuum | TestVacuumRecovery | Pass |
 | Catalog corruption | TestCatalogRecalculationAfterWALRecovery | Pass |
 
-## Общий вердикт
+## Overall Verdict
 
 **Pass with findings**
 
-WAL/Recovery реализация демонстрирует корректную обработку ACID-гарантий:
-- CRC32 checksum обнаруживает все формы повреждения записей
-- Full Page Image защищает от torn pages
-- Recovery корректно обрабатывает committed/incomplete/aborted транзакции
-- Encrypted WAL корректно отвергает повреждённые данные
+The WAL/Recovery implementation demonstrates correct handling of ACID guarantees:
+- CRC32 checksum detects all forms of record corruption
+- Full Page Image protects against torn pages
+- Recovery correctly handles committed/incomplete/aborted transactions
+- Encrypted WAL correctly rejects corrupted data
 
-Единственная находка — SyncBatchSize trade-off, который является осознанным решением.
+The only finding is the SyncBatchSize trade-off, which is an intentional design decision.

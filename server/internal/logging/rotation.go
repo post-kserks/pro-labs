@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Rotator — ротатор лог-файлов.
+// Rotator — log file rotator.
 type Rotator struct {
 	mu          sync.Mutex
 	file        *os.File
@@ -20,7 +20,7 @@ type Rotator struct {
 	currentSize int64
 }
 
-// NewRotator создаёт новый ротатор.
+// NewRotator creates a new rotator.
 func NewRotator(filename string, maxSizeMB int, maxBackups int) (*Rotator, error) {
 	if maxSizeMB <= 0 {
 		maxSizeMB = 100 // по умолчанию 100 МБ
@@ -50,12 +50,12 @@ func NewRotator(filename string, maxSizeMB int, maxBackups int) (*Rotator, error
 	}, nil
 }
 
-// Write записывает данные в лог-файл.
+// Write writes data to log file.
 func (r *Rotator) Write(p []byte) (n int, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Проверяем нужна ли ротация
+	// Check if rotation is needed
 	if r.currentSize+int64(len(p)) > r.maxSize {
 		if err := r.rotate(); err != nil {
 			return 0, err
@@ -67,23 +67,23 @@ func (r *Rotator) Write(p []byte) (n int, err error) {
 	return n, err
 }
 
-// rotate выполняет ротацию лог-файла.
+// rotate performs log file rotation.
 func (r *Rotator) rotate() error {
-	// Закрываем текущий файл
+	// Close current file
 	if err := r.file.Close(); err != nil {
 		return err
 	}
 
-	// Удаляем самый старый бэкап
+	// Delete самый старый бэкап
 	r.removeOldestBackup()
 
-	// Переименовываем текущий файл
+	// Rename current file
 	backupName := r.filename + fmt.Sprintf(".%s", time.Now().Format("2006-01-02T15-04-05"))
 	if err := os.Rename(r.filename, backupName); err != nil {
 		return err
 	}
 
-	// Создаём новый файл
+	// Create new file
 	file, err := os.OpenFile(r.filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
 	if err != nil {
 		return err
@@ -95,7 +95,7 @@ func (r *Rotator) rotate() error {
 	return nil
 }
 
-// removeOldestBackup удаляет самый старый бэкап.
+// removeOldestBackup removes the oldest backup.
 func (r *Rotator) removeOldestBackup() {
 	dir := filepath.Dir(r.filename)
 	base := filepath.Base(r.filename)
@@ -112,9 +112,9 @@ func (r *Rotator) removeOldestBackup() {
 		}
 	}
 
-	// Удаляем старые бэкапы если их больше maxBackups
+	// Delete старые бэкапы если их больше maxBackups
 	for len(backups) > r.maxBackups {
-		// Находим самый старый (по имени файла — там дата)
+		// Find the oldest (по имени файла — там дата)
 		oldest := backups[0]
 		for _, b := range backups[1:] {
 			if b < oldest {
@@ -123,7 +123,7 @@ func (r *Rotator) removeOldestBackup() {
 		}
 		os.Remove(filepath.Join(dir, oldest))
 
-		// Удаляем из списка
+		// Delete из списка
 		for i, b := range backups {
 			if b == oldest {
 				backups = append(backups[:i], backups[i+1:]...)
@@ -133,7 +133,7 @@ func (r *Rotator) removeOldestBackup() {
 	}
 }
 
-// Close закрывает ротатор.
+// Close closes the rotator.
 func (r *Rotator) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -144,7 +144,7 @@ func (r *Rotator) Close() error {
 	return nil
 }
 
-// Sync синхронизирует файл на диск.
+// Sync syncs file to disk.
 func (r *Rotator) Sync() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -155,7 +155,7 @@ func (r *Rotator) Sync() error {
 	return nil
 }
 
-// Writer возвращает io.Writer для использования с log/slog.
+// Writer returns io.Writer for use with log/slog.
 func (r *Rotator) Writer() io.Writer {
 	return r
 }

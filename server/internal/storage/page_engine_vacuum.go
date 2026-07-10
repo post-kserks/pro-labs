@@ -32,7 +32,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 
 	start := time.Now()
 
-	// Записываем начало vacuum в WAL
+	// Write start vacuum в WAL
 	if e.wal != nil {
 		vacuumPayload := wal.WALVacuumPayload{
 			DB:    dbName,
@@ -43,7 +43,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		}
 	}
 
-	// Создаём shadow file для новой версии таблицы
+	// Create shadow file для новой версии таблицы
 	shadowPath := e.tablePath(dbName, tableName) + ".vacuum"
 	shadowHF, err := heap.CreateHeapFile(shadowPath)
 	if err != nil {
@@ -84,7 +84,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 				rowsAfter++
 			}
 		}
-		// Пересобираем страницу только из живых версий
+		// Rebuild page только из живых версий
 		pg.Init(page.PageTypeHeap)
 		for _, tuple := range live {
 			if _, err := pg.InsertTuple(tuple); err != nil {
@@ -92,7 +92,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 				return nil, err
 			}
 		}
-		// Пишем в shadow file
+		// Write to shadow file
 		if err := shadowHF.WritePage(pid, &pg); err != nil {
 			os.Remove(shadowPath)
 			return nil, err
@@ -104,7 +104,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 	}
 	shadowHF.Close()
 
-	// Записываем завершение vacuum в WAL (перед заменой файлов)
+	// Write completion vacuum в WAL (перед заменой файлов)
 	if e.wal != nil {
 		vacuumPayload := wal.WALVacuumPayload{
 			DB:    dbName,
@@ -116,7 +116,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		}
 	}
 
-	// Атомарная замена: удаляем старую директорию и переименовываем shadow.
+	// Atomic replacement: удаляем старую директорию и переименовываем shadow.
 	// На Linux os.Rename для директорий требует, чтобы цель не существовала
 	// или была пустой. Поскольку originalPath — непустая директория с сегментами,
 	// сначала удаляем её, затем делаем rename.
@@ -135,7 +135,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		return nil, err
 	}
 
-	// Открываем новый heap file
+	// Open new heap file
 	newHF, err := heap.OpenHeapFile(originalPath)
 	if err != nil {
 		return nil, err
@@ -143,7 +143,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 	t.heap = newHF
 	e.bufPool.InvalidateTable(t.tableID)
 
-	// Обновляем каталог (кратковременный global lock).
+	// Update catalog (кратковременный global lock).
 	e.mu.Lock()
 	key := dbName + "/" + tableName
 	e.catalog.RowCounts[key] = rowsAfter

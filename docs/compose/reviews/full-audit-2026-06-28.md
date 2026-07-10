@@ -1,38 +1,38 @@
 # VaultDB — Full Code Review
 
-**Дата**: 2026-06-28
-**Метод**: ручной статический анализ всего серверного кода (Go), excludes `client/` и `audit.md`
+**Date**: 2026-06-28
+**Method**: Manual static analysis of all server code (Go), excludes `client/` and `audit.md`
 
 ---
 
-## Общая оценка
+## Overall Assessment
 
-Проект впечатляет: полноценный SQL-движок с WAL, MVCC, оптимизатором, индексами (BTree/GIN/GiST/Hash), буфер-пулом, страничным хранилищем и транзакционным overlay. Архитектура модульная, слои разделены чётко. Тестов >50, покрытие хорошее, все тесты проходят.
+The project is impressive: a full-featured SQL engine with WAL, MVCC, optimizer, indexes (BTree/GIN/GiST/Hash), buffer pool, page storage, and transactional overlay. The architecture is modular, layers are cleanly separated. Tests >50, good coverage, all tests pass.
 
-Ниже — все найденные проблемы, сгруппированные по критичности.
+Below are all issues found, grouped by criticality.
 
 ---
 
 ## Critical (Must Fix)
 
-### 1. Lock ordering WAL ↔ PageEngine — реальный deadlock-вектор
+### 1. Lock ordering WAL ↔ PageEngine — real deadlock vector
 
-**Файл**: `server/internal/storage/page_engine.go:541-575`  
-**Файл**: `server/internal/wal/wal.go:498-525`
+**File**: `server/internal/storage/page_engine.go:541-575`
+**File**: `server/internal/wal/wal.go:498-525`
 
-**Проблема**: `doCheckpoint()` захватывает `e.mu.Lock()`, затем вызывает `e.wal.Append()` (берёт `w.mu`). Recovery-коллбэки (`redoPhase`/`undoPhase`) захватывают `e.mu` под уже удерживаемым `w.mu` — **обратный порядок**.
+**Problem**: `doCheckpoint()` acquires `e.mu.Lock()`, then calls `e.wal.Append()` (acquires `w.mu`). Recovery callbacks (`redoPhase`/`undoPhase`) acquire `e.mu` while `w.mu` is already held — **reverse order**.
 
-Это НЕ theoretical: при старте сервера `RecoverFromWAL()` → `redoPhase()` → `redoInsert()` захватывает `e.mu.Lock()` **после** того, как `wal.Replay()` захватил `w.mu`. А `doCheckpoint()` делает `e.mu.Lock()` → `w.mu` (через `wal.Append`). Если recovery и checkpoint запускаются одновременно — deadlock.
+This is NOT theoretical: when the server starts, `RecoverFromWAL()` → `redoPhase()` → `redoInsert()` acquires `e.mu.Lock()` **after** `wal.Replay()` has acquired `w.mu`. And `doCheckpoint()` does `e.mu.Lock()` → `w.mu` (via `wal.Append`). If recovery and checkpoint run simultaneously — deadlock.
 
-**Статус в audit.md**:✅ описан как "potential". Я подтверждаю — это **реальный** deadlock-вектор при определённых условиях.
+**Status in audit.md**: ✅ described as "potential". I confirm — this is a **real** deadlock vector under certain conditions.
 
-**Рекомендация**: Добавить документированный invariant: lock order всегда WAL → PageEngine. Или перестроить checkpoint так, чтобы `w.mu` не держался при вызове `e.mu`-protected методов.
+**Recommendation**: Add a documented invariant: lock order is always WAL → PageEngine. Or restructure checkpoint so that `w.mu` is not held when calling `e.mu`-protected methods.
 
 ---
 
-### 2. `context.Background()` в executor — запросы не отменяются при shutdown
+### 2. `context.Background()` in executor — queries not cancelled on shutdown
 
-**Файл**: `server/internal/executor/executor.go:205-209`
+**File**: `server/internal/executor/executor.go:205-209`
 
 ```go
 queryCtx := context.Background()
@@ -41,51 +41,51 @@ if queryTimeout > 0 {
 }
 ```
 
-**Проблема**: Контекст запроса НЕ привязан к контексту сервера. При `SIGTERM`/`SIGKILL` долгие запросы (большие SELECT, тяжёлые DDL) продолжают выполняться, не прерываясь. Сервер ждёт `ShutdownTimeoutSec` (30s по умолчанию), но запрос может работать дольше.
+**Problem**: The query context is NOT bound to the server context. On `SIGTERM`/`SIGKILL`, long queries (large SELECT, heavy DDL) continue executing without interruption. The server waits `ShutdownTimeoutSec` (30s default), but the query may run longer.
 
-**Статус в audit.md**:✅ описан. Подтверждаю — это high-priority для production.
+**Status in audit.md**: ✅ described. Confirmed — this is high-priority for production.
 
-**Рекомендация**: Пробрасывать `context.Context` из `handleConnection` через `Session.Execute` → `Executor.Run`.
+**Recommendation**: Pass `context.Context` from `handleConnection` through `Session.Execute` → `Executor.Run`.
 
 ---
 
-### 3. WAL silent error swallowing — потеря данных при corrupt WAL
+### 3. WAL silent error swallowing — data loss on corrupt WAL
 
-**Файл**: `server/internal/wal/wal.go:413-425`, `466-473`, `508-514`
+**File**: `server/internal/wal/wal.go:413-425`, `466-473`, `508-514`
 
 ```go
 if err == io.EOF || err == io.ErrUnexpectedEOF {
     break
 }
-break  // остальные ошибки тоже тихо break
+break  // other errors also silently break
 ```
 
-**Проблема**: В `scanAndTruncate`, `AnalyzeTransactions`, `Replay` все ошибки кроме `io.EOF/ErrUnexpectedEOF` обрабатываются как `break` **без логирования**. Повреждённая запись в середине WAL приводит к молчаливой потере ВСЕХ последующих записей.
+**Problem**: In `scanAndTruncate`, `AnalyzeTransactions`, `Replay`, all errors except `io.EOF/ErrUnexpectedEOF` are handled as `break` **without logging**. A corrupted record in the middle of the WAL leads to silent loss of ALL subsequent records.
 
-**Статус в audit.md**:✅ описан. Согласен — это serious data loss risk.
+**Status in audit.md**: ✅ described. Agreed — this is a serious data loss risk.
 
-**Рекомендация**: Добавить `slog.Warn` с offset и типом ошибки. Лучше — вернуть ошибку и прервать recovery с явным сообщением.
+**Recommendation**: Add `slog.Warn` with offset and error type. Better yet — return an error and abort recovery with an explicit message.
 
 ---
 
 ## Important (Should Fix)
 
-### 4. ConnectionPool — не пул, а счётчик соединений
+### 4. ConnectionPool — not a pool, but a connection counter
 
-**Файл**: `server/internal/pool/pool.go:156-173`  
-**Файл**: `server/cmd/vaultdb-server/main.go:486-534`
+**File**: `server/internal/pool/pool.go:156-173`
+**File**: `server/cmd/vaultdb-server/main.go:486-534`
 
-**Проблема**: `AcquireConn()` не переиспользует idle-соединения. Каждая входящая коннекция создаёт новый wrapper. Пул не возвращает соединения — он только ограничивает максимум.
+**Problem**: `AcquireConn()` does not reuse idle connections. Each incoming connection creates a new wrapper. The pool does not return connections — it only limits the maximum.
 
-**Статус в audit.md**:✅ описан. Я согласен — для production нужен настоящий пул с reuse, или переименовать в `ConnectionTracker`.
+**Status in audit.md**: ✅ described. Agreed — for production, a real pool with reuse is needed, or rename to `ConnectionTracker`.
 
-**Рекомендация**: Переименовать в `ConnectionTracker` или реализовать реальный пул (accept loop → pool → handler goroutine).
+**Recommendation**: Rename to `ConnectionTracker` or implement a real pool (accept loop → pool → handler goroutine).
 
 ---
 
-### 5. `isHealthy` — data race в pool
+### 5. `isHealthy` — data race in pool
 
-**Файл**: `server/internal/pool/pool.go:228-243`
+**File**: `server/internal/pool/pool.go:228-243`
 
 ```go
 func (p *Pool) isHealthy(conn *Connection) bool {
@@ -93,29 +93,29 @@ func (p *Pool) isHealthy(conn *Connection) bool {
     _, err := conn.conn.Read(make([]byte, 0))
 ```
 
-**Проблема**: Метод вызывает `conn.conn.SetReadDeadline` и `conn.conn.Read` **без блокировки `conn.mu`**, в то время как `Read`/`Write` в `Connection` держат тот же мьютекс. Race condition при конкурентном чтении/записи.
+**Problem**: The method calls `conn.conn.SetReadDeadline` and `conn.conn.Read` **without locking `conn.mu`**, while `Read`/`Write` in `Connection` hold the same mutex. Race condition on concurrent read/write.
 
-**Статус в audit.md**:✅ описан как data race. Подтверждаю.
+**Status in audit.md**: ✅ described as data race. Confirmed.
 
-**Рекомендация**: Взять `conn.mu.Lock()` в `isHealthy`, либо использовать `conn.conn` напрямую (обойдя обёртку).
-
----
-
-### 6. `getTableForRead` / `getTableForWrite` — дублирование кода
-
-**Файл**: `server/internal/storage/page_engine.go:797-893`
-
-**Проблема**: ~45 строк скопированы с единственным отличием: `t.mu.RLock()` vs `t.mu.Lock()`. Нарушение DRY.
-
-**Статус в audit.md**:✅ описан. Согласен.
-
-**Рекомендация**: Вынести в общий метод `getTable(db, table, write bool)`.
+**Recommendation**: Acquire `conn.mu.Lock()` in `isHealthy`, or use `conn.conn` directly (bypass the wrapper).
 
 ---
 
-### 7. `encodeColumnValue` fallback — тихая потеря типа
+### 6. `getTableForRead` / `getTableForWrite` — code duplication
 
-**Файл**: `server/internal/storage/binary_encoding.go:172-180`
+**File**: `server/internal/storage/page_engine.go:797-893`
+
+**Problem**: ~45 lines copied with the only difference being `t.mu.RLock()` vs `t.mu.Lock()`. DRY violation.
+
+**Status in audit.md**: ✅ described. Agreed.
+
+**Recommendation**: Extract into a common method `getTable(db, table, write bool)`.
+
+---
+
+### 7. `encodeColumnValue` fallback — silent type loss
+
+**File**: `server/internal/storage/binary_encoding.go:172-180`
 
 ```go
 default:
@@ -123,41 +123,41 @@ default:
     // encode as string tag 's'
 ```
 
-**Проблема**: Для неизвестных типов Go используется `fmt.Sprintf("%v")` с тегом `'s'`. При десериализации получится строка, а не оригинальный тип. Тихая деградация данных.
+**Problem**: For unknown Go types, `fmt.Sprintf("%v")` is used with tag `'s'`. On deserialization, the result is a string, not the original type. Silent data degradation.
 
-**Статус в audit.md**:✅ описан. Согласен.
+**Status in audit.md**: ✅ described. Agreed.
 
-**Рекомендация**: Возвращать ошибку для неизвестных типов, либо добавить тег `'?'` с raw JSON.
-
----
-
-### 8. reflect-based command registry — хрупкость
-
-**Файл**: `server/internal/executor/executor.go:23-96`
-
-**Проблема**: При добавлении нового Statement нужно не забыть зарегистрировать фабрику в `init()`. Если забыть — `CommandFactory` вернёт `"unknown statement type"` в рантайме.
-
-**Статус в audit.md**:✅ описан. Согласен — это latent bug source.
-
-**Рекомендация**: Использовать type switch или registration через interface marker.
+**Recommendation**: Return an error for unknown types, or add a `'?'` tag with raw JSON.
 
 ---
 
-### 9. `validateConfig` дублирует `Default()` — неочевидный fallback
+### 8. reflect-based command registry — fragility
 
-**Файл**: `server/internal/config/config.go:153-259`
+**File**: `server/internal/executor/executor.go:23-96`
 
-**Проблема**: `validateConfig` повторно присваивает значения по умолчанию, которые уже установлены в `Default()`. Это fallback для случая, когда YAML содержит явный `0`/`""`/`false` и `Unmarshal` сбрасывает default. Но код неочевиден.
+**Problem**: When adding a new Statement, you must not forget to register the factory in `init()`. If forgotten — `CommandFactory` returns `"unknown statement type"` at runtime.
 
-**Статус в audit.md**:✅ описан как мелкое замечание. Я считаю это medium — в production конфиге это может привести к неожиданному поведению.
+**Status in audit.md**: ✅ described. Agreed — this is a latent bug source.
+
+**Recommendation**: Use type switch or registration via interface marker.
+
+---
+
+### 9. `validateConfig` duplicates `Default()` — non-obvious fallback
+
+**File**: `server/internal/config/config.go:153-259`
+
+**Problem**: `validateConfig` re-assigns default values that were already set in `Default()`. This is a fallback for when YAML contains explicit `0`/`""`/`false` and `Unmarshal` resets the default. But the code is non-obvious.
+
+**Status in audit.md**: ✅ described as a minor note. I consider this medium — in a production config, this could lead to unexpected behavior.
 
 ---
 
 ## New Issues (Not in audit.md)
 
-### 10. `isHealthy` в pool — неверная семантика для idle соединений
+### 10. `isHealthy` in pool — incorrect semantics for idle connections
 
-**Файл**: `server/internal/pool/pool.go:228-243`
+**File**: `server/internal/pool/pool.go:228-243`
 
 ```go
 func (p *Pool) isHealthy(conn *Connection) bool {
@@ -169,60 +169,60 @@ func (p *Pool) isHealthy(conn *Connection) bool {
 }
 ```
 
-**Проблема**: `io.EOF` означает, что remote side закрыл соединение. Для TCP это **мёртвое** соединение, но `isHealthy` считает его здоровым. При повторном использовании такого соединения будет получен `io.EOF` при чтении.
+**Problem**: `io.EOF` means the remote side closed the connection. For TCP this is a **dead** connection, but `isHealthy` considers it healthy. On reuse, `io.EOF` will be returned on read.
 
-**Рекомендация**: Убрать `io.EOF` из "healthy" условий.
-
----
-
-### 11. `sanitizeErrorMessage` в protocol.go — неполная защита
-
-**Файл**: `server/cmd/vaultdb-server/protocol.go:37-53`
-
-**Проблема**: Фильтр определяет внутренние ошибки по паттернам (`/go/src/`, `.go:`, `heapfile`), но не покрывает:
-- Стек-трейсы (содержат `.go:` файлы)
-- Ошибки с портами (`:5432`, `:8080`)
-- Пути данных (`data/pagedb/`)
-
-Некоторые ошибки storage могут просачиваться к клиенту.
-
-**Рекомендация**: Использовать whitelist подход (всегда возвращать generic "internal error") вместо blacklist.
+**Recommendation**: Remove `io.EOF` from "healthy" conditions.
 
 ---
 
-### 12. `VaultDB.Open()` не инициализирует WAL
+### 11. `sanitizeErrorMessage` in protocol.go — incomplete protection
 
-**Файл**: `server/vaultdb.go:25-38`
+**File**: `server/cmd/vaultdb-server/protocol.go:37-53`
+
+**Problem**: The filter identifies internal errors by patterns (`/go/src/`, `.go:`, `heapfile`), but does not cover:
+- Stack traces (contain `.go:` files)
+- Errors with ports (`:5432`, `:8080`)
+- Data paths (`data/pagedb/`)
+
+Some storage errors may leak to the client.
+
+**Recommendation**: Use a whitelist approach (always return generic "internal error") instead of a blacklist.
+
+---
+
+### 12. `VaultDB.Open()` does not initialize WAL
+
+**File**: `server/vaultdb.go:25-38`
 
 ```go
 func Open(dataDir string) (*VaultDB, error) {
     s, err := storage.NewPageStorageEngine(dataDir, nil, txm)
 ```
 
-**Проблема**: Embedded API передаёт `nil` для WAL. Это значит, что `PageStorageEngine` работает **без WAL** — нет crash recovery, нет durability. Пользователи embedded API могут не осознавать это.
+**Problem**: The Embedded API passes `nil` for WAL. This means `PageStorageEngine` operates **without WAL** — no crash recovery, no durability. Embedded API users may not realize this.
 
-**Рекомендация**: Либо автоматически создавать WAL, либо явно документировать отсутствие durability.
+**Recommendation**: Either automatically create a WAL, or explicitly document the absence of durability.
 
 ---
 
 ### 13. Missing `go.sum` dependency pinning
 
-**Файл**: `server/go.mod`
+**File**: `server/go.mod`
 
 ```
 go 1.23
 require gopkg.in/yaml.v3 v3.0.1
 ```
 
-**Проблема**: Единственная зависимость — `yaml.v3`. Но в CI используется `staticcheck@v0.5.1`, `gosec@v2.21.4`, `govulncheck@v1.1.3` — внешние инструменты без pinning версий. При изменении их поведения CI может сломаться.
+**Problem**: The only dependency is `yaml.v3`. But CI uses `staticcheck@v0.5.1`, `gosec@v2.21.4`, `govulncheck@v1.1.3` — external tools without version pinning. If their behavior changes, CI may break.
 
-**Рекомендация**: Использовать `go tool` directive (Go 1.24+) или зафиксировать версии в Makefile.
+**Recommendation**: Use `go tool` directive (Go 1.24+) or pin versions in Makefile.
 
 ---
 
-### 14. `handleConnection` — panic recovery без stack trace
+### 14. `handleConnection` — panic recovery without stack trace
 
-**Файл**: `server/cmd/vaultdb-server/main.go:177-184`
+**File**: `server/cmd/vaultdb-server/main.go:177-184`
 
 ```go
 defer func() {
@@ -235,92 +235,92 @@ defer func() {
 }()
 ```
 
-**Проблема**: Panic recovery не логирует stack trace. При production panic информация для диагностики будет потеряна.
+**Problem**: Panic recovery does not log the stack trace. In production, diagnostic information from a panic will be lost.
 
-**Рекомендация**: Добавить `debug.Stack()` в лог.
+**Recommendation**: Add `debug.Stack()` to the log.
 
 ---
 
 ### 15. `RateLimiter` hardcoded values
 
-**Файл**: `server/cmd/vaultdb-server/main.go:104`
+**File**: `server/cmd/vaultdb-server/main.go:104`
 
 ```go
 rateLimiter := httpserver.NewRateLimiter(100, 200) // 100 req/s, burst 200
 ```
 
-**Проблема**: Rate limiter захардкожен в коде, не конфигурируется через `vaultdb.yaml`. В production разным деплоям могут нужны разные лимиты.
+**Problem**: Rate limiter is hardcoded in code, not configurable via `vaultdb.yaml`. In production, different deployments may need different limits.
 
-**Рекомендация**: Добавить `server.rate_limit_rps` и `server.rate_limit_burst` в конфиг.
+**Recommendation**: Add `server.rate_limit_rps` and `server.rate_limit_burst` to config.
 
 ---
 
-### 16. `ConnectionRateLimiter` дублирует `httpserver.RateLimiter`
+### 16. `ConnectionRateLimiter` duplicates `httpserver.RateLimiter`
 
-**Файл**: `server/cmd/vaultdb-server/main.go:140-174`  
-**Файл**: `server/internal/httpserver/ratelimit.go`
+**File**: `server/cmd/vaultdb-server/main.go:140-174`
+**File**: `server/internal/httpserver/ratelimit.go`
 
-**Проблема**: Два разных rate limiter'а: один для TCP (`ConnectionRateLimiter`), другой для HTTP (`httpserver.RateLimiter`). Код `ConnectionRateLimiter` написан с нуля и не переиспользует существующий.
+**Problem**: Two different rate limiters: one for TCP (`ConnectionRateLimiter`), another for HTTP (`httpserver.RateLimiter`). `ConnectionRateLimiter` code was written from scratch and does not reuse the existing one.
 
-**Рекомендация**: Переиспользовать `httpserver.RateLimiter` или вынести общий token bucket в `internal/ratelimit`.
+**Recommendation**: Reuse `httpserver.RateLimiter` or extract a common token bucket into `internal/ratelimit`.
 
 ---
 
 ### 17. Missing `VERSION` consistency check
 
-**Файл**: `VERSION`  
-**Файл**: `Makefile:4`  
-**Файл**: `server/cmd/vaultdb-server/main.go:41`
+**File**: `VERSION`
+**File**: `Makefile:4`
+**File**: `server/cmd/vaultdb-server/main.go:41`
 
-**Проблема**: `VERSION` файл, `Makefile` и `main.go` содержат version. `main.go` по умолчанию `dev`, но нет проверки что `VERSION` файл существует при сборке через `make build`. Если файл удалён — будет пустая строка.
+**Problem**: The `VERSION` file, `Makefile`, and `main.go` all contain a version. `main.go` defaults to `dev`, but there is no check that the `VERSION` file exists when building via `make build`. If the file is deleted — an empty string will be used.
 
 ---
 
 ### 18. `InsertRows` — double sync
 
-**Файл**: `server/internal/storage/page_engine_io.go:249-261`
+**File**: `server/internal/storage/page_engine_io.go:249-261`
 
 ```go
-if err := t.heap.Sync(); err != nil {  // sync внутри loop
+if err := t.heap.Sync(); err != nil {  // sync inside loop
     return 0, err
 }
 ...
-if err := t.heap.Sync(); err != nil {  // sync после loop
+if err := t.heap.Sync(); err != nil {  // sync after loop
     return 0, err
 }
 ```
 
-**Проблема**: `t.heap.Sync()` вызывается и внутри цикла (при page overflow), и после цикла. Внутренний sync избыточен — он происходит при flush'е страницы.
+**Problem**: `t.heap.Sync()` is called both inside the loop (on page overflow) and after the loop. The inner sync is redundant — it occurs during page flush.
 
-**Рекомендация**: Убрать внутренний sync (строка 249-251), оставить только финальный.
+**Recommendation**: Remove the inner sync (line 249-251), keep only the final one.
 
 ---
 
 ## Minor (Nice to Have)
 
-### 19. `generateID()` — мёртвый код
-`pool.go:300-304` — `generateID()` не используется, дублирует `randomID()`.
+### 19. `generateID()` — dead code
+`pool.go:300-304` — `generateID()` is unused, duplicates `randomID()`.
 
-### 20. `PoolStats` — мёртвый тип
-`pool.go:306-311` — `PoolStats` и `Stats()` не вызываются извне.
+### 20. `PoolStats` — dead type
+`pool.go:306-311` — `PoolStats` and `Stats()` are not called externally.
 
-### 21. `VAULTDB_LOG_LEVEL` — no-op в config
-`config.go:293-295` — переменная читается, но сразу отбрасывается.
+### 21. `VAULTDB_LOG_LEVEL` — no-op in config
+`config.go:293-295` — variable is read but immediately discarded.
 
-### 22. `OpUpdate` отсутствует в WAL
-На уровне WAL нет единого `OpUpdate`. UPDATE = DELETE + INSERT — два WAL-записи.
+### 22. `OpUpdate` absent in WAL
+At the WAL level, there is no single `OpUpdate`. UPDATE = DELETE + INSERT — two WAL records.
 
 ### 23. `distinctRows` — O(n) memory, potential O(n²) strings
-`commands_select.go:414-425` — `strings.Join(row, "\x00")` для каждого row создаёт новую строку. При больших результатах — много аллокаций.
+`commands_select.go:414-425` — `strings.Join(row, "\x00")` creates a new string for each row. For large results — many allocations.
 
 ### 24. `evalOperandRaw` — potential nil dereference
-`commands_select.go:311` — если `cmp.Right` это nil, `evalOperandRaw` может упасть.
+`commands_select.go:311` — if `cmp.Right` is nil, `evalOperandRaw` may crash.
 
 ---
 
-## Тесты и покрытие
+## Tests and Coverage
 
-| Пакет | Статус | Время |
+| Package | Status | Time |
 |-------|--------|-------|
 | `cmd/vaultdb-server` | ✅ ok | 0.4s |
 | `internal/ai` | ✅ ok | 2.1s |
@@ -344,19 +344,19 @@ if err := t.heap.Sync(); err != nil {  // sync после loop
 | `internal/wal` | ✅ ok | 1.6s |
 | `internal/websocket` | ✅ ok | 1.6s |
 
-**Все тесты проходят.** `go vet` чистый.
+**All tests pass.** `go vet` is clean.
 
 ---
 
 ## CI/CD
 
-CI включает: `gofmt`, `go vet`, `staticcheck`, `go test -race`, `gosec`, `govulncheck`, `npm audit`, C++ build+test, Docker smoke test. Это хорошая практика.
+CI includes: `gofmt`, `go vet`, `staticcheck`, `go test -race`, `gosec`, `govulncheck`, `npm audit`, C++ build+test, Docker smoke test. This is good practice.
 
 ---
 
-## Итоговая сводка
+## Summary
 
-| Категория | Найдено | Приоритет |
+| Category | Found | Priority |
 |-----------|---------|-----------|
 | Critical deadlock | 1 | Critical |
 | Shutdown non-cancellation | 1 | High |
@@ -370,18 +370,18 @@ CI включает: `gofmt`, `go vet`, `staticcheck`, `go test -race`, `gosec`,
 | Embedded API durability gap | 1 | Medium |
 | Minor/dead code | 6 | Low |
 
-**Всего**: 20 замечаний (4 Critical/High, 8 Medium, 8 Low)
+**Total**: 20 findings (4 Critical/High, 8 Medium, 8 Low)
 
 ---
 
-## Сравнение с audit.md
+## Comparison with audit.md
 
-| audit.md # | Мой статус | Комментарий |
+| audit.md # | My Status | Comment |
 |------------|-----------|-------------|
-| A (deadlock) | ✅ Agree, real risk | Не theoretical — реальный вектор |
-| B (pool) | ✅ Agree | Дополнительно: isHealthy data race |
-| C (context) | ✅ Agree | Критично для production |
-| D (WAL errors) | ✅ Agree | Критично для durability |
+| A (deadlock) | ✅ Agree, real risk | Not theoretical — real vector |
+| B (pool) | ✅ Agree | Additionally: isHealthy data race |
+| C (context) | ✅ Agree | Critical for production |
+| D (WAL errors) | ✅ Agree | Critical for durability |
 | E (DRY) | ✅ Agree | |
 | F (reflect) | ✅ Agree | |
 | G (fallback) | ✅ Agree | |
@@ -390,16 +390,16 @@ CI включает: `gofmt`, `go vet`, `staticcheck`, `go test -race`, `gosec`,
 | J (token race) | ✅ Agree | Low priority |
 | 3.1-3.5 | ✅ Agree | |
 
-**Новые замечания** (не в audit.md): #10-18, 20-24.
+**New findings** (not in audit.md): #10-18, 20-24.
 
 ---
 
-## Рекомендации по приоритету для production
+## Production Priority Recommendations
 
-1. **Fix deadlock** (#1) — задокументировать lock ordering или перестроить checkpoint
-2. **Fix context** (#2) — пробросить shutdown context в executor
-3. **Fix WAL errors** (#3) — добавить slog.Warn на corrupt entries
-4. **Fix pool race** (#5) — заблокировать conn.mu в isHealthy
-5. **Fix isHealthy EOF** (#10) — убрать io.EOF из healthy
-6. **Fix panic stack trace** (#14) — добавить debug.Stack()
-7. **Fix embedded WAL** (#12) — документировать или автоматизировать
+1. **Fix deadlock** (#1) — document lock ordering or restructure checkpoint
+2. **Fix context** (#2) — pass shutdown context into executor
+3. **Fix WAL errors** (#3) — add slog.Warn on corrupt entries
+4. **Fix pool race** (#5) — lock conn.mu in isHealthy
+5. **Fix isHealthy EOF** (#10) — remove io.EOF from healthy conditions
+6. **Fix panic stack trace** (#14) — add debug.Stack()
+7. **Fix embedded WAL** (#12) — document or automate

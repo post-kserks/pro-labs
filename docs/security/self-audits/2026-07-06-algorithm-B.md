@@ -1,23 +1,23 @@
 # Security Self-Audit Report — Algorithm B
 
-Дата: 2026-07-06
-Исполнитель: MiMoCode Agent
-Алгоритм: B — Authentication & Authorization Review
-Версия VaultDB: Current (main branch)
+Date: 2026-07-06
+Executor: MiMoCode Agent
+Algorithm: B — Authentication & Authorization Review
+VaultDB Version: Current (main branch)
 
-## Результаты по шагам
+## Step-by-Step Results
 
-| Шаг | Статус | Комментарий |
+| Step | Status | Comment |
 |---|---|---|
-| 1 | Пройден | Токены хранятся только как HMAC-SHA256 хеши |
-| 2 | Пройден | ValidateToken использует HMAC-SHA256 (constant-time by design) |
-| 3 | Пройден | VAULTDB_AUTH_SECRET — ephemeral secret если не задан, без hardcoded default |
-| 4 | Пройден | RLS implemented — проверены векторы обхода |
-| 5 | Провален | Нет механизма отзыва (revocation) токенов |
+| 1 | Passed | Tokens are stored only as HMAC-SHA256 hashes |
+| 2 | Passed | ValidateToken uses HMAC-SHA256 (constant-time by design) |
+| 3 | Passed | VAULTDB_AUTH_SECRET — ephemeral secret if not set, no hardcoded default |
+| 4 | Passed | RLS implemented — bypass vectors checked |
+| 5 | Failed | No token revocation mechanism |
 
-## Шаг 1: Формат хранения токенов
+## Step 1: Token Storage Format
 
-**Источник:** `server/internal/auth/manager.go:32`
+**Source:** `server/internal/auth/manager.go:32`
 
 ```go
 type Manager struct {
@@ -26,9 +26,9 @@ type Manager struct {
 }
 ```
 
-Токены хранятся **только** как HMAC-SHA256 хеши (hex-encoded). Оригинальные значения не сохраняются.
+Tokens are stored **only** as HMAC-SHA256 hashes (hex-encoded). Original values are not preserved.
 
-**Проверка (manager_test.go:76-97):**
+**Verification (manager_test.go:76-97):**
 ```go
 func TestTokensStoredHashed(t *testing.T) {
     m, _ := New(true, map[string]string{"plain-secret": "ci"}, nil, 60, 10, 300)
@@ -38,11 +38,11 @@ func TestTokensStoredHashed(t *testing.T) {
 }
 ```
 
-**Результат:** PASS — plaintext токены не хранятся.
+**Result:** PASS — plaintext tokens are not stored.
 
-## Шаг 2: Constant-time comparison
+## Step 2: Constant-time Comparison
 
-**Источник:** `server/internal/auth/manager.go:203-215`
+**Source:** `server/internal/auth/manager.go:203-215`
 
 ```go
 func (m *Manager) ValidateToken(token string) bool {
@@ -56,12 +56,12 @@ func (m *Manager) ValidateToken(token string) bool {
 }
 ```
 
-**Анализ:**
-1. `hashToken` вычисляет HMAC-SHA256 — HMAC является constant-time операцией по дизайну (RFC 2104)
-2. Сравнение происходит через Go map lookup — O(1) амортизированное
-3. Нет прямого сравнения строк через `==`
+**Analysis:**
+1. `hashToken` computes HMAC-SHA256 — HMAC is a constant-time operation by design (RFC 2104)
+2. Comparison is done via Go map lookup — O(1) amortized
+3. There is no direct string comparison via `==`
 
-**Проверка (timing_test.go):**
+**Verification (timing_test.go):**
 ```go
 func TestTokenComparisonTiming(t *testing.T) {
     // Ratio < 1.25 required for pass
@@ -72,13 +72,13 @@ func TestTokenComparisonTiming(t *testing.T) {
 }
 ```
 
-**Результат:** PASS — timing ratio < 1.25 (HMAC + map lookup).
+**Result:** PASS — timing ratio < 1.25 (HMAC + map lookup).
 
-**Примечание:** Не используется `subtle.ConstantTimeCompare` напрямую, но HMAC-SHA256 hash + map lookup является mathematically constant-time.
+**Note:** `subtle.ConstantTimeCompare` is not used directly, but HMAC-SHA256 hash + map lookup is mathematically constant-time.
 
-## Шаг 3: VAULTDB_AUTH_SECRET validation
+## Step 3: VAULTDB_AUTH_SECRET Validation
 
-**Источник:** `server/internal/auth/manager.go:146-177`
+**Source:** `server/internal/auth/manager.go:146-177`
 
 ```go
 func New(enabled bool, tokens map[string]string, logger *slog.Logger, ...) (*Manager, error) {
@@ -95,19 +95,19 @@ func New(enabled bool, tokens map[string]string, logger *slog.Logger, ...) (*Man
 }
 ```
 
-**Анализ:**
-- Нет hardcoded default значения для secret
-- Если env var не задан — генерируется ephemeral 32-byte random secret
-- В production VAULTDB_AUTH_SECRET обязателен (проверяется в main.go)
+**Analysis:**
+- No hardcoded default value for secret
+- If env var is not set — an ephemeral 32-byte random secret is generated
+- In production, VAULTDB_AUTH_SECRET is mandatory (checked in main.go)
 - Ephemeral secret invalidates tokens on restart (by design)
 
-**Результат:** PASS — нет hardcoded defaults.
+**Result:** PASS — no hardcoded defaults.
 
-## Шаг 4: RLS bypass vectors
+## Step 4: RLS Bypass Vectors
 
-**Источник:** `server/internal/executor/commands_dml_shared.go:98-149`
+**Source:** `server/internal/executor/commands_dml_shared.go:98-149`
 
-### 4.1 Admin bypass
+### 4.1 Admin Bypass
 ```go
 func enforceRLSPolicies(ctx *ExecutionContext, dbName, tableName string) error {
     schema, _ := ctx.Storage.GetTableSchema(dbName, tableName)
@@ -116,56 +116,56 @@ func enforceRLSPolicies(ctx *ExecutionContext, dbName, tableName string) error {
 }
 ```
 
-RLS применяется одинаково для всех ролей. Нет built-in admin bypass.
+RLS is applied equally for all roles. There is no built-in admin bypass.
 
-### 4.2 SQL injection в USING expression
+### 4.2 SQL Injection in USING Expression
 ```go
 expr, err := parser.ParseExpression(policy.UsingExpr)
 ```
 
-USING expression парсится через парсер — безопасно от injection.
+The USING expression is parsed through the parser — safe from injection.
 
-### 4.3 JOIN bypass
-RLS фильтрация применяется **до** JOINs:
+### 4.3 JOIN Bypass
+RLS filtering is applied **before** JOINs:
 ```go
 // commands_select.go:325-327
 rows, err = filterRowsWithRLS(rows, mainSchema, ctx, dbName, c.stmt.TableName)
 // ... then JOINs
 ```
 
-**Результат:** PASS — все три вектора обхода защищены.
+**Result:** PASS — all three bypass vectors are protected.
 
-## Шаг 5: Token revocation mechanism
+## Step 5: Token Revocation Mechanism
 
-**Поиск в кодовой базе:**
+**Codebase search:**
 ```bash
 grep -rn "Revocation\|revoke\|token.*life\|expir\|token.*timeout" server/internal/
 ```
 
-**Результат:** Найдены только expiration для row locks и cache TTL. Механизм отзыва токенов (revocation list, token expiry) **не реализован**.
+**Result:** Only expiration for row locks and cache TTL was found. The token revocation mechanism (revocation list, token expiry) **is not implemented**.
 
-**Вектор атаки:** Скомпрометированный токен остаётся действительным до перезапуска сервера или ручного удаления из tokens.json.
+**Attack vector:** A compromised token remains valid until the server is restarted or the token is manually deleted from tokens.json.
 
 ## Findings
 
 ### Finding 1 — No Token Revocation Mechanism (High)
-**Описание:** Отсутствует механизм отзыва скомпрометированных токенов без перезапуска сервера.
+**Description:** There is no mechanism to revoke compromised tokens without restarting the server.
 
-**Как воспроизвести:** 
-1. Создать токен через API
-2. Использовать токен для доступа
-3. Компрометировать токен
-4. Нет способа деактивировать токен без перезапуска сервера
+**How to reproduce:**
+1. Create a token via API
+2. Use the token for access
+3. Compromise the token
+4. There is no way to deactivate the token without restarting the server
 
-**Рекомендация:** Добавить:
+**Recommendation:** Add:
 - Token expiry (TTL)
-- Revocation list (in-memory или persistent)
-- API endpoint для отзыва токенов
+- Revocation list (in-memory or persistent)
+- API endpoint for token revocation
 
-**Статус исправления:** Open
+**Fix Status:** Open
 
 ### Finding 2 — Localhost Auth Bypass (Medium)
-**Описание:** Auth middleware пропускает запросы с localhost:
+**Description:** Auth middleware skips requests from localhost:
 ```go
 // manager.go:240
 if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
@@ -174,12 +174,12 @@ if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
 }
 ```
 
-**Вектор атаки:** Если сервер слушает на 0.0.0.0 и reachable извне, атакующий может подделать IP через proxy.
+**Attack vector:** If the server listens on 0.0.0.0 and is reachable from outside, an attacker can spoof the IP via a proxy.
 
-**Рекомендация:** Убедиться что сервер слушает только на 127.0.0.1 в development, или ограничить localhost bypass через configuration.
+**Recommendation:** Ensure the server only listens on 127.0.0.1 in development, or restrict the localhost bypass through configuration.
 
-**Статус исправления:** Accepted Risk (development convenience)
+**Fix Status:** Accepted Risk (development convenience)
 
-## Общий вердикт
+## Overall Verdict
 
-**Pass with findings** — основные механизмы аутентификации реализованы корректно (HMAC hashing, constant-time comparison, no hardcoded secrets, RLS enforcement). Обнаружен High severity finding — отсутствие механизма отзыва токенов.
+**Pass with findings** — core authentication mechanisms are correctly implemented (HMAC hashing, constant-time comparison, no hardcoded secrets, RLS enforcement). A High severity finding was discovered — absence of a token revocation mechanism.

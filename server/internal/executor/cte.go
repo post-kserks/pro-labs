@@ -9,28 +9,28 @@ import (
 
 const maxCTEIterations = 100
 
-// CTEScope — область видимости CTE для конкретного запроса.
+// CTEScope — CTE scope for a specific query.
 type CTEScope struct {
 	ctes   map[string]*CTEDefinition
 	parent *CTEScope
 }
 
-// CTEDefinition — определение CTE.
+// CTEDefinition — CTE definition.
 type CTEDefinition struct {
 	Name    string
 	Columns []string
 	Query   parser.Statement
-	Result  *Result // закэшированный результат
+	Result  *Result // cached result
 }
 
-// NewCTEScope создаёт новую область видимости CTE.
+// NewCTEScope creates a new CTE scope.
 func NewCTEScope() *CTEScope {
 	return &CTEScope{
 		ctes: make(map[string]*CTEDefinition),
 	}
 }
 
-// PushScope добавляет вложенную область видимости.
+// PushScope adds a nested scope.
 func (s *CTEScope) PushScope() *CTEScope {
 	return &CTEScope{
 		ctes:   make(map[string]*CTEDefinition),
@@ -38,12 +38,12 @@ func (s *CTEScope) PushScope() *CTEScope {
 	}
 }
 
-// RegisterCTE регистрирует CTE в текущей области видимости.
+// RegisterCTE registers a CTE in the current scope.
 func (s *CTEScope) RegisterCTE(cte *CTEDefinition) {
 	s.ctes[cte.Name] = cte
 }
 
-// ResolveCTE ищет CTE по имени в цепочке областей видимости.
+// ResolveCTE looks up a CTE by name in the scope chain.
 func (s *CTEScope) ResolveCTE(name string) (*CTEDefinition, bool) {
 	if cte, ok := s.ctes[name]; ok {
 		return cte, true
@@ -54,7 +54,7 @@ func (s *CTEScope) ResolveCTE(name string) (*CTEDefinition, bool) {
 	return nil, false
 }
 
-// ExecuteCTE выполняет CTE и кэширует результат.
+// ExecuteCTE executes a CTE and caches the result.
 func (s *CTEScope) ExecuteCTE(cte *CTEDefinition, ctx *ExecutionContext) (*Result, error) {
 	if cte.Result != nil {
 		return cte.Result, nil
@@ -74,7 +74,7 @@ func (s *CTEScope) ExecuteCTE(cte *CTEDefinition, ctx *ExecutionContext) (*Resul
 	return res, nil
 }
 
-// ExecuteCTEStatement выполняет CTEStatement.
+// ExecuteCTEStatement executes a CTEStatement.
 func ExecuteCTEStatement(stmt *parser.CTEStatement, ctx *ExecutionContext) (*Result, error) {
 	scope := NewCTEScope()
 
@@ -326,10 +326,10 @@ func rowKeyStr(row []string) string {
 	return strings.Join(parts, "\x00")
 }
 
-// ExecuteSelectWithCTE выполняет SELECT с CTE.
+// ExecuteSelectWithCTE executes SELECT with CTE.
 func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (*Result, error) {
 	if len(stmt.CTEs) == 0 {
-		// Нет CTE — выполняем обычный SELECT
+		// No CTE — execute regular SELECT
 		cmd := &SelectCommand{stmt: stmt}
 		return cmd.Execute(ctx)
 	}
@@ -338,7 +338,7 @@ func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (
 
 	dbName, _ := requireCurrentDB(ctx)
 
-	// Регистрируем CTE
+	// Register CTE
 	for i := range stmt.CTEs {
 		scope.RegisterCTE(&CTEDefinition{
 			Name:    stmt.CTEs[i].Name,
@@ -385,7 +385,7 @@ func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (
 		}
 	}()
 
-	// Проверяем, ссылается ли SELECT на CTE
+	// Check if SELECT references a CTE
 	if stmt.TableName != "" {
 		if _, found := scope.ResolveCTE(stmt.TableName); found {
 			// Check if outer SELECT has aggregation, GROUP BY, HAVING, or other clauses
@@ -456,12 +456,12 @@ func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (
 		}
 	}
 
-	// Обычный SELECT
+	// Regular SELECT
 	cmd := &SelectCommand{stmt: stmt}
 	return cmd.Execute(ctx)
 }
 
-// FormatCTEResult форматирует результат CTE для вывода.
+// FormatCTEResult formats the CTE result for output.
 func FormatCTEResult(res *Result) *Result {
 	if res == nil {
 		return &Result{Type: "message", Message: "CTE executed successfully"}

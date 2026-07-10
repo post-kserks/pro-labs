@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// Index — интерфейс для всех типов индексов.
+// Index — interface for all index types.
 type Index interface {
 	Name() string
 	Column() string
@@ -22,7 +22,7 @@ type Index interface {
 	GetStoredColumns(rowPos int) (map[string]interface{}, bool)
 }
 
-// NewByType создаёт индекс по типу.
+// NewByType creates an index by type.
 func NewByType(name, column string, colIndex int, indexType string) Index {
 	switch indexType {
 	case "btree":
@@ -40,7 +40,7 @@ func NewByType(name, column string, colIndex int, indexType string) Index {
 	}
 }
 
-// NewCompositeByType создаёт составной индекс.
+// NewCompositeByType creates a composite index.
 func NewCompositeByType(name string, columns []string, colIndices []int, indexType string) Index {
 	switch indexType {
 	case "btree":
@@ -50,7 +50,7 @@ func NewCompositeByType(name string, columns []string, colIndices []int, indexTy
 	}
 }
 
-// IndexManager хранит все индексы одной таблицы.
+// IndexManager stores all indexes for a single table.
 type IndexManager struct {
 	mu      sync.RWMutex
 	indexes map[string]Index // имя индекса → индекс
@@ -182,7 +182,7 @@ func (m *IndexManager) RangeSearch(column, low, high string) ([]int, bool) {
 	return nil, false
 }
 
-// FullTextSearch выполняет полнотекстовый поиск через GIN индекс.
+// FullTextSearch выполняет полноtextовый поиск через GIN индекс.
 func (m *IndexManager) FullTextSearch(column, query string) ([]int, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

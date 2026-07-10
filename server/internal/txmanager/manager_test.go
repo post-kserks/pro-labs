@@ -160,7 +160,7 @@ func TestSpillReadOpsNoTruncationAndError(t *testing.T) {
 		t.Fatalf("large op truncated/lost on spill: got len %d", len(s))
 	}
 
-	// Симулируем ошибку записи: липкая spillErr должна вернуться из ReadOps.
+	// Simulate write error: липкая spillErr должна вернуться из ReadOps.
 	tx2 := m.Begin()
 	tx2.spilled = true
 	tx2.spillPath = dir + "/does-not-exist.tmp"
@@ -188,11 +188,11 @@ func TestSavepointTruncation(t *testing.T) {
 	if len(ops) != 1 {
 		t.Fatalf("expected 1 op after rollback to s1, got %d", len(ops))
 	}
-	// s2 создан позже s1 — должен быть удалён.
+	// s2 was created after s1 — должен быть удалён.
 	if err := tx.RollbackToSavepoint("s2"); err == nil {
 		t.Fatalf("expected error rolling back to dropped savepoint s2")
 	}
-	// Неизвестный savepoint.
+	// Unknown savepoint.
 	if err := tx.RollbackToSavepoint("nope"); err == nil {
 		t.Fatalf("expected error for unknown savepoint")
 	}

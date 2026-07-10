@@ -48,7 +48,7 @@ type PreparedStatement struct {
 	Query parser.Statement
 }
 
-// SessionConfig содержит все параметры для создания сессии.
+// SessionConfig contains all parameters for creating a session.
 type SessionConfig struct {
 	Store            storage.StorageEngine
 	Metrics          *metrics.Collector
@@ -73,7 +73,7 @@ func NewSession(store storage.StorageEngine, m *metrics.Collector, txm *txmanage
 	})
 }
 
-// NewSessionWithConfig создаёт сессию с полной конфигурацией.
+// NewSessionWithConfig creates a session with full configuration.
 func NewSessionWithConfig(cfg SessionConfig) *Session {
 	s := &Session{
 		executor:           New(cfg.Store, cfg.Metrics, cfg.TxManager, cfg.Broadcaster),
@@ -122,27 +122,27 @@ func (s *Session) SetResultCacheConfig(size int, ttlSec int) {
 	}
 }
 
-// SetEmbedder подключает embedding-провайдер для SEMANTIC_MATCH/AI_EMBED.
+// SetEmbedder connects an embedding provider for SEMANTIC_MATCH/AI_EMBED.
 func (s *Session) SetEmbedder(emb ai.Embedder) {
 	s.executor.SetEmbedder(emb)
 }
 
-// SetAuthManager подключает менеджер аутентификации для RBAC проверок.
+// SetAuthManager connects the authentication manager for RBAC checks.
 func (s *Session) SetAuthManager(m *auth.Manager) {
 	s.executor.SetAuthManager(m)
 }
 
-// SetWAL подключает WAL для записи операций транзакций.
+// SetWAL connects WAL for writing transaction operations.
 func (s *Session) SetWAL(w *wal.WAL) {
 	s.executor.SetWAL(w)
 }
 
-// SetQueryTimeout задаёт таймаут на выполнение запроса.
+// SetQueryTimeout sets the query execution timeout.
 func (s *Session) SetQueryTimeout(d time.Duration) {
 	s.executor.SetQueryTimeout(d)
 }
 
-// SetMaxRows задаёт максимальное количество строк в результате SELECT.
+// SetMaxRows sets the maximum number of rows in SELECT results.
 func (s *Session) SetMaxRows(n int) {
 	s.executor.SetMaxRows(n)
 }
@@ -153,8 +153,8 @@ func (s *Session) IsInTx() bool {
 	return s.ActiveTx != nil && s.ActiveTx.State == txmanager.TxActive
 }
 
-// GetActiveTx возвращает текущую транзакцию под блокировкой.
-// Если транзакции нет — возвращает nil.
+// GetActiveTx returns the current transaction under lock.
+// If there is no transaction — returns nil.
 func (s *Session) GetActiveTx() *txmanager.Transaction {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -177,14 +177,14 @@ func (s *Session) SetCurrentDatabase(name string) {
 	s.currentDB = name
 }
 
-// SetSnapshotTxID задаёт ID транзакции для snapshot isolation при live queries.
+// SetSnapshotTxID sets the transaction ID for snapshot isolation in live queries.
 func (s *Session) SetSnapshotTxID(txID uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.snapshotTxID = txID
 }
 
-// SnapshotTxID возвращает ID снимка транзакции (0 = нет снимка).
+// SnapshotTxID returns the transaction snapshot ID (0 = no snapshot).
 func (s *Session) SnapshotTxID() uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -226,14 +226,14 @@ func (s *Session) ClearActiveTx() {
 	s.ActiveTx = nil
 }
 
-// SetServerContext задаёт контекст сервера для отмены запросов при shutdown.
+// SetServerContext sets the server context for query cancellation at shutdown.
 func (s *Session) SetServerContext(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.serverCtx = ctx
 }
 
-// ServerContext возвращает контекст сервера (или context.Background если не задан).
+// ServerContext returns the server context (or context.Background if not set).
 func (s *Session) ServerContext() context.Context {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -271,9 +271,9 @@ func (s *Session) GetRole() string {
 	return s.role
 }
 
-// Close очищает ресурсы сессии.
-// Если есть активная транзакция — откатывает её, чтобы не терять данные
-// и не утекать ресурсы (spill-файлы и т.д.).
+// Close cleans up session resources.
+// If there is an active transaction — rolls it back to avoid data loss
+// and resource leaks (spill files, etc.).
 func (s *Session) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -284,7 +284,7 @@ func (s *Session) Close() {
 	s.ActiveTx = nil
 }
 
-// Reset сбрасывает состояние сессии для повторного использования в пуле.
+// Reset resets session state for reuse in the pool.
 func (s *Session) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

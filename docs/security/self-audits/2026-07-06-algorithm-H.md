@@ -1,134 +1,134 @@
 # Security Self-Audit Report — Algorithm H
 
-Дата: 2026-07-06
-Исполнитель: MiMoCode (автоматический анализ)
-Алерготм: Audit Log Tamper Review
-Версия VaultDB: latest (HEAD)
+Date: 2026-07-06
+Executor: MiMoCode (automated analysis)
+Algorithm: Audit Log Tamper Review
+VaultDB Version: latest (HEAD)
 
-## Результаты по шагам
+## Step-by-Step Results
 
-| Шаг | Статус | Комментарий |
+| Step | Status | Comment |
 |---|---|---|
-| 1 | Пройден | Hash-chain реализован через SHA-256, VERIFY AUDIT LOG работает |
-| 2 | Пройден | Прямая модификация записи обнаруживается через VerifyChain() |
-| 3 | Пройден | Audit log — append-only через INSERT, нет UPDATE/DELETE API |
-| 4 | Не применимо | RLS для audit log не реализован (нет multi-tenancy) |
-| 5 | Пройден | Chain integrity detection работает корректно |
+| 1 | Passed | Hash-chain implemented via SHA-256, VERIFY AUDIT LOG works |
+| 2 | Passed | Direct record modification detected via VerifyChain() |
+| 3 | Passed | Audit log is append-only via INSERT, no UPDATE/DELETE API |
+| 4 | Not applicable | RLS for audit log not implemented (no multi-tenancy) |
+| 5 | Passed | Chain integrity detection works correctly |
 
 ## Findings
 
 ### Finding 1 — Hash Chain: SHA-256 Implementation (Pass)
 
-**Описание:** Каждая запись audit log содержит `prev_hash` и `entry_hash`. Хеш вычисляется как SHA-256 от конкатенации: `ID|OccurredAt|Actor|Action|Target|Detail|PrevHash`.
+**Description:** Each audit log record contains `prev_hash` and `entry_hash`. The hash is computed as SHA-256 of the concatenation: `ID|OccurredAt|Actor|Action|Target|Detail|PrevHash`.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/audit/log.go:23-29` — `HashChain()` implementation
 
-**Формула хеша:**
+**Hash formula:**
 ```
 entry_hash = SHA256("%d|%s|%s|%s|%s|%s|%s", ID, OccurredAt, Actor, Action, Target, Detail, PrevHash)
 ```
 
-**Вердикт:** Хеш-цепочка правильно включает все поля записи + предыдущий хеш. Modifying any field breaks the chain.
+**Verdict:** The hash chain correctly includes all record fields + previous hash. Modifying any field breaks the chain.
 
 ---
 
-### Finding 2 — VerifyChain() обнаруживает подмену (Pass)
+### Finding 2 — VerifyChain() detects tampering (Pass)
 
-**Описание:** `VerifyChain()` (`table_log.go:146-161`) пересчитывает хеш для каждой записи и сравнивает с сохранённым. При mismatch — возвращает ошибку с номером записи.
+**Description:** `VerifyChain()` (`table_log.go:146-161`) recalculates the hash for each record and compares it with the stored value. On mismatch — returns an error with the record number.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/audit/table_log.go:146-161` — VerifyChain()
 - `server/internal/executor/commands_audit.go:14-37` — VerifyAuditLogCommand
 
-**VERIFY AUDIT LOG команда** корректно вызывает `VerifyChain()` и报告ing results:
-- При success: "Audit chain intact: N entries verified, no tampering detected."
-- При failure: "Audit chain BROKEN at entry: <details>"
+The **VERIFY AUDIT LOG** command correctly calls `VerifyChain()` and reports results:
+- On success: "Audit chain intact: N entries verified, no tampering detected."
+- On failure: "Audit chain BROKEN at entry: <details>"
 
 ---
 
-### Finding 3 — Append-Only: нет UPDATE/DELETE API (Pass)
+### Finding 3 — Append-Only: no UPDATE/DELETE API (Pass)
 
-**Описание:** Audit log реализован через таблицу `vaultdb_audit_log` в system database. Единственный публичный метод — `Append()` (`table_log.go:61-101`), который выполняет INSERT. Методы `UPDATE` и `DELETE` для audit log отсутствуют.
+**Description:** Audit log is implemented as a `vaultdb_audit_log` table in the system database. The only public method is `Append()` (`table_log.go:61-101`), which executes an INSERT. `UPDATE` and `DELETE` methods for audit log are absent.
 
-**Доказательства:**
-- `server/internal/audit/table_log.go:61-101` — Append() — единственный write path
+**Evidence:**
+- `server/internal/audit/table_log.go:61-101` — Append() — only write path
 - `server/internal/audit/table_log.go:105-125` — ReadAll() — read-only
-- Грейп `UPDATE.*vaultdb_audit_log|DELETE.*vaultdb_audit_log` — 0 результатов
+- `grep UPDATE.*vaultdb_audit_log|DELETE.*vaultdb_audit_log` — 0 results
 
-**Дополнительно:** Таблица audit log хранится в `system` database, которая не является целевой для пользовательских запросов.
+**Additional:** The audit log table is stored in the `system` database, which is not a target for user queries.
 
 ---
 
 ### Finding 4 — Audit Log Table Schema: Hash fields are VARCHAR(64) (Pass)
 
-**Описание:** Поля `prev_hash` и `entry_hash` имеют тип VARCHAR(64) — достаточно для SHA-256 hex (64 символа). Это предотвращает truncation хешей.
+**Description:** Fields `prev_hash` and `entry_hash` have type VARCHAR(64) — sufficient for SHA-256 hex (64 characters). This prevents hash truncation.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/audit/table_log.go:48-49`
 
 ---
 
-### Finding 5 — Audit Log: автоинкремент ID (Pass)
+### Finding 5 — Audit Log: auto-increment ID (Pass)
 
-**Описание:** Поле `id` имеет `AutoIncrement: true` (`table_log.go:42`). Это предотвращает повторное использование ID и обеспечивает монотонную последовательность.
+**Description:** Field `id` has `AutoIncrement: true` (`table_log.go:42`). This prevents ID reuse and ensures a monotonic sequence.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/audit/table_log.go:42`
 
 ---
 
-### Finding 6 — Audit Log в system database: нет RLS (Low)
+### Finding 6 — Audit Log in system database: no RLS (Low)
 
-**Описание:** Audit log хранится в system database. RLS для audit log не реализован. Это означает что любой пользователь с доступом к system database может читать audit log.
+**Description:** Audit log is stored in the system database. RLS for audit log is not implemented. This means any user with access to the system database can read the audit log.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/audit/table_log.go:13-14` — `SystemDB = "system"`, `AuditTableName = "vaultdb_audit_log"`
 
-**Контекст:** В текущей архитектуре VaultDB (single-tenant, без multi-user isolation) это Acceptable Risk. При переходе к multi-tenancy — необходимо добавить RLS для audit log.
+**Context:** In VaultDB's current architecture (single-tenant, no multi-user isolation), this is Acceptable Risk. When transitioning to multi-tenancy, RLS for audit log must be added.
 
-**Рекомендация:** При введении multi-tenancy — добавить RLS на audit log table.
+**Recommendation:** When introducing multi-tenancy, add RLS on the audit log table.
 
-**Статус исправления:** Accepted Risk
+**Fix Status:** Accepted Risk
 
 ---
 
 ### Finding 7 — Audit Log: JSON data field (Pass)
 
-**Описание:** Поле `data` хранит полный entry как JSON-строку (`table_log.go:78-93`). Это обеспечивает полное восстановление записи для verification.
+**Description:** Field `data` stores the full entry as a JSON string (`table_log.go:78-93`). This ensures complete record recovery for verification.
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/audit/table_log.go:78-93`
 
 ---
 
 ### Finding 8 — Audit Integration Points (Pass)
 
-**Описание:** Audit log интегрирован в key operations:
+**Description:** Audit log is integrated into key operations:
 - DDL: CREATE/DROP DATABASE, CREATE/DROP FUNCTION, CREATE/DROP PROCEDURE
-- Auth: через `Auth.SetAuditFunc` (`server.go:164-171`)
+- Auth: via `Auth.SetAuditFunc` (`server.go:164-171`)
 
-**Доказательства:**
+**Evidence:**
 - `server/internal/executor/commands_ddl_database.go:46-47` — CREATE DATABASE audit
 - `server/internal/executor/commands_ddl_database.go:72-74` — DROP DATABASE audit
 - `server/internal/httpserver/server.go:163-171` — Auth audit integration
 
 ---
 
-## Общий вердикт
+## Overall Verdict
 
 **Pass with findings**
 
-Audit log hash-chain реализация корректна:
-- SHA-256 хеш включает все поля записи
-- VerifyChain() обнаруживает любую подмену
-- Append-only design предотвращает модификацию
-- VERIFY AUDIT LOG команда работает корректно
+Audit log hash-chain implementation is correct:
+- SHA-256 hash includes all record fields
+- VerifyChain() detects any tampering
+- Append-only design prevents modification
+- VERIFY AUDIT LOG command works correctly
 
-Единственная находка — отсутствие RLS для audit log (Acceptable Risk для single-tenant deployments).
+The only finding is the absence of RLS for audit log (Acceptable Risk for single-tenant deployments).
 
-## Рекомендации
+## Recommendations
 
-1. **[Low]** При введении multi-tenancy — добавить RLS на audit log
-2. **[Low]** Добавить alerting при обнаружении broken chain через VERIFY AUDIT LOG
-3. **[Low]** Рассмотреть архивирование audit log с поддержкой chain continuity
+1. **[Low]** When introducing multi-tenancy, add RLS on audit log
+2. **[Low]** Add alerting when broken chain is detected via VERIFY AUDIT LOG
+3. **[Low]** Consider audit log archiving with chain continuity support

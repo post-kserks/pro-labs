@@ -47,8 +47,8 @@ type GrantsProvider interface {
 	GetRoleGrants(roleName string) (map[string][]string, error)
 }
 
-// Manager хранит HMAC-SHA256 хеши токенов с серверным секретом.
-// HMAC привязан к секрету — rainbow tables бесполезны.
+// Manager stores HMAC-SHA256 hashes of tokens with a server secret.
+// HMAC is bound to the secret — rainbow tables are useless.
 type Manager struct {
 	enabled         bool
 	localhostBypass bool
@@ -71,7 +71,7 @@ type authMetricsCollector interface {
 	SetAuthBlockedIPs(int64)
 }
 
-// authRateLimiter отслеживает неудачные попытки аутентификации по IP.
+// authRateLimiter tracks failed authentication attempts by IP.
 type authRateLimiter struct {
 	mu        sync.Mutex
 	attempts  map[string][]time.Time
@@ -104,9 +104,9 @@ func newAuthRateLimiter(windowSec, maxFails, blockForSec int, collector authMetr
 	}
 }
 
-// sweepLocked удаляет устаревшие записи, чтобы карты attempts/blocked не росли
-// неограниченно при потоке запросов с большого числа разных IP (защита от
-// исчерпания памяти). Вызывается под удержанием rl.mu не чаще раза в window.
+// sweepLocked removes stale entries so attempts/blocked maps don't grow
+// unboundedly with requests from many different IPs (memory exhaustion protection).
+// Called under rl.mu, no more than once per window.
 func (rl *authRateLimiter) sweepLocked(now time.Time) {
 	if now.Sub(rl.lastSweep) < rl.window {
 		return
@@ -122,7 +122,7 @@ func (rl *authRateLimiter) sweepLocked(now time.Time) {
 		if _, stillBlocked := rl.blocked[ip]; stillBlocked {
 			continue
 		}
-		// Если последняя попытка вне окна — запись бесполезна, удаляем.
+		// If last attempt is outside the window — entry is useless, delete it.
 		if len(ts) == 0 || !ts[len(ts)-1].After(cutoff) {
 			delete(rl.attempts, ip)
 		}
@@ -182,22 +182,22 @@ func (rl *authRateLimiter) updateBlockedIPsMetricLocked() {
 	}
 }
 
-// hashToken вычисляет HMAC-SHA256 токена с серверным секретом.
+// hashToken computes HMAC-SHA256 of token with the server secret.
 func (m *Manager) hashToken(token string) string {
 	mac := hmac.New(sha256.New, m.secret)
 	mac.Write([]byte(token))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// New создаёт менеджер с серверным секретом.
-// secretKey читается из VAULTDB_AUTH_SECRET.
-// Если переменная не задана — генерируем случайный (для тестов/разработки).
-// В production VAULTDB_AUTH_SECRET обязателен (проверяется в main.go).
+// New creates a manager with a server secret.
+// secretKey is read from VAULTDB_AUTH_SECRET.
+// If the variable is not set, a random one is generated (for tests/development).
+// In production, VAULTDB_AUTH_SECRET is required (checked in main.go).
 func New(enabled bool, tokens map[string]string, logger *slog.Logger, rateWindowSec, maxFails, blockForSec int) (*Manager, error) {
 	return NewWithCollector(enabled, tokens, logger, rateWindowSec, maxFails, blockForSec, nil)
 }
 
-// NewWithCollector создаёт менеджер с опциональным metrics collector.
+// NewWithCollector creates a manager with an optional metrics collector.
 func NewWithCollector(enabled bool, tokens map[string]string, logger *slog.Logger, rateWindowSec, maxFails, blockForSec int, collector authMetricsCollector) (*Manager, error) {
 	secret := []byte(os.Getenv("VAULTDB_AUTH_SECRET"))
 

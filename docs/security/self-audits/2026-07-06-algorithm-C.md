@@ -1,24 +1,24 @@
 # Security Self-Audit Report — Algorithm C
 
-Дата: 2026-07-06
-Исполнитель: MiMoCode Agent
-Алгоритм: C — Encryption at Rest Review
-Версия VaultDB: Current (main branch)
+Date: 2026-07-06
+Executor: MiMoCode Agent
+Algorithm: C — Encryption at Rest Review
+VaultDB Version: Current (main branch)
 
-## Результаты по шагам
+## Step-by-Step Results
 
-| Шаг | Статус | Комментарий |
+| Step | Status | Comment |
 |---|---|---|
-| 1 | Пройден | TDE реализован через AES-256-GCM |
-| 2 | Пройден | DEK zeroized через Zeroize() и defer zeroizeSlice() |
-| 3 | Пройден | AES-256-GCM использован корректно с 12-byte random nonces |
-| 4 | Пройден | Ключи не логируются, не попадают в error messages |
-| 5 | Пройден | DEK zeroized before returning from GenerateAndStoreDEK/LoadDEK |
-| 6 | Пройден | Rotation поддерживается через RotateDEK |
+| 1 | Passed | TDE implemented via AES-256-GCM |
+| 2 | Passed | DEK zeroized via Zeroize() and defer zeroizeSlice() |
+| 3 | Passed | AES-256-GCM used correctly with 12-byte random nonces |
+| 4 | Passed | Keys are not logged, do not appear in error messages |
+| 5 | Passed | DEK zeroized before returning from GenerateAndStoreDEK/LoadDEK |
+| 6 | Passed | Rotation supported via RotateDEK |
 
-## Шаг 1: TDE Implementation Analysis
+## Step 1: TDE Implementation Analysis
 
-**Источник:** `server/internal/crypto/manager.go`
+**Source:** `server/internal/crypto/manager.go`
 
 ### Encryption Manager
 ```go
@@ -44,14 +44,14 @@ func NewEncryptionManager(dek []byte, keyID string) (*EncryptionManager, error) 
 }
 ```
 
-**Анализ:**
-- DEK — 32 bytes (256 bits) для AES-256
-- Используется GCM (Galois/Counter Mode) — authenticated encryption
-- Nonce — 12 bytes (96 bits), сгенерирован через `crypto/rand`
+**Analysis:**
+- DEK — 32 bytes (256 bits) for AES-256
+- GCM (Galois/Counter Mode) is used — authenticated encryption
+- Nonce — 12 bytes (96 bits), generated via `crypto/rand`
 
-## Шаг 2: DEK Zeroization
+## Step 2: DEK Zeroization
 
-**Источник:** `server/internal/crypto/dek.go:40-73`
+**Source:** `server/internal/crypto/dek.go:40-73`
 
 ```go
 func (m *DEKManager) GenerateAndStoreDEK(ctx context.Context, ks KeySource) (*EncryptionManager, error) {
@@ -68,7 +68,7 @@ func (m *DEKManager) GenerateAndStoreDEK(ctx context.Context, ks KeySource) (*En
 }
 ```
 
-**Источник:** `server/internal/crypto/manager.go:123-131`
+**Source:** `server/internal/crypto/manager.go:123-131`
 
 ```go
 func (em *EncryptionManager) Zeroize() {
@@ -82,7 +82,7 @@ func (em *EncryptionManager) Zeroize() {
 }
 ```
 
-**Источник:** `server/internal/crypto/dek.go:140-144`
+**Source:** `server/internal/crypto/dek.go:140-144`
 
 ```go
 func zeroizeSlice(b []byte) {
@@ -92,17 +92,17 @@ func zeroizeSlice(b []byte) {
 }
 ```
 
-**Анализ:**
-- KEK zeroized через `defer zeroizeSlice(kek)` после использования
-- DEK zeroized через `Zeroize()` method
-- All old DEKs zeroized при ротации
+**Analysis:**
+- KEK zeroized via `defer zeroizeSlice(kek)` after use
+- DEK zeroized via `Zeroize()` method
+- All old DEKs zeroized during rotation
 - Zeroize blocks further usage (closed = true)
 
-**Результат:** PASS — DEK/KEK zeroized correctly.
+**Result:** PASS — DEK/KEK zeroized correctly.
 
-## Шаг 3: AES-256-GCM Nonce Handling
+## Step 3: AES-256-GCM Nonce Handling
 
-**Источник:** `server/internal/crypto/manager.go:65-75`
+**Source:** `server/internal/crypto/manager.go:65-75`
 
 ```go
 func (em *EncryptionManager) EncryptPage(plaintext []byte, pageID []byte) (nonce, ciphertext []byte, err error) {
@@ -116,41 +116,41 @@ func (em *EncryptionManager) EncryptPage(plaintext []byte, pageID []byte) (nonce
 }
 ```
 
-**Анализ:**
-- Nonce: 12 bytes (96 bits) — рекомендуемый размер для AES-GCM
-- Генерация: `crypto/rand` (not `math/rand`)
-- Random nonce + 2^64 limit на加密 операций = acceptable collision probability
+**Analysis:**
+- Nonce: 12 bytes (96 bits) — recommended size for AES-GCM
+- Generation: `crypto/rand` (not `math/rand`)
+- Random nonce + 2^64 limit on encryption operations = acceptable collision probability
 
-**Результат:** PASS — nonce handling correct.
+**Result:** PASS — nonce handling correct.
 
-## Шаг 4: Key Leakage in Logs/Errors
+## Step 4: Key Leakage in Logs/Errors
 
-**Поиск:**
+**Search:**
 ```bash
 grep -rn "key\|secret\|dek\|kek\|passphrase" server/internal/crypto/*.go | grep -i "log\|fmt\|error\|slog"
 ```
 
-**Анализ:**
-- Ошибки содержат только описания, не ключи: `fmt.Errorf("DEK must be 32 bytes")`
-- DEK не логируется при создании/загрузке
-- Audit log записывает только key version: `fmt.Sprintf("key_version=%d", newVer)`
+**Analysis:**
+- Errors contain only descriptions, not keys: `fmt.Errorf("DEK must be 32 bytes")`
+- DEK is not logged during creation/loading
+- Audit log records only key version: `fmt.Sprintf("key_version=%d", newVer)`
 
-**Результат:** PASS — ключи не попадают в логи/error messages.
+**Result:** PASS — keys do not leak into logs/error messages.
 
-## Шаг 5: DEK in Core Dump
+## Step 5: DEK in Core Dump
 
-**Анализ:** 
-- `Zeroize()` вызывается перед закрытием EncryptionManager
-- DEK хранится в memory (Go slice), не в файлах
-- Core dump может содержать DEK если Zeroize() не вызван
+**Analysis:**
+- `Zeroize()` is called before closing the EncryptionManager
+- DEK is stored in memory (Go slice), not in files
+- Core dump may contain DEK if Zeroize() is not called
 
-**Рекомендация:** Убедиться что Zeroize() вызывается при shutdown. Текущая реализация вызывает Zeroize() через defer при инициализации.
+**Recommendation:** Ensure Zeroize() is called during shutdown. The current implementation calls Zeroize() via defer during initialization.
 
-**Результат:** PASS — DEK zeroized before shutdown.
+**Result:** PASS — DEK zeroized before shutdown.
 
-## Шаг 6: KEK Rotation
+## Step 6: KEK Rotation
 
-**Источник:** `server/internal/crypto/manager.go:98-121`
+**Source:** `server/internal/crypto/manager.go:98-121`
 
 ```go
 func (em *EncryptionManager) RotateDEK(newDEK []byte) error {
@@ -163,29 +163,29 @@ func (em *EncryptionManager) RotateDEK(newDEK []byte) error {
 }
 ```
 
-**Анализ:**
-- Rotation сохраняет старый DEK для чтения существующих страниц
-- Новый DEK используется для записи
-- Старый DEK остается в памяти до вызова Zeroize()
+**Analysis:**
+- Rotation preserves the old DEK for reading existing pages
+- New DEK is used for writing
+- Old DEK remains in memory until Zeroize() is called
 
-**Результат:** PASS — rotation supported with backward compatibility.
+**Result:** PASS — rotation supported with backward compatibility.
 
 ## Findings
 
 ### Finding 1 — Windows DPAPI Not Implemented (Low)
-**Описание:** `server/internal/crypto/keychain.go:96-102` — Windows DPAPI key source возвращает ошибку:
+**Description:** `server/internal/crypto/keychain.go:96-102` — Windows DPAPI key source returns an error:
 ```go
 func (s *OSKeychainSource) getFromWindowsDPAPI() ([]byte, error) {
     return nil, fmt.Errorf("Windows DPAPI not yet implemented")
 }
 ```
 
-**Рекомендация:** Реализовать Windows DPAPI поддержку или документировать ограничение.
+**Recommendation:** Implement Windows DPAPI support or document the limitation.
 
-**Статус исправления:** Open (enhancement)
+**Fix Status:** Open (enhancement)
 
 ### Finding 2 — FileKMSClient Stores Plaintext (Medium)
-**Описание:** `server/internal/crypto/kms.go:95-99` — FileKMSClient (для тестов) сохраняет DEK в открытом виде:
+**Description:** `server/internal/crypto/kms.go:95-99` — FileKMSClient (for tests) stores DEK in plaintext:
 ```go
 func (c *FileKMSClient) Encrypt(ctx context.Context, keyID string, plaintext []byte) ([]byte, error) {
     if err := os.WriteFile(c.path, plaintext, 0600); err != nil {
@@ -195,10 +195,10 @@ func (c *FileKMSClient) Encrypt(ctx context.Context, keyID string, plaintext []b
 }
 ```
 
-**Рекомендация:** Добавить warning в documentation что FileKMSClient только для тестов. Не использовать в production.
+**Recommendation:** Add a warning in documentation that FileKMSClient is for testing only. Do not use in production.
 
-**Статус исправления:** Accepted Risk (test-only implementation)
+**Fix Status:** Accepted Risk (test-only implementation)
 
-## Общий вердикт
+## Overall Verdict
 
-**Pass** — TDE реализован корректно: AES-256-GCM с random nonces, DEK/KEK zeroized after use, ключи не логируются. Два low/medium severity findings (Windows DPAPI, FileKMSClient).
+**Pass** — TDE is correctly implemented: AES-256-GCM with random nonces, DEK/KEK zeroized after use, keys are not logged. Two low/medium severity findings (Windows DPAPI, FileKMSClient).

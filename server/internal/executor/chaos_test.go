@@ -20,7 +20,7 @@ import (
 // для basic durability (в отличие от FileStorageEngine, где WAL был единственным
 // источником правды).
 //
-// Данный тест проверяет: (1) данные сохраняются при normal shutdown,
+// This test verifies: (1) данные сохраняются при normal shutdown,
 // (2) corrupt WAL tail не ломает recovery, (3) данные кумулятивно растут.
 func TestChaosRecovery(t *testing.T) {
 	if testing.Short() {
@@ -52,7 +52,7 @@ func TestChaosRecovery(t *testing.T) {
 				runSQL(t, exec, sess, fmt.Sprintf("CREATE TABLE %s (id INT, val TEXT);", tableName))
 			}
 
-			// 2. Нагрузка
+			// 2. Workload
 			var wg sync.WaitGroup
 			sess := &Session{currentDB: dbName}
 			for i := 0; i < numWorkers; i++ {
@@ -80,7 +80,7 @@ func TestChaosRecovery(t *testing.T) {
 
 			t.Logf("Cycle %d: Shutdown. Expected rows so far: %d", cycle, expectedCount.Load())
 
-			// 4. Проверяем что данные восстанавливаются из heap-файлов
+			// 4. Check that данные восстанавливаются из heap-файлов
 			txm2 := txmanager.NewManager()
 			storeRecover, err := storage.NewPageStorageEngine(dbPath, nil, txm2)
 			if err != nil {

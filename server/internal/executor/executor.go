@@ -205,7 +205,7 @@ func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manag
 	return &Executor{storage: store, metrics: m, txm: txm, broadcaster: b, embedder: ai.NoopEmbedder{}}
 }
 
-// SetWAL подключает WAL для записи операций транзакций.
+// SetWAL подключает WAL for writes операций транзакций.
 func (e *Executor) SetWAL(w *wal.WAL) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
