@@ -358,8 +358,8 @@ func TestCaseAndCast(t *testing.T) {
 
 func TestSemanticSearch(t *testing.T) {
 	session := setupSession(t)
-	// В тестах используется детерминированный mock-embedder; в продакшене
-	// без настроенного AI SEMANTIC_MATCH возвращает ошибку (см. NoopEmbedder).
+	// Tests use a deterministic mock-embedder; in production without
+	// configured AI, SEMANTIC_MATCH returns an error (see NoopEmbedder).
 	session.SetEmbedder(ai.MockEmbedder{})
 	executeSQL(t, session, "CREATE TABLE docs (id INT, content TEXT, v VECTOR(8));")
 

@@ -35,7 +35,7 @@
 | **Page Lock** | Per-page mutex enabling concurrent writes to different pages |
 | **Primary Key** | Column(s) uniquely identifying each row; automatically indexed |
 | **Protocol v2** | JSON-based TCP handshake protocol where clients send a `handshake` request on connect and receive server version, features, and capabilities |
-| **RBAC** | Role-Based Access Control — (not yet implemented) planned system for CREATE ROLE, GRANT, REVOKE |
+| **RBAC** | Role-Based Access Control — system for CREATE ROLE, DROP ROLE, GRANT, REVOKE with dynamic permissions stored in system.roles and system.grants tables |
 | **Revocation** | Token revocation mechanism that invalidates authentication tokens via HMAC-SHA256 hash map, with 24h cleanup of expired entries |
 | **RLS** | Row-Level Security — per-user data access policies |
 | **Segment** | File containing up to 65,536 pages (512 MB) of a heap file |

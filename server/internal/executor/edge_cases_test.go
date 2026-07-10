@@ -112,7 +112,7 @@ func TestEdgeUnicodeEmoji(t *testing.T) {
 
 	res = executeSQL(t, session, "SELECT val FROM edge_unicode ORDER BY id")
 	if res.Rows[0][0] != "Привет мир" {
-		t.Errorf("row 1: got %q, want 'Привет мир'", res.Rows[0][0])
+		t.Errorf("row 1: got %q, want 'Hello world'", res.Rows[0][0])
 	}
 	if res.Rows[1][0] != "日本語テスト" {
 		t.Errorf("row 2: got %q, want '日本語テスト'", res.Rows[1][0])

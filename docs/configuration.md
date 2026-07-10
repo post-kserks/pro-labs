@@ -340,7 +340,7 @@ Roles are assigned when tokens are registered:
 export VAULTDB_API_TOKENS="token1:label1:admin,token2:label2:writer,token3:label3:reader"
 ```
 
-> **Note:** Roles are currently defined in code and cannot be customized via configuration. Custom role definitions are planned for a future release.
+> **Note:** Roles can be managed via SQL (CREATE ROLE, DROP ROLE, GRANT, REVOKE) and stored in system.roles table. Built-in roles (admin, writer, reader) are available by default.
 
 ## AI Options
 

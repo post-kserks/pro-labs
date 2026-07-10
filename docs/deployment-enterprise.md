@@ -326,7 +326,7 @@ export VAULTDB_API_TOKENS="admin-token:ops:admin,app-token:myapp:writer,reader-t
 | `writer` | Application servers (INSERT/UPDATE/DELETE) |
 | `reader` | Monitoring, reporting, dashboards |
 
-> **Note:** Role definitions are currently hardcoded (`admin`, `writer`, `reader`). Custom roles are planned for a future release.
+> **Note:** Role definitions are currently hardcoded (`admin`, `writer`, `reader`). Roles can be managed via SQL (CREATE ROLE, DROP ROLE, GRANT, REVOKE).
 
 ### TLS Enforcement Notes
 

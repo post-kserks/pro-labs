@@ -24,16 +24,16 @@ func TestEvalLike(t *testing.T) {
 		{"aa", "a%a", true},
 		{"abcdef", "a%c%e%", true},
 		{"abcdef", "a%e%c%", false},
-		// '_' — одиночный символ (regexp-путь)
+		// '_' — single character (regexp path)
 		{"hello", "h_llo", true},
 		{"hello", "h_y", false},
 		{"hello", "_____", true},
 		{"hello", "____", false},
-		// Спецсимволы regexp в паттерне экранируются
+		// Regex special chars in pattern are escaped
 		{"a.b", "a.b", true},
 		{"axb", "a.b", false},
 		{"price (usd)", "%(usd)%", true},
-		// Многострочный text: % покрывает \n
+		// Multi-line text: % covers \n
 		{"line1\nline2", "line1%line2", true},
 	}
 

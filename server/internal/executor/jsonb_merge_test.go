@@ -7,22 +7,22 @@ import (
 func TestJSONBMergeOperator(t *testing.T) {
 	session := setupSession(t)
 
-	// Создаём таблицу с JSONB колонкой
+	// Create a table with a JSONB column
 	executeSQL(t, session, "CREATE DATABASE testdb;")
 	executeSQL(t, session, "USE testdb;")
 	executeSQL(t, session, "CREATE TABLE config (id INT, settings JSONB);")
 
-	// Вставляем JSON объект
+	// Insert a JSON object
 	executeSQL(t, session, `INSERT INTO config VALUES (1, '{"theme": "dark", "lang": "ru"}');`)
 
-	// Используем || для слияния JSON объектов в SELECT
+	// Use || to merge JSON objects in SELECT
 	result := executeSQL(t, session, `SELECT '{"notifications": true}' || '{"volume": 80}';`)
 	if len(result.Rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(result.Rows))
 	}
 	t.Logf("|| merge result: %s", result.Rows[0][0])
 
-	// Check that результат содержит оба ключа
+	// Check that result contains both keys
 	merged := result.Rows[0][0]
 	if merged == "" {
 		t.Fatal("expected non-empty merge result")
@@ -42,7 +42,7 @@ func TestJSONBContainsOperator(t *testing.T) {
 	executeSQL(t, session, `INSERT INTO docs VALUES (2, '{"name": "Bob", "age": 25, "city": "SPb"}');`)
 	executeSQL(t, session, `INSERT INTO docs VALUES (3, '{"name": "Charlie", "age": 35, "city": "Moscow"}');`)
 
-	// Используем ? для проверки наличия ключа
+	// Use ? to check for key presence
 	result := executeSQL(t, session, `SELECT * FROM docs WHERE data ? 'age';`)
 	if len(result.Rows) != 3 {
 		t.Fatalf("expected 3 rows with ?, got %d", len(result.Rows))

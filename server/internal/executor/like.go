@@ -8,13 +8,13 @@ import (
 	"sync"
 )
 
-// compiledPattern — compiled LIKE pattern. Для паттернов только с '%'
-// используется быстрый путь на strings (в разы быстрее regexp); для паттернов
-// с '_' компилируется regexp — один раз, дальше берётся из кэша.
+// compiledPattern — compiled LIKE pattern. For patterns with only '%',
+// a fast strings path is used (much faster than regexp); for patterns
+// with '_', regexp is compiled once and then cached.
 type compiledPattern struct {
 	simple   bool
-	segments []string       // для простых паттернов: куски между '%'
-	re       *regexp.Regexp // для сложных паттернов
+	segments []string       // for simple patterns: segments between '%'
+	re       *regexp.Regexp // for complex patterns
 }
 
 func (cp *compiledPattern) match(text string) bool {
@@ -24,12 +24,12 @@ func (cp *compiledPattern) match(text string) bool {
 	return cp.re.MatchString(text)
 }
 
-// matchSegments проверяет text против паттерна, разбитого по '%':
-// первый сегмент — префикс, последний — суффикс, промежуточные должны
-// встречаться по порядку между ними.
+// matchSegments checks text against a pattern split by '%':
+// first segment is prefix, last is suffix, middle segments must
+// appear in order between them.
 func matchSegments(text string, segs []string) bool {
 	if len(segs) == 1 {
-		// Pattern without '%' — точное совпадение
+		// Pattern without '%' — exact match
 		return text == segs[0]
 	}
 	if !strings.HasPrefix(text, segs[0]) {
@@ -58,7 +58,7 @@ func matchSegments(text string, segs []string) bool {
 
 func compilePattern(pattern string) (*compiledPattern, error) {
 	if !strings.Contains(pattern, "_") {
-		// Only '%' and literals — быстрый путь без regexp
+		// Only '%' and literals — fast path without regexp
 		return &compiledPattern{
 			simple:   true,
 			segments: strings.Split(pattern, "%"),
@@ -86,14 +86,14 @@ func compilePattern(pattern string) (*compiledPattern, error) {
 	return &compiledPattern{re: re}, nil
 }
 
-// likeCache — LRU cache of compiled patterns: запрос вида
+// likeCache — LRU cache of compiled patterns: a query like
 // WHERE name LIKE '%x%' on a million rows compiles the pattern once,
 // not a million times.
 type likePatternCache struct {
 	mu       sync.Mutex
 	capacity int
 	entries  map[string]*list.Element
-	order    *list.List // front = недавно использованный
+	order    *list.List // front = recently used
 }
 
 type likeCacheEntry struct {
@@ -119,7 +119,7 @@ func (c *likePatternCache) getOrCompile(pattern string) (*compiledPattern, error
 	}
 	c.mu.Unlock()
 
-	// Compile without holding lock: компиляция может быть дорогой
+	// Compile without holding lock: compilation may be expensive
 	cp, err := compilePattern(pattern)
 	if err != nil {
 		return nil, err

@@ -245,8 +245,8 @@ func TestTruncateInsideTransaction(t *testing.T) {
 	executeSQL(t, session, "BEGIN;")
 	executeSQL(t, session, "TRUNCATE heroes;")
 
-	// Read-your-own-writes (Bug #1): буферизованный TRUNCATE виден своей же
-	// транзакции — таблица читается пустой через tx-overlay.
+	// Read-your-own-writes (Bug #1): buffered TRUNCATE is visible to the same
+	// transaction — table reads as empty via tx-overlay.
 	count := executeSQL(t, session, "SELECT COUNT(*) FROM heroes;")
 	if count.Rows[0][0] != "0" {
 		t.Fatalf("expected 0 rows within tx after buffered TRUNCATE, got %s", count.Rows[0][0])

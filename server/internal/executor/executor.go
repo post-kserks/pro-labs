@@ -171,10 +171,10 @@ type ExecutionContext struct {
 	OldRow storage.Row
 	NewRow storage.Row
 
-	// InCommitApply true, пока выполняется applyOps внутри Commit. В этот момент
-	// commit-локи нужных таблиц уже захвачены (sync.Mutex не реентрантный),
-	// поэтому autocommit-обёртка mutateUnderTableLock НЕ должна брать их повторно
-	// — иначе self-deadlock (Bug #2, deadlock guard).
+	// InCommitApply true while applyOps is running inside Commit. At this point
+	// commit locks for needed tables are already held (sync.Mutex is not reentrant),
+	// so the autocommit wrapper mutateUnderTableLock must NOT acquire them again
+	// — otherwise self-deadlock (Bug #2, deadlock guard).
 	InCommitApply bool
 
 	// Parallel holds the parallel execution configuration for this query.
@@ -200,12 +200,12 @@ type Executor struct {
 }
 
 func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Executor {
-	// По умолчанию AI не настроен: SEMANTIC_MATCH/AI_EMBED возвращают
-	// понятную ошибку, а не тихий mock-результат.
+	// By default AI is not configured: SEMANTIC_MATCH/AI_EMBED return
+	// a clear error instead of a silent mock result.
 	return &Executor{storage: store, metrics: m, txm: txm, broadcaster: b, embedder: ai.NoopEmbedder{}}
 }
 
-// SetWAL connects WAL for writing transaction operations.
+// SetWAL connects WAL for write operations of transactions.
 func (e *Executor) SetWAL(w *wal.WAL) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

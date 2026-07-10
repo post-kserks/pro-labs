@@ -51,8 +51,8 @@ func TestTransactions(t *testing.T) {
 	executeSQL(t, session, "BEGIN;")
 	executeSQL(t, session, "INSERT INTO heroes VALUES (5, 'Gandalf', 20, TRUE, 10.0, 'Wizard');")
 
-	// Read-your-own-writes (Bug #1): буферизованная вставка видна СВОЕЙ же
-	// транзакции через tx-overlay ещё до COMMIT.
+	// Read-your-own-writes (Bug #1): buffered insert is visible to the SAME
+	// transaction via tx-overlay even before COMMIT.
 	res := executeSQL(t, session, "SELECT * FROM heroes WHERE id = 5;")
 	if len(res.Rows) != 1 {
 		t.Fatalf("expected 1 row visible within tx (read-your-writes), got %d", len(res.Rows))

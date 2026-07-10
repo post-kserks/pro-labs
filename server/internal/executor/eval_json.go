@@ -19,7 +19,7 @@ const (
 	embeddingTimeout       = 10 * time.Second
 )
 
-// evalFtsMatch выполняет полноtextовый поиск (FTS_MATCH и @@).
+// evalFtsMatch performs full-text search (FTS_MATCH and @@).
 func evalFtsMatch(left, right interface{}) (bool, error) {
 	return evalFtsMatchScored(valueToString(left), valueToString(right)) > ftsScoreThreshold, nil
 }

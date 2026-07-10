@@ -20,8 +20,8 @@ import (
 // for basic durability (unlike FileStorageEngine where WAL was the only
 // source of truth).
 //
-// This test verifies: (1) данные сохраняются при normal shutdown,
-// (2) corrupt WAL tail не ломает recovery, (3) данные кумулятивно растут.
+// This test verifies: (1) data is preserved on normal shutdown,
+// (2) corrupt WAL tail does not break recovery, (3) data grows cumulatively.
 func TestChaosRecovery(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping chaos test in short mode")
