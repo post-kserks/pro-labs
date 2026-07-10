@@ -4,6 +4,7 @@ package crypto
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"os"
 	"unsafe"
@@ -39,7 +40,7 @@ func (s *DPAPISource) GetKEK(_ context.Context) ([]byte, error) {
 
 func (s *DPAPISource) generateAndProtect() ([]byte, error) {
 	key := make([]byte, 32)
-	if _, err := windows.RtlGenRandom((*byte)(unsafe.Pointer(&key[0])), uint32(len(key))); err != nil {
+	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("generate random key: %w", err)
 	}
 	blob, err := s.protect(key)
@@ -54,30 +55,30 @@ func (s *DPAPISource) generateAndProtect() ([]byte, error) {
 
 func (s *DPAPISource) protect(data []byte) ([]byte, error) {
 	in := windows.DataBlob{
-		Len:    uint32(len(data)),
-		PbData: (*byte)(unsafe.Pointer(&data[0])),
+		CbData: uint32(len(data)),
+		PbData: &data[0],
 	}
 	var out windows.DataBlob
 	if err := windows.CryptProtectData(&in, nil, nil, nil, nil, 0, &out); err != nil {
 		return nil, fmt.Errorf("dpapi protect: %w", err)
 	}
 	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.PbData)))
-	blob := make([]byte, out.Len)
-	copy(blob, unsafe.Slice(out.PbData, out.Len))
-	return blob, nil
+	result := make([]byte, out.CbData)
+	copy(result, unsafe.Slice(out.PbData, out.CbData))
+	return result, nil
 }
 
 func (s *DPAPISource) unprotect(blob []byte) ([]byte, error) {
 	in := windows.DataBlob{
-		Len:    uint32(len(blob)),
-		PbData: (*byte)(unsafe.Pointer(&blob[0])),
+		CbData: uint32(len(blob)),
+		PbData: &blob[0],
 	}
 	var out windows.DataBlob
 	if err := windows.CryptUnprotectData(&in, nil, nil, nil, nil, 0, &out); err != nil {
 		return nil, fmt.Errorf("dpapi unprotect: %w", err)
 	}
 	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.PbData)))
-	result := make([]byte, out.Len)
-	copy(result, unsafe.Slice(out.PbData, out.Len))
+	result := make([]byte, out.CbData)
+	copy(result, unsafe.Slice(out.PbData, out.CbData))
 	return result, nil
 }
