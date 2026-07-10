@@ -12,10 +12,10 @@ import (
 	"vaultdb/internal/wasmudf"
 )
 
-// builtinFunc — тип функции для builtin функций SQL.
+// builtinFunc — function type for builtin SQL functions.
 type builtinFunc func(args []interface{}, ctx *ExecutionContext) (interface{}, error)
 
-// builtinFuncs — карта встроенных SQL функций.
+// builtinFuncs — map of builtin SQL functions.
 var builtinFuncs = map[string]builtinFunc{
 	"NOW":                  fnNow,
 	"UPPER":                fnUpper,
@@ -85,7 +85,7 @@ var builtinFuncs = map[string]builtinFunc{
 	"JSONB_EXTRACT_PATH":   fnJsonbExtractPath,
 }
 
-// evalFunctionCall вычисляет вызов функции.
+// evalFunctionCall evaluates a function call.
 func evalFunctionCall(fn *parser.FunctionCall, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
 	args := make([]interface{}, len(fn.Args))
 	for i, arg := range fn.Args {
@@ -111,7 +111,7 @@ func evalFunctionCall(fn *parser.FunctionCall, row storage.Row, schema *storage.
 	return nil, fmt.Errorf("unknown function: %s", name)
 }
 
-// executeSubquery выполняет скалярный подзапрос.
+// executeSubquery executes a scalar subquery.
 func executeSubquery(sub *parser.SubqueryExpr, outerRow storage.Row, outerSchema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
 	var cmd parser.Statement
 	if sel, ok := sub.Query.(*parser.SelectStatement); ok {
@@ -155,7 +155,7 @@ func executeSubquery(sub *parser.SubqueryExpr, outerRow storage.Row, outerSchema
 	return val, nil
 }
 
-// injectOuterColumns подставляет значения внешних столбцов в подзапрос.
+// injectOuterColumns injects outer column values into a subquery.
 func injectOuterColumns(expr parser.Expression, outerRow storage.Row, outerSchema *storage.TableSchema) parser.Expression {
 	switch e := expr.(type) {
 	case *parser.BinaryExpr:
@@ -235,7 +235,7 @@ func injectOuterColumns(expr parser.Expression, outerRow storage.Row, outerSchem
 	}
 }
 
-// parseJSONArray парсит JSON массив.
+// parseJSONArray parses a JSON array.
 func parseJSONArray(s string) []interface{} {
 	raw, err := storage.DecodeJSON([]byte(s))
 	if err != nil {
@@ -248,7 +248,7 @@ func parseJSONArray(s string) []interface{} {
 	return arr
 }
 
-// generateUUID генерирует UUID v4.
+// generateUUID generates a UUID v4.
 func generateUUID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := crypto_rand.Read(b); err != nil {
@@ -259,7 +259,7 @@ func generateUUID() (string, error) {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
-// executeUserDefinedFunction выполняет пользовательскую функцию.
+// executeUserDefinedFunction executes a user-defined function.
 func executeUserDefinedFunction(dbName, funcName string, args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	fd, err := loadObject(ctx, dbName, objTypeFunction, funcName)
 	if err != nil {
@@ -359,7 +359,7 @@ func executeWASMFunction(wasmPath string, opts map[string]string, args []interfa
 	return fn.Call(context.Background(), args)
 }
 
-// substituteParam подставляет значение параметра в выражение.
+// substituteParam substitutes a parameter value into an expression.
 func substituteParam(expr parser.Expression, paramName string, paramValue interface{}) parser.Expression {
 	switch e := expr.(type) {
 	case *parser.BinaryExpr:

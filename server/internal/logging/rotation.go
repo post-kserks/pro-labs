@@ -74,7 +74,7 @@ func (r *Rotator) rotate() error {
 		return err
 	}
 
-	// Delete самый старый бэкап
+	// Delete the oldest backup
 	r.removeOldestBackup()
 
 	// Rename current file
@@ -112,9 +112,9 @@ func (r *Rotator) removeOldestBackup() {
 		}
 	}
 
-	// Delete старые бэкапы если их больше maxBackups
+	// Delete old backups if there are more than maxBackups
 	for len(backups) > r.maxBackups {
-		// Find the oldest (по имени файла — там дата)
+		// Find the oldest (by filename — it contains the date)
 		oldest := backups[0]
 		for _, b := range backups[1:] {
 			if b < oldest {
@@ -123,7 +123,7 @@ func (r *Rotator) removeOldestBackup() {
 		}
 		os.Remove(filepath.Join(dir, oldest))
 
-		// Delete из списка
+		// Remove from list
 		for i, b := range backups {
 			if b == oldest {
 				backups = append(backups[:i], backups[i+1:]...)

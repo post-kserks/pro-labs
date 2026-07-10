@@ -9,7 +9,7 @@ import (
 	"vaultdb/internal/parser"
 )
 
-// FormatOptimizedPlan форматирует оптимизированный план для вывода.
+// FormatOptimizedPlan formats the optimized plan for display.
 func (p *OptimizedPlan) FormatOptimizedPlan() string {
 	var b strings.Builder
 	sep := strings.Repeat("═", 64)

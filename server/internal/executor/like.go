@@ -87,8 +87,8 @@ func compilePattern(pattern string) (*compiledPattern, error) {
 }
 
 // likeCache — LRU cache of compiled patterns: запрос вида
-// WHERE name LIKE '%x%' по миллиону строк компилирует паттерн один раз,
-// а не миллион.
+// WHERE name LIKE '%x%' on a million rows compiles the pattern once,
+// not a million times.
 type likePatternCache struct {
 	mu       sync.Mutex
 	capacity int
@@ -142,7 +142,7 @@ func (c *likePatternCache) getOrCompile(pattern string) (*compiledPattern, error
 	return cp, nil
 }
 
-// likeCache хранит последние 256 скомпилированных паттернов.
+// likeCache stores the last 256 compiled patterns.
 var likeCache = newLikePatternCache(256)
 
 // evalLike implements SQL LIKE: % matches any run of characters, _ matches a

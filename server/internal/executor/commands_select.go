@@ -1,7 +1,7 @@
 package executor
 
-// SELECT и связанные команды: JOIN, GROUP BY, оконные функции,
-// set-операции, EXPLAIN, HISTORY.
+// SELECT and related commands: JOIN, GROUP BY, window functions,
+// set operations, EXPLAIN, HISTORY.
 
 import (
 	"crypto/sha256"
@@ -39,7 +39,7 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	// Check result cache (only for simple SELECT, not CTEs or subqueries).
-	// В транзакции кэш пропускаем: он не учитывает tx-overlay (Bug #1).
+	// Skip cache in transactions: it doesn't account for tx-overlay (Bug #1).
 	if ctx.Session.resultCache != nil && !ctx.Session.IsInTx() && c.stmt.TableName != "" && c.stmt.FromSubquery == nil && len(c.stmt.CTEs) == 0 {
 		dbName, err := requireCurrentDB(ctx)
 		if err == nil {
@@ -69,8 +69,8 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	result, err := c.executeSimpleSelect(ctx, dbName)
 
-	// Cache the result (only successful SELECT without mutations). Не кэшируем
-	// результаты, посчитанные поверх tx-overlay (Bug #1).
+	// Cache the result (only successful SELECT without mutations). Don't cache
+	// results computed over tx-overlay (Bug #1).
 	if err == nil && ctx.Session.resultCache != nil && !ctx.Session.IsInTx() && result != nil {
 		cacheKey := ResultCacheKey(c.stmt, dbName)
 		tables := map[string]bool{c.stmt.TableName: true}
@@ -415,7 +415,7 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	var rowsScanned int
 
 	// Try index lookup (only for single table for now)
-	// Внутри транзакции индекс пропускаем — он обошёл бы tx-overlay (Bug #1).
+	// Within a transaction we skip the index — it would bypass tx-overlay (Bug #1).
 	usedIndex := false
 	indexOnlyResult := false
 	if len(c.stmt.Joins) == 0 && c.stmt.Where != nil && c.stmt.AsOf == nil && !ctx.Session.IsInTx() {

@@ -268,10 +268,10 @@ func TestWALAbortOnRollback(t *testing.T) {
 	}
 }
 
-// TestUndoUpdatePartialCommitPerRowRestore: при откате частично применённого
-// коммита один UPDATE, затронувший несколько строк с РАЗНЫМИ старыми
-// значениями, должен восстановить каждой строке ЕЁ значение, а не одно общее.
-// Регресс на слияние per-row карт в mergedUpdates (порча данных).
+// TestUndoUpdatePartialCommitPerRowRestore: when rolling back a partially applied
+// commit, a single UPDATE that affected multiple rows with DIFFERENT old
+// values must restore each row's OWN value, not a single common one.
+// Regression from merging per-row maps in mergedUpdates (data corruption).
 func TestUndoUpdatePartialCommitPerRowRestore(t *testing.T) {
 	session := setupTxSession(t)
 	executeSQL(t, session, "CREATE TABLE accounts (id INT, balance INT);")
@@ -280,10 +280,10 @@ func TestUndoUpdatePartialCommitPerRowRestore(t *testing.T) {
 	executeSQL(t, session, "INSERT INTO accounts VALUES (2, 20);")
 
 	executeSQL(t, session, "BEGIN;")
-	// Один UPDATE на две строки с разными старыми значениями (10 и 20).
+	// One UPDATE on two rows with different old values (10 and 20).
 	executeSQL(t, session, "UPDATE accounts SET balance = 500 WHERE id <= 2;")
-	// Второй UPDATE падает на apply (CHECK balance>=0) → частичный коммит,
-	// первый UPDATE откатывается, и обе строки должны вернуть СВОИ 10 и 20.
+	// Second UPDATE fails on apply (CHECK balance>=0) → partial commit,
+	// first UPDATE is rolled back, and both rows must restore THEIR 10 and 20.
 	executeSQL(t, session, "UPDATE accounts SET balance = -5 WHERE id = 2;")
 	executeSQLExpectError(t, session, "COMMIT;")
 
@@ -297,7 +297,7 @@ func TestUndoUpdatePartialCommitPerRowRestore(t *testing.T) {
 	}
 }
 
-// TestTruncateRollback: после TRUNCATE + ROLLBACK данные должны быть восстановлены.
+// TestTruncateRollback: after TRUNCATE + ROLLBACK data must be restored.
 func TestTruncateRollback(t *testing.T) {
 	session := setupTxSession(t)
 
@@ -384,7 +384,7 @@ func TestSessionCloseWithActiveTx(t *testing.T) {
 	executeSQL(t, session, "BEGIN;")
 	executeSQL(t, session, "INSERT INTO items VALUES (2, 'banana', 20);")
 
-	// Check that транзакция активна
+	// Check that transaction is active
 	if !session.IsInTx() {
 		t.Fatal("expected active transaction before close")
 	}
@@ -400,8 +400,8 @@ func TestSessionCloseWithActiveTx(t *testing.T) {
 		t.Fatal("ActiveTx should be nil after Close()")
 	}
 
-	// Check that данные откатались — новая сессия видит только ту строку,
-	// что была закоммичена до BEGIN
+	// Check that data rolled back — new session only sees the row
+	// that was committed before BEGIN
 	dir := t.TempDir()
 	txm := txmanager.NewManager()
 	store, err := storage.NewPageStorageEngine(dir, nil, txm)

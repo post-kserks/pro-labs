@@ -4,7 +4,7 @@ package executor
 
 import ()
 
-// estimateCost estimates cost плана.
+// estimateCost estimates the cost of a plan.
 func (o *Optimizer) estimateCost(dbName string, plan *OptimizedPlan) CostEstimate {
 	totalCost := 0.0
 	totalRows := 0

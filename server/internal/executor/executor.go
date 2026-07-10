@@ -205,14 +205,14 @@ func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manag
 	return &Executor{storage: store, metrics: m, txm: txm, broadcaster: b, embedder: ai.NoopEmbedder{}}
 }
 
-// SetWAL подключает WAL for writes операций транзакций.
+// SetWAL connects WAL for writing transaction operations.
 func (e *Executor) SetWAL(w *wal.WAL) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.wal = w
 }
 
-// SetEmbedder подключает реальный embedding-провайдер.
+// SetEmbedder connects a real embedding provider.
 func (e *Executor) SetEmbedder(emb ai.Embedder) {
 	if emb != nil {
 		e.mu.Lock()
@@ -221,14 +221,14 @@ func (e *Executor) SetEmbedder(emb ai.Embedder) {
 	}
 }
 
-// SetQueryTimeout задаёт таймаут на выполнение запроса.
+// SetQueryTimeout sets the query execution timeout.
 func (e *Executor) SetQueryTimeout(d time.Duration) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.queryTimeout = d
 }
 
-// SetMaxRows задаёт максимальное количество строк в результате SELECT.
+// SetMaxRows sets the maximum number of rows in SELECT results.
 func (e *Executor) SetMaxRows(n int) {
 	if n > 0 {
 		e.mu.Lock()
@@ -237,21 +237,21 @@ func (e *Executor) SetMaxRows(n int) {
 	}
 }
 
-// SetParallelConfig настраивает параллельное выполнение запросов.
+// SetParallelConfig configures parallel query execution.
 func (e *Executor) SetParallelConfig(cfg ParallelConfig) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.parallel = cfg
 }
 
-// ParallelConfig возвращает текущую конфигурацию параллельного выполнения.
+// ParallelConfig returns the current parallel execution configuration.
 func (e *Executor) ParallelConfig() ParallelConfig {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.parallel
 }
 
-// SetAuthManager подключает менеджер аутентификации для RBAC проверок.
+// SetAuthManager connects the authentication manager for RBAC checks.
 func (e *Executor) SetAuthManager(m *auth.Manager) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

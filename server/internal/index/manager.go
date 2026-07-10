@@ -182,7 +182,7 @@ func (m *IndexManager) RangeSearch(column, low, high string) ([]int, bool) {
 	return nil, false
 }
 
-// FullTextSearch выполняет полноtextовый поиск через GIN индекс.
+// FullTextSearch performs full-text search via a GIN index.
 func (m *IndexManager) FullTextSearch(column, query string) ([]int, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

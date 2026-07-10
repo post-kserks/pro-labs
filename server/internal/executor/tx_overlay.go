@@ -1,21 +1,20 @@
 package executor
 
-// Транзакционный overlay, сериализация буферизованных операций при spill'е,
-// заморозка волатильных функций и сериализация autocommit-записей с коммитами.
+// Transactional overlay, serialization of buffered operations on spill,
+// freezing of volatile functions, and serialization of autocommit writes with commits.
 //
-// Инвариант консистентности (почему overlay при чтении и повтор при COMMIT дают
-// одинаковый результат):
-//   1. Bug #2: снимок версии таблицы берётся при ПЕРВОМ обращении (чтении или
-//      записи), а autocommit-записи бьют версию под тем же per-table commit-локом,
-//      что и Commit. Значит, между первым обращением транзакции и её COMMIT'ом
-//      затронутые таблицы НЕ могут быть изменены никем другим (иначе COMMIT
-//      упадёт с конфликтом). Поэтому повторное вычисление WHERE буферизованного
-//      запроса при COMMIT даёт ровно те же строки, что и overlay при чтении —
-//      для предикатов, зависящих от данных, консистентность соблюдается.
-//   2. Bug #3: единственный оставшийся источник расхождения — волатильные
-//      функции (NOW, CURRENT_*, UUID). Они «замораживаются» в литералы в момент
-//      буферизации (freeze*), поэтому overlay и commit-apply используют
-//      идентичные значения.
+// Consistency invariant (why overlay at read time and re-evaluation at COMMIT
+// yield the same result):
+//   1. Bug #2: the table version snapshot is taken on FIRST access (read or
+//      write), and autocommit writes bump the version under the same per-table
+//      commit lock as Commit. Therefore, between the transaction's first access
+//      and its COMMIT, affected tables CANNOT be modified by anyone else (otherwise
+//      COMMIT would fail with a conflict). Thus re-evaluating the WHERE clause of
+//      buffered queries at COMMIT produces exactly the same rows as the overlay at
+//      read time — for data-dependent predicates, consistency is maintained.
+//   2. Bug #3: the only remaining source of divergence is volatile functions
+//      (NOW, CURRENT_*, UUID). They are "frozen" into literals at buffering time
+//      (freeze*), so overlay and commit-apply use identical values.
 
 import (
 	"encoding/json"
@@ -28,19 +27,18 @@ import (
 )
 
 func init() {
-	// Регистрируем кодек, восстанавливающий типизированный Payload при spill'е.
+	// Register codec that restores typed Payload on spill.
 	txmanager.EncodePendingOp = encodePendingOp
 	txmanager.DecodePendingOp = decodePendingOp
 }
 
-// applyTxOverlay накладывает буферизованные операции активной транзакции на
-// набор базовых (committed) строк таблицы — это и есть read-your-own-writes
-// (Bug #1). Вне транзакции возвращает base без изменений. Кроме того фиксирует
-// OCC-снимок версии таблицы при чтении (Bug #2a).
+// applyTxOverlay applies buffered operations of the active transaction on top of
+// the base (committed) rows of a table — this is read-your-own-writes
+// (Bug #1). Outside a transaction, returns base unchanged. Also captures the
+// OCC version snapshot at read time (Bug #2a).
 //
-// Применяется ТОЛЬКО на путях текущего чтения (ReadCurrentRows); для AS OF /
-// time-travel overlay не применяется — там должна быть только закоммиченная
-// история.
+// Applied ONLY on current-read paths (ReadCurrentRows); for AS OF /
+// time-travel, overlay is not applied — only committed history should be there.
 func applyTxOverlay(ctx *ExecutionContext, db, table string, base []storage.Row) ([]storage.Row, error) {
 	if ctx == nil || ctx.Session == nil || !ctx.Session.IsInTx() {
 		return base, nil
@@ -50,7 +48,7 @@ func applyTxOverlay(ctx *ExecutionContext, db, table string, base []storage.Row)
 		return base, nil
 	}
 
-	// OCC: снимок версии при первом обращении (чтении) — Bug #2a.
+	// OCC: version snapshot on first access (read) — Bug #2a.
 	if ctx.TxManager != nil {
 		ctx.TxManager.RecordAccess(tx, db, table)
 	}
@@ -101,8 +99,8 @@ func applyTxOverlay(ctx *ExecutionContext, db, table string, base []storage.Row)
 			if !ok {
 				return nil, fmt.Errorf("tx overlay: invalid update payload type %T", op.Payload)
 			}
-			// Значения присваиваний вычисляем так же, как executeImmediate
-			// (один раз, с nil-строкой), чтобы overlay и commit совпали.
+			// Evaluate assignment values the same way as executeImmediate
+			// (once, with nil row), so overlay and commit match.
 			updates := make(map[string]storage.Value, len(s.Assignments))
 			for _, a := range s.Assignments {
 				val, err := evalOperand(a.Value, nil, schema, ctx)
@@ -143,7 +141,7 @@ func applyTxOverlay(ctx *ExecutionContext, db, table string, base []storage.Row)
 	return result, nil
 }
 
-// applyUpdatesToRow возвращает копию row с применёнными присваиваниями.
+// applyUpdatesToRow returns a copy of row with assignments applied.
 func applyUpdatesToRow(row storage.Row, schema *storage.TableSchema, updates map[string]storage.Value) storage.Row {
 	nr := make(storage.Row, len(row))
 	copy(nr, row)
@@ -158,12 +156,12 @@ func applyUpdatesToRow(row storage.Row, schema *storage.TableSchema, updates map
 	return nr
 }
 
-// mutateUnderTableLock выполняет fn под per-table commit-локом, чтобы
-// autocommit-запись (мутация storage + bump версии в notifyMutation)
-// сериализовалась с коммитами транзакций (Bug #2b).
+// mutateUnderTableLock executes fn under per-table commit lock, so that
+// autocommit writes (storage mutation + version bump in notifyMutation)
+// serialize with transaction commits (Bug #2b).
 //
-// Deadlock guard: во время applyOps внутри Commit локи уже взяты, поэтому при
-// ctx.InCommitApply=true мы НЕ берём их повторно (sync.Mutex не реентрантный).
+// Deadlock guard: during applyOps inside Commit, locks are already held, so when
+// ctx.InCommitApply=true we do NOT acquire them again (sync.Mutex is not reentrant).
 func mutateUnderTableLock(ctx *ExecutionContext, db, table string, fn func() error) error {
 	if ctx == nil || ctx.InCommitApply || ctx.TxManager == nil {
 		return fn()
@@ -173,8 +171,8 @@ func mutateUnderTableLock(ctx *ExecutionContext, db, table string, fn func() err
 	return fn()
 }
 
-// volatileFuncs — функции, значение которых меняется при каждом вызове и которые
-// нужно «замораживать» при буферизации (Bug #3).
+// volatileFuncs — functions whose value changes on each call and which
+// need to be "frozen" during buffering (Bug #3).
 var volatileFuncs = map[string]bool{
 	"NOW":               true,
 	"CURRENT_TIMESTAMP": true,
@@ -183,7 +181,7 @@ var volatileFuncs = map[string]bool{
 	"UUID":              true,
 }
 
-// rawToParserValue превращает вычисленное Go-значение обратно в литерал AST.
+// rawToParserValue converts a computed Go value back to an AST literal.
 func rawToParserValue(v interface{}) parser.Value {
 	switch x := v.(type) {
 	case nil:
@@ -203,8 +201,8 @@ func rawToParserValue(v interface{}) parser.Value {
 	}
 }
 
-// freezeVolatileExpr заменяет вызовы волатильных функций на вычисленные литералы,
-// рекурсивно обходя выражение. Прочие узлы пересобираются без изменения смысла.
+// freezeVolatileExpr replaces volatile function calls with computed literals,
+// recursively traversing the expression. Other nodes are reconstructed without changing semantics.
 func freezeVolatileExpr(e parser.Expression, ctx *ExecutionContext) (parser.Expression, error) {
 	switch v := e.(type) {
 	case *parser.FunctionCall:
@@ -280,9 +278,9 @@ func freezeVolatileExpr(e parser.Expression, ctx *ExecutionContext) (parser.Expr
 	}
 }
 
-// freezeInsert возвращает копию INSERT с замороженными волатильными функциями в
-// списках значений. Для INSERT ... SELECT заморозка не нужна (нет списков
-// литералов) — возвращаем исходный statement.
+// freezeInsert returns a copy of INSERT with frozen volatile functions in
+// value lists. For INSERT ... SELECT freezing is not needed (no literal lists) —
+// the original statement is returned.
 func freezeInsert(s *parser.InsertStatement, ctx *ExecutionContext) (*parser.InsertStatement, error) {
 	if s.SelectQuery != nil {
 		return s, nil
@@ -303,8 +301,8 @@ func freezeInsert(s *parser.InsertStatement, ctx *ExecutionContext) (*parser.Ins
 	return &cp, nil
 }
 
-// freezeUpdate возвращает копию UPDATE с замороженными волатильными функциями в
-// присваиваниях и WHERE.
+// freezeUpdate returns a copy of UPDATE with frozen volatile functions in
+// assignments and WHERE.
 func freezeUpdate(s *parser.UpdateStatement, ctx *ExecutionContext) (*parser.UpdateStatement, error) {
 	cp := *s
 	cp.Assignments = make([]parser.Assignment, len(s.Assignments))
@@ -325,7 +323,7 @@ func freezeUpdate(s *parser.UpdateStatement, ctx *ExecutionContext) (*parser.Upd
 	return &cp, nil
 }
 
-// freezeDelete возвращает копию DELETE с замороженным волатильным WHERE.
+// freezeDelete returns a copy of DELETE with frozen volatile WHERE.
 func freezeDelete(s *parser.DeleteStatement, ctx *ExecutionContext) (*parser.DeleteStatement, error) {
 	if s.Where == nil {
 		return s, nil
@@ -339,11 +337,11 @@ func freezeDelete(s *parser.DeleteStatement, ctx *ExecutionContext) (*parser.Del
 	return &cp, nil
 }
 
-// --- Сериализация PendingOp для spill'а ----------------------------------
+// --- PendingOp serialization for spill ----------------------------------
 //
-// JSON не умеет восстанавливать поля-интерфейсы (parser.Expression внутри
-// statement'ов), поэтому используем явный wire-формат с тегами типов. Любой
-// неподдерживаемый узел/форма приводит к ошибке — операция НЕ теряется молча.
+// JSON cannot restore interface fields (parser.Expression inside
+// statements), so we use an explicit wire format with type tags. Any
+// unsupported node/form produces an error — operations are NOT silently lost.
 
 type wireExpr struct {
 	K     string      `json:"k"`
@@ -623,7 +621,7 @@ func encodePendingOp(op txmanager.PendingOp) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("spill: unknown op type %q", op.Type)
 	}
-	// json.Marshal не вставляет переводы строк — безопасно для построчного spill.
+	// json.Marshal does not insert newlines — safe for line-by-line spill.
 	return json.Marshal(w)
 }
 
