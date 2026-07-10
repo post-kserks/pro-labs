@@ -152,6 +152,7 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 
 	for _, tuple := range tuples {
 		for {
+			freshPage := false
 			if !havePage {
 				newPid, newPg, err := t.heap.AllocatePage(page.PageTypeHeap)
 				if err != nil {
@@ -160,6 +161,7 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 				newPid.TableID = t.tableID
 				e.bufPool.CachePage(newPid, newPg, t.heap, t.schema.Database, t.schema.Name)
 				pid, pg, havePage = newPid, newPg, true
+				freshPage = true
 			}
 			if _, err := pg.InsertTuple(tuple); err == nil {
 				break
@@ -169,6 +171,11 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte) er
 				return err
 			}
 			havePage = false
+
+			if freshPage {
+				return fmt.Errorf("tuple too large to fit on a page (%d bytes > %d usable)",
+					len(tuple), page.PageSize-page.PageHeaderSize-page.ItemPointerSize)
+			}
 		}
 	}
 	return flush()
@@ -288,6 +295,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 		}
 
 		for {
+			freshPage := false
 			if !havePage {
 				newPid, newPg, err := t.heap.AllocatePage(page.PageTypeHeap)
 				if err != nil {
@@ -297,6 +305,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 				e.bufPool.CachePage(newPid, newPg, t.heap, t.schema.Database, t.schema.Name)
 				pid, pg, havePage = newPid, newPg, true
 				cachedPageCount++
+				freshPage = true
 			}
 
 			if !pageLocked {
@@ -335,6 +344,11 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 				e.bufPool.UnpinPage(pid, false)
 			}
 			havePage = false
+
+			if freshPage {
+				return 0, fmt.Errorf("tuple too large to fit on a page (%d bytes > %d usable)",
+					len(tuple), page.PageSize-page.PageHeaderSize-page.ItemPointerSize)
+			}
 		}
 	}
 
