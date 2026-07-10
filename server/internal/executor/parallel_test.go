@@ -253,11 +253,11 @@ func TestParallelGroupAndAggregate_SingleGroup(t *testing.T) {
 
 func TestShouldUseParallel(t *testing.T) {
 	tests := []struct {
-		name      string
-		config    ParallelConfig
-		numRows   int
-		hasJoins  bool
-		hasOrder  bool
+		name         string
+		config       ParallelConfig
+		numRows      int
+		hasJoins     bool
+		hasOrder     bool
 		wantParallel bool
 	}{
 		{

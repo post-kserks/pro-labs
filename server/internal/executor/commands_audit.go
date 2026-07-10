@@ -48,11 +48,11 @@ type ArchiveAuditLogCommand struct {
 
 // archiveExport is the top-level JSON structure written to the archive file.
 type archiveExport struct {
-	ArchivedAt  string         `json:"archived_at"`
-	EntryCount  int            `json:"entry_count"`
-	ChainHash   string         `json:"chain_hash"`
-	KeepCount   int            `json:"keep_count"`
-	Entries     []audit.Entry  `json:"entries"`
+	ArchivedAt string        `json:"archived_at"`
+	EntryCount int           `json:"entry_count"`
+	ChainHash  string        `json:"chain_hash"`
+	KeepCount  int           `json:"keep_count"`
+	Entries    []audit.Entry `json:"entries"`
 }
 
 func (c *ArchiveAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error) {

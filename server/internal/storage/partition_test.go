@@ -102,8 +102,8 @@ func TestRangePartitionRouting(t *testing.T) {
 func TestHashPartitionRouting(t *testing.T) {
 	pt := &PartitionedTable{
 		Spec: &PartitionSpec{
-			Type:    "HASH",
-			Columns: []string{"user_id"},
+			Type:     "HASH",
+			Columns:  []string{"user_id"},
 			NumParts: 4,
 		},
 		Schema: &TableSchema{
@@ -153,8 +153,8 @@ func TestNewPartitionedTable(t *testing.T) {
 	schema := &TableSchema{
 		Name: "orders",
 		PartitionBy: &PartitionSpec{
-			Type:    "HASH",
-			Columns: []string{"id"},
+			Type:     "HASH",
+			Columns:  []string{"id"},
 			NumParts: 3,
 		},
 		Columns: []ColumnSchema{
@@ -185,8 +185,8 @@ func TestPartitionInsertAndSelect(t *testing.T) {
 		Name:     "orders",
 		Database: "testdb",
 		PartitionBy: &PartitionSpec{
-			Type:    "HASH",
-			Columns: []string{"id"},
+			Type:     "HASH",
+			Columns:  []string{"id"},
 			NumParts: 2,
 		},
 		Columns: []ColumnSchema{
@@ -340,7 +340,7 @@ func TestRangePartitionPruning(t *testing.T) {
 			expected: []string{"orders_p2023", "orders_p2024"},
 		},
 		{
-			name:     "complex AND on key",
+			name: "complex AND on key",
 			where: &parser.AndExpr{
 				Left:  &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: ">=", Right: &parser.Value{Type: "string", StrVal: "2024-01-01"}},
 				Right: &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "<", Right: &parser.Value{Type: "string", StrVal: "2025-06-15"}},
@@ -353,7 +353,7 @@ func TestRangePartitionPruning(t *testing.T) {
 			expected: []string{"orders_p2023", "orders_p2024", "orders_p2025"},
 		},
 		{
-			name:     "OR returns all",
+			name: "OR returns all",
 			where: &parser.OrExpr{
 				Left:  &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "=", Right: &parser.Value{Type: "string", StrVal: "2023-01-01"}},
 				Right: &parser.BinaryExpr{Left: &parser.ColumnRef{Name: "order_date"}, Operator: "=", Right: &parser.Value{Type: "string", StrVal: "2024-01-01"}},
@@ -380,8 +380,8 @@ func TestRangePartitionPruning(t *testing.T) {
 func TestHashPartitionPruning(t *testing.T) {
 	pt := &PartitionedTable{
 		Spec: &PartitionSpec{
-			Type:    "HASH",
-			Columns: []string{"user_id"},
+			Type:     "HASH",
+			Columns:  []string{"user_id"},
 			NumParts: 4,
 		},
 		Schema: &TableSchema{

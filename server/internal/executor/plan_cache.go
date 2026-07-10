@@ -24,12 +24,12 @@ const (
 
 // PlanCache is a thread-safe cache for query execution plans with schema version tracking.
 type PlanCache struct {
-	mu       sync.RWMutex
-	plans    map[uint64]*CachedPlan // queryHash → CachedPlan
-	maxSize  int
-	ttl      time.Duration
-	hits     int64
-	misses   int64
+	mu        sync.RWMutex
+	plans     map[uint64]*CachedPlan // queryHash → CachedPlan
+	maxSize   int
+	ttl       time.Duration
+	hits      int64
+	misses    int64
 	evictions int64
 }
 

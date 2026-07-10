@@ -16,10 +16,10 @@ func TestWriteResponse_Handshake(t *testing.T) {
 
 	go func() {
 		resp := protocol.HandshakeResponse{
-			Type:            "handshake",
-			ProtocolVersion: "2.0",
-			Server:          "VaultDB",
-			ServerVersion:   "2.0.0",
+			Type:              "handshake",
+			ProtocolVersion:   "2.0",
+			Server:            "VaultDB",
+			ServerVersion:     "2.0.0",
 			SupportedFeatures: []string{"time_travel", "transactions"},
 		}
 		writeResponse(server, resp)

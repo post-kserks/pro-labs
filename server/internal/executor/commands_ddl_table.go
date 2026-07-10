@@ -65,8 +65,8 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	// Convert parser PartitionSpec to storage PartitionSpec
 	if c.stmt.PartitionBy != nil {
 		storageSpec := &storage.PartitionSpec{
-			Type:    c.stmt.PartitionBy.Type,
-			Columns: c.stmt.PartitionBy.Columns,
+			Type:     c.stmt.PartitionBy.Type,
+			Columns:  c.stmt.PartitionBy.Columns,
 			NumParts: c.stmt.PartitionBy.NumParts,
 		}
 		for _, pd := range c.stmt.PartitionBy.Partitions {

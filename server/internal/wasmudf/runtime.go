@@ -111,8 +111,8 @@ func decodeLEB128(data []byte) (uint32, int, error) {
 type Runtime struct {
 	runtime        wazero.Runtime
 	defaultTimeout time.Duration
-	maxModuleSize  int64              // maximum allowed WASM binary size in bytes
-	allowedExports map[string]bool    // export whitelist; nil means use package default
+	maxModuleSize  int64           // maximum allowed WASM binary size in bytes
+	allowedExports map[string]bool // export whitelist; nil means use package default
 }
 
 // NewRuntime creates a new WASM runtime with sensible defaults:

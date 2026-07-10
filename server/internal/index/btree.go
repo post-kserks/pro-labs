@@ -20,10 +20,10 @@ func (e *btreeEntry) Less(than gbtree.Item) bool {
 
 // BTreeIndex — B-tree индекс для range queries и ordering.
 type BTreeIndex struct {
-	tree    *gbtree.BTree
-	mu      sync.RWMutex
-	name    string
-	column  string
+	tree     *gbtree.BTree
+	mu       sync.RWMutex
+	name     string
+	column   string
 	colIndex int
 
 	// Обратный маппинг: позиция строки → ключ

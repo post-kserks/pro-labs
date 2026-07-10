@@ -108,9 +108,9 @@ func TestEncodeBase64Empty(t *testing.T) {
 func TestDecodeBase64PaddingEdgeCases(t *testing.T) {
 	// Standard padding
 	tests := []string{
-		"QQ==",   // "A" with padding
-		"QUE=",   // "AB" with padding
-		"QUJD",  // "ABC" no padding
+		"QQ==", // "A" with padding
+		"QUE=", // "AB" with padding
+		"QUJD", // "ABC" no padding
 	}
 	for _, tt := range tests {
 		_, err := decodeBase64(tt)

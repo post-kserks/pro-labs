@@ -492,31 +492,31 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-		checks["wal"] = map[string]interface{}{
-			"status": "pass",
-		}
+	checks["wal"] = map[string]interface{}{
+		"status": "pass",
+	}
 
-		poolStats := s.sessionPool.Stats()
-		checks["session_pool"] = map[string]interface{}{
-			"status": "pass",
-			"active": poolStats.Active,
-			"idle":   poolStats.Idle,
-			"max":    poolStats.Max,
-		}
+	poolStats := s.sessionPool.Stats()
+	checks["session_pool"] = map[string]interface{}{
+		"status": "pass",
+		"active": poolStats.Active,
+		"idle":   poolStats.Idle,
+		"max":    poolStats.Max,
+	}
 
-		if s.cfg.Auth == nil || !s.cfg.Auth.Enabled() || s.cfg.Auth.ValidateToken(extractHealthToken(r)) {
-			uptime := int(time.Since(s.startedAt).Seconds())
-			writeJSON(w, http.StatusOK, map[string]interface{}{
-				"status":      status,
-				"version":     s.cfg.Version,
-				"uptime_s":    uptime,
-				"connections": s.cfg.ActiveConnections(),
-				"wal_enabled": true,
-				"time_travel": true,
-				"checks":      checks,
-			})
-			return
-		}
+	if s.cfg.Auth == nil || !s.cfg.Auth.Enabled() || s.cfg.Auth.ValidateToken(extractHealthToken(r)) {
+		uptime := int(time.Since(s.startedAt).Seconds())
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":      status,
+			"version":     s.cfg.Version,
+			"uptime_s":    uptime,
+			"connections": s.cfg.ActiveConnections(),
+			"wal_enabled": true,
+			"time_travel": true,
+			"checks":      checks,
+		})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status": status,

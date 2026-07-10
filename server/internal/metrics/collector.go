@@ -101,8 +101,8 @@ type Collector struct {
 	ratelimitEvictionsTotal atomic.Int64
 
 	// Auth rate limiter метрики
-	authBlockedIPs           atomic.Int64
-	authFailedAttemptsTotal  atomic.Int64
+	authBlockedIPs          atomic.Int64
+	authFailedAttemptsTotal atomic.Int64
 }
 
 const (
@@ -175,13 +175,13 @@ func (c *Collector) IncIndexHit()    { c.indexHits.Add(1) }
 func (c *Collector) IncIndexMiss()   { c.indexMisses.Add(1) }
 
 // Rate limiter metrics.
-func (c *Collector) IncRatelimitBlocked()   { c.ratelimitBlockedTotal.Add(1) }
+func (c *Collector) IncRatelimitBlocked()           { c.ratelimitBlockedTotal.Add(1) }
 func (c *Collector) SetRatelimitActiveKeys(n int64) { c.ratelimitActiveKeys.Store(n) }
-func (c *Collector) IncRatelimitEvictions() { c.ratelimitEvictionsTotal.Add(1) }
+func (c *Collector) IncRatelimitEvictions()         { c.ratelimitEvictionsTotal.Add(1) }
 
 // Auth rate limiter metrics.
-func (c *Collector) SetAuthBlockedIPs(n int64)       { c.authBlockedIPs.Store(n) }
-func (c *Collector) IncAuthFailedAttempts()           { c.authFailedAttemptsTotal.Add(1) }
+func (c *Collector) SetAuthBlockedIPs(n int64) { c.authBlockedIPs.Store(n) }
+func (c *Collector) IncAuthFailedAttempts()    { c.authFailedAttemptsTotal.Add(1) }
 
 func sanitizeMetricLabel(s string) string {
 	s = strings.ReplaceAll(s, `\`, `_`)

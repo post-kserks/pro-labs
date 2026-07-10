@@ -464,11 +464,11 @@ type WAL struct {
 	nextTxID      atomic.Uint64
 	path          string
 	syncCounter   int
-	SyncBatchSize int                    // number of writes between fsyncs (0 = sync every write)
-	OnAppend      func()                 // called after each successful WAL append (for metrics)
+	SyncBatchSize int                       // number of writes between fsyncs (0 = sync every write)
+	OnAppend      func()                    // called after each successful WAL append (for metrics)
 	em            *crypto.EncryptionManager // nil = no encryption
-	groupCommit   *GroupCommit            // nil = no grouping
-	writeBehind   *WriteBehindBuffer      // nil = no write-behind batching
+	groupCommit   *GroupCommit              // nil = no grouping
+	writeBehind   *WriteBehindBuffer        // nil = no write-behind batching
 }
 
 func Open(path string) (*WAL, error) {
@@ -993,8 +993,8 @@ func buildRecord(txID uint64, opType byte, payload []byte, enc *crypto.Encryptio
 	}
 
 	// Fixed layout: magic(4) + txID(8) + opType(1) + encrypted(1) + keyVersion(4) + nonce(12) + payloadLen(4) + payload + crc(4)
-	fixedLen := 4 + 8 + 1 + 1 + 4 + 12 + 4 // 34 bytes header
-	recordLen := fixedLen + len(payload) + 4  // +4 for CRC
+	fixedLen := 4 + 8 + 1 + 1 + 4 + 12 + 4   // 34 bytes header
+	recordLen := fixedLen + len(payload) + 4 // +4 for CRC
 	record := make([]byte, recordLen)
 
 	copy(record[0:4], recordMagic)

@@ -60,14 +60,14 @@ type StorageConfig struct {
 
 // AuthConfig — параметры аутентификации.
 type AuthConfig struct {
-	Enabled          bool   `yaml:"enabled"`
-	MTLSEnabled      bool   `yaml:"mtls_enabled"`
-	MTLScaFile       string `yaml:"mtls_ca_file"`
-	RateWindowSec    int    `yaml:"rate_window_seconds"`
-	MaxFails         int    `yaml:"max_fails"`
-	BlockForSec      int    `yaml:"block_for_seconds"`
-	LocalhostBypass  bool   `yaml:"localhost_bypass"`
-	RequireTLSForToken bool `yaml:"require_tls_for_token"`
+	Enabled            bool   `yaml:"enabled"`
+	MTLSEnabled        bool   `yaml:"mtls_enabled"`
+	MTLScaFile         string `yaml:"mtls_ca_file"`
+	RateWindowSec      int    `yaml:"rate_window_seconds"`
+	MaxFails           int    `yaml:"max_fails"`
+	BlockForSec        int    `yaml:"block_for_seconds"`
+	LocalhostBypass    bool   `yaml:"localhost_bypass"`
+	RequireTLSForToken bool   `yaml:"require_tls_for_token"`
 }
 
 // AIConfig — параметры внешнего embedding-провайдера для SEMANTIC_MATCH/AI_EMBED.
@@ -83,17 +83,17 @@ type AIConfig struct {
 // EncryptionConfig — параметры Transparent Data Encryption (TDE).
 type EncryptionConfig struct {
 	Enabled        bool   `yaml:"enabled"`
-	KeySource      string `yaml:"key_source"`      // passphrase | os_keychain | kms
-	DefaultScope   string `yaml:"default_scope"`   // all | tables_only | off
+	KeySource      string `yaml:"key_source"`    // passphrase | os_keychain | kms
+	DefaultScope   string `yaml:"default_scope"` // all | tables_only | off
 	EncryptCatalog bool   `yaml:"encrypt_catalog"`
 	EncryptWAL     bool   `yaml:"encrypt_wal"`
 }
 
 // AuditConfig — параметры журналирования аудита.
 type AuditConfig struct {
-	ArchivePath      string `yaml:"archive_path"`
-	ArchiveKeepCount int    `yaml:"archive_keep_count"`
-	VerifyIntervalSec int   `yaml:"verify_interval_sec"`
+	ArchivePath       string `yaml:"archive_path"`
+	ArchiveKeepCount  int    `yaml:"archive_keep_count"`
+	VerifyIntervalSec int    `yaml:"verify_interval_sec"`
 }
 
 // Config — корневая конфигурация vaultdb.yaml.
@@ -107,25 +107,25 @@ type Config struct {
 }
 
 const (
-	DefaultMaxRequestSize        = 64 * 1024 * 1024 // 64 МБ
-	DefaultLiveQueryBuffer       = 256
-	DefaultLiveQueryPolicy       = "drop"
-	DefaultLiveQueryBlockTimeout = 5
-	DefaultQueryTimeoutSec       = 30
-	DefaultMaxConnections        = 1000
-	DefaultShutdownTimeoutSec    = 30
-	DefaultMaxRows               = 1000000
-	DefaultTCPKeepAliveSec       = 30
-	DefaultTCPIdleTimeoutSec     = 300
-	DefaultMaxPreparedStmts      = 1000
-	DefaultResultCacheSize       = 256
-	DefaultResultCacheTTL        = 30
-	DefaultRateLimitRPS          = 100
-	DefaultRateLimitBurst        = 200
-	DefaultBufferPoolPages       = 16384 // 128MB with 8KB pages
-	DefaultAuthRateWindowSec     = 60
-	DefaultAuthMaxFails          = 10
-	DefaultAuthBlockForSec       = 300
+	DefaultMaxRequestSize         = 64 * 1024 * 1024 // 64 МБ
+	DefaultLiveQueryBuffer        = 256
+	DefaultLiveQueryPolicy        = "drop"
+	DefaultLiveQueryBlockTimeout  = 5
+	DefaultQueryTimeoutSec        = 30
+	DefaultMaxConnections         = 1000
+	DefaultShutdownTimeoutSec     = 30
+	DefaultMaxRows                = 1000000
+	DefaultTCPKeepAliveSec        = 30
+	DefaultTCPIdleTimeoutSec      = 300
+	DefaultMaxPreparedStmts       = 1000
+	DefaultResultCacheSize        = 256
+	DefaultResultCacheTTL         = 30
+	DefaultRateLimitRPS           = 100
+	DefaultRateLimitBurst         = 200
+	DefaultBufferPoolPages        = 16384 // 128MB with 8KB pages
+	DefaultAuthRateWindowSec      = 60
+	DefaultAuthMaxFails           = 10
+	DefaultAuthBlockForSec        = 300
 	DefaultAuditVerifyIntervalSec = 300 // 5 minutes
 )
 

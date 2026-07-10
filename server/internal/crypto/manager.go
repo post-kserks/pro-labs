@@ -12,9 +12,9 @@ import (
 type AuditFunc func(actor, action, target, detail string)
 
 type EncryptionManager struct {
-	activeDEK []byte                // 32 bytes for AES-256
-	activeVer uint32                // current version
-	oldDEKs   map[uint32][]byte     // old DEKs for reading existing pages
+	activeDEK []byte                 // 32 bytes for AES-256
+	activeVer uint32                 // current version
+	oldDEKs   map[uint32][]byte      // old DEKs for reading existing pages
 	aeads     map[uint32]cipher.AEAD // AEAD for each version
 	keyID     string
 	closed    bool

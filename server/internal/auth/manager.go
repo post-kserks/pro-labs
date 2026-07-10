@@ -50,19 +50,19 @@ type GrantsProvider interface {
 // Manager хранит HMAC-SHA256 хеши токенов с серверным секретом.
 // HMAC привязан к секрету — rainbow tables бесполезны.
 type Manager struct {
-	enabled        bool
+	enabled         bool
 	localhostBypass bool
-	mu             sync.RWMutex
-	tokens         map[string]*TokenInfo // HMAC-SHA256(token, secret) hex → token info
-	revoked        map[string]time.Time  // HMAC-SHA256(token, secret) hex → revocation time
-	secret         []byte
-	warnedOnce     sync.Once
-	logger         *slog.Logger
-	rateLim        *authRateLimiter
-	auditFunc      AuditFunc
-	dataDir        string // directory for persisting revoked tokens
-	grantsProvider GrantsProvider // dynamic RBAC grants from DB
-	collector      authMetricsCollector
+	mu              sync.RWMutex
+	tokens          map[string]*TokenInfo // HMAC-SHA256(token, secret) hex → token info
+	revoked         map[string]time.Time  // HMAC-SHA256(token, secret) hex → revocation time
+	secret          []byte
+	warnedOnce      sync.Once
+	logger          *slog.Logger
+	rateLim         *authRateLimiter
+	auditFunc       AuditFunc
+	dataDir         string         // directory for persisting revoked tokens
+	grantsProvider  GrantsProvider // dynamic RBAC grants from DB
+	collector       authMetricsCollector
 }
 
 // authMetricsCollector is a minimal interface for auth rate limiter metrics.
@@ -182,8 +182,6 @@ func (rl *authRateLimiter) updateBlockedIPsMetricLocked() {
 	}
 }
 
-
-
 // hashToken вычисляет HMAC-SHA256 токена с серверным секретом.
 func (m *Manager) hashToken(token string) string {
 	mac := hmac.New(sha256.New, m.secret)
@@ -227,14 +225,14 @@ func NewWithCollector(enabled bool, tokens map[string]string, logger *slog.Logge
 	}
 
 	m := &Manager{
-		enabled:        enabled,
+		enabled:         enabled,
 		localhostBypass: true, // default: backward-compatible bypass for localhost
-		tokens:         hashed,
-		revoked:        make(map[string]time.Time),
-		secret:         secret,
-		logger:         logger,
-		rateLim:        newAuthRateLimiter(rateWindowSec, maxFails, blockForSec, collector),
-		collector:      collector,
+		tokens:          hashed,
+		revoked:         make(map[string]time.Time),
+		secret:          secret,
+		logger:          logger,
+		rateLim:         newAuthRateLimiter(rateWindowSec, maxFails, blockForSec, collector),
+		collector:       collector,
 	}
 	go m.cleanupRevokedTokens()
 	return m, nil
@@ -277,8 +275,8 @@ func (m *Manager) IsRevoked(token string) bool {
 
 // revokedEntry represents a single revoked token in JSON serialization.
 type revokedEntry struct {
-	TokenHash  string    `json:"token_hash"`
-	RevokedAt  time.Time `json:"revoked_at"`
+	TokenHash string    `json:"token_hash"`
+	RevokedAt time.Time `json:"revoked_at"`
 }
 
 // SetDataDir sets the directory used to persist revoked tokens and loads

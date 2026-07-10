@@ -176,7 +176,7 @@ func TestEdgeNegativeTimestamps(t *testing.T) {
 func TestEdgeBoundaryIntegers(t *testing.T) {
 	session := newEdgeSession(t)
 	mustExec(t, session, "CREATE TABLE edge_int (id INT, val INT)")
-	mustExec(t, session, "INSERT INTO edge_int VALUES (1, 2147483647)")   // INT MAX
+	mustExec(t, session, "INSERT INTO edge_int VALUES (1, 2147483647)")  // INT MAX
 	mustExec(t, session, "INSERT INTO edge_int VALUES (2, -2147483648)") // INT MIN
 	mustExec(t, session, "INSERT INTO edge_int VALUES (3, 0)")
 

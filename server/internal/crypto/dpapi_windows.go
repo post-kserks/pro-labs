@@ -54,7 +54,7 @@ func (s *DPAPISource) generateAndProtect() ([]byte, error) {
 
 func (s *DPAPISource) protect(data []byte) ([]byte, error) {
 	in := windows.DataBlob{
-		Len: uint32(len(data)),
+		Len:    uint32(len(data)),
 		PbData: (*byte)(unsafe.Pointer(&data[0])),
 	}
 	var out windows.DataBlob
@@ -69,7 +69,7 @@ func (s *DPAPISource) protect(data []byte) ([]byte, error) {
 
 func (s *DPAPISource) unprotect(blob []byte) ([]byte, error) {
 	in := windows.DataBlob{
-		Len: uint32(len(blob)),
+		Len:    uint32(len(blob)),
 		PbData: (*byte)(unsafe.Pointer(&blob[0])),
 	}
 	var out windows.DataBlob

@@ -1448,12 +1448,12 @@ func TestValidateObjectNameEdgeCases(t *testing.T) {
 		{"a", false},
 		{"_abc", false},
 		{"abc123", false},
-		{"123abc", true}, // starts with digit
-		{"a-b", true},   // contains dash
-		{"a.b", true},   // contains dot
-		{"a/b", true},   // contains slash
-		{"a\\b", true},  // contains backslash
-		{"a..b", true},  // path traversal
+		{"123abc", true},          // starts with digit
+		{"a-b", true},             // contains dash
+		{"a.b", true},             // contains dot
+		{"a/b", true},             // contains slash
+		{"a\\b", true},            // contains backslash
+		{"a..b", true},            // path traversal
 		{string([]byte{0}), true}, // null byte
 	}
 	for _, tt := range tests {

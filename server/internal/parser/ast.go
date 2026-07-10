@@ -67,16 +67,16 @@ type CreateTableStatement struct {
 
 // PartitionSpec describes how a table is partitioned.
 type PartitionSpec struct {
-	Type       string          // "RANGE", "HASH"
-	Columns    []string        // partition key columns
-	Partitions []PartitionDef  // RANGE: explicit partition definitions
-	NumParts   int             // HASH: number of partitions
+	Type       string         // "RANGE", "HASH"
+	Columns    []string       // partition key columns
+	Partitions []PartitionDef // RANGE: explicit partition definitions
+	NumParts   int            // HASH: number of partitions
 }
 
 // PartitionDef defines a single partition in a RANGE-partitioned table.
 type PartitionDef struct {
-	Name   string      // partition name (e.g., "p2023")
-	Bound  interface{} // upper bound value for RANGE (nil = MAXVALUE)
+	Name  string      // partition name (e.g., "p2023")
+	Bound interface{} // upper bound value for RANGE (nil = MAXVALUE)
 }
 
 type DropTableStatement struct {
@@ -453,102 +453,102 @@ type RevokeStatement struct {
 	From       string
 }
 
-func (*CreateDatabaseStatement) statementNode()  {}
-func (*DropDatabaseStatement) statementNode()    {}
-func (*UseDatabaseStatement) statementNode()     {}
-func (*ShowDatabasesStatement) statementNode()   {}
-func (*ShowTablesStatement) statementNode()      {}
+func (*CreateDatabaseStatement) statementNode()       {}
+func (*DropDatabaseStatement) statementNode()         {}
+func (*UseDatabaseStatement) statementNode()          {}
+func (*ShowDatabasesStatement) statementNode()        {}
+func (*ShowTablesStatement) statementNode()           {}
 func (*ShowEncryptionStatusStatement) statementNode() {}
-func (*DescribeTableStatement) statementNode()   {}
-func (*CreateTableStatement) statementNode()     {}
-func (*DropTableStatement) statementNode()       {}
-func (*AlterTableStatement) statementNode()      {}
-func (*SelectStatement) statementNode()          {}
-func (*ExplainStatement) statementNode()         {}
-func (*HistoryStatement) statementNode()         {}
-func (*InsertStatement) statementNode()          {}
-func (*UpdateStatement) statementNode()          {}
-func (*DeleteStatement) statementNode()          {}
-func (*VacuumStatement) statementNode()          {}
-func (*CopyStatement) statementNode()            {}
-func (*CreateIndexStatement) statementNode()     {}
-func (*DropIndexStatement) statementNode()       {}
-func (*ShowIndexesStatement) statementNode()     {}
-func (*BeginStatement) statementNode()           {}
-func (*CommitStatement) statementNode()          {}
-func (*RollbackStatement) statementNode()        {}
-func (*PrepareStatement) statementNode()         {}
-func (*ExecuteStatement) statementNode()         {}
-func (*DeallocateStatement) statementNode()      {}
-func (*SetOperationStatement) statementNode()    {}
-func (*MigrationStatement) statementNode()       {}
-func (*CreatePolicyStatement) statementNode()    {}
-func (*EnableRlsStatement) statementNode()       {}
-func (*VerifyAuditLogStatement) statementNode()     {}
-func (*ArchiveAuditLogStatement) statementNode()    {}
-func (*CreateRoleStatement) statementNode()     {}
-func (*DropRoleStatement) statementNode()       {}
-func (*GrantStatement) statementNode()          {}
-func (*RevokeStatement) statementNode()         {}
-func (*CTEStatement) statementNode()             {}
-func (*CreateViewStatement) statementNode()      {}
-func (*DropViewStatement) statementNode()        {}
-func (*CreateTriggerStatement) statementNode()   {}
-func (*DropTriggerStatement) statementNode()     {}
-func (*CreateFunctionStatement) statementNode()  {}
-func (*DropFunctionStatement) statementNode()    {}
-func (*CreateProcedureStatement) statementNode() {}
-func (*DropProcedureStatement) statementNode()   {}
-func (*CallProcedureStatement) statementNode()   {}
+func (*DescribeTableStatement) statementNode()        {}
+func (*CreateTableStatement) statementNode()          {}
+func (*DropTableStatement) statementNode()            {}
+func (*AlterTableStatement) statementNode()           {}
+func (*SelectStatement) statementNode()               {}
+func (*ExplainStatement) statementNode()              {}
+func (*HistoryStatement) statementNode()              {}
+func (*InsertStatement) statementNode()               {}
+func (*UpdateStatement) statementNode()               {}
+func (*DeleteStatement) statementNode()               {}
+func (*VacuumStatement) statementNode()               {}
+func (*CopyStatement) statementNode()                 {}
+func (*CreateIndexStatement) statementNode()          {}
+func (*DropIndexStatement) statementNode()            {}
+func (*ShowIndexesStatement) statementNode()          {}
+func (*BeginStatement) statementNode()                {}
+func (*CommitStatement) statementNode()               {}
+func (*RollbackStatement) statementNode()             {}
+func (*PrepareStatement) statementNode()              {}
+func (*ExecuteStatement) statementNode()              {}
+func (*DeallocateStatement) statementNode()           {}
+func (*SetOperationStatement) statementNode()         {}
+func (*MigrationStatement) statementNode()            {}
+func (*CreatePolicyStatement) statementNode()         {}
+func (*EnableRlsStatement) statementNode()            {}
+func (*VerifyAuditLogStatement) statementNode()       {}
+func (*ArchiveAuditLogStatement) statementNode()      {}
+func (*CreateRoleStatement) statementNode()           {}
+func (*DropRoleStatement) statementNode()             {}
+func (*GrantStatement) statementNode()                {}
+func (*RevokeStatement) statementNode()               {}
+func (*CTEStatement) statementNode()                  {}
+func (*CreateViewStatement) statementNode()           {}
+func (*DropViewStatement) statementNode()             {}
+func (*CreateTriggerStatement) statementNode()        {}
+func (*DropTriggerStatement) statementNode()          {}
+func (*CreateFunctionStatement) statementNode()       {}
+func (*DropFunctionStatement) statementNode()         {}
+func (*CreateProcedureStatement) statementNode()      {}
+func (*DropProcedureStatement) statementNode()        {}
+func (*CallProcedureStatement) statementNode()        {}
 
 func (*CreateDatabaseStatement) StatementType() string { return "CREATE_DATABASE" }
 
-func (*DropDatabaseStatement) StatementType() string    { return "DROP_DATABASE" }
-func (*UseDatabaseStatement) StatementType() string     { return "USE_DATABASE" }
-func (*ShowDatabasesStatement) StatementType() string   { return "SHOW_DATABASES" }
-func (*ShowTablesStatement) StatementType() string      { return "SHOW_TABLES" }
+func (*DropDatabaseStatement) StatementType() string         { return "DROP_DATABASE" }
+func (*UseDatabaseStatement) StatementType() string          { return "USE_DATABASE" }
+func (*ShowDatabasesStatement) StatementType() string        { return "SHOW_DATABASES" }
+func (*ShowTablesStatement) StatementType() string           { return "SHOW_TABLES" }
 func (*ShowEncryptionStatusStatement) StatementType() string { return "SHOW_ENCRYPTION_STATUS" }
-func (*DescribeTableStatement) StatementType() string   { return "DESCRIBE_TABLE" }
-func (*CreateTableStatement) StatementType() string     { return "CREATE_TABLE" }
-func (*DropTableStatement) StatementType() string       { return "DROP_TABLE" }
-func (*AlterTableStatement) StatementType() string      { return "ALTER_TABLE" }
-func (*SelectStatement) StatementType() string          { return "SELECT" }
-func (*ExplainStatement) StatementType() string         { return "EXPLAIN" }
-func (*HistoryStatement) StatementType() string         { return "HISTORY" }
-func (*InsertStatement) StatementType() string          { return "INSERT" }
-func (*UpdateStatement) StatementType() string          { return "UPDATE" }
-func (*DeleteStatement) StatementType() string          { return "DELETE" }
-func (*VacuumStatement) StatementType() string          { return "VACUUM" }
-func (*CopyStatement) StatementType() string            { return "COPY" }
-func (*CreateIndexStatement) StatementType() string     { return "CREATE_INDEX" }
-func (*DropIndexStatement) StatementType() string       { return "DROP_INDEX" }
-func (*ShowIndexesStatement) StatementType() string     { return "SHOW_INDEXES" }
-func (*BeginStatement) StatementType() string           { return "BEGIN" }
-func (*CommitStatement) StatementType() string          { return "COMMIT" }
-func (*RollbackStatement) StatementType() string        { return "ROLLBACK" }
-func (*PrepareStatement) StatementType() string         { return "PREPARE" }
-func (*ExecuteStatement) StatementType() string         { return "EXECUTE" }
-func (*DeallocateStatement) StatementType() string      { return "DEALLOCATE" }
-func (*SetOperationStatement) StatementType() string    { return "SET_OPERATION" }
-func (*MigrationStatement) StatementType() string       { return "MIGRATION" }
-func (*CreatePolicyStatement) StatementType() string    { return "CREATE_POLICY" }
-func (*EnableRlsStatement) StatementType() string       { return "ENABLE_RLS" }
-func (*VerifyAuditLogStatement) StatementType() string  { return "VERIFY_AUDIT_LOG" }
-func (*ArchiveAuditLogStatement) StatementType() string { return "ARCHIVE_AUDIT_LOG" }
-func (*CreateRoleStatement) StatementType() string     { return "CREATE_ROLE" }
-func (*DropRoleStatement) StatementType() string       { return "DROP_ROLE" }
-func (*GrantStatement) StatementType() string          { return "GRANT" }
-func (*RevokeStatement) StatementType() string         { return "REVOKE" }
-func (*CTEStatement) StatementType() string             { return "CTE" }
-func (*CreateViewStatement) StatementType() string      { return "CREATE_VIEW" }
-func (*DropViewStatement) StatementType() string        { return "DROP_VIEW" }
-func (*CreateTriggerStatement) StatementType() string   { return "CREATE_TRIGGER" }
-func (*DropTriggerStatement) StatementType() string     { return "DROP_TRIGGER" }
-func (*CreateFunctionStatement) StatementType() string  { return "CREATE_FUNCTION" }
-func (*DropFunctionStatement) StatementType() string    { return "DROP_FUNCTION" }
-func (*CreateProcedureStatement) StatementType() string { return "CREATE_PROCEDURE" }
-func (*DropProcedureStatement) StatementType() string   { return "DROP_PROCEDURE" }
-func (*CallProcedureStatement) StatementType() string   { return "CALL_PROCEDURE" }
+func (*DescribeTableStatement) StatementType() string        { return "DESCRIBE_TABLE" }
+func (*CreateTableStatement) StatementType() string          { return "CREATE_TABLE" }
+func (*DropTableStatement) StatementType() string            { return "DROP_TABLE" }
+func (*AlterTableStatement) StatementType() string           { return "ALTER_TABLE" }
+func (*SelectStatement) StatementType() string               { return "SELECT" }
+func (*ExplainStatement) StatementType() string              { return "EXPLAIN" }
+func (*HistoryStatement) StatementType() string              { return "HISTORY" }
+func (*InsertStatement) StatementType() string               { return "INSERT" }
+func (*UpdateStatement) StatementType() string               { return "UPDATE" }
+func (*DeleteStatement) StatementType() string               { return "DELETE" }
+func (*VacuumStatement) StatementType() string               { return "VACUUM" }
+func (*CopyStatement) StatementType() string                 { return "COPY" }
+func (*CreateIndexStatement) StatementType() string          { return "CREATE_INDEX" }
+func (*DropIndexStatement) StatementType() string            { return "DROP_INDEX" }
+func (*ShowIndexesStatement) StatementType() string          { return "SHOW_INDEXES" }
+func (*BeginStatement) StatementType() string                { return "BEGIN" }
+func (*CommitStatement) StatementType() string               { return "COMMIT" }
+func (*RollbackStatement) StatementType() string             { return "ROLLBACK" }
+func (*PrepareStatement) StatementType() string              { return "PREPARE" }
+func (*ExecuteStatement) StatementType() string              { return "EXECUTE" }
+func (*DeallocateStatement) StatementType() string           { return "DEALLOCATE" }
+func (*SetOperationStatement) StatementType() string         { return "SET_OPERATION" }
+func (*MigrationStatement) StatementType() string            { return "MIGRATION" }
+func (*CreatePolicyStatement) StatementType() string         { return "CREATE_POLICY" }
+func (*EnableRlsStatement) StatementType() string            { return "ENABLE_RLS" }
+func (*VerifyAuditLogStatement) StatementType() string       { return "VERIFY_AUDIT_LOG" }
+func (*ArchiveAuditLogStatement) StatementType() string      { return "ARCHIVE_AUDIT_LOG" }
+func (*CreateRoleStatement) StatementType() string           { return "CREATE_ROLE" }
+func (*DropRoleStatement) StatementType() string             { return "DROP_ROLE" }
+func (*GrantStatement) StatementType() string                { return "GRANT" }
+func (*RevokeStatement) StatementType() string               { return "REVOKE" }
+func (*CTEStatement) StatementType() string                  { return "CTE" }
+func (*CreateViewStatement) StatementType() string           { return "CREATE_VIEW" }
+func (*DropViewStatement) StatementType() string             { return "DROP_VIEW" }
+func (*CreateTriggerStatement) StatementType() string        { return "CREATE_TRIGGER" }
+func (*DropTriggerStatement) StatementType() string          { return "DROP_TRIGGER" }
+func (*CreateFunctionStatement) StatementType() string       { return "CREATE_FUNCTION" }
+func (*DropFunctionStatement) StatementType() string         { return "DROP_FUNCTION" }
+func (*CreateProcedureStatement) StatementType() string      { return "CREATE_PROCEDURE" }
+func (*DropProcedureStatement) StatementType() string        { return "DROP_PROCEDURE" }
+func (*CallProcedureStatement) StatementType() string        { return "CALL_PROCEDURE" }
 
 // Expression is the root interface for all WHERE expressions.
 type Expression interface {

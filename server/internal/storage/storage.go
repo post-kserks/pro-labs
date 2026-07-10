@@ -52,10 +52,10 @@ type TableSchema struct {
 
 // PartitionSpec describes how a table is partitioned.
 type PartitionSpec struct {
-	Type       string          `json:"type"`        // "RANGE", "HASH"
-	Columns    []string        `json:"columns"`     // partition key columns
-	Partitions []PartitionDef  `json:"partitions"`  // RANGE: explicit partition definitions
-	NumParts   int             `json:"num_parts"`   // HASH: number of partitions
+	Type       string         `json:"type"`       // "RANGE", "HASH"
+	Columns    []string       `json:"columns"`    // partition key columns
+	Partitions []PartitionDef `json:"partitions"` // RANGE: explicit partition definitions
+	NumParts   int            `json:"num_parts"`  // HASH: number of partitions
 }
 
 // PartitionDef defines a single partition.

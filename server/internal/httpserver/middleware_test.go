@@ -80,12 +80,12 @@ func TestTLSDisabledWarningLogged(t *testing.T) {
 	sess.Execute(stmt)
 
 	srv := New(Config{
-		Storage:   store,
-		Auth:      mustAuth(t, false, nil),
-		Metrics:   metrics.New(),
-		TxManager: txmanager.NewManager(),
+		Storage:     store,
+		Auth:        mustAuth(t, false, nil),
+		Metrics:     metrics.New(),
+		TxManager:   txmanager.NewManager(),
 		Broadcaster: br,
-		Logger:    logger,
+		Logger:      logger,
 	})
 	// TLS not configured (empty cert/key)
 	srv.cfg.TLSCertFile = ""
@@ -136,12 +136,12 @@ func TestRequireTLSForTokenRejection(t *testing.T) {
 	sess.Execute(stmt)
 
 	srv := New(Config{
-		Storage:   store,
-		Auth:      mustAuth(t, true, map[string]string{"testtoken": "test"}),
-		Metrics:   metrics.New(),
-		TxManager: txmanager.NewManager(),
+		Storage:     store,
+		Auth:        mustAuth(t, true, map[string]string{"testtoken": "test"}),
+		Metrics:     metrics.New(),
+		TxManager:   txmanager.NewManager(),
 		Broadcaster: br,
-		Logger:    logger,
+		Logger:      logger,
 	})
 	srv.cfg.TLSCertFile = ""
 	srv.cfg.TLSKeyFile = ""

@@ -312,7 +312,7 @@ func (s *Server) Start(ctx context.Context) error {
 	_ = apiServer.Shutdown(shutdownCtx)
 	_ = monitorServer.Shutdown(shutdownCtx)
 
-	s.	sessions.stop()
+	s.sessions.stop()
 	s.sessionPool.Close()
 
 	// Stop audit chain verifier.

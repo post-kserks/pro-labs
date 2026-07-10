@@ -76,7 +76,7 @@ func (m *mockStorageEngine) RowHistory(dbName, tableName string, pkValue interfa
 func (m *mockStorageEngine) TableModifiedSince(db, table string, txID uint64) (bool, error) {
 	return false, nil
 }
-func (m *mockStorageEngine) CurrentTxID() uint64    { return 0 }
+func (m *mockStorageEngine) CurrentTxID() uint64   { return 0 }
 func (m *mockStorageEngine) SchemaVersion() uint64 { return 0 }
 func (m *mockStorageEngine) ListIndexes(dbName, tableName string) ([]string, error) {
 	return nil, nil

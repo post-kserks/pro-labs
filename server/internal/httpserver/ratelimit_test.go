@@ -13,9 +13,9 @@ type mockMetricsCollector struct {
 	evictions  atomic.Int64
 }
 
-func (m *mockMetricsCollector) IncRatelimitBlocked()          { m.blocked.Add(1) }
+func (m *mockMetricsCollector) IncRatelimitBlocked()           { m.blocked.Add(1) }
 func (m *mockMetricsCollector) SetRatelimitActiveKeys(n int64) { m.activeKeys.Store(n) }
-func (m *mockMetricsCollector) IncRatelimitEvictions()        { m.evictions.Add(1) }
+func (m *mockMetricsCollector) IncRatelimitEvictions()         { m.evictions.Add(1) }
 
 func TestRateLimiterMemoryDoS(t *testing.T) {
 	rl := &RateLimiter{

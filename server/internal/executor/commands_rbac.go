@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	rbacDB       = "system"
-	rolesTable   = "roles"
-	grantsTable  = "grants"
+	rbacDB      = "system"
+	rolesTable  = "roles"
+	grantsTable = "grants"
 )
 
 var validPrivileges = map[string]bool{

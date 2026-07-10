@@ -24,6 +24,7 @@ type TableLog struct {
 	lastHash string
 
 	verifierDone chan struct{}
+	stopOnce     sync.Once
 }
 
 // NewTableLog creates a new table-based audit log.
@@ -98,15 +99,15 @@ func (t *TableLog) Append(entry Entry) error {
 
 	// Insert into system table
 	row := storage.Row{
-		int64(entry.ID),       // id
-		entry.OccurredAt,      // occurred_at
-		entry.Actor,           // actor
-		entry.Action,          // action
-		entry.Target,          // target
-		entry.Detail,          // detail
-		entry.PrevHash,        // prev_hash
-		entry.EntryHash,       // entry_hash
-		string(data),          // data (full entry as JSON)
+		int64(entry.ID),  // id
+		entry.OccurredAt, // occurred_at
+		entry.Actor,      // actor
+		entry.Action,     // action
+		entry.Target,     // target
+		entry.Detail,     // detail
+		entry.PrevHash,   // prev_hash
+		entry.EntryHash,  // entry_hash
+		string(data),     // data (full entry as JSON)
 	}
 
 	if _, err := t.storage.InsertRows(SystemDB, AuditTableName, []storage.Row{row}); err != nil {
@@ -293,9 +294,11 @@ func (t *TableLog) verifyLoop(interval time.Duration, logger *slog.Logger) {
 }
 
 // StopVerifier stops the background verifier goroutine.
+// Safe to call multiple times.
 func (t *TableLog) StopVerifier() {
-	if t.verifierDone != nil {
-		close(t.verifierDone)
-		t.verifierDone = nil
-	}
+	t.stopOnce.Do(func() {
+		if t.verifierDone != nil {
+			close(t.verifierDone)
+		}
+	})
 }

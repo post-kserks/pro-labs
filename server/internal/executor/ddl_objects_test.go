@@ -601,8 +601,8 @@ func TestValidateWASMPath(t *testing.T) {
 		wantErr bool
 	}{
 		{"relative valid", "file://test.wasm", dir, false},
-		{"absolute inside", "file://" + wasmPath, dataDir, true},  // absolute path rejected
-		{"path traversal", "file://../../etc/passwd", dir, true},   // traversal rejected
+		{"absolute inside", "file://" + wasmPath, dataDir, true}, // absolute path rejected
+		{"path traversal", "file://../../etc/passwd", dir, true}, // traversal rejected
 		{"double dot", "file://sub/../../../etc/passwd", dir, true},
 		{"nonexistent", "file://nonexistent.wasm", dir, true},
 	}

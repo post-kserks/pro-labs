@@ -274,10 +274,10 @@ func handleConnection(ctx context.Context, conn net.Conn, store storage.StorageE
 			}
 
 			resp := protocol.HandshakeResponse{
-				Type:            "handshake",
-				ProtocolVersion: "2.0",
-				Server:          "VaultDB",
-				ServerVersion:   version,
+				Type:              "handshake",
+				ProtocolVersion:   "2.0",
+				Server:            "VaultDB",
+				ServerVersion:     version,
 				SupportedFeatures: []string{"time_travel", "transactions", "prepared_statements"},
 			}
 			if err := writeResponse(conn, resp); err != nil {

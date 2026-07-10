@@ -186,17 +186,17 @@ type ExecutionContext struct {
 }
 
 type Executor struct {
-	storage       storage.StorageEngine
-	metrics       *metrics.Collector
-	txm           *txmanager.Manager
-	broadcaster   *Broadcaster
-	embedder      ai.Embedder
-	wal           *wal.WAL
-	authMgr       *auth.Manager // RBAC: nil means permission checks disabled
-	queryTimeout  time.Duration
-	maxRows       int
-	parallel      ParallelConfig
-	mu            sync.RWMutex
+	storage      storage.StorageEngine
+	metrics      *metrics.Collector
+	txm          *txmanager.Manager
+	broadcaster  *Broadcaster
+	embedder     ai.Embedder
+	wal          *wal.WAL
+	authMgr      *auth.Manager // RBAC: nil means permission checks disabled
+	queryTimeout time.Duration
+	maxRows      int
+	parallel     ParallelConfig
+	mu           sync.RWMutex
 }
 
 func New(store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, b *Broadcaster) *Executor {

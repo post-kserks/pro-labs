@@ -12,7 +12,7 @@ import (
 )
 
 type mockSession struct {
-	closed  bool
+	closed      bool
 	resetCalled bool
 }
 

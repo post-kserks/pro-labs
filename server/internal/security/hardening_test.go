@@ -513,8 +513,8 @@ func TestHardeningInt64BoundaryOperations(t *testing.T) {
 		}()
 		_, _ = execSQLSafe(t, sess, "INSERT INTO ibig VALUES (1, 9223372036854775807);")  // int64 MAX
 		_, _ = execSQLSafe(t, sess, "INSERT INTO ibig VALUES (2, -9223372036854775808);") // int64 MIN
-		_, _ = execSQLSafe(t, sess, "SELECT val + 1 FROM ibig WHERE id = 1;")              // int64 MAX + 1
-		_, _ = execSQLSafe(t, sess, "SELECT val - 1 FROM ibig WHERE id = 2;")              // int64 MIN - 1
+		_, _ = execSQLSafe(t, sess, "SELECT val + 1 FROM ibig WHERE id = 1;")             // int64 MAX + 1
+		_, _ = execSQLSafe(t, sess, "SELECT val - 1 FROM ibig WHERE id = 2;")             // int64 MIN - 1
 	}()
 }
 

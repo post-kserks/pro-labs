@@ -99,9 +99,9 @@ func (c *CopyFromCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 
 	return &Result{
-		Type:    "affected",
+		Type:     "affected",
 		Affected: affected,
-		Message: fmt.Sprintf("COPY: %d rows imported", affected),
+		Message:  fmt.Sprintf("COPY: %d rows imported", affected),
 	}, nil
 }
 
@@ -159,9 +159,9 @@ func (c *CopyToCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	return &Result{
-		Type:    "affected",
+		Type:     "affected",
 		Affected: count,
-		Message: fmt.Sprintf("COPY: %d rows exported", count),
+		Message:  fmt.Sprintf("COPY: %d rows exported", count),
 	}, nil
 }
 

@@ -52,9 +52,9 @@ func TestUpgradeSuccess(t *testing.T) {
 
 	// Server goroutine: accept one connection, upgrade it.
 	type result struct {
-		conn net.Conn
+		conn  net.Conn
 		bufrw *bufio.ReadWriter
-		err  error
+		err   error
 	}
 	ch := make(chan result, 1)
 
@@ -130,8 +130,8 @@ func (f *fakeHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 type nonHijacker struct{}
 
 func (n *nonHijacker) Header() http.Header         { return http.Header{} }
-func (n *nonHijacker) Write(b []byte) (int, error)   { return len(b), nil }
-func (n *nonHijacker) WriteHeader(code int)           {}
+func (n *nonHijacker) Write(b []byte) (int, error) { return len(b), nil }
+func (n *nonHijacker) WriteHeader(code int)        {}
 
 func TestUpgradeNonHijacker(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -153,14 +153,14 @@ type errConn struct {
 	closeErr error
 }
 
-func (e *errConn) Read(b []byte) (int, error)            { return 0, io.EOF }
-func (e *errConn) Write(b []byte) (int, error)            { return 0, e.writeErr }
-func (e *errConn) Close() error                           { return e.closeErr }
-func (e *errConn) LocalAddr() net.Addr                    { return nil }
-func (e *errConn) RemoteAddr() net.Addr                   { return nil }
-func (e *errConn) SetDeadline(_ time.Time) error          { return nil }
-func (e *errConn) SetReadDeadline(_ time.Time) error      { return nil }
-func (e *errConn) SetWriteDeadline(_ time.Time) error     { return nil }
+func (e *errConn) Read(b []byte) (int, error)         { return 0, io.EOF }
+func (e *errConn) Write(b []byte) (int, error)        { return 0, e.writeErr }
+func (e *errConn) Close() error                       { return e.closeErr }
+func (e *errConn) LocalAddr() net.Addr                { return nil }
+func (e *errConn) RemoteAddr() net.Addr               { return nil }
+func (e *errConn) SetDeadline(_ time.Time) error      { return nil }
+func (e *errConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (e *errConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 func TestUpgradeWriteStringError(t *testing.T) {
 	// Create a hijacker that returns a conn whose write fails during handshake.
@@ -209,9 +209,9 @@ func TestUpgradeFlushError(t *testing.T) {
 
 type flushErrorHijacker struct{}
 
-func (f *flushErrorHijacker) Header() http.Header { return http.Header{} }
+func (f *flushErrorHijacker) Header() http.Header         { return http.Header{} }
 func (f *flushErrorHijacker) Write(b []byte) (int, error) { return len(b), nil }
-func (f *flushErrorHijacker) WriteHeader(code int) {}
+func (f *flushErrorHijacker) WriteHeader(code int)        {}
 
 func (f *flushErrorHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	// Return a pipe-based conn (for Read/Close) and a bufrw backed by a writer
@@ -237,13 +237,13 @@ type pipeConn struct {
 	writer *io.PipeWriter
 }
 
-func (c *pipeConn) Read(b []byte) (int, error)   { return c.reader.Read(b) }
-func (c *pipeConn) Write(b []byte) (int, error)   { return c.writer.Write(b) }
-func (c *pipeConn) Close() error                  { c.reader.Close(); return c.writer.Close() }
-func (c *pipeConn) LocalAddr() net.Addr           { return nil }
-func (c *pipeConn) RemoteAddr() net.Addr          { return nil }
-func (c *pipeConn) SetDeadline(_ time.Time) error { return nil }
-func (c *pipeConn) SetReadDeadline(_ time.Time) error { return nil }
+func (c *pipeConn) Read(b []byte) (int, error)         { return c.reader.Read(b) }
+func (c *pipeConn) Write(b []byte) (int, error)        { return c.writer.Write(b) }
+func (c *pipeConn) Close() error                       { c.reader.Close(); return c.writer.Close() }
+func (c *pipeConn) LocalAddr() net.Addr                { return nil }
+func (c *pipeConn) RemoteAddr() net.Addr               { return nil }
+func (c *pipeConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *pipeConn) SetReadDeadline(_ time.Time) error  { return nil }
 func (c *pipeConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 func TestWriteJSONSmallPayload(t *testing.T) {

@@ -3695,10 +3695,10 @@ func TestParseInsertOrReplaceError(t *testing.T) {
 
 func TestParseDistinctOn(t *testing.T) {
 	cases := []struct {
-		name        string
-		query       string
-		distinctOn  int  // expected number of DISTINCT ON expressions
-		distinct    bool // expected DISTINCT flag
+		name       string
+		query      string
+		distinctOn int  // expected number of DISTINCT ON expressions
+		distinct   bool // expected DISTINCT flag
 	}{
 		{
 			name:       "DISTINCT ON single column",
@@ -3754,10 +3754,10 @@ func TestParseDistinctOn(t *testing.T) {
 
 func TestParseJSONAccessOperators(t *testing.T) {
 	cases := []struct {
-		name     string
-		query    string
-		op       string
-		inWhere  bool
+		name    string
+		query   string
+		op      string
+		inWhere bool
 	}{
 		{
 			name:    "JSONB contains @> in WHERE",

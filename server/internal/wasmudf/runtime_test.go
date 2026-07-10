@@ -21,10 +21,10 @@ var testWASM = []byte{
 	0x01,                   // 1 type entry
 	0x60, 0x00, 0x01, 0x7f, // (func (result i32))
 	0x03, 0x02, // function section, 2 bytes
-	0x01, // 1 function
-	0x00, // type index 0
+	0x01,       // 1 function
+	0x00,       // type index 0
 	0x07, 0x0b, // export section, 11 bytes
-	0x01,                                                       // 1 export
+	0x01,                                           // 1 export
 	0x07, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x65, // "execute"
 	0x00, 0x00, // func, index 0
 	0x0a, 0x06, // code section, 6 bytes
@@ -78,11 +78,11 @@ type wasmModule struct {
 	exports  []exportDef
 	codes    [][]byte // code bodies (full body bytes including locals)
 	dataSegs []dataSeg
-	secOrder []byte   // forced section order override
+	secOrder []byte // forced section order override
 }
 
 type globDef struct {
-	valtype byte   // 0x7f = i32
+	valtype byte // 0x7f = i32
 	mutable bool
 	init    []byte // const expression
 }
@@ -234,9 +234,9 @@ func buildRichModule() []byte {
 	resultOffset := uint32(128)
 	p := &wasmModule{
 		types: [][]byte{
-			{0x60, 0x01, 0x7f, 0x01, 0x7f}, // (func (param i32) (result i32))  — alloc, result_copy
+			{0x60, 0x01, 0x7f, 0x01, 0x7f},       // (func (param i32) (result i32))  — alloc, result_copy
 			{0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f}, // (func (param i32 i32) (result i32))  — execute_args
-			{0x60, 0x00, 0x01, 0x7f},               // (func (result i32))  — execute, result_len
+			{0x60, 0x00, 0x01, 0x7f},             // (func (result i32))  — execute, result_len
 		},
 		funcs:  []byte{0, 1, 2, 2, 0}, // alloc:t0, execute_args:t1, execute:t2, result_len:t2, result_copy:t0
 		memory: &mem1Page,
@@ -251,20 +251,20 @@ func buildRichModule() []byte {
 			// alloc(size): read bump from mem[0], store new bump at mem[0], return old bump
 			// local 0 = param (size), local 1 = temp (old bump)
 			funcBody(oneI32Local, []byte{
-				0x41, 0x00,       // i32.const 0
+				0x41, 0x00, // i32.const 0
 				0x28, 0x02, 0x00, // i32.load offset=0 align=2 → old_bump
-				0x21, 0x01,       // local.set 1 (save old bump)
-				0x41, 0x00,       // i32.const 0 (mem address)
-				0x20, 0x01,       // local.get 1 (old bump)
-				0x20, 0x00,       // local.get 0 (size)
+				0x21, 0x01, // local.set 1 (save old bump)
+				0x41, 0x00, // i32.const 0 (mem address)
+				0x20, 0x01, // local.get 1 (old bump)
+				0x20, 0x00, // local.get 0 (size)
 				0x6a,             // i32.add → new_bump
 				0x36, 0x02, 0x00, // i32.store offset=0 align=2 (mem[0] = new_bump)
-				0x20, 0x01,       // local.get 1 (old bump) → return value
+				0x20, 0x01, // local.get 1 (old bump) → return value
 			}),
 			// execute_args: no-op, return 0
-			funcBody(noLocals, append(i32Const0)),
+			funcBody(noLocals, i32Const0),
 			// execute: no-op, return 0
-			funcBody(noLocals, append(i32Const0)),
+			funcBody(noLocals, i32Const0),
 			// result_len: return len(resultJSON)
 			funcBody(noLocals, append([]byte{0x41}, leb128(uint32(len(resultJSON)))...)),
 			// result_copy(ptr): copy from resultOffset to memory[ptr], return len
@@ -330,7 +330,7 @@ func buildRichModuleNoAlloc() []byte {
 	resultJSON := []byte(`{"ok":true}`)
 	p := &wasmModule{
 		types: [][]byte{
-			{0x60, 0x00, 0x01, 0x7f},               // (func (result i32))
+			{0x60, 0x00, 0x01, 0x7f},             // (func (result i32))
 			{0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f}, // (func (param i32 i32) (result i32))
 		},
 		funcs:  []byte{0, 0, 1}, // execute:t0, result_len:t0, result_copy:t1
@@ -344,7 +344,7 @@ func buildRichModuleNoAlloc() []byte {
 			{"result_copy", 0, 2},
 		},
 		codes: [][]byte{
-			funcBody(noLocals, append(i32Const0)),
+			funcBody(noLocals, i32Const0),
 			funcBody(noLocals, append([]byte{0x41}, leb128(uint32(len(resultJSON)))...)),
 			funcBody(oneI32Local, buildCopyBody(resultJSON)),
 		},
@@ -371,8 +371,8 @@ func buildRichModuleZeroResult() []byte {
 			{"result_len", 0, 1},
 		},
 		codes: [][]byte{
-			funcBody(noLocals, append(i32Const0)),
-			funcBody(noLocals, append(i32Const0)),
+			funcBody(noLocals, i32Const0),
+			funcBody(noLocals, i32Const0),
 		},
 	}
 	return p.build()
@@ -397,7 +397,7 @@ func buildRichModuleBadJSON() []byte {
 			{"result_copy", 0, 2},
 		},
 		codes: [][]byte{
-			funcBody(noLocals, append(i32Const0)),
+			funcBody(noLocals, i32Const0),
 			funcBody(noLocals, append([]byte{0x41}, leb128(uint32(len(badJSON)))...)),
 			funcBody(oneI32Local, buildCopyBody(badJSON)),
 		},
@@ -430,7 +430,7 @@ func buildRichModuleAllocError() []byte {
 			// alloc traps
 			funcBody(noLocals, []byte{0x00}), // unreachable
 			// execute returns 0
-			funcBody(noLocals, append(i32Const0)),
+			funcBody(noLocals, i32Const0),
 			// result_len returns 5
 			funcBody(noLocals, []byte{0x41, 0x05}),
 			// result_copy stub (won't be reached)
@@ -993,9 +993,9 @@ func TestCallReadResultResultCopyTrap(t *testing.T) {
 			{"result_copy", 0, 2},
 		},
 		codes: [][]byte{
-			funcBody(noLocals, append(i32Const0)),
+			funcBody(noLocals, i32Const0),
 			funcBody(noLocals, []byte{0x41, 0x05}), // result_len returns 5
-			funcBody(noLocals, []byte{0x00}),        // result_copy traps
+			funcBody(noLocals, []byte{0x00}),       // result_copy traps
 		},
 	}
 
@@ -1030,9 +1030,9 @@ func TestCallNoResults(t *testing.T) {
 		types: [][]byte{
 			{0x60, 0x00, 0x00}, // (func) — no params, no results
 		},
-		funcs:  []byte{0},
+		funcs:   []byte{0},
 		exports: []exportDef{{"execute", 0, 0}},
-		codes:  [][]byte{funcBody(noLocals, nil)},
+		codes:   [][]byte{funcBody(noLocals, nil)},
 	}
 
 	rt, err := NewRuntime()
@@ -1241,10 +1241,10 @@ func TestWASMExecutionAndCleanup(t *testing.T) {
 func TestUnexpectedExportRejected(t *testing.T) {
 	// Module that exports "debugger" — not in the allowed list.
 	p := &wasmModule{
-		types:    [][]byte{{0x60, 0x00, 0x01, 0x7f}},
-		funcs:    []byte{0, 0},
-		exports:  []exportDef{{"execute", 0, 0}, {"debugger", 0, 1}},
-		codes:    [][]byte{funcBody(noLocals, append(i32Const0)), funcBody(noLocals, append(i32Const0))},
+		types:   [][]byte{{0x60, 0x00, 0x01, 0x7f}},
+		funcs:   []byte{0, 0},
+		exports: []exportDef{{"execute", 0, 0}, {"debugger", 0, 1}},
+		codes:   [][]byte{funcBody(noLocals, i32Const0), funcBody(noLocals, i32Const0)},
 	}
 
 	rt, err := NewRuntime()
@@ -1300,10 +1300,10 @@ func TestDefaultTimeoutApplied(t *testing.T) {
 func TestLoadModuleRequiresExecuteExport(t *testing.T) {
 	// Module with only "alloc" export (no "execute") — should be rejected.
 	p := &wasmModule{
-		types:    [][]byte{{0x60, 0x01, 0x7f, 0x01, 0x7f}},
-		funcs:    []byte{0},
-		exports:  []exportDef{{"alloc", 0, 0}},
-		codes:    [][]byte{funcBody(oneI32Local, append([]byte{0x20, 0x00}))},
+		types:   [][]byte{{0x60, 0x01, 0x7f, 0x01, 0x7f}},
+		funcs:   []byte{0},
+		exports: []exportDef{{"alloc", 0, 0}},
+		codes:   [][]byte{funcBody(oneI32Local, []byte{0x20, 0x00})},
 	}
 
 	rt, err := NewRuntime()
@@ -1457,7 +1457,7 @@ func TestValidateSectionSizesTruncated(t *testing.T) {
 	data := []byte{
 		0x00, 0x61, 0x73, 0x6d, // magic
 		0x01, 0x00, 0x00, 0x00, // version 1
-		0x01, // type section ID
+		0x01,                         // type section ID
 		0xFF, 0xFF, 0xFF, 0xFF, 0x0f, // section size = max uint32 (but data is only a few bytes)
 	}
 	if err := ValidateWASMBytes(data, DefaultMaxModuleSize); err == nil {
@@ -1470,8 +1470,8 @@ func TestValidateSectionSizesOversized(t *testing.T) {
 	data := []byte{
 		0x00, 0x61, 0x73, 0x6d,
 		0x01, 0x00, 0x00, 0x00,
-		0x01, // type section ID
-		0x02, // LEB128: size = 2
+		0x01,       // type section ID
+		0x02,       // LEB128: size = 2
 		0x01, 0x00, // 2 bytes of section content
 	}
 	if err := ValidateWASMBytes(data, 1); err == nil {
@@ -1483,14 +1483,14 @@ func TestValidateWASMBytesMultipleExports(t *testing.T) {
 	// Module with two valid exports: "alloc" and "execute".
 	p := &wasmModule{
 		types: [][]byte{
-			{0x60, 0x00, 0x01, 0x7f},               // (func (result i32))
+			{0x60, 0x00, 0x01, 0x7f},       // (func (result i32))
 			{0x60, 0x01, 0x7f, 0x01, 0x7f}, // (func (param i32) (result i32))
 		},
-		funcs:  []byte{0, 1}, // alloc:t1, execute:t0
+		funcs:   []byte{0, 1}, // alloc:t1, execute:t0
 		exports: []exportDef{{"alloc", 0, 0}, {"execute", 0, 1}},
 		codes: [][]byte{
-			funcBody(oneI32Local, append([]byte{0x20, 0x00})),
-			funcBody(noLocals, append(i32Const0)),
+			funcBody(oneI32Local, []byte{0x20, 0x00}),
+			funcBody(noLocals, i32Const0),
 		},
 	}
 	bin := p.build()
@@ -1507,10 +1507,10 @@ func TestValidateWASMBytesExportNameTooLong(t *testing.T) {
 		longName += "a"
 	}
 	p := &wasmModule{
-		types:    [][]byte{{0x60, 0x00, 0x01, 0x7f}},
-		funcs:    []byte{0},
-		exports:  []exportDef{{longName, 0, 0}},
-		codes:    [][]byte{funcBody(noLocals, append(i32Const0))},
+		types:   [][]byte{{0x60, 0x00, 0x01, 0x7f}},
+		funcs:   []byte{0},
+		exports: []exportDef{{longName, 0, 0}},
+		codes:   [][]byte{funcBody(noLocals, i32Const0)},
 	}
 	bin := p.build()
 	if err := ValidateWASMBytes(bin, DefaultMaxModuleSize); err != nil {
@@ -1567,10 +1567,10 @@ func TestSetAllowedExportsOverridesDefault(t *testing.T) {
 
 	// Module exporting "debugger" — previously rejected, now allowed
 	p := &wasmModule{
-		types:    [][]byte{{0x60, 0x00, 0x01, 0x7f}},
-		funcs:    []byte{0, 0},
-		exports:  []exportDef{{"execute", 0, 0}, {"debugger", 0, 1}},
-		codes:    [][]byte{funcBody(noLocals, append(i32Const0)), funcBody(noLocals, append(i32Const0))},
+		types:   [][]byte{{0x60, 0x00, 0x01, 0x7f}},
+		funcs:   []byte{0, 0},
+		exports: []exportDef{{"execute", 0, 0}, {"debugger", 0, 1}},
+		codes:   [][]byte{funcBody(noLocals, i32Const0), funcBody(noLocals, i32Const0)},
 	}
 	path := writeTempWASM(t, p.build())
 	fn, err := rt.LoadModule(path)
@@ -1594,10 +1594,10 @@ func TestSetAllowedExportsRejectsRemoved(t *testing.T) {
 
 	// Module with only "execute" should be rejected
 	p := &wasmModule{
-		types:    [][]byte{{0x60, 0x00, 0x01, 0x7f}},
-		funcs:    []byte{0},
-		exports:  []exportDef{{"execute", 0, 0}},
-		codes:    [][]byte{funcBody(noLocals, append(i32Const0))},
+		types:   [][]byte{{0x60, 0x00, 0x01, 0x7f}},
+		funcs:   []byte{0},
+		exports: []exportDef{{"execute", 0, 0}},
+		codes:   [][]byte{funcBody(noLocals, i32Const0)},
 	}
 	path := writeTempWASM(t, p.build())
 	_, err = rt.LoadModule(path)

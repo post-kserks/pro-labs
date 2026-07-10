@@ -26,19 +26,19 @@ const (
 	binaryCatalogMagic   = "VDBC"
 	binaryCatalogVersion = 1
 
-	catalogFlagNotNull      uint32 = 1 << 0
-	catalogFlagPrimaryKey   uint32 = 1 << 1
-	catalogFlagAutoInc      uint32 = 1 << 2
-	catalogFlagComputed     uint32 = 1 << 3
-	catalogFlagRLSEnabled   uint32 = 1 << 4
-	catalogFlagHasConst     uint32 = 1 << 5
+	catalogFlagNotNull    uint32 = 1 << 0
+	catalogFlagPrimaryKey uint32 = 1 << 1
+	catalogFlagAutoInc    uint32 = 1 << 2
+	catalogFlagComputed   uint32 = 1 << 3
+	catalogFlagRLSEnabled uint32 = 1 << 4
+	catalogFlagHasConst   uint32 = 1 << 5
 )
 
 type BinaryCatalog struct {
-	Magic       [4]byte
-	Version     uint32
-	TableCount  uint32
-	Tables      []BinaryTableEntry
+	Magic      [4]byte
+	Version    uint32
+	TableCount uint32
+	Tables     []BinaryTableEntry
 }
 
 type BinaryTableEntry struct {
@@ -371,8 +371,8 @@ func MarshalCatalog(cat *pageCatalog, schemas map[string]*TableSchema) ([]byte, 
 			entry.ColumnCount = uint16(len(schema.Columns))
 			for _, col := range schema.Columns {
 				ce := BinaryColumnEntry{
-					Name: []byte(col.Name),
-					Type: []byte(col.Type),
+					Name:  []byte(col.Name),
+					Type:  []byte(col.Type),
 					Flags: columnFlags(col),
 				}
 				ce.NameLen = uint16(len(ce.Name))
@@ -402,7 +402,7 @@ func UnmarshalToPageCatalog(bc *BinaryCatalog) (*pageCatalog, map[string]*TableS
 
 		if t.ColumnCount > 0 {
 			schema := &TableSchema{
-				Name:      key,
+				Name:       key,
 				RLSEnabled: t.Flags&catalogFlagRLSEnabled != 0,
 			}
 			for _, col := range t.Columns {

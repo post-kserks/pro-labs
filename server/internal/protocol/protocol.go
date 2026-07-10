@@ -18,18 +18,18 @@ func GenerateRequestID() string {
 }
 
 const (
-	ProtocolV2        = "2.0"
-	ServerName        = "VaultDB"
-	FeatureParams     = "params"
-	FeatureDatabase   = "database"
-	FeatureAsOf       = "as_of"
+	ProtocolV2      = "2.0"
+	ServerName      = "VaultDB"
+	FeatureParams   = "params"
+	FeatureDatabase = "database"
+	FeatureAsOf     = "as_of"
 )
 
 // HandshakeRequest is the first message from a v2 client.
 type HandshakeRequest struct {
-	Type              string   `json:"type"`              // "handshake"
-	ClientVersion     string   `json:"client_version"`    // e.g. "2.0"
-	ClientName        string   `json:"client_name"`       // e.g. "vaultdb-go-client"
+	Type              string   `json:"type"`               // "handshake"
+	ClientVersion     string   `json:"client_version"`     // e.g. "2.0"
+	ClientName        string   `json:"client_name"`        // e.g. "vaultdb-go-client"
 	SupportedFeatures []string `json:"supported_features"` // client features
 	Nonce             string   `json:"nonce"`              // anti-replay nonce (RFC 9564)
 	NonceTimestamp    int64    `json:"nonce_timestamp"`    // unix timestamp of nonce creation
@@ -37,10 +37,10 @@ type HandshakeRequest struct {
 
 // HandshakeResponse is the server's handshake reply.
 type HandshakeResponse struct {
-	Type              string   `json:"type"`              // "handshake"
-	ProtocolVersion   string   `json:"protocol_version"`  // "2.0"
-	Server            string   `json:"server"`            // "VaultDB"
-	ServerVersion     string   `json:"server_version"`    // e.g. "2.0.0"
+	Type              string   `json:"type"`               // "handshake"
+	ProtocolVersion   string   `json:"protocol_version"`   // "2.0"
+	Server            string   `json:"server"`             // "VaultDB"
+	ServerVersion     string   `json:"server_version"`     // e.g. "2.0.0"
 	SupportedFeatures []string `json:"supported_features"` // server features
 }
 
@@ -140,14 +140,14 @@ func ParseHandshake(data []byte) (HandshakeRequest, error) {
 }
 
 type Request struct {
-	ID       string        `json:"id"`
-	Token    string        `json:"token,omitempty"`
-	Query    string        `json:"query"`
-	Version  string        `json:"version,omitempty"`   // "2.0" for v2 clients
-	Params   []interface{} `json:"params,omitempty"`    // typed parameters
-	Database string        `json:"database,omitempty"`
-	AsOf     interface{}   `json:"as_of,omitempty"`     // Time Travel
-	Isolation string       `json:"isolation,omitempty"`
+	ID        string        `json:"id"`
+	Token     string        `json:"token,omitempty"`
+	Query     string        `json:"query"`
+	Version   string        `json:"version,omitempty"` // "2.0" for v2 clients
+	Params    []interface{} `json:"params,omitempty"`  // typed parameters
+	Database  string        `json:"database,omitempty"`
+	AsOf      interface{}   `json:"as_of,omitempty"` // Time Travel
+	Isolation string        `json:"isolation,omitempty"`
 }
 
 type Response struct {

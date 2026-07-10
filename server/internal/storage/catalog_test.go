@@ -408,7 +408,7 @@ func TestColumnFlags(t *testing.T) {
 
 func TestTableFlags(t *testing.T) {
 	ts := TableSchema{
-		RLSEnabled: true,
+		RLSEnabled:  true,
 		Constraints: []TableConstraint{{Name: "pk", Type: "PRIMARY_KEY"}},
 	}
 	flags := tableFlags(ts)
@@ -621,9 +621,9 @@ func BenchmarkBinaryCatalogLookup(b *testing.B) {
 func TestBinaryCatalogSizeComparison(t *testing.T) {
 	// Build a catalog with full schema info (what binary stores)
 	type fullTable struct {
-		Name    string        `json:"name"`
-		Columns []ColumnSchema `json:"columns"`
-		RowCount int          `json:"row_count"`
+		Name     string         `json:"name"`
+		Columns  []ColumnSchema `json:"columns"`
+		RowCount int            `json:"row_count"`
 	}
 	type fullCatalog struct {
 		Tables []fullTable `json:"tables"`

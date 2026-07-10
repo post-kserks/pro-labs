@@ -17,8 +17,8 @@ type Index interface {
 	Delete(rowPos int)
 	Rebuild(rows []IndexableRow)
 	// Index-only scan support
-	Columns() []string           // returns column names this index covers
-	HasStoredColumns() bool      // true if index stores column data
+	Columns() []string      // returns column names this index covers
+	HasStoredColumns() bool // true if index stores column data
 	GetStoredColumns(rowPos int) (map[string]interface{}, bool)
 }
 

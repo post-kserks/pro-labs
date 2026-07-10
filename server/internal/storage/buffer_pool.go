@@ -29,14 +29,14 @@ const maxUsageCount uint8 = 5
 // При вытеснении clock hand сканирует массив: страницы с usage > 0 теряют
 // по одному за проход (второй шанс), с usage == 0 вытесняются.
 type BufferPool struct {
-	mu         sync.RWMutex
-	capacity   int                        // максимальное количество страниц в кэше
-	cache      map[page.PageID]int        // PageID → индекс в buffers
-	buffers    []*bufferEntry             // фиксированный массив буферов
-	clockHand  int                        // текущая позиция clock hand
-	count      int                        // текущее количество страниц в кэше
-	wal        *wal.WAL                   // WAL для записи full page images
-	bgFlushCancel context.CancelFunc     // останавливает фоновую горутину
+	mu            sync.RWMutex
+	capacity      int                 // максимальное количество страниц в кэше
+	cache         map[page.PageID]int // PageID → индекс в buffers
+	buffers       []*bufferEntry      // фиксированный массив буферов
+	clockHand     int                 // текущая позиция clock hand
+	count         int                 // текущее количество страниц в кэше
+	wal           *wal.WAL            // WAL для записи full page images
+	bgFlushCancel context.CancelFunc  // останавливает фоновую горутину
 }
 
 // bufferEntry — запись в кэше.
@@ -114,10 +114,10 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile, dbTable ...s
 
 	// Добавляем в кэш
 	entry := &bufferEntry{
-		pid:       pid,
-		page:      pg,
-		hf:        hf,
-		pinCnt:    1,
+		pid:        pid,
+		page:       pg,
+		hf:         hf,
+		pinCnt:     1,
 		usageCount: 1,
 	}
 	if len(dbTable) >= 2 {
@@ -151,12 +151,12 @@ func (bp *BufferPool) CachePage(pid page.PageID, pg *page.Page, hf *heap.HeapFil
 	idx := bp.findEmptySlot()
 
 	entry := &bufferEntry{
-		pid:       pid,
-		page:      pg,
-		hf:        hf,
-		pinCnt:    1,
+		pid:        pid,
+		page:       pg,
+		hf:         hf,
+		pinCnt:     1,
 		usageCount: 1,
-		dirty:     true,
+		dirty:      true,
 	}
 	if len(dbTable) >= 2 {
 		entry.db = dbTable[0]
@@ -438,10 +438,10 @@ func (bp *BufferPool) PrefetchPages(pids []page.PageID, hf *heap.HeapFile) {
 		}
 		idx := bp.findEmptySlot()
 		bp.buffers[idx] = &bufferEntry{
-			pid:       pid,
-			page:      pg,
-			hf:        hf,
-			pinCnt:    0,
+			pid:        pid,
+			page:       pg,
+			hf:         hf,
+			pinCnt:     0,
 			usageCount: 1,
 		}
 		bp.cache[pid] = idx

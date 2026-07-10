@@ -158,7 +158,7 @@ func TestContainsSubqueryDML_DetectsInsert(t *testing.T) {
 
 	// SubqueryExpr wrapping INSERT
 	sel1 := &parser.SelectStatement{
-		Columns:  []parser.SelectColumn{{Expr: &parser.SubqueryExpr{Query: inner}}},
+		Columns:   []parser.SelectColumn{{Expr: &parser.SubqueryExpr{Query: inner}}},
 		TableName: "t",
 	}
 	if !containsSubqueryDML(sel1) {
@@ -167,7 +167,7 @@ func TestContainsSubqueryDML_DetectsInsert(t *testing.T) {
 
 	// ExistsExpr wrapping INSERT
 	sel2 := &parser.SelectStatement{
-		Columns:  []parser.SelectColumn{{Expr: &parser.ExistsExpr{Select: inner}}},
+		Columns:   []parser.SelectColumn{{Expr: &parser.ExistsExpr{Select: inner}}},
 		TableName: "t",
 	}
 	if !containsSubqueryDML(sel2) {
@@ -176,7 +176,7 @@ func TestContainsSubqueryDML_DetectsInsert(t *testing.T) {
 
 	// ComparisonSubqueryExpr wrapping INSERT
 	sel3 := &parser.SelectStatement{
-		Columns:  []parser.SelectColumn{{Expr: &parser.ColumnRef{Name: "id"}}},
+		Columns:   []parser.SelectColumn{{Expr: &parser.ColumnRef{Name: "id"}}},
 		TableName: "t",
 		Where: &parser.ComparisonSubqueryExpr{
 			Left:     &parser.ColumnRef{Name: "id"},

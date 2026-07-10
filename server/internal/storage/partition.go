@@ -18,9 +18,9 @@ type PartitionedTable struct {
 
 // Partition represents one physical partition (a separate heap-backed table).
 type Partition struct {
-	Name     string
-	TableName string // logical name for storage access: "{parent_table}_{partition_name}"
-	Bound    interface{} // upper bound for RANGE partitions, nil for HASH
+	Name      string
+	TableName string      // logical name for storage access: "{parent_table}_{partition_name}"
+	Bound     interface{} // upper bound for RANGE partitions, nil for HASH
 }
 
 // NewPartitionedTable creates a PartitionedTable from a schema's partition spec.
@@ -349,7 +349,8 @@ func (pt *PartitionedTable) applyComparison(mask []bool, bounds []partitionBound
 // the set of values satisfying `key <op> c.val`.
 //
 // RANGE partition semantics: partition i contains rows where
-//   lower_bound <= key < upper_bound (upper_bound is nil = +infinity for MAXVALUE)
+//
+//	lower_bound <= key < upper_bound (upper_bound is nil = +infinity for MAXVALUE)
 //
 // For MAXVALUE partitions (nil upper), the range is [lower_bound, +infinity).
 func (pt *PartitionedTable) rangeOverlapsComp(lower, upper interface{}, c comparison) bool {

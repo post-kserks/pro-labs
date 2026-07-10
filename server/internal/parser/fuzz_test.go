@@ -327,10 +327,10 @@ func FuzzParseSQL(f *testing.F) {
 	f.Add("SELECT * FROM t WHERE a = '" + string([]byte{0x08, 0x09, 0x0a, 0x0d}) + "';")
 
 	// --- Numeric edge cases ---
-	f.Add("SELECT 9223372036854775807 FROM t;")   // MAX_INT64
-	f.Add("SELECT -9223372036854775808 FROM t;")  // MIN_INT64
-	f.Add("SELECT 1e308 FROM t;")                 // large scientific
-	f.Add("SELECT 1e-308 FROM t;")                // small scientific
+	f.Add("SELECT 9223372036854775807 FROM t;")     // MAX_INT64
+	f.Add("SELECT -9223372036854775808 FROM t;")    // MIN_INT64
+	f.Add("SELECT 1e308 FROM t;")                   // large scientific
+	f.Add("SELECT 1e-308 FROM t;")                  // small scientific
 	f.Add("SELECT 1.7976931348623157e+308 FROM t;") // near max float64
 	f.Add("SELECT 0.0 FROM t;")
 	f.Add("SELECT -0.0 FROM t;")
