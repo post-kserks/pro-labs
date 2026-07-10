@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -92,13 +94,32 @@ func (s *OSKeychainSource) storeToLinuxKeyring(kek []byte) error {
 	return cmd.Run()
 }
 
-// Windows DPAPI
+// Windows DPAPI — uses build-tag-gated protect()/unprotect() primitives.
+// Blob stored at {UserConfigDir}/vaultdb/{serviceName}_{account}.dpapi
+func (s *OSKeychainSource) dpapiBlobPath() string {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		configDir = os.TempDir()
+	}
+	dir := filepath.Join(configDir, "vaultdb")
+	_ = os.MkdirAll(dir, 0700)
+	return filepath.Join(dir, fmt.Sprintf("%s_%s.dpapi", s.serviceName, s.account))
+}
+
 func (s *OSKeychainSource) getFromWindowsDPAPI() ([]byte, error) {
-	return nil, fmt.Errorf("windows DPAPI not yet implemented")
+	data, err := os.ReadFile(s.dpapiBlobPath())
+	if err != nil {
+		return nil, fmt.Errorf("DPAPI blob not found: %w", err)
+	}
+	return unprotect(data)
 }
 
 func (s *OSKeychainSource) storeToWindowsDPAPI(kek []byte) error {
-	return fmt.Errorf("windows DPAPI not yet implemented")
+	protected, err := protect(kek)
+	if err != nil {
+		return fmt.Errorf("DPAPI protect failed: %w", err)
+	}
+	return os.WriteFile(s.dpapiBlobPath(), protected, 0600)
 }
 
 func encodeBase64(data []byte) string {
