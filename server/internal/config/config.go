@@ -51,11 +51,11 @@ type ServerConfig struct {
 
 // StorageConfig — storage parameters.
 type StorageConfig struct {
-	Engine           string `yaml:"engine"`
-	DataDir          string `yaml:"data_dir"`
-	ResultCacheSize  int    `yaml:"result_cache_size"`
+	Engine          string `yaml:"engine"`
+	DataDir         string `yaml:"data_dir"`
+	ResultCacheSize int    `yaml:"result_cache_size"`
 	ResultCacheTTLS int    `yaml:"result_cache_ttl_seconds"`
-	BufferPoolPages  int    `yaml:"buffer_pool_pages"`
+	BufferPoolPages int    `yaml:"buffer_pool_pages"`
 }
 
 // AuthConfig — authentication parameters.
@@ -154,11 +154,11 @@ func Default() *Config {
 			},
 		},
 		Storage: StorageConfig{
-			Engine:           "page",
-			DataDir:          "./data",
-			ResultCacheSize:  DefaultResultCacheSize,
+			Engine:          "page",
+			DataDir:         "./data",
+			ResultCacheSize: DefaultResultCacheSize,
 			ResultCacheTTLS: DefaultResultCacheTTL,
-			BufferPoolPages:  DefaultBufferPoolPages,
+			BufferPoolPages: DefaultBufferPoolPages,
 		},
 		Auth: AuthConfig{
 			Enabled:         true,
