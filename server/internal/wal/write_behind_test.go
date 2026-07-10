@@ -272,29 +272,6 @@ func TestWriteBehindPanicsOnDoubleEnable(t *testing.T) {
 // Benchmarks: WriteBehindBuffer vs direct WAL writes
 // ---------------------------------------------------------------------------
 
-func populateWALWithWriteBehind(tb testing.TB, path string, count, maxBuffer int, flushInterval time.Duration) {
-	tb.Helper()
-	w, err := Open(path)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	wbb := NewWriteBehindBuffer(w, maxBuffer, flushInterval)
-	for i := 0; i < count; i++ {
-		payload, _ := json.Marshal(map[string]interface{}{
-			"db":      "benchdb",
-			"table":   "benchtable",
-			"row_id":  i,
-			"payload": "row-data-padding-for-realistic-size",
-		})
-		txID := w.nextTxID.Add(1)
-		rec := &WALRecord{TxID: txID}
-		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
-		wbb.Append(rec)
-	}
-	wbb.Close()
-	w.Close()
-}
-
 func BenchmarkWriteBehindAppend_100(b *testing.B) {
 	dir := b.TempDir()
 	path := filepath.Join(dir, "wbb_bench.wal")

@@ -78,7 +78,6 @@ type wasmModule struct {
 	exports  []exportDef
 	codes    [][]byte // code bodies (full body bytes including locals)
 	dataSegs []dataSeg
-	secOrder []byte // forced section order override
 }
 
 type globDef struct {
@@ -118,9 +117,6 @@ var noLocals = []byte{0x00}
 
 // oneI32Local builds "1 group, 1 i32 local".
 var oneI32Local = []byte{0x01, 0x01, 0x7f}
-
-// twoI32Locals builds "1 group, 2 i32 locals".
-var twoI32Locals = []byte{0x01, 0x02, 0x7f}
 
 func (m *wasmModule) build() []byte {
 	var buf bytes.Buffer

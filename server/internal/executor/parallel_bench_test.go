@@ -49,7 +49,7 @@ func BenchmarkSequentialFilter_10k(b *testing.B) {
 		for _, row := range rows {
 			ok, _ := evalExpr(where, row, schema, ctx)
 			if ok {
-				filtered = append(filtered, row)
+				_ = append(filtered, row)
 			}
 		}
 	}
@@ -122,7 +122,7 @@ func BenchmarkSequentialFilter_100k(b *testing.B) {
 		for _, row := range rows {
 			ok, _ := evalExpr(where, row, schema, ctx)
 			if ok {
-				filtered = append(filtered, row)
+				_ = append(filtered, row)
 			}
 		}
 	}
@@ -181,7 +181,7 @@ func BenchmarkSequentialProject_100k(b *testing.B) {
 				val, _ := evalOperand(col.Expr, row, schema, ctx)
 				projectedRow[j] = valueToString(val)
 			}
-			projected = append(projected, projectedRow)
+			_ = append(projected, projectedRow)
 		}
 	}
 }

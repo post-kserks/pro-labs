@@ -80,7 +80,7 @@ func (s *OSKeychainSource) getFromLinuxKeyring() ([]byte, error) {
 	if err == nil {
 		return out, nil
 	}
-	return nil, fmt.Errorf("Linux keyring not available: install libsecret-tools")
+	return nil, fmt.Errorf("linux keyring not available: install libsecret-tools")
 }
 
 func (s *OSKeychainSource) storeToLinuxKeyring(kek []byte) error {
@@ -94,11 +94,11 @@ func (s *OSKeychainSource) storeToLinuxKeyring(kek []byte) error {
 
 // Windows DPAPI
 func (s *OSKeychainSource) getFromWindowsDPAPI() ([]byte, error) {
-	return nil, fmt.Errorf("Windows DPAPI not yet implemented")
+	return nil, fmt.Errorf("windows DPAPI not yet implemented")
 }
 
 func (s *OSKeychainSource) storeToWindowsDPAPI(kek []byte) error {
-	return fmt.Errorf("Windows DPAPI not yet implemented")
+	return fmt.Errorf("windows DPAPI not yet implemented")
 }
 
 func encodeBase64(data []byte) string {

@@ -373,6 +373,7 @@ func BenchmarkRowLockVsTableLock(b *testing.B) {
 			for pb.Next() {
 				tableMu.Lock()
 				// Simulate work
+				_ = 1 + 1
 				tableMu.Unlock()
 			}
 		})

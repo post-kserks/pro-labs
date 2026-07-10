@@ -20,7 +20,7 @@ func PutRow(r Row) {
 	if cap(r) > 256 {
 		return
 	}
-	rowPool.Put(r[:0])
+	rowPool.Put(r[:0]) //nolint:sa6002
 }
 
 // GetRowWithLen retrieves a Row from the pool with the specified length.

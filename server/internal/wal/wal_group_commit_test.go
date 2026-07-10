@@ -198,29 +198,6 @@ func TestGroupCommitZeroBatchSizeDisabled(t *testing.T) {
 // Benchmarks
 // ---------------------------------------------------------------------------
 
-func populateWALWithGroupCommit(tb testing.TB, path string, count, batchSize int, batchTime time.Duration) {
-	tb.Helper()
-	w, err := Open(path)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	gc := NewGroupCommit(w, batchSize, batchTime)
-	for i := 0; i < count; i++ {
-		payload, _ := json.Marshal(map[string]interface{}{
-			"db":      "benchdb",
-			"table":   "benchtable",
-			"row_id":  i,
-			"payload": "row-data-padding-for-realistic-size",
-		})
-		txID := w.nextTxID.Add(1)
-		rec := &WALRecord{TxID: txID}
-		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
-		gc.AppendBatch(rec)
-	}
-	gc.Close()
-	w.Close()
-}
-
 func BenchmarkGroupCommitAppend_100(b *testing.B) {
 	dir := b.TempDir()
 	path := filepath.Join(dir, "gc_bench.wal")

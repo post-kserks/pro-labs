@@ -36,7 +36,7 @@ func TestQueryPublicAPI(t *testing.T) {
 	}
 
 	// Create table
-	result, err = db.Query("testdb", "CREATE TABLE users (id INT PRIMARY KEY, name TEXT);")
+	_, err = db.Query("testdb", "CREATE TABLE users (id INT PRIMARY KEY, name TEXT);")
 	if err != nil {
 		t.Fatalf("Create table failed: %v", err)
 	}
@@ -72,8 +72,7 @@ func TestQueryPublicAPI(t *testing.T) {
 func TestResultTypeAccessible(t *testing.T) {
 	// This test verifies that the Result type is accessible
 	// from external modules (compilation test)
-	var r *Result
-	r = &Result{
+	r := &Result{
 		Type:     "rows",
 		Columns:  []string{"id", "name"},
 		Rows:     [][]string{{"1", "Alice"}},

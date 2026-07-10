@@ -18,8 +18,6 @@ const (
 	// DefaultTimeout is the execution deadline when no timeout is configured.
 	DefaultTimeout = 30 * time.Second
 	// wasmPageSize is the size of a single WASM memory page in bytes.
-	wasmPageSize = 64 * 1024
-	// DefaultMaxModuleSize is the default maximum allowed WASM binary size (10 MB).
 	DefaultMaxModuleSize = 10 * 1024 * 1024
 	// wasmMagic is the WASM binary magic number: \0asm.
 	wasmMagic = "\x00asm"

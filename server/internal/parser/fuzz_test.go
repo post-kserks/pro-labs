@@ -142,7 +142,7 @@ func generateRandomSQL(rng *rand.Rand) string {
 		},
 		// UPSERT
 		func(rng *rand.Rand) string {
-			return fmt.Sprintf("INSERT INTO t (id, val) VALUES (1, 'a') ON CONFLICT (id) DO UPDATE SET val = EXCLUDED.val")
+			return "INSERT INTO t (id, val) VALUES (1, 'a') ON CONFLICT (id) DO UPDATE SET val = EXCLUDED.val"
 		},
 		// EXPLAIN
 		func(rng *rand.Rand) string {

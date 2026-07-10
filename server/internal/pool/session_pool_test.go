@@ -11,19 +11,6 @@ import (
 	"vaultdb/internal/txmanager"
 )
 
-type mockSession struct {
-	closed      bool
-	resetCalled bool
-}
-
-func (s *mockSession) Close() {
-	s.closed = true
-}
-
-func (s *mockSession) Reset() {
-	s.resetCalled = true
-}
-
 func newMockSessionFactory() func() *executor.Session {
 	return func() *executor.Session {
 		return executor.NewSession(nil, metrics.New(), txmanager.NewManager(), nil)
