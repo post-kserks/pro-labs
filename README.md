@@ -6,6 +6,25 @@ Enterprise SQL database engine with Go server, native TCP protocol, and official
 
 ---
 
+## Why VaultDB?
+
+VaultDB is not another lightweight embedded database. It's a full-featured SQL engine designed for organizations that need PostgreSQL-level capabilities with a unique set of built-in features:
+
+| Advantage | What it means |
+|-----------|---------------|
+| **Time Travel out of the box** | Query data as it was at any point in the past — no separate tooling needed |
+| **Transparent Data Encryption** | AES-256-GCM with envelope encryption (DEK/KEK), no config overhead |
+| **Built-in RBAC** | CREATE ROLE / GRANT / REVOKE with dynamic permissions via SQL — no external identity provider required |
+| **Crash-safe WAL** | Group commit, binary payloads, guaranteed recovery — no silent data loss |
+| **Native protocol** | Own TCP protocol with v2 handshake — no PostgreSQL wire compatibility baggage |
+| **WASM UDFs** | Run custom functions in a sandboxed WASM runtime with memory limits and export whitelist |
+| **Partition pruning** | RANGE and HASH partitioning with predicate-based partition elimination |
+| **Full-text search** | BM25 ranking with snippet highlighting built into the engine |
+| **Audit log with hash-chain** | SHA-256 chained audit trail with `VERIFY AUDIT LOG` for tamper detection |
+| **Production-grade security** | Token revocation, rate limiting, TLS enforcement, path sandboxing, 8-algorithm security audit |
+
+---
+
 ## Features
 
 ### SQL Engine
@@ -15,25 +34,28 @@ Enterprise SQL database engine with Go server, native TCP protocol, and official
 - **DDL**: CREATE/DROP/ALTER DATABASE/TABLE/INDEX/VIEW/TRIGGER/FUNCTION/PROCEDURE
 - **Types**: INT, BIGINT, FLOAT, BOOL, TEXT, VARCHAR, NUMERIC, JSONB, VECTOR, TIMESTAMPTZ, BLOB, ARRAY
 - **JSONB operators**: `->`, `->>`, `@>`, `<@`, `||`, `?`
-- **Table partitioning**: RANGE and HASH partitioning
+- **Table partitioning**: RANGE and HASH partitioning with predicate-based pruning
 - **Full-text search**: BM25 ranking, snippet highlighting, stop words
+- **RBAC**: CREATE ROLE, DROP ROLE, GRANT, REVOKE with dynamic permissions
 
 ### Security
 
 - **TDE**: Transparent Data Encryption with AES-256-GCM, envelope encryption (DEK/KEK)
 - **Authentication**: HMAC-SHA256 token-based auth with constant-time comparison
-- **Token revocation**: Revoke compromised tokens without server restart
-- **RBAC**: Role-based access control (admin, writer, reader)
-- **Audit log**: Hash-chain integrity, SHA-256, VERIFY AUDIT LOG command
+- **Token revocation**: Revoke compromised tokens without server restart (persisted to disk)
+- **RBAC**: Role-based access control with SQL-managed roles (admin, writer, reader + custom)
+- **Audit log**: Hash-chain integrity, SHA-256, periodic verification, `VERIFY AUDIT LOG` command
 - **TLS**: Configurable enforcement, min version (1.2/1.3), mTLS support
 - **Path sandboxing**: COPY commands restricted to data directory
 - **WASM security**: Memory limits, export whitelist, no host filesystem access
+- **Rate limiting**: Per-IP token bucket with configurable RPS and burst
+- **Anti-replay**: Handshake nonce validation for protocol v2
 
 ### Protocol
 
-- **Protocol v2**: Handshake negotiation, versioning, feature detection
+- **Protocol v2**: Handshake negotiation, versioning, feature detection, anti-replay
 - **Backward compatible**: v1 clients work without changes
-- **Official clients**: Go, Python, JavaScript/TypeScript
+- **Official clients**: Go, Python, JavaScript/TypeScript, C++
 
 ### Performance
 
@@ -41,6 +63,7 @@ Enterprise SQL database engine with Go server, native TCP protocol, and official
 - **Buffer pool**: Clock-Sweep eviction, configurable size (default 128MB)
 - **Query plan caching**: LRU cache with schema-aware invalidation
 - **Parallel queries**: Multi-goroutine execution for complex queries
+- **Partition pruning**: Predicate extraction eliminates irrelevant partitions early
 - **sync.Pool**: Hot Row allocation reuse
 
 ---
@@ -81,7 +104,7 @@ cd server && go build -o ../vaultdb-server ./cmd/vaultdb-server
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
-| 5432 | TCP | Native protocol (Go/Python/JS clients) |
+| 5432 | TCP | Native protocol (Go/Python/JS/C++ clients) |
 | 8080 | HTTP | REST API + Web UI |
 | 5433 | HTTP | Health/metrics/security dashboard |
 
@@ -127,6 +150,16 @@ console.log(result.rows);
 
 ## SQL Examples
 
+### RBAC — create roles and grant permissions
+
+```sql
+CREATE ROLE analyst WITH PASSWORD 'secure_password';
+GRANT SELECT ON users TO analyst;
+GRANT SELECT, INSERT ON logs TO analyst;
+REVOKE INSERT ON logs FROM analyst;
+DROP ROLE analyst;
+```
+
 ### Table with partitioning
 
 ```sql
@@ -138,6 +171,9 @@ CREATE TABLE orders (
     PARTITION p2023 VALUES LESS THAN ('2024-01-01'),
     PARTITION p2024 VALUES LESS THAN ('2025-01-01')
 );
+
+-- Partition pruning: only p2024 is scanned
+SELECT * FROM orders WHERE order_date >= '2024-06-01';
 ```
 
 ### COPY data
@@ -159,12 +195,19 @@ SELECT * FROM users WHERE data ? 'email';
 ```sql
 SELECT * FROM vaultdb_audit_log WHERE action = 'ALTER TABLE' ORDER BY occurred_at DESC;
 VERIFY AUDIT LOG;
+ARCHIVE AUDIT LOG TO '/backup/audit_export.json' KEEP 1000;
 ```
 
 ### Token management
 
 ```sql
 REVOKE TOKEN 'vdb_sk_compromised_token_here';
+```
+
+### Full-text search
+
+```sql
+SELECT content FROM docs WHERE content FTS_MATCH 'database performance';
 ```
 
 ---
@@ -194,6 +237,8 @@ storage:
 
 auth:
   enabled: true
+  localhost_bypass: false   # require tokens even from localhost
+  require_tls_for_token: true
 ```
 
 ### Environment variables
@@ -215,7 +260,7 @@ auth:
 ## Architecture
 
 ```
-Client (Go/Python/JS/C++) → TCP → Protocol v2 Handshake
+Client (Go/Python/JS/C++) → TCP → Protocol v2 Handshake (anti-replay nonce)
                                        ↓
                               Lexer → Parser → Optimizer → Executor
                                        ↓                    ↓
@@ -235,18 +280,19 @@ Client (Go/Python/JS/C++) → TCP → Protocol v2 Handshake
 │   ├── cmd/vaultdb-server/     # Entry point
 │   ├── cmd/vaultdb-backup/     # Backup utility
 │   ├── cmd/vaultdb-encrypt/    # Encryption utility
-│   ├── internal/               # Core (22 packages)
-│   │   ├── executor/           # Query execution
+│   ├── internal/               # Core (28 packages)
+│   │   ├── executor/           # Query execution + optimizer pushdown
 │   │   ├── parser/             # SQL parser
 │   │   ├── storage/            # Storage engine + buffer pool + partitioning
 │   │   ├── wal/                # Write-Ahead Log
 │   │   ├── txmanager/          # MVCC transactions
-│   │   ├── crypto/             # Encryption (AES-256-GCM)
+│   │   ├── crypto/             # Encryption (AES-256-GCM) + DPAPI
 │   │   ├── auth/               # Authentication + RBAC + revocation
 │   │   ├── audit/              # Audit log with hash-chain
 │   │   ├── wasmudf/            # WASM UDF runtime
 │   │   ├── fts/                # Full-text search (BM25)
-│   │   └── ...                 # index, metrics, config, etc.
+│   │   ├── iputil/             # Shared IP extraction utility
+│   │   └── ...                 # index, metrics, config, tls, etc.
 │   ├── benchmarks/             # Regression benchmarks
 │   └── go.mod
 ├── client/                     # Official clients
@@ -259,7 +305,7 @@ Client (Go/Python/JS/C++) → TCP → Protocol v2 Handshake
 │   ├── security/               # Security scripts (SBOM, TLS scan)
 │   └── benchstat-gate.sh       # Benchmark regression gate
 ├── docs/                       # Documentation (55+ files)
-│   ├── security/               # Audit reports, self-audits
+│   ├── security/               # Audit reports, self-audits (8 algorithms)
 │   ├── benchmarks/             # Baseline metrics
 │   ├── hardening/              # Coverage & crash reports
 │   └── protocol/               # Protocol v2 specification
@@ -314,8 +360,8 @@ semgrep --config .semgrep/ ./server
 |----------|-------|
 | Getting started | introduction, quickstart, installation |
 | SQL reference | sql-reference, functions, data-types, indexes |
-| Features | encryption, transactions, triggers, views, udf, wal, mvcc |
-| Security | security, encryption, sql-injection-audit (2 reports), self-audits (8 algorithms) |
+| Features | encryption, transactions, triggers, views, udf, wal, mvcc, storage |
+| Security | security, sql-injection-audit (2 reports), self-audits (8 algorithms) |
 | Infrastructure | configuration, deployment, deployment-enterprise, architecture |
 | Clients | client (Go/Python/JS/C++), tcp-protocol, api-reference |
 | Operations | monitoring, backup, hardening-checklist |
