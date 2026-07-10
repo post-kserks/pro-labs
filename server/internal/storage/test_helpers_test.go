@@ -7,7 +7,7 @@ import (
 	"vaultdb/internal/txmanager"
 )
 
-// newTestPageEngine создаёт PageStorageEngine для тестов.
+// newTestPageEngine creates a PageStorageEngine for tests.
 func newTestPageEngine(t *testing.T) *PageStorageEngine {
 	t.Helper()
 	dir := t.TempDir()

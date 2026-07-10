@@ -10,7 +10,7 @@ import (
 )
 
 // CompositeIndex — composite index on multiple columns.
-// Ключ = конкатенация значений столбцов через разделитель.
+// Key = concatenation of column values with a separator.
 type CompositeIndex struct {
 	mu       sync.RWMutex
 	name     string

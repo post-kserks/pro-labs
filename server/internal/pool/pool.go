@@ -409,7 +409,7 @@ func (p *SessionPool) Put(sess *executor.Session) {
 		lastUsed: time.Now(),
 	}:
 	default:
-		// Pool is full — закрываем сессию
+		// Pool is full — close the session
 		sess.Close()
 	}
 }
@@ -482,7 +482,7 @@ func (p *SessionPool) cleanIdleSessions() {
 			if now.Sub(entry.lastUsed) >= p.idleTimeout {
 				entry.session.Close()
 			} else {
-				// Session is still alive — возвращаем в пул
+				// Session is still alive — return to pool
 				select {
 				case p.sessions <- entry:
 				default:

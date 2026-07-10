@@ -87,7 +87,7 @@ func (s *Subscription) notify(res *Result, logger *slog.Logger) bool {
 		}
 
 	case PolicyEvict:
-		// Single select: attempt to send, при провале — дренировать и повторить.
+		// Single select: attempt to send; on failure — drain and retry.
 		// This is O(1), not a loop.
 		select {
 		case s.Send <- res:

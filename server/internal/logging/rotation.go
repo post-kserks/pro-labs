@@ -15,18 +15,18 @@ type Rotator struct {
 	mu          sync.Mutex
 	file        *os.File
 	filename    string
-	maxSize     int64 // максимальный размер файла в байтах
-	maxBackups  int   // максимальное количество бэкапов
+	maxSize     int64 // maximum file size in bytes
+	maxBackups  int   // maximum number of backups
 	currentSize int64
 }
 
 // NewRotator creates a new rotator.
 func NewRotator(filename string, maxSizeMB int, maxBackups int) (*Rotator, error) {
 	if maxSizeMB <= 0 {
-		maxSizeMB = 100 // по умолчанию 100 МБ
+		maxSizeMB = 100 // default 100 MB
 	}
 	if maxBackups <= 0 {
-		maxBackups = 5 // по умолчанию 5 бэкапов
+		maxBackups = 5 // default 5 backups
 	}
 
 	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)

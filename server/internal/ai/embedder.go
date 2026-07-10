@@ -1,7 +1,7 @@
-// Package ai предоставляет генерацию эмбеддингов для SEMANTIC_MATCH и
-// AI_EMBED. Реальные эмбеддинги приходят из внешнего OpenAI-совместимого API
-// (OpenAI, Ollama и т.п.); если AI не настроен, операции возвращают понятную
-// ошибку вместо тихого mock-результата.
+// Package ai provides embedding generation for SEMANTIC_MATCH and
+// AI_EMBED. Real embeddings come from an external OpenAI-compatible API
+// (OpenAI, Ollama, etc.); if AI is not configured, operations return a clear
+// error instead of a silent mock result.
 package ai
 
 import (
@@ -17,15 +17,15 @@ import (
 	"time"
 )
 
-// Embedder генерирует векторное представление textа.
+// Embedder generates a vector representation of text.
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float64, error)
 }
 
 // HTTPEmbedder calls OpenAI / Ollama / any compatible embeddings API.
 type HTTPEmbedder struct {
-	Endpoint string // например https://api.openai.com/v1/embeddings
-	Model    string // например text-embedding-3-small или nomic-embed-text
+	Endpoint string // e.g. https://api.openai.com/v1/embeddings
+	Model    string // e.g. text-embedding-3-small or nomic-embed-text
 	APIKey   string
 	Client   *http.Client
 }
@@ -61,13 +61,13 @@ func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float64, error
 			return vec, nil
 		}
 
-		// Retry только для временных ошибок
+		// Retry only for transient errors
 		if isRetryable(err) {
 			lastErr = err
 			continue
 		}
 
-		// Не-ретраябельная ошибка (401, 400) — сразу возвращаем
+		// Non-retryable error (401, 400) — return immediately
 		return nil, err
 	}
 
@@ -78,8 +78,8 @@ func (e *HTTPEmbedder) doEmbed(ctx context.Context, text string) ([]float64, err
 	body, err := json.Marshal(map[string]interface{}{
 		"model": e.Model,
 		"input": text,
-		// Ollama (/api/embeddings) использует "prompt" вместо "input";
-		// лишнее поле OpenAI игнорирует.
+		// Ollama (/api/embeddings) uses "prompt" instead of "input";
+		// the extra field is ignored by OpenAI.
 		"prompt": text,
 	})
 	if err != nil {
@@ -105,7 +105,7 @@ func (e *HTTPEmbedder) doEmbed(ctx context.Context, text string) ([]float64, err
 		return nil, &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status}
 	}
 
-	// Поддерживаем два формата ответа:
+	// We support two response formats:
 	//   OpenAI: {"data":[{"embedding":[...]}]}
 	//   Ollama: {"embedding":[...]}
 	var result struct {
@@ -137,7 +137,7 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("embedding API: unexpected status %s", e.Status)
 }
 
-// isRetryable определяет стоит ли делать retry.
+// isRetryable determines whether a retry should be attempted.
 func isRetryable(err error) bool {
 	var httpErr *HTTPError
 	if errors.As(err, &httpErr) {
@@ -145,7 +145,7 @@ func isRetryable(err error) bool {
 		return httpErr.StatusCode == 429 ||
 			(httpErr.StatusCode >= 500 && httpErr.StatusCode < 600)
 	}
-	// Сетевые ошибки — retry
+	// Network errors — retry
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return netErr.Timeout()
@@ -153,8 +153,8 @@ func isRetryable(err error) bool {
 	return false
 }
 
-// NoopEmbedder — stub when AI is not configured. Явно возвращает ошибку
-// вместо тихого mock-результата.
+// NoopEmbedder — stub when AI is not configured. Explicitly returns an error
+// instead of a silent mock result.
 type NoopEmbedder struct{}
 
 func (NoopEmbedder) Embed(_ context.Context, _ string) ([]float64, error) {
@@ -165,7 +165,7 @@ func (NoopEmbedder) Embed(_ context.Context, _ string) ([]float64, error) {
 }
 
 // MockEmbedder — deterministic keyword-based embedder for tests.
-// Не является ML-моделью и should not be used in production.
+// Not an ML model and should not be used in production.
 type MockEmbedder struct{}
 
 func (MockEmbedder) Embed(_ context.Context, text string) ([]float64, error) {

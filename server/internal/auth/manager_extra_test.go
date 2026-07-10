@@ -137,13 +137,13 @@ func TestMiddlewareDisabled(t *testing.T) {
 	}
 }
 
-// TestRateLimiterSweepBoundsMemory проверяет, что карты attempts/blocked не
-// растут неограниченно: устаревшие записи с большого числа разных IP вычищаются
-// фоновым sweep'ом по истечении окна.
+// TestRateLimiterSweepBoundsMemory verifies that attempts/blocked maps do not
+// grow unboundedly: stale entries from many different IPs are cleaned up by
+// background sweep after the window expires.
 func TestRateLimiterSweepBoundsMemory(t *testing.T) {
-	rl := newAuthRateLimiter(1, 100, 1, nil) // окно 1с, блок 1с
+	rl := newAuthRateLimiter(1, 100, 1, nil) // window 1s, block 1s
 
-	// Fill with thousands of different IPs с одной (недостаточной для блокировки) ошибкой.
+	// Fill with thousands of different IPs with one (insufficient for blocking) failure.
 	for i := 0; i < 1000; i++ {
 		rl.recordFailure(fmt.Sprintf("10.0.%d.%d", i/256, i%256))
 	}
@@ -151,11 +151,11 @@ func TestRateLimiterSweepBoundsMemory(t *testing.T) {
 		t.Fatalf("expected ~1000 attempt entries before sweep, got %d", got)
 	}
 
-	// Ждём, пока окно истечёт, и провоцируем sweep ещё одним вызовом.
+	// Wait for the window to expire, then trigger sweep with another call.
 	time.Sleep(1100 * time.Millisecond)
 	rl.recordFailure("172.16.0.1")
 
-	// All old entries (последняя попытка вне окна, не заблокированы) должны уйти.
+	// All old entries (last attempt outside window, not blocked) should be cleaned up.
 	if got := len(rl.attempts); got > 5 {
 		t.Fatalf("expected stale attempt entries to be swept, got %d", got)
 	}

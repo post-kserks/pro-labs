@@ -784,7 +784,7 @@ func (e *PageStorageEngine) unpinPage(pid page.PageID, dirty bool) {
 	e.bufPool.UnpinPage(pid, dirty)
 }
 
-// saveCatalogLocked сохраняет каталог; вызывается под write-локом.
+// saveCatalogLocked saves the catalog; called under write lock.
 // Saves both JSON (backward compat) and binary (fast read) formats.
 func (e *PageStorageEngine) saveCatalogLocked() error {
 	data, err := json.MarshalIndent(&e.catalog, "", "  ")

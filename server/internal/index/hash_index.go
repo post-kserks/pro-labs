@@ -5,25 +5,25 @@ import (
 	"sync"
 )
 
-// IndexableRow — минимальный набор данных о строке, нужный индексу.
+// IndexableRow — minimum row data needed by the index.
 type IndexableRow struct {
 	DeletedTx uint64
 	Data      []interface{}
 }
 
 // HashIndex — in-memory hash index for a single table column.
-// Хранит маппинг: значение_столбца → []int (индексы строк в data-файле).
+// Stores mapping: column_value → []int (row indices in the data file).
 type HashIndex struct {
 	mu       sync.RWMutex
 	name     string
 	column   string
-	colIndex int // позиция столбца в схеме (0-based)
+	colIndex int // column position in schema (0-based)
 
-	// Основное хранилище: ключ → список позиций строк
+	// Primary storage: key → list of row positions
 	data map[string][]int
 
-	// Reverse mapping: позиция строки → ключ
-	// Нужен для UPDATE (удалить старую запись из индекса)
+	// Reverse mapping: row position → key
+	// Needed for UPDATE (remove old entry from index)
 	reverse map[int]string
 }
 
@@ -61,7 +61,7 @@ func (idx *HashIndex) RenameColumn(old, new string) {
 	idx.column = new
 }
 
-// Lookup возвращает индексы строк для заданного значения.
+// Lookup returns row indices for a given value.
 func (idx *HashIndex) Lookup(value string) ([]int, bool) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -74,7 +74,7 @@ func (idx *HashIndex) Lookup(value string) ([]int, bool) {
 	return result, true
 }
 
-// Insert добавляет маппинг значение → позиция строки.
+// Insert adds a mapping value → row position.
 func (idx *HashIndex) Insert(value string, rowPos int) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -82,7 +82,7 @@ func (idx *HashIndex) Insert(value string, rowPos int) {
 	idx.reverse[rowPos] = value
 }
 
-// Delete удаляет позицию строки из индекса.
+// Delete removes a row position from the index.
 func (idx *HashIndex) Delete(rowPos int) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -103,7 +103,7 @@ func (idx *HashIndex) Delete(rowPos int) {
 	}
 }
 
-// Rebuild пересоздаёт индекс из актуальных строк таблицы.
+// Rebuild recreates the index from current table rows.
 func (idx *HashIndex) Rebuild(rows []IndexableRow) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -113,7 +113,7 @@ func (idx *HashIndex) Rebuild(rows []IndexableRow) {
 
 	for pos, row := range rows {
 		if row.DeletedTx != 0 {
-			continue // устаревшая версия не индексируется
+			continue // deleted versions are not indexed
 		}
 		if idx.colIndex >= len(row.Data) {
 			continue
@@ -124,7 +124,7 @@ func (idx *HashIndex) Rebuild(rows []IndexableRow) {
 	}
 }
 
-// ValueToIndexKey конвертирует любое значение в строковый ключ для хэш-таблицы.
+// ValueToIndexKey converts any value to a string key for the hash table.
 func ValueToIndexKey(v interface{}) string {
 	if v == nil {
 		return "\x00NULL"

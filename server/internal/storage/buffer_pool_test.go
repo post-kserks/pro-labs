@@ -148,14 +148,13 @@ func TestBufferPoolInvalidateTable(t *testing.T) {
 	}
 }
 
-// TestBufferPoolEvictionNoDataLoss проверяет, что вытеснение страниц из
-// переполненного кэша не теряет записанные данные. Это регрессионный тест на
-// баг #5: раньше async flush очищал dirty-флаг без записи на диск, и вытеснение
-// такой страницы молча теряло изменения. Теперь кэш read-through и хранит только
-// чистые страницы (запись на диск делает вызывающий код), поэтому вытеснение
-// безопасно.
+// TestBufferPoolEvictionNoDataLoss verifies that evicting pages from an
+// overflowing cache does not lose written data. This is a regression test for
+// bug #5: previously async flush cleared the dirty flag without writing to disk,
+// and evicting such a page silently lost changes. Now the cache is read-through
+// and only stores clean pages (the caller writes to disk), so eviction is safe.
 func TestBufferPoolEvictionNoDataLoss(t *testing.T) {
-	bp := NewBufferPool(2) // маленький кэш, чтобы форсировать вытеснение
+	bp := NewBufferPool(2) // small cache to force eviction
 	defer bp.Close()
 	hf := setupHeapFile(t)
 
@@ -163,8 +162,8 @@ func TestBufferPoolEvictionNoDataLoss(t *testing.T) {
 	pids := make([]page.PageID, nPages)
 	want := make([]byte, nPages)
 
-	// Записываем на каждую страницу уникальный кортеж и пишем напрямую на диск
-	// (как это делает движок), затем UnpinPage(true).
+	// Write a unique tuple to each page and write directly to disk
+	// (as the engine does), then UnpinPage(true).
 	for i := 0; i < nPages; i++ {
 		pid, _, err := hf.AllocatePage(page.PageTypeHeap)
 		if err != nil {
@@ -187,8 +186,8 @@ func TestBufferPoolEvictionNoDataLoss(t *testing.T) {
 		bp.UnpinPage(pid, true)
 	}
 
-	// Кэш переполнен — большинство страниц вытеснено. Перечитываем все страницы и
-	// проверяем, что данные на месте (никаких потерянных записей).
+	// Cache is overflowing — most pages are evicted. Re-read all pages and
+	// verify data is intact (no lost writes).
 	for i := 0; i < nPages; i++ {
 		pg, _, err := bp.FetchPage(pids[i], hf)
 		if err != nil {
@@ -204,25 +203,25 @@ func TestBufferPoolEvictionNoDataLoss(t *testing.T) {
 		}
 	}
 
-	// Кэш не должен превышать capacity.
+	// Cache must not exceed capacity.
 	if stats := bp.Stats(); stats.Used > 2 {
 		t.Fatalf("expected at most 2 cached pages, got %d", stats.Used)
 	}
 }
 
-// TestBufferPoolNoGoroutineLeak проверяет, что создание и закрытие buffer pool
-// не оставляет фоновых горутин и не паникует (раньше flushLoop текла, т.к.
-// Close движком не вызывался).
+// TestBufferPoolNoGoroutineLeak verifies that creating and closing a buffer pool
+// does not leak background goroutines or panic (previously flushLoop leaked because
+// engine Close was not called).
 func TestBufferPoolNoGoroutineLeak(t *testing.T) {
 	before := runtime.NumGoroutine()
 
 	for i := 0; i < 50; i++ {
 		bp := NewBufferPool(4)
 		bp.Close()
-		bp.Close() // повторный Close не должен паниковать
+		bp.Close() // duplicate Close should not panic
 	}
 
-	// Даём планировщику шанс завершить любые горутины.
+	// Give the scheduler a chance to finish any goroutines.
 	for i := 0; i < 10; i++ {
 		if runtime.NumGoroutine() <= before+2 {
 			break

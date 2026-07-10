@@ -18,7 +18,7 @@ func TestCommitConflictDetected(t *testing.T) {
 	m.AddOp(tx1, PendingOp{Type: "update", DB: "shop", Table: "users"})
 	m.AddOp(tx2, PendingOp{Type: "update", DB: "shop", Table: "users"})
 
-	// tx1 коммитится первой; executor поднимает версию таблицы при применении
+	// tx1 commits first; executor bumps table version on apply
 	if err := m.Commit(tx1, func(ops []PendingOp) error {
 		m.BumpTableVersion("shop", "users")
 		return nil
@@ -26,7 +26,7 @@ func TestCommitConflictDetected(t *testing.T) {
 		t.Fatalf("first commit failed: %v", err)
 	}
 
-	// tx2 видела старую версию таблицы — должен быть конфликт
+	// tx2 saw the old table version — conflict should occur
 	err := m.Commit(tx2, func(ops []PendingOp) error {
 		t.Fatal("applyFn must not run on conflict")
 		return nil
@@ -99,7 +99,7 @@ func TestParallelCommitsSameTableExactlyOneWins(t *testing.T) {
 func TestSortedLockingAvoidsDeadlock(t *testing.T) {
 	m := NewManager()
 
-	// Две транзакции трогают одни и те же таблицы в разном порядке
+	// Two transactions touch the same tables in different order
 	tx1 := m.Begin()
 	m.AddOp(tx1, PendingOp{DB: "db", Table: "a"})
 	m.AddOp(tx1, PendingOp{DB: "db", Table: "b"})
@@ -121,20 +121,20 @@ func TestSortedLockingAvoidsDeadlock(t *testing.T) {
 			})
 		}(tx)
 	}
-	wg.Wait() // тест зависнет при deadlock — go test упадёт по таймауту
+	wg.Wait() // test will hang on deadlock — go test will fail by timeout
 }
 
-// TestSpillReadOpsNoTruncationAndError — Bug #4: spill читается без ограничения
-// в 64KB (bufio.Scanner) и распространяет ошибки записи/чтения.
+// TestSpillReadOpsNoTruncationAndError — Bug #4: spill is read without the 64KB
+// limit (bufio.Scanner) and propagates write/read errors.
 func TestSpillReadOpsNoTruncationAndError(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager()
 	m.SpillDir = dir
-	m.SpillThreshold = 1 // спиллим сразу
+	m.SpillThreshold = 1 // spill immediately
 
 	tx := m.Begin()
 
-	// Операция с payload > 64KB (через дефолтный JSON-кодек: строка в Payload).
+	// Operation with payload > 64KB (via default JSON codec: string in Payload).
 	big := make([]byte, 100*1024)
 	for i := range big {
 		big[i] = 'x'
@@ -160,7 +160,7 @@ func TestSpillReadOpsNoTruncationAndError(t *testing.T) {
 		t.Fatalf("large op truncated/lost on spill: got len %d", len(s))
 	}
 
-	// Simulate write error: липкая spillErr должна вернуться из ReadOps.
+	// Simulate write error: sticky spillErr should be returned from ReadOps.
 	tx2 := m.Begin()
 	tx2.spilled = true
 	tx2.spillPath = dir + "/does-not-exist.tmp"
@@ -170,8 +170,8 @@ func TestSpillReadOpsNoTruncationAndError(t *testing.T) {
 	}
 }
 
-// TestSavepointTruncation — RollbackToSavepoint усекает буфер и сбрасывает
-// маркеры, созданные позже.
+// TestSavepointTruncation — RollbackToSavepoint truncates the buffer and drops
+// markers created after the savepoint.
 func TestSavepointTruncation(t *testing.T) {
 	m := NewManager()
 	tx := m.Begin()
@@ -188,7 +188,7 @@ func TestSavepointTruncation(t *testing.T) {
 	if len(ops) != 1 {
 		t.Fatalf("expected 1 op after rollback to s1, got %d", len(ops))
 	}
-	// s2 was created after s1 — должен быть удалён.
+	// s2 was created after s1 — should be dropped.
 	if err := tx.RollbackToSavepoint("s2"); err == nil {
 		t.Fatalf("expected error rolling back to dropped savepoint s2")
 	}

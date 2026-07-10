@@ -11,7 +11,7 @@ import (
 	"vaultdb/internal/storage/page"
 )
 
-// ── Индексы ────────────────────────────────────────────────────────────────
+// ── Indexes ─────────────────────────────────────────────────────────────────
 
 func (e *PageStorageEngine) getOrCreateIndexManager(db, table string) *index.IndexManager {
 	key := db + "/" + table

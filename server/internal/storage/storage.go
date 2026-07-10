@@ -93,11 +93,11 @@ type TxLogEntry struct {
 
 type VacuumStats struct {
 	TableName      string
-	RowsBefore     int   // строк до vacuum (включая все версии)
-	RowsAfter      int   // строк после vacuum (только актуальные)
-	ReclaimedRows  int   // удалено устаревших версий
-	FileSizeBefore int64 // байт до
-	FileSizeAfter  int64 // байт после
+	RowsBefore     int   // rows before vacuum (including all versions)
+	RowsAfter      int   // rows after vacuum (only live)
+	ReclaimedRows  int   // dead versions removed
+	FileSizeBefore int64 // bytes before
+	FileSizeAfter  int64 // bytes after
 	DurationMs     float64
 }
 

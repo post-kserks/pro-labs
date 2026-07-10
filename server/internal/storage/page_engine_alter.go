@@ -70,11 +70,11 @@ func (e *PageStorageEngine) recoverIncompleteRewrites() {
 
 // ── ALTER TABLE ───────────────────────────────────────────────────────────
 
-// rewriteTable перезаписывает все живые строки таблицы функцией transform
-// (используется ADD/DROP COLUMN, когда меняется арность строк).
-// Before start and after completion эмитятся WAL-записи OpRewriteBegin/OpRewriteCommit.
-// A safe approach is used: данные пишутся во временную директорию,
-// затем атомарно заменяют оригинальную.
+// rewriteTable rewrites all live rows of a table using the transform function
+// (used by ADD/DROP COLUMN when row arity changes).
+// WAL entries OpRewriteBegin/OpRewriteCommit are emitted before start and after completion.
+// A safe approach is used: data is written to a temporary directory,
+// then atomically replaces the original.
 func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchema, transform func(Row) Row) error {
 	t, err := e.getTableLocked(db, table, true)
 	if err != nil {
@@ -335,7 +335,7 @@ func (e *PageStorageEngine) AlterTableRenameTable(dbName, oldName, newName strin
 		return err
 	}
 
-	// Обновляем имя в схеме
+	// Update the name in the schema
 	t, err := e.getTableLocked(dbName, newName, true)
 	if err != nil {
 		return err

@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// queryClass — query category for counters. Набор известен заранее,
-// поэтому на горячем пути используются прямые atomic-счётчики без sync.Map.
+// queryClass — query category for counters. The set is known in advance,
+// so direct atomic counters are used on the hot path instead of sync.Map.
 type queryClass int
 
 const (
@@ -35,7 +35,7 @@ type QueryCounters struct {
 	err [numQueryClasses]atomic.Int64
 }
 
-// classify сводит StatementType (в нижнем регистре) к категории счётчика.
+// classify maps a StatementType (lowercase) to a counter category.
 func classify(queryType string) queryClass {
 	switch queryType {
 	case "select", "set_operation":
@@ -59,15 +59,15 @@ func classify(queryType string) queryClass {
 	}
 }
 
-// Collector stores all server metrics и умеет сериализовать их
-// в Prometheus text format.
+// Collector stores all server metrics and can serialize them
+// to Prometheus text format.
 type Collector struct {
 	startTime time.Time
 
-	// Query counters by category (прямые atomic, без sync.Map)
+	// Query counters by category (direct atomic, no sync.Map)
 	queries QueryCounters
 
-	// Execution time histogram (в секундах)
+	// Execution time histogram (in seconds)
 	histBuckets []float64
 	histCounts  []atomic.Int64
 	histSum     atomic.Int64
@@ -91,7 +91,7 @@ type Collector struct {
 	indexHits   atomic.Int64
 	indexMisses atomic.Int64
 
-	// Storage metrics (обновляются периодически)
+	// Storage metrics (updated periodically)
 	storageMu   sync.RWMutex
 	storageRows map[string]map[string]int64
 
@@ -110,7 +110,7 @@ const (
 	maxStorageRowMetrics  = 1000
 )
 
-// Boundaries для histogram в секундах
+// Boundaries for histogram in seconds
 var defaultBuckets = []float64{
 	0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0,
 }
@@ -127,12 +127,12 @@ func New() *Collector {
 	return c
 }
 
-// RecordQuery фиксирует выполнение запроса.
+// RecordQuery records query execution.
 // queryType: "select", "insert", "update", "delete", "ddl", "explain"
-// status: "ok" или "error"
-// duration: время выполнения
+// status: "ok" or "error"
+// duration: execution time
 func (c *Collector) RecordQuery(queryType, status string, duration time.Duration) {
-	// Счётчик запросов: прямое обращение к atomic — никакого sync.Map
+	// Query counter: direct atomic access — no sync.Map
 	class := classify(strings.ToLower(queryType))
 	if status == "error" {
 		c.queries.err[class].Add(1)
@@ -140,7 +140,7 @@ func (c *Collector) RecordQuery(queryType, status string, duration time.Duration
 		c.queries.ok[class].Add(1)
 	}
 
-	// Гистограмма (только успешные запросы)
+	// Histogram (only successful queries)
 	if status == "ok" {
 		secs := duration.Seconds()
 		c.histSum.Add(duration.Nanoseconds())
@@ -155,14 +155,14 @@ func (c *Collector) RecordQuery(queryType, status string, duration time.Duration
 		}
 		c.latencyMu.Unlock()
 
-		// Найти бакет для этого значения
+		// Find bucket for this value
 		for i, bound := range c.histBuckets {
 			if secs <= bound {
 				c.histCounts[i].Add(1)
 				return
 			}
 		}
-		// +Inf бакет
+		// +Inf bucket
 		c.histCounts[len(c.histBuckets)].Add(1)
 	}
 }
@@ -192,7 +192,7 @@ func sanitizeMetricLabel(s string) string {
 }
 
 // UpdateStorageRows updates storage statistics.
-// Вызывается периодически (каждые 30 секунд) из фоновой горутины.
+// Called periodically (every 30 seconds) from a background goroutine.
 func (c *Collector) UpdateStorageRows(db, table string, count int64) {
 	c.storageMu.Lock()
 	defer c.storageMu.Unlock()
@@ -245,16 +245,16 @@ func (c *Collector) ComputePercentiles() (p50, p95, p99 float64) {
 	return percentile(0.5), percentile(0.95), percentile(0.99)
 }
 
-// Render сериализует все метрики в Prometheus text format.
+// Render serializes all metrics to Prometheus text format.
 func (c *Collector) Render() string {
 	var b strings.Builder
 
-	// ── Счётчики запросов ─────────────────────────────────────────────
+	// ── Query counters ─────────────────────────────────────────────────
 
 	b.WriteString("# HELP vaultdb_queries_total Total SQL queries executed\n")
 	b.WriteString("# TYPE vaultdb_queries_total counter\n")
 
-	// Прямые атомарные чтения; фиксированный порядок категорий
+	// Direct atomic reads; fixed category order
 	for class := queryClass(0); class < numQueryClasses; class++ {
 		fmt.Fprintf(&b,
 			`vaultdb_queries_total{type="%s",status="ok"} %d`+"\n",
@@ -276,7 +276,7 @@ func (c *Collector) Render() string {
 			"vaultdb_query_duration_seconds_bucket{le=\"%g\"} %d\n",
 			bound, cumulative)
 	}
-	// +Inf всегда равен total
+	// +Inf always equals total
 	total := c.histTotal.Load()
 	fmt.Fprintf(&b,
 		"vaultdb_query_duration_seconds_bucket{le=\"+Inf\"} %d\n", total)
@@ -285,7 +285,7 @@ func (c *Collector) Render() string {
 	fmt.Fprintf(&b, "vaultdb_query_duration_seconds_sum %g\n", sumSecs)
 	fmt.Fprintf(&b, "vaultdb_query_duration_seconds_count %d\n", total)
 
-	// ── Percentile метрики (p50, p95, p99) ──────────────────────────────
+	// ── Percentile metrics (p50, p95, p99) ──────────────────────────────
 
 	if p50, p95, p99 := c.ComputePercentiles(); p99 > 0 {
 		b.WriteString("\n# HELP vaultdb_query_duration_percentile Query duration percentiles (from last 10k samples)\n")
@@ -332,7 +332,7 @@ func (c *Collector) Render() string {
 			"vaultdb_index_lookups_total{result=\"miss\"} %d\n",
 		c.indexHits.Load(), c.indexMisses.Load())
 
-	// ── Статистика хранилища ──────────────────────────────────────────
+	// ── Storage statistics ─────────────────────────────────────────────
 
 	c.storageMu.RLock()
 	defer c.storageMu.RUnlock()

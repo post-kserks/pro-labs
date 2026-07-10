@@ -10,7 +10,7 @@ import (
 	"vaultdb/internal/wal"
 )
 
-// Компайл-проверка: PageStorageEngine реализует StorageEngine.
+// Compile-time check: PageStorageEngine implements StorageEngine.
 var _ StorageEngine = (*PageStorageEngine)(nil)
 
 func newPageEngine(t *testing.T) *PageStorageEngine {
@@ -64,7 +64,7 @@ func TestPageEngineCRUD(t *testing.T) {
 		t.Fatalf("row roundtrip mismatch: %#v", rows[0])
 	}
 
-	// UPDATE второй строки (позиция 1)
+	// UPDATE second row (position 1)
 	if n, err := e.UpdateRows("shop", "users", []int{1}, map[string]Value{"score": 7.7}); err != nil || n != 1 {
 		t.Fatalf("update: n=%d err=%v", n, err)
 	}
@@ -82,7 +82,7 @@ func TestPageEngineCRUD(t *testing.T) {
 		t.Fatalf("updated row not found: %#v", rows)
 	}
 
-	// DELETE первой строки
+	// DELETE first row
 	if n, err := e.DeleteRows("shop", "users", []int{0}); err != nil || n != 1 {
 		t.Fatalf("delete: n=%d err=%v", n, err)
 	}
@@ -236,7 +236,7 @@ func TestPageEngineManyRowsSpanPages(t *testing.T) {
 	_ = e.CreateDatabase("db")
 	_ = e.CreateTable("db", usersSchema())
 
-	// Достаточно строк, чтобы заполнить несколько страниц по 8 КБ
+	// Enough rows to fill multiple 8 KB pages
 	batch := make([]Row, 500)
 	for i := range batch {
 		batch[i] = Row{int64(i), "user-with-a-reasonably-long-name-" + string(rune('a'+i%26)), float64(i)}

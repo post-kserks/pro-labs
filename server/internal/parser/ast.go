@@ -127,7 +127,7 @@ type SelectStatement struct {
 	DistinctOn   []Expression    // DISTINCT ON (expr1, expr2, ...) — nil means no DISTINCT ON
 }
 
-// CTEDefinition — CTE definition в WITH clause.
+// CTEDefinition — CTE definition in WITH clause.
 type CTEDefinition struct {
 	Name    string
 	Columns []string  // optional column aliases
@@ -153,12 +153,12 @@ type MergeStatement struct {
 	Returning      []SelectColumn
 }
 
-// MergeWhenClause — WHEN MATCHED THEN ... или WHEN NOT MATCHED THEN ...
+// MergeWhenClause — WHEN MATCHED THEN ... or WHEN NOT MATCHED THEN ...
 type MergeWhenClause struct {
-	Action      string         // "UPDATE" или "INSERT"
-	Assignments []Assignment   // для UPDATE
-	Columns     []string       // для INSERT
-	Values      [][]Expression // для INSERT
+	Action      string         // "UPDATE" or "INSERT"
+	Assignments []Assignment   // for UPDATE
+	Columns     []string       // for INSERT
+	Values      [][]Expression // for INSERT
 	SelectQuery Statement      // INSERT ... SELECT (alternative to Values)
 }
 
@@ -260,11 +260,11 @@ type InsertStatement struct {
 	OrReplace   bool              // INSERT OR REPLACE (SQLite compatibility)
 }
 
-// OnConflictClause — ON CONFLICT clause для UPSERT.
+// OnConflictClause — ON CONFLICT clause for UPSERT.
 type OnConflictClause struct {
 	Columns     []string     // conflict target columns (UNIQUE index)
-	Action      string       // "NOTHING" или "UPDATE"
-	Assignments []Assignment // для ON CONFLICT DO UPDATE SET
+	Action      string       // "NOTHING" or "UPDATE"
+	Assignments []Assignment // for ON CONFLICT DO UPDATE SET
 }
 
 type Assignment struct {

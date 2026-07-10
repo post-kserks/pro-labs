@@ -16,7 +16,7 @@ import (
 )
 
 func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, error) {
-	// Кратковременный global lock для получения ссылки на таблицу.
+	// Brief global lock to get a reference to the table.
 	e.mu.Lock()
 	t, err := e.getTableLocked(dbName, tableName, true)
 	if err != nil {
@@ -26,13 +26,13 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 	sizeBefore := e.tableSizeLocked(dbName, tableName)
 	e.mu.Unlock()
 
-	// Per-table lock на время vacuum — не блокирует другие таблицы.
+	// Per-table lock for the duration of vacuum — does not block other tables.
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	start := time.Now()
 
-	// Write start vacuum в WAL
+	// Write start vacuum to WAL
 	if e.wal != nil {
 		vacuumPayload := wal.WALVacuumPayload{
 			DB:    dbName,
@@ -43,7 +43,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		}
 	}
 
-	// Create shadow file для новой версии таблицы
+	// Create shadow file for the new table version
 	shadowPath := e.tablePath(dbName, tableName) + ".vacuum"
 	shadowHF, err := heap.CreateHeapFile(shadowPath)
 	if err != nil {
@@ -84,7 +84,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 				rowsAfter++
 			}
 		}
-		// Rebuild page только из живых версий
+		// Rebuild page from live versions only
 		pg.Init(page.PageTypeHeap)
 		for _, tuple := range live {
 			if _, err := pg.InsertTuple(tuple); err != nil {
@@ -104,7 +104,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 	}
 	shadowHF.Close()
 
-	// Write completion vacuum в WAL (перед заменой файлов)
+	// Write completion vacuum to WAL (before file replacement)
 	if e.wal != nil {
 		vacuumPayload := wal.WALVacuumPayload{
 			DB:    dbName,
@@ -116,10 +116,10 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 		}
 	}
 
-	// Atomic replacement: удаляем старую директорию и переименовываем shadow.
-	// На Linux os.Rename для директорий требует, чтобы цель не существовала
-	// или была пустой. Поскольку originalPath — непустая директория с сегментами,
-	// сначала удаляем её, затем делаем rename.
+	// Atomic replacement: remove the old directory and rename shadow.
+	// On Linux, os.Rename for directories requires the target to not exist
+	// or be empty. Since originalPath is a non-empty directory with segments,
+	// we remove it first, then rename.
 	originalPath := e.tablePath(dbName, tableName)
 	if err := t.heap.Close(); err != nil {
 		os.RemoveAll(shadowPath)
@@ -143,7 +143,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 	t.heap = newHF
 	e.bufPool.InvalidateTable(t.tableID)
 
-	// Update catalog (кратковременный global lock).
+	// Update catalog (brief global lock).
 	e.mu.Lock()
 	key := dbName + "/" + tableName
 	e.catalog.RowCounts[key] = rowsAfter
@@ -254,7 +254,7 @@ func (e *PageStorageEngine) SchemaVersion() uint64 {
 	return ver
 }
 
-// FinalCheckpoint сбрасывает все dirty pages на диск.
+// FinalCheckpoint flushes all dirty pages to disk.
 func (e *PageStorageEngine) FinalCheckpoint() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -269,12 +269,12 @@ func (e *PageStorageEngine) FinalCheckpoint() error {
 	return nil
 }
 
-// StartBackgroundFlush запускает фоновую горутину для periodic flush dirty pages.
+// StartBackgroundFlush starts a background goroutine for periodic flush of dirty pages.
 func (e *PageStorageEngine) StartBackgroundFlush(ctx context.Context, interval time.Duration) {
 	e.bufPool.StartBackgroundFlush(ctx, interval)
 }
 
-// Close закрывает движок и все ресурсы.
+// Close shuts down the engine and all resources.
 func (e *PageStorageEngine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

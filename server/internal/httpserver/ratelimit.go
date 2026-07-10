@@ -37,12 +37,12 @@ type tokenBucket struct {
 	maxTokens float64
 }
 
-// NewRateLimiter создаёт новый rate limiter.
+// NewRateLimiter creates a new rate limiter.
 func NewRateLimiter(rate int, burst int) *RateLimiter {
 	return NewRateLimiterWithCollector(rate, burst, nil)
 }
 
-// NewRateLimiterWithCollector создаёт rate limiter с опциональным metrics collector.
+// NewRateLimiterWithCollector creates a rate limiter with an optional metrics collector.
 func NewRateLimiterWithCollector(rate int, burst int, c metricsCollector) *RateLimiter {
 	if rate <= 0 {
 		rate = 100
@@ -66,7 +66,7 @@ func NewRateLimiterWithCollector(rate int, burst int, c metricsCollector) *RateL
 	return rl
 }
 
-// Allow проверяет, разрешён ли запрос для данного ключа (IP address).
+// Allow checks whether a request is allowed for the given key (IP address).
 func (rl *RateLimiter) Allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -130,7 +130,7 @@ func (rl *RateLimiter) evictOldest() {
 	}
 }
 
-// Middleware возвращает HTTP middleware для rate limiting.
+// Middleware returns HTTP middleware for rate limiting.
 func (rl *RateLimiter) Middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := iputil.ExtractClientIP(r, nil)
@@ -149,7 +149,7 @@ func (rl *RateLimiter) Middleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// cleanupLoop периодически очищает неиспользуемые токены.
+// cleanupLoop periodically cleans up unused tokens.
 func (rl *RateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(rl.cleanupInterval)
 	defer ticker.Stop()
@@ -164,12 +164,12 @@ func (rl *RateLimiter) cleanupLoop() {
 	}
 }
 
-// Close останавливает фоновый cleanupLoop.
+// Close stops the background cleanupLoop.
 func (rl *RateLimiter) Close() {
 	close(rl.stopCh)
 }
 
-// doCleanup удаляет токены bucket которые не использовались более 5 минут.
+// doCleanup removes token buckets that have not been used for more than 5 minutes.
 func (rl *RateLimiter) doCleanup() {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()

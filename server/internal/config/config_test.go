@@ -32,7 +32,7 @@ server:
   port: 6000
   http_port: 8081
   monitor_port: 5434
-  max_request_size_bytes: 67108864  # 64 МБ
+  max_request_size_bytes: 67108864  # 64 MB
   live_queries:
     buffer_size: 128
     drop_policy: "evict"

@@ -9,7 +9,7 @@ import (
 const maxLocksBeforeEviction = 10000
 
 // PageLockManager manages page-level locks.
-// Позволяет конкурентные записи в разные страницы одной таблицы.
+// Allows concurrent writes to different pages of the same table.
 type PageLockManager struct {
 	locks sync.Map // map[page.PageID]*sync.RWMutex
 }
@@ -19,8 +19,8 @@ func NewPageLockManager() *PageLockManager {
 	return &PageLockManager{}
 }
 
-// getLock возвращает (или создаёт) блокировку для страницы.
-// Операция атомарна — устраняет гонку между созданием записи и захватом блокировки.
+// getLock returns (or creates) a lock for a page.
+// The operation is atomic — eliminates the race between creating the entry and acquiring the lock.
 func (pm *PageLockManager) getLock(pid page.PageID) *sync.RWMutex {
 	if v, ok := pm.locks.Load(pid); ok {
 		return v.(*sync.RWMutex)
@@ -30,7 +30,7 @@ func (pm *PageLockManager) getLock(pid page.PageID) *sync.RWMutex {
 	return actual.(*sync.RWMutex)
 }
 
-// RLockPage блокирует страницу for reads.
+// RLockPage locks the page for reads.
 func (pm *PageLockManager) RLockPage(pid page.PageID) {
 	lock := pm.getLock(pid)
 	lock.RLock()
@@ -46,7 +46,7 @@ func (pm *PageLockManager) UnlockPage(pid page.PageID) {
 	}
 }
 
-// LockPage блокирует страницу for writes.
+// LockPage locks the page for writes.
 func (pm *PageLockManager) LockPage(pid page.PageID) {
 	lock := pm.getLock(pid)
 	lock.Lock()
@@ -62,7 +62,7 @@ func (pm *PageLockManager) UnlockPageWrite(pid page.PageID) {
 	}
 }
 
-// LockTable блокирует все страницы таблицы for writes (для ALTER TABLE и т.п.).
+// LockTable locks all pages of the table for writes (for ALTER TABLE, etc.).
 func (pm *PageLockManager) LockTable(pids []page.PageID) {
 	sortedPids := make([]page.PageID, len(pids))
 	copy(sortedPids, pids)
@@ -80,7 +80,7 @@ func (pm *PageLockManager) UnlockTable(pids []page.PageID) {
 	}
 }
 
-// evictIfTooLarge удаляет записи блокировок, которые не удерживаются ни одной горутиной.
+// evictIfTooLarge removes lock entries not held by any goroutine.
 func (pm *PageLockManager) evictIfTooLarge() {
 	count := 0
 	pm.locks.Range(func(k, v any) bool {
@@ -105,8 +105,8 @@ func (pm *PageLockManager) evictIfTooLarge() {
 	})
 }
 
-// EvictUnused вызывается извне для массовой очистки.
-// Удаляет все незаблокированные записи. Возвращает количество удалённых.
+// EvictUnused is called externally for bulk cleanup.
+// Removes all unlocked entries. Returns the number removed.
 func (pm *PageLockManager) EvictUnused() int {
 	removed := 0
 	pm.locks.Range(func(k, v any) bool {
@@ -121,7 +121,7 @@ func (pm *PageLockManager) EvictUnused() int {
 	return removed
 }
 
-// sortPageIDs сортирует PageID to prevent deadlock.
+// sortPageIDs sorts PageIDs to prevent deadlock.
 func sortPageIDs(pids []page.PageID) {
 	for i := 1; i < len(pids); i++ {
 		for j := i; j > 0; j-- {
