@@ -1,6 +1,6 @@
 module vaultdb
 
-go 1.25.11
+go 1.25.12
 
 require (
 	github.com/google/btree v1.1.3
