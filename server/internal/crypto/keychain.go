@@ -96,30 +96,38 @@ func (s *OSKeychainSource) storeToLinuxKeyring(kek []byte) error {
 
 // Windows DPAPI — uses build-tag-gated protect()/unprotect() primitives.
 // Blob stored at {UserConfigDir}/vaultdb/{serviceName}_{account}.dpapi
-func (s *OSKeychainSource) dpapiBlobPath() string {
+func (s *OSKeychainSource) dpapiBlobPath() (string, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
-		configDir = os.TempDir()
+		return "", fmt.Errorf("dpapi: cannot determine config dir: %w", err)
 	}
 	dir := filepath.Join(configDir, "vaultdb")
 	_ = os.MkdirAll(dir, 0700)
-	return filepath.Join(dir, fmt.Sprintf("%s_%s.dpapi", s.serviceName, s.account))
+	return filepath.Join(dir, fmt.Sprintf("%s_%s.dpapi", s.serviceName, s.account)), nil
 }
 
 func (s *OSKeychainSource) getFromWindowsDPAPI() ([]byte, error) {
-	data, err := os.ReadFile(s.dpapiBlobPath())
+	blobPath, err := s.dpapiBlobPath()
 	if err != nil {
-		return nil, fmt.Errorf("DPAPI blob not found: %w", err)
+		return nil, err
+	}
+	data, err := os.ReadFile(blobPath)
+	if err != nil {
+		return nil, fmt.Errorf("dpapi: blob not found: %w", err)
 	}
 	return unprotect(data)
 }
 
 func (s *OSKeychainSource) storeToWindowsDPAPI(kek []byte) error {
+	blobPath, err := s.dpapiBlobPath()
+	if err != nil {
+		return err
+	}
 	protected, err := protect(kek)
 	if err != nil {
-		return fmt.Errorf("DPAPI protect failed: %w", err)
+		return fmt.Errorf("dpapi: protect failed: %w", err)
 	}
-	return os.WriteFile(s.dpapiBlobPath(), protected, 0600)
+	return os.WriteFile(blobPath, protected, 0600)
 }
 
 func encodeBase64(data []byte) string {
