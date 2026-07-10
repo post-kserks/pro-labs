@@ -635,8 +635,8 @@ func TestLoad_DefaultsWithEmptyPath(t *testing.T) {
 	if cfg.Storage.ResultCacheSize != DefaultResultCacheSize {
 		t.Fatalf("default result_cache_size = %d", cfg.Storage.ResultCacheSize)
 	}
-	if cfg.Storage.ResultCacheTTL_s != DefaultResultCacheTTL {
-		t.Fatalf("default result_cache_ttl = %d", cfg.Storage.ResultCacheTTL_s)
+	if cfg.Storage.ResultCacheTTLS != DefaultResultCacheTTL {
+		t.Fatalf("default result_cache_ttl = %d", cfg.Storage.ResultCacheTTLS)
 	}
 	if cfg.Auth.RateWindowSec != DefaultAuthRateWindowSec {
 		t.Fatalf("default rate_window_seconds = %d", cfg.Auth.RateWindowSec)

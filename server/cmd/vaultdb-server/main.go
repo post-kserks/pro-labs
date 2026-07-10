@@ -116,7 +116,7 @@ func runHTTPServer(ctx context.Context, cfg *config.Config, host string, httpPor
 		QueryTimeoutSec:           cfg.Server.QueryTimeoutSec,
 		MaxPreparedStmts:          cfg.Server.MaxPreparedStmts,
 		ResultCacheSize:           cfg.Storage.ResultCacheSize,
-		ResultCacheTTLSec:         cfg.Storage.ResultCacheTTL_s,
+		ResultCacheTTLSec:         cfg.Storage.ResultCacheTTLS,
 		AllowedOrigins:            cfg.Server.AllowedOrigins,
 		Storage:                   store,
 		Auth:                      authManager,
