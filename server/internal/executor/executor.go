@@ -115,6 +115,9 @@ func init() {
 	registerCommand(reflect.TypeOf((*parser.RevokeStatement)(nil)), func(s parser.Statement) Command {
 		return &RevokeCommand{stmt: s.(*parser.RevokeStatement)}
 	})
+	registerCommand(reflect.TypeOf((*parser.RevokeTokenStatement)(nil)), func(s parser.Statement) Command {
+		return &RevokeTokenCommand{stmt: s.(*parser.RevokeTokenStatement)}
+	})
 	registerCommand(reflect.TypeOf((*parser.CopyStatement)(nil)), func(s parser.Statement) Command {
 		stmt := s.(*parser.CopyStatement)
 		if stmt.IsFrom {

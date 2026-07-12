@@ -262,19 +262,32 @@ func (p *sqlParser) parseHistory() (Statement, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := p.consume(lexer.TOKEN_KEY, "KEY"); err != nil {
-		return nil, err
+
+	stmt := &HistoryStatement{TableName: tableName}
+
+	if p.current().Type == lexer.TOKEN_KEY {
+		p.advance() // KEY
+		key, err := p.parseExpression()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Key = key
 	}
 
-	key, err := p.parseExpression()
-	if err != nil {
-		return nil, err
+	if p.current().Type == lexer.TOKEN_WHERE {
+		p.advance() // WHERE
+		where, err := p.parseExpression()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Where = where
 	}
 
-	return &HistoryStatement{
-		TableName: tableName,
-		Key:       key,
-	}, nil
+	if stmt.Key == nil && stmt.Where == nil {
+		return nil, fmt.Errorf("syntax error: HISTORY requires KEY or WHERE clause")
+	}
+
+	return stmt, nil
 }
 
 func (p *sqlParser) parseShow() (Statement, error) {

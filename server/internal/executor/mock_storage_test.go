@@ -181,6 +181,10 @@ func (m *MockStorage) RowHistory(dbName, tableName string, pkValue interface{}) 
 	return nil, nil
 }
 
+func (m *MockStorage) AllRowHistory(dbName, tableName string) ([]storage.VersionedRow, error) {
+	return nil, nil
+}
+
 func (m *MockStorage) TableVersionStats(dbName, tableName string) (*storage.TableVersionStats, error) {
 	return &storage.TableVersionStats{TotalRows: len(m.rows[dbName][tableName])}, nil
 }
@@ -434,7 +438,7 @@ func (m *MockStorage) AlterTableRenameTable(dbName, oldName, newName string) err
 	return nil
 }
 
-func (m *MockStorage) CreateIndex(dbName, tableName, indexName, column string) error {
+func (m *MockStorage) CreateIndex(dbName, tableName, indexName, column, indexType string) error {
 	m.ensureDB(dbName)
 	if m.indexes[dbName][tableName] == nil {
 		m.indexes[dbName][tableName] = make(map[string][]int)
@@ -444,11 +448,11 @@ func (m *MockStorage) CreateIndex(dbName, tableName, indexName, column string) e
 }
 
 func (m *MockStorage) CreateIndexMulti(dbName, tableName, indexName string, columns []string) error {
-	return m.CreateIndex(dbName, tableName, indexName, columns[0])
+	return m.CreateIndex(dbName, tableName, indexName, columns[0], "")
 }
 
-func (m *MockStorage) CreateIndexUnique(dbName, tableName, indexName, column string) error {
-	return m.CreateIndex(dbName, tableName, indexName, column)
+func (m *MockStorage) CreateIndexUnique(dbName, tableName, indexName, column, indexType string) error {
+	return m.CreateIndex(dbName, tableName, indexName, column, indexType)
 }
 
 func (m *MockStorage) CreateIndexMultiUnique(dbName, tableName, indexName string, columns []string) error {

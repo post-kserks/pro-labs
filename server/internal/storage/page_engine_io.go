@@ -1053,3 +1053,26 @@ func (e *PageStorageEngine) RowHistory(dbName, tableName string, pkValue interfa
 	}
 	return history, nil
 }
+
+func (e *PageStorageEngine) AllRowHistory(dbName, tableName string) ([]VersionedRow, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	t, err := e.getTableLocked(dbName, tableName, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(t.schema.Columns) == 0 {
+		return []VersionedRow{}, nil
+	}
+
+	history := []VersionedRow{}
+	err = e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+		history = append(history, VersionedRow{CreatedTx: createdTx, DeletedTx: deletedTx, Data: row})
+		return false, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return history, nil
+}

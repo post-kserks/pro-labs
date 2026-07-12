@@ -485,7 +485,7 @@ func TestIndexPersistence(t *testing.T) {
 	}
 
 	// Create index
-	if err := engine.CreateIndex("testdb", "users", "idx_name", "name"); err != nil {
+	if err := engine.CreateIndex("testdb", "users", "idx_name", "name", ""); err != nil {
 		t.Fatal(err)
 	}
 

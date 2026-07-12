@@ -35,7 +35,7 @@ func newAlterTestEngine(t *testing.T) *PageStorageEngine {
 
 func TestDropColumnShiftsIndex(t *testing.T) {
 	s := newAlterTestEngine(t)
-	if err := s.CreateIndex("shop", "products", "idx_price", "price"); err != nil {
+	if err := s.CreateIndex("shop", "products", "idx_price", "price", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -64,7 +64,7 @@ func TestDropColumnShiftsIndex(t *testing.T) {
 
 func TestDropIndexedColumnRemovesIndex(t *testing.T) {
 	s := newAlterTestEngine(t)
-	if err := s.CreateIndex("shop", "products", "idx_label", "label"); err != nil {
+	if err := s.CreateIndex("shop", "products", "idx_label", "label", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AlterTableDropColumn("shop", "products", "label"); err != nil {
@@ -77,7 +77,7 @@ func TestDropIndexedColumnRemovesIndex(t *testing.T) {
 
 func TestRenameColumnRenamesIndex(t *testing.T) {
 	s := newAlterTestEngine(t)
-	if err := s.CreateIndex("shop", "products", "idx_price", "price"); err != nil {
+	if err := s.CreateIndex("shop", "products", "idx_price", "price", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AlterTableRenameColumn("shop", "products", "price", "cost"); err != nil {

@@ -3,6 +3,7 @@ package executor
 import (
 	"testing"
 
+	"vaultdb/internal/auth"
 	"vaultdb/internal/parser"
 )
 
@@ -334,5 +335,115 @@ func TestDropRoleCleansGrants(t *testing.T) {
 	}
 	if len(grants) != 0 {
 		t.Errorf("expected 0 grants after role drop, got %d", len(grants))
+	}
+}
+
+func TestParseRevokeToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr bool
+		token   string
+	}{
+		{"simple", "REVOKE TOKEN 'abc123';", false, "abc123"},
+		{"missing token literal", "REVOKE TOKEN;", true, ""},
+		{"extra content", "REVOKE TOKEN 'x' extra;", true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := parser.Parse(tt.sql)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Parse(%q) error = %v, wantErr = %v", tt.sql, err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			rt, ok := stmt.(*parser.RevokeTokenStatement)
+			if !ok {
+				t.Fatalf("expected RevokeTokenStatement, got %T", stmt)
+			}
+			if rt.Token != tt.token {
+				t.Errorf("Token = %q, want %q", rt.Token, tt.token)
+			}
+			if rt.StatementType() != "REVOKE_TOKEN" {
+				t.Errorf("StatementType() = %q, want REVOKE_TOKEN", rt.StatementType())
+			}
+		})
+	}
+}
+
+func TestRevokeTokenCommand(t *testing.T) {
+	store := NewMockStorage()
+	mgr, err := auth.New(true, map[string]string{"test-token-123": "test-label"}, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("auth.New: %v", err)
+	}
+	sess := NewSession(store, nil, nil, nil)
+	sess.SetAuthManager(mgr)
+
+	// Verify token is valid before revocation.
+	if !mgr.ValidateToken("test-token-123") {
+		t.Fatal("token should be valid before revocation")
+	}
+
+	// Execute REVOKE TOKEN.
+	stmt, err := parser.Parse("REVOKE TOKEN 'test-token-123';")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	result, err := sess.Execute(stmt)
+	if err != nil {
+		t.Fatalf("Execute REVOKE TOKEN: %v", err)
+	}
+	if result.Message != "Token revoked." {
+		t.Errorf("Message = %q, want %q", result.Message, "Token revoked.")
+	}
+
+	// Verify token is now revoked.
+	if mgr.ValidateToken("test-token-123") {
+		t.Error("token should be invalid after revocation")
+	}
+	if !mgr.IsRevoked("test-token-123") {
+		t.Error("token should be in revoked set")
+	}
+}
+
+func TestRevokeTokenCommandNoAuthManager(t *testing.T) {
+	store := NewMockStorage()
+	sess := NewSession(store, nil, nil, nil)
+	// No auth manager set.
+
+	stmt, err := parser.Parse("REVOKE TOKEN 'some-token';")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = sess.Execute(stmt)
+	if err == nil {
+		t.Fatal("expected error when auth manager is nil")
+	}
+	if err.Error() != "REVOKE TOKEN: auth manager not configured" {
+		t.Errorf("error = %q, want %q", err.Error(), "REVOKE TOKEN: auth manager not configured")
+	}
+}
+
+func TestRevokeTokenCommandEmptyToken(t *testing.T) {
+	store := NewMockStorage()
+	mgr, err := auth.New(true, nil, nil, 60, 10, 300)
+	if err != nil {
+		t.Fatalf("auth.New: %v", err)
+	}
+	sess := NewSession(store, nil, nil, nil)
+	sess.SetAuthManager(mgr)
+
+	stmt, err := parser.Parse("REVOKE TOKEN '';")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = sess.Execute(stmt)
+	if err == nil {
+		t.Fatal("expected error for empty token")
+	}
+	if err.Error() != "REVOKE TOKEN: token string is required" {
+		t.Errorf("error = %q, want %q", err.Error(), "REVOKE TOKEN: token string is required")
 	}
 }

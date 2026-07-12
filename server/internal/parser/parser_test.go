@@ -847,6 +847,108 @@ func TestParseCreateIndex(t *testing.T) {
 		if idx.Column != "col" {
 			t.Fatalf("expected column 'col', got %q", idx.Column)
 		}
+		if idx.IndexType != "" {
+			t.Fatalf("expected empty IndexType, got %q", idx.IndexType)
+		}
+	})
+
+	t.Run("USING GIN", func(t *testing.T) {
+		stmt, err := Parse("CREATE INDEX gin_meta ON docs USING GIN (metadata);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		idx, ok := stmt.(*CreateIndexStatement)
+		if !ok {
+			t.Fatalf("expected *CreateIndexStatement, got %T", stmt)
+		}
+		if idx.IndexName != "gin_meta" {
+			t.Fatalf("expected index name 'gin_meta', got %q", idx.IndexName)
+		}
+		if idx.TableName != "docs" {
+			t.Fatalf("expected table name 'docs', got %q", idx.TableName)
+		}
+		if idx.Column != "metadata" {
+			t.Fatalf("expected column 'metadata', got %q", idx.Column)
+		}
+		if idx.IndexType != "GIN" {
+			t.Fatalf("expected IndexType 'GIN', got %q", idx.IndexType)
+		}
+	})
+
+	t.Run("USING BTREE", func(t *testing.T) {
+		stmt, err := Parse("CREATE INDEX idx_name ON t USING BTREE (col);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		idx, ok := stmt.(*CreateIndexStatement)
+		if !ok {
+			t.Fatalf("expected *CreateIndexStatement, got %T", stmt)
+		}
+		if idx.IndexName != "idx_name" {
+			t.Fatalf("expected index name 'idx_name', got %q", idx.IndexName)
+		}
+		if idx.IndexType != "BTREE" {
+			t.Fatalf("expected IndexType 'BTREE', got %q", idx.IndexType)
+		}
+	})
+
+	t.Run("USING GiST", func(t *testing.T) {
+		stmt, err := Parse("CREATE INDEX gist_idx ON t USING GiST (loc);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		idx, ok := stmt.(*CreateIndexStatement)
+		if !ok {
+			t.Fatalf("expected *CreateIndexStatement, got %T", stmt)
+		}
+		if idx.IndexType != "GIST" {
+			t.Fatalf("expected IndexType 'GIST', got %q", idx.IndexType)
+		}
+	})
+
+	t.Run("USING HASH", func(t *testing.T) {
+		stmt, err := Parse("CREATE INDEX hash_idx ON t USING HASH (id);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		idx, ok := stmt.(*CreateIndexStatement)
+		if !ok {
+			t.Fatalf("expected *CreateIndexStatement, got %T", stmt)
+		}
+		if idx.IndexType != "HASH" {
+			t.Fatalf("expected IndexType 'HASH', got %q", idx.IndexType)
+		}
+	})
+
+	t.Run("no USING clause preserves empty IndexType", func(t *testing.T) {
+		stmt, err := Parse("CREATE INDEX idx ON t (col);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		idx, ok := stmt.(*CreateIndexStatement)
+		if !ok {
+			t.Fatalf("expected *CreateIndexStatement, got %T", stmt)
+		}
+		if idx.IndexType != "" {
+			t.Fatalf("expected empty IndexType, got %q", idx.IndexType)
+		}
+	})
+
+	t.Run("USING GIN multi-column", func(t *testing.T) {
+		stmt, err := Parse("CREATE INDEX gin_multi ON t USING GIN (a, b);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		idx, ok := stmt.(*CreateIndexStatement)
+		if !ok {
+			t.Fatalf("expected *CreateIndexStatement, got %T", stmt)
+		}
+		if idx.IndexType != "GIN" {
+			t.Fatalf("expected IndexType 'GIN', got %q", idx.IndexType)
+		}
+		if len(idx.Columns) != 2 || idx.Columns[0] != "a" || idx.Columns[1] != "b" {
+			t.Fatalf("expected columns [a, b], got %v", idx.Columns)
+		}
 	})
 }
 

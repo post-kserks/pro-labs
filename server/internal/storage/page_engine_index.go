@@ -36,6 +36,7 @@ func (e *PageStorageEngine) saveIndexesMetadata(dbName, tableName string, mgr *i
 		Column string `json:"column"`
 		ColIdx int    `json:"col_idx"`
 		Type   string `json:"type"`
+		Unique bool   `json:"unique,omitempty"`
 	}, 0, len(indexes))
 	for _, idx := range indexes {
 		meta = append(meta, struct {
@@ -43,11 +44,13 @@ func (e *PageStorageEngine) saveIndexesMetadata(dbName, tableName string, mgr *i
 			Column string `json:"column"`
 			ColIdx int    `json:"col_idx"`
 			Type   string `json:"type"`
+			Unique bool   `json:"unique,omitempty"`
 		}{
 			Name:   idx.Name(),
 			Column: idx.Column(),
 			ColIdx: idx.ColIndex(),
 			Type:   idx.Type(),
+			Unique: idx.IsUnique(),
 		})
 	}
 	data, err := json.MarshalIndent(meta, "", "  ")
@@ -69,7 +72,38 @@ func (e *PageStorageEngine) rowsToIndexable(rows []Row) []index.IndexableRow {
 	return result
 }
 
-func (e *PageStorageEngine) CreateIndex(dbName, tableName, indexName, column string) error {
+func (e *PageStorageEngine) CreateIndexUnique(dbName, tableName, indexName, column, indexType string) error {
+	err := e.CreateIndex(dbName, tableName, indexName, column, indexType)
+	if err != nil {
+		return err
+	}
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	if idx, ok := mgr.FindForColumn(column); ok && idx.Name() == indexName {
+		idx.SetUnique(true)
+		return e.saveIndexesMetadata(dbName, tableName, mgr)
+	}
+	return nil
+}
+
+func (e *PageStorageEngine) CreateIndexMultiUnique(dbName, tableName, indexName string, columns []string) error {
+	err := e.CreateIndexMulti(dbName, tableName, indexName, columns)
+	if err != nil {
+		return err
+	}
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	idxs, ok := mgr.FindForColumnMultiple(columns[0])
+	if ok {
+		for _, idx := range idxs {
+			if idx.Name() == indexName {
+				idx.SetUnique(true)
+				return e.saveIndexesMetadata(dbName, tableName, mgr)
+			}
+		}
+	}
+	return nil
+}
+
+func (e *PageStorageEngine) CreateIndex(dbName, tableName, indexName, column, indexType string) error {
 	e.mu.RLock()
 	t, err := e.getTableLocked(dbName, tableName, false)
 	if err != nil {
@@ -105,14 +139,30 @@ func (e *PageStorageEngine) CreateIndex(dbName, tableName, indexName, column str
 	}
 
 	var idx index.Index
-	if strings.HasPrefix(indexName, "gin_") {
+	switch strings.ToUpper(indexType) {
+	case "GIN":
 		idx = index.NewGINIndex(indexName, column, colIdx)
-	} else if strings.HasPrefix(indexName, "gin_jsonb_") {
-		idx = index.NewGINJSONBIndex(indexName, column, colIdx)
-	} else if strings.HasPrefix(indexName, "gist_") {
+	case "GIST":
 		idx = index.NewGiSTIndex(indexName, column, colIdx)
-	} else {
-		idx = index.NewBTreeIndex(indexName, column, colIdx)
+	case "HASH":
+		idx = index.New(indexName, column, colIdx)
+	case "BTREE", "":
+		// Default: fall back to name-prefix convention when indexType is empty
+		if indexType == "" {
+			if strings.HasPrefix(indexName, "gin_") {
+				idx = index.NewGINIndex(indexName, column, colIdx)
+			} else if strings.HasPrefix(indexName, "gin_jsonb_") {
+				idx = index.NewGINJSONBIndex(indexName, column, colIdx)
+			} else if strings.HasPrefix(indexName, "gist_") {
+				idx = index.NewGiSTIndex(indexName, column, colIdx)
+			} else {
+				idx = index.NewBTreeIndex(indexName, column, colIdx)
+			}
+		} else {
+			idx = index.NewBTreeIndex(indexName, column, colIdx)
+		}
+	default:
+		return fmt.Errorf("unsupported index type: %s", indexType)
 	}
 
 	idx.Rebuild(e.rowsToIndexable(rows))

@@ -30,6 +30,20 @@ func (p *sqlParser) parseCreateIndex() (Statement, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Optional: USING <type>
+	indexType := ""
+	if p.current().Type == lexer.TOKEN_USING {
+		p.advance() // USING
+		typeTok := p.current()
+		if typeTok.Type == lexer.TOKEN_IDENT || typeTok.Type == lexer.TOKEN_HASH {
+			indexType = strings.ToUpper(typeTok.Literal)
+			p.advance()
+		} else {
+			return nil, p.expectedError("GIN, BTREE, GIST or HASH", typeTok)
+		}
+	}
+
 	if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
 		return nil, err
 	}
@@ -44,6 +58,7 @@ func (p *sqlParser) parseCreateIndex() (Statement, error) {
 		IndexName: indexName,
 		TableName: tableName,
 		Unique:    unique,
+		IndexType: indexType,
 	}
 	if len(columns) == 1 {
 		result.Column = columns[0]

@@ -116,6 +116,10 @@ func (m *mockStorage) RowHistory(dbName, tableName string, pkValue interface{}) 
 	return nil, nil
 }
 
+func (m *mockStorage) AllRowHistory(dbName, tableName string) ([]storage.VersionedRow, error) {
+	return nil, nil
+}
+
 func (m *mockStorage) TableVersionStats(dbName, tableName string) (*storage.TableVersionStats, error) {
 	return nil, nil
 }
@@ -245,7 +249,7 @@ func (m *mockStorage) AlterTableRenameTable(dbName, oldName, newName string) err
 	return nil
 }
 
-func (m *mockStorage) CreateIndex(dbName, tableName, indexName, column string) error {
+func (m *mockStorage) CreateIndex(dbName, tableName, indexName, column, indexType string) error {
 	return nil
 }
 
@@ -253,7 +257,7 @@ func (m *mockStorage) CreateIndexMulti(dbName, tableName, indexName string, colu
 	return nil
 }
 
-func (m *mockStorage) CreateIndexUnique(dbName, tableName, indexName, column string) error {
+func (m *mockStorage) CreateIndexUnique(dbName, tableName, indexName, column, indexType string) error {
 	return nil
 }
 

@@ -292,17 +292,21 @@ func (c *HistoryCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 
-	var val parser.Value
-	switch v := c.stmt.Key.(type) {
-	case parser.Value:
-		val = v
-	case *parser.Value:
-		val = *v
-	default:
-		return nil, fmt.Errorf("expected literal value for key, got %T", c.stmt.Key)
+	var history []storage.VersionedRow
+	if c.stmt.Key != nil {
+		var val parser.Value
+		switch v := c.stmt.Key.(type) {
+		case parser.Value:
+			val = v
+		case *parser.Value:
+			val = *v
+		default:
+			return nil, fmt.Errorf("expected literal value for key, got %T", c.stmt.Key)
+		}
+		history, err = ctx.Storage.RowHistory(dbName, c.stmt.TableName, parserValueToRaw(val))
+	} else {
+		history, err = ctx.Storage.AllRowHistory(dbName, c.stmt.TableName)
 	}
-
-	history, err := ctx.Storage.RowHistory(dbName, c.stmt.TableName, parserValueToRaw(val))
 	if err != nil {
 		return nil, err
 	}
@@ -312,25 +316,53 @@ func (c *HistoryCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		columns = append(columns, col.Name)
 	}
 
-	rows := make([][]string, 0, len(history))
+	// Build history schema for WHERE evaluation.
+	histSchema := &storage.TableSchema{
+		Name:    c.stmt.TableName,
+		Database: dbName,
+	}
+	histSchema.Columns = append(histSchema.Columns,
+		storage.ColumnSchema{Name: "created_tx", Type: "INT"},
+		storage.ColumnSchema{Name: "deleted_tx", Type: "TEXT"},
+	)
+	histSchema.Columns = append(histSchema.Columns, schema.Columns...)
+	colIdx := buildColumnIndex(histSchema)
+
+	var filteredRows [][]string
 	for _, version := range history {
-		row := make([]string, 0, 2+len(version.Data))
-		row = append(row, fmt.Sprintf("%d", version.CreatedTx))
+		// Build eval row: created_tx, deleted_tx, data...
+		evalRow := make(storage.Row, 0, 2+len(version.Data))
+		evalRow = append(evalRow, int64(version.CreatedTx))
 		if version.DeletedTx == 0 {
-			row = append(row, "CURRENT")
+			evalRow = append(evalRow, "CURRENT")
 		} else {
-			row = append(row, fmt.Sprintf("%d", version.DeletedTx))
+			evalRow = append(evalRow, fmt.Sprintf("%d", version.DeletedTx))
 		}
-		for _, value := range version.Data {
-			row = append(row, valueToString(value))
+		evalRow = append(evalRow, version.Data...)
+
+		// Apply WHERE filter.
+		if c.stmt.Where != nil {
+			ok, err := evalExpr(c.stmt.Where, evalRow, histSchema, ctx)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
 		}
-		rows = append(rows, row)
+
+		row := make([]string, 0, len(columns))
+		for _, v := range evalRow {
+			row = append(row, valueToString(v))
+		}
+		filteredRows = append(filteredRows, row)
 	}
 
+	_ = colIdx // used via buildColumnIndex for resolveColumn in evalExpr
 	return &Result{
 		Type:    "rows",
 		Columns: columns,
-		Rows:    rows,
+		Rows:    filteredRows,
 	}, nil
 }
 

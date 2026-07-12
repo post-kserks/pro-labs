@@ -14,6 +14,7 @@ type GINIndex struct {
 	name      string
 	column    string
 	colIndex  int
+	unique    bool
 	indexType string // "text" or "jsonb"
 
 	// Inverted index: token → []int (row positions)
@@ -48,10 +49,12 @@ func NewGINJSONBIndex(name, column string, colIndex int) *GINIndex {
 	}
 }
 
-func (g *GINIndex) Type() string   { return "gin" }
-func (g *GINIndex) Name() string   { return g.name }
-func (g *GINIndex) Column() string { return g.column }
-func (g *GINIndex) ColIndex() int  { return g.colIndex }
+func (g *GINIndex) Type() string    { return "gin" }
+func (g *GINIndex) Name() string    { return g.name }
+func (g *GINIndex) Column() string  { return g.column }
+func (g *GINIndex) ColIndex() int   { return g.colIndex }
+func (g *GINIndex) IsUnique() bool  { return g.unique }
+func (g *GINIndex) SetUnique(u bool) { g.unique = u }
 
 // Columns returns nil — GIN index does not support index-only scan.
 func (g *GINIndex) Columns() []string { return nil }

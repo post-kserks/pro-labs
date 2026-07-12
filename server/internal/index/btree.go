@@ -25,6 +25,7 @@ type BTreeIndex struct {
 	name     string
 	column   string
 	colIndex int
+	unique   bool
 
 	// Reverse mapping: row position → key
 	reverse map[int]string
@@ -45,10 +46,12 @@ func NewBTreeIndex(name, column string, colIndex int) *BTreeIndex {
 	}
 }
 
-func (idx *BTreeIndex) Type() string   { return "btree" }
-func (idx *BTreeIndex) Name() string   { return idx.name }
-func (idx *BTreeIndex) Column() string { return idx.column }
-func (idx *BTreeIndex) ColIndex() int  { return idx.colIndex }
+func (idx *BTreeIndex) Type() string    { return "btree" }
+func (idx *BTreeIndex) Name() string    { return idx.name }
+func (idx *BTreeIndex) Column() string  { return idx.column }
+func (idx *BTreeIndex) ColIndex() int   { return idx.colIndex }
+func (idx *BTreeIndex) IsUnique() bool  { return idx.unique }
+func (idx *BTreeIndex) SetUnique(u bool) { idx.unique = u }
 
 func (idx *BTreeIndex) Len() int {
 	idx.mu.RLock()

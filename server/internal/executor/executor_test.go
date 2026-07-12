@@ -638,6 +638,58 @@ func TestHistoryCommand(t *testing.T) {
 	}
 }
 
+func TestHistoryCommandWithWhere(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "INSERT INTO heroes VALUES (1, 'Aragorn', 10, TRUE, 9.8, 'King');")
+	executeSQL(t, session, "UPDATE heroes SET level = 11 WHERE id = 1;")
+
+	history := executeSQL(t, session, "HISTORY heroes WHERE id = 1;")
+	if history.Type != "rows" {
+		t.Fatalf("expected rows result, got %s", history.Type)
+	}
+	if len(history.Rows) < 2 {
+		t.Fatalf("expected at least 2 history rows with WHERE, got %d", len(history.Rows))
+	}
+}
+
+func TestHistoryCommandWhereFilters(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "INSERT INTO heroes VALUES (1, 'Aragorn', 10, TRUE, 9.8, 'King');")
+	executeSQL(t, session, "INSERT INTO heroes VALUES (2, 'Legolas', 9, TRUE, 9.5, 'Archer');")
+	executeSQL(t, session, "UPDATE heroes SET level = 11 WHERE id = 1;")
+
+	history := executeSQL(t, session, "HISTORY heroes WHERE id = 1;")
+	if history.Type != "rows" {
+		t.Fatalf("expected rows result, got %s", history.Type)
+	}
+	// WHERE id = 1 should only return versions for row id=1, not id=2
+	for _, row := range history.Rows {
+		if row[2] != "1" {
+			t.Fatalf("expected WHERE to filter to id=1, got id=%s", row[2])
+		}
+	}
+}
+
+func TestHistoryCommandKeyWithWhere(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "INSERT INTO heroes VALUES (1, 'Aragorn', 10, TRUE, 9.8, 'King');")
+	executeSQL(t, session, "UPDATE heroes SET level = 11 WHERE id = 1;")
+
+	history := executeSQL(t, session, "HISTORY heroes KEY 1 WHERE level = 11;")
+	if history.Type != "rows" {
+		t.Fatalf("expected rows result, got %s", history.Type)
+	}
+	if len(history.Rows) < 1 {
+		t.Fatalf("expected at least 1 history row with KEY+WHERE, got %d", len(history.Rows))
+	}
+	// Only the updated version should match level = 11
+	for _, row := range history.Rows {
+		if row[4] != "11" {
+			t.Fatalf("expected level=11 in filtered result, got level=%s", row[4])
+		}
+	}
+}
+
 func TestSemanticMatchWithoutAIConfigured(t *testing.T) {
 	session := setupSession(t)
 	executeSQL(t, session, "CREATE TABLE docs2 (id INT, content TEXT);")

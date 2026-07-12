@@ -269,7 +269,7 @@ func TestPageEngineSecondaryIndexes(t *testing.T) {
 	}
 
 	// Create index
-	if err := e.CreateIndex("db", "users", "idx_name", "name"); err != nil {
+	if err := e.CreateIndex("db", "users", "idx_name", "name", ""); err != nil {
 		t.Fatalf("CreateIndex failed: %v", err)
 	}
 
@@ -298,7 +298,7 @@ func TestPageEngineSecondaryIndexes(t *testing.T) {
 	}
 
 	// Duplicate index should fail
-	if err := e.CreateIndex("db", "users", "idx_name2", "name"); err == nil {
+	if err := e.CreateIndex("db", "users", "idx_name2", "name", ""); err == nil {
 		t.Fatal("duplicate CreateIndex should fail")
 	}
 

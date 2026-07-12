@@ -11,6 +11,8 @@ type Index interface {
 	Column() string
 	ColIndex() int
 	Type() string
+	IsUnique() bool
+	SetUnique(unique bool)
 	RenameColumn(old, new string)
 	Lookup(value string) ([]int, bool)
 	Insert(value string, rowPos int)

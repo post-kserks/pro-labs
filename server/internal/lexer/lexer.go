@@ -157,6 +157,7 @@ const (
 	TOKEN_GRANT
 	TOKEN_REVOKE
 	TOKEN_PRIVILEGES
+	TOKEN_TOKEN
 
 	// Data types
 	TOKEN_INT
@@ -693,6 +694,7 @@ var keywords = map[string]TokenType{
 	"GRANT":          TOKEN_GRANT,
 	"REVOKE":         TOKEN_REVOKE,
 	"PRIVILEGES":     TOKEN_PRIVILEGES,
+	"TOKEN":          TOKEN_TOKEN,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -860,6 +862,7 @@ var tokenNames = [...]string{
 	TOKEN_GRANT:             "GRANT",
 	TOKEN_REVOKE:            "REVOKE",
 	TOKEN_PRIVILEGES:        "PRIVILEGES",
+	TOKEN_TOKEN:             "TOKEN",
 	TOKEN_IDENT:             "IDENT",
 	TOKEN_INT_LIT:           "INT_LIT",
 	TOKEN_FLOAT_LIT:         "FLOAT_LIT",

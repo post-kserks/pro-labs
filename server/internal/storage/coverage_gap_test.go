@@ -1388,7 +1388,7 @@ func TestGetIndex(t *testing.T) {
 	_ = e.CreateTable("db", usersSchema())
 	_, _ = e.InsertRows("db", "users", []Row{{int64(1), "a", 1.0}})
 
-	_ = e.CreateIndex("db", "users", "idx_name", "name")
+	_ = e.CreateIndex("db", "users", "idx_name", "name", "")
 
 	idx, ok := e.GetIndex("db", "users", "idx_name")
 	if !ok || idx == nil {

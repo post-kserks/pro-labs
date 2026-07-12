@@ -73,6 +73,10 @@ func (m *mockStorageEngine) TxIDAtTimestamp(dbName, ts string) (uint64, error) {
 func (m *mockStorageEngine) RowHistory(dbName, tableName string, pkValue interface{}) ([]VersionedRow, error) {
 	return nil, nil
 }
+
+func (m *mockStorageEngine) AllRowHistory(dbName, tableName string) ([]VersionedRow, error) {
+	return nil, nil
+}
 func (m *mockStorageEngine) TableModifiedSince(db, table string, txID uint64) (bool, error) {
 	return false, nil
 }
@@ -123,13 +127,13 @@ func (m *mockStorageEngine) AlterTableRenameColumn(dbName, tableName, oldName, n
 func (m *mockStorageEngine) AlterTableRenameTable(dbName, oldName, newName string) error {
 	return nil
 }
-func (m *mockStorageEngine) CreateIndex(dbName, tableName, indexName, column string) error {
+func (m *mockStorageEngine) CreateIndex(dbName, tableName, indexName, column, indexType string) error {
 	return nil
 }
 func (m *mockStorageEngine) CreateIndexMulti(dbName, tableName, indexName string, columns []string) error {
 	return nil
 }
-func (m *mockStorageEngine) CreateIndexUnique(dbName, tableName, indexName, column string) error {
+func (m *mockStorageEngine) CreateIndexUnique(dbName, tableName, indexName, column, indexType string) error {
 	return nil
 }
 func (m *mockStorageEngine) CreateIndexMultiUnique(dbName, tableName, indexName string, columns []string) error {

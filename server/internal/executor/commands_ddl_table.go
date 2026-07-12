@@ -387,9 +387,9 @@ func (c *CreateIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		column = c.stmt.Columns[0]
 	}
 	if c.stmt.Unique {
-		err = ctx.Storage.CreateIndexUnique(dbName, c.stmt.TableName, c.stmt.IndexName, column)
+		err = ctx.Storage.CreateIndexUnique(dbName, c.stmt.TableName, c.stmt.IndexName, column, c.stmt.IndexType)
 	} else {
-		err = ctx.Storage.CreateIndex(dbName, c.stmt.TableName, c.stmt.IndexName, column)
+		err = ctx.Storage.CreateIndex(dbName, c.stmt.TableName, c.stmt.IndexName, column, c.stmt.IndexType)
 	}
 	if err != nil {
 		return nil, err

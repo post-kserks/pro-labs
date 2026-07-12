@@ -23,6 +23,7 @@ type ColumnSchema struct {
 	EnumValues    []string `json:"enum_values,omitempty"`
 	NotNull       bool     `json:"not_null,omitempty"`
 	PrimaryKey    bool     `json:"primary_key,omitempty"`
+	Unique        bool     `json:"unique,omitempty"`
 	AutoIncrement bool     `json:"auto_increment,omitempty"`
 	Default       *Value   `json:"default,omitempty"`
 }
@@ -120,6 +121,7 @@ type ReadOnlyEngine interface {
 	CountRows(dbName, tableName string) (int, error)
 	TxIDAtTimestamp(dbName, ts string) (uint64, error)
 	RowHistory(dbName, tableName string, pkValue interface{}) ([]VersionedRow, error)
+	AllRowHistory(dbName, tableName string) ([]VersionedRow, error)
 	TableVersionStats(dbName, tableName string) (*TableVersionStats, error)
 	TableModifiedSince(db, table string, txID uint64) (bool, error)
 	CurrentTxID() uint64
@@ -149,8 +151,10 @@ type WriteEngine interface {
 	SetTableRLS(dbName, tableName string, enabled bool) error
 	AddPolicy(dbName, tableName string, policy RLSPolicy) error
 	AlterTableRenameTable(dbName, oldName, newName string) error
-	CreateIndex(dbName, tableName, indexName, column string) error
+	CreateIndex(dbName, tableName, indexName, column, indexType string) error
 	CreateIndexMulti(dbName, tableName, indexName string, columns []string) error
+	CreateIndexUnique(dbName, tableName, indexName, column, indexType string) error
+	CreateIndexMultiUnique(dbName, tableName, indexName string, columns []string) error
 	DropIndex(dbName, indexName string) error
 }
 

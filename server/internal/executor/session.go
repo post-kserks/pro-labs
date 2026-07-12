@@ -132,6 +132,16 @@ func (s *Session) SetAuthManager(m *auth.Manager) {
 	s.executor.SetAuthManager(m)
 }
 
+// GetAuthManager returns the session's auth manager (may be nil).
+func (s *Session) GetAuthManager() *auth.Manager {
+	if s.executor == nil {
+		return nil
+	}
+	s.executor.mu.RLock()
+	defer s.executor.mu.RUnlock()
+	return s.executor.authMgr
+}
+
 // SetWAL connects WAL for writing transaction operations.
 func (s *Session) SetWAL(w *wal.WAL) {
 	s.executor.SetWAL(w)
