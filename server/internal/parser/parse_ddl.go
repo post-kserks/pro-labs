@@ -667,6 +667,122 @@ func (p *sqlParser) parseCreateTable() (Statement, error) {
 			p.advance()
 		}
 
+		// Check for UNIQUE table constraint: UNIQUE(col1, col2)
+		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "UNIQUE" && p.peek().Type == lexer.TOKEN_LPAREN {
+			p.advance() // UNIQUE
+			if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+				return nil, err
+			}
+			// Skip column list
+			for {
+				if _, err := p.consumeIdent("column name"); err != nil {
+					return nil, err
+				}
+				if p.current().Type == lexer.TOKEN_COMMA {
+					p.advance()
+					continue
+				}
+				break
+			}
+			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				return nil, err
+			}
+			if p.current().Type == lexer.TOKEN_COMMA {
+				continue // comma handled at loop start
+			}
+			if p.current().Type == lexer.TOKEN_RPAREN {
+				p.advance()
+				break
+			}
+			return nil, p.expectedError("',' or ')'", p.current())
+		}
+
+		// Check for FOREIGN KEY table constraint: FOREIGN KEY(col) REFERENCES table(col)
+		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "FOREIGN" && p.peek().Type == lexer.TOKEN_KEY {
+			p.advance() // FOREIGN
+			p.advance() // KEY
+			if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+				return nil, err
+			}
+			// Skip local column list
+			for {
+				if _, err := p.consumeIdent("column name"); err != nil {
+					return nil, err
+				}
+				if p.current().Type == lexer.TOKEN_COMMA {
+					p.advance()
+					continue
+				}
+				break
+			}
+			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				return nil, err
+			}
+			if err := p.consume(lexer.TOKEN_REFERENCES, "REFERENCES"); err != nil {
+				return nil, err
+			}
+			if _, err := p.consumeIdent("referenced table"); err != nil {
+				return nil, err
+			}
+			if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+				return nil, err
+			}
+			// Skip referenced column list
+			for {
+				if _, err := p.consumeIdent("column name"); err != nil {
+					return nil, err
+				}
+				if p.current().Type == lexer.TOKEN_COMMA {
+					p.advance()
+					continue
+				}
+				break
+			}
+			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				return nil, err
+			}
+			// Optional ON DELETE CASCADE
+			if p.current().Type == lexer.TOKEN_ON {
+				p.advance()
+				if p.current().Type == lexer.TOKEN_DELETE {
+					p.advance()
+					if p.current().Type == lexer.TOKEN_IDENT && strings.EqualFold(p.current().Literal, "CASCADE") {
+						p.advance()
+					}
+				}
+			}
+			if p.current().Type == lexer.TOKEN_COMMA {
+				continue // comma handled at loop start
+			}
+			if p.current().Type == lexer.TOKEN_RPAREN {
+				p.advance()
+				break
+			}
+			return nil, p.expectedError("',' or ')'", p.current())
+		}
+
+		// Check for CHECK table constraint: CHECK(expr)
+		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "CHECK" && p.peek().Type == lexer.TOKEN_LPAREN {
+			p.advance() // CHECK
+			if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+				return nil, err
+			}
+			if _, err := p.parseExpression(); err != nil {
+				return nil, err
+			}
+			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				return nil, err
+			}
+			if p.current().Type == lexer.TOKEN_COMMA {
+				continue // comma handled at loop start
+			}
+			if p.current().Type == lexer.TOKEN_RPAREN {
+				p.advance()
+				break
+			}
+			return nil, p.expectedError("',' or ')'", p.current())
+		}
+
 		// Check for FULLTEXT table constraint: FULLTEXT(col1, col2)
 		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "FULLTEXT" {
 			if p.peek().Type == lexer.TOKEN_LPAREN {
@@ -886,6 +1002,33 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 	if p.current().Type == lexer.TOKEN_ENCRYPTED {
 		p.advance()
 		col.Encrypted = true
+	}
+
+	// Inline REFERENCES constraint: REFERENCES table(col) [ON DELETE CASCADE]
+	if p.current().Type == lexer.TOKEN_REFERENCES {
+		p.advance() // REFERENCES
+		if _, err := p.consumeIdent("referenced table"); err != nil {
+			return nil, err
+		}
+		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+			return nil, err
+		}
+		if _, err := p.consumeIdent("referenced column"); err != nil {
+			return nil, err
+		}
+		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+			return nil, err
+		}
+		// Optional ON DELETE CASCADE
+		if p.current().Type == lexer.TOKEN_ON {
+			p.advance()
+			if p.current().Type == lexer.TOKEN_DELETE {
+				p.advance()
+				if p.current().Type == lexer.TOKEN_IDENT && strings.EqualFold(p.current().Literal, "CASCADE") {
+					p.advance()
+				}
+			}
+		}
 	}
 
 	return col, nil
@@ -1385,22 +1528,25 @@ func (p *sqlParser) parsePartitionSpec() (*PartitionSpec, error) {
 
 	switch partType {
 	case "RANGE":
-		// Parse partition definitions: PARTITION p_name VALUES LESS THAN (value)
-		if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
-			return nil, err
-		}
-		for {
-			if p.current().Type == lexer.TOKEN_RPAREN {
-				p.advance()
-				break
-			}
-			def, err := p.parsePartitionDef()
-			if err != nil {
+		// Parse optional partition definitions: PARTITION p_name VALUES LESS THAN (value)
+		// Allow empty partition list (no parentheses required)
+		if p.current().Type == lexer.TOKEN_LPAREN && p.peek().Type == lexer.TOKEN_PARTITION {
+			if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
 				return nil, err
 			}
-			spec.Partitions = append(spec.Partitions, *def)
-			if p.current().Type == lexer.TOKEN_COMMA {
-				p.advance()
+			for {
+				if p.current().Type == lexer.TOKEN_RPAREN {
+					p.advance()
+					break
+				}
+				def, err := p.parsePartitionDef()
+				if err != nil {
+					return nil, err
+				}
+				spec.Partitions = append(spec.Partitions, *def)
+				if p.current().Type == lexer.TOKEN_COMMA {
+					p.advance()
+				}
 			}
 		}
 	case "HASH":

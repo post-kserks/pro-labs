@@ -437,6 +437,28 @@ func (e *PageStorageEngine) redoInsert(p wal.WALPageInsertPayload) error {
 		pid = newPid
 	}
 
+	// Check if the tuple already exists at the expected slot.
+	// During normal operation, the buffer pool may flush a dirty page to disk
+	// before the crash. On recovery the page on disk already contains the
+	// tuples, so re-inserting them would fail with "page is full".
+	h := pg.Header()
+	if p.SlotNo < h.NItems {
+		existing := pg.GetTuple(p.SlotNo)
+		if existing != nil && len(existing) == len(p.TupleData) {
+			tupleMatches := true
+			for i := range existing {
+				if existing[i] != p.TupleData[i] {
+					tupleMatches = false
+					break
+				}
+			}
+			if tupleMatches {
+				// Tuple already on page — no-op.
+				return nil
+			}
+		}
+	}
+
 	if _, err := pg.InsertTuple(p.TupleData); err != nil {
 		return err
 	}

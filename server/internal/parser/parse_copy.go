@@ -115,6 +115,9 @@ func (p *sqlParser) parseCopyOptions() (CopyOptions, error) {
 			} else if p.current().Type == lexer.TOKEN_INT_LIT {
 				opts.Header = p.current().Literal != "0"
 				p.advance()
+			} else if p.current().Type == lexer.TOKEN_RPAREN || p.current().Type == lexer.TOKEN_COMMA {
+				// Standalone HEADER keyword (e.g., FORMAT CSV, HEADER) means true
+				opts.Header = true
 			} else {
 				return opts, p.expectedError("TRUE, FALSE, or integer", p.current())
 			}

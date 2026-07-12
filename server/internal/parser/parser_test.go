@@ -4258,3 +4258,293 @@ func TestParseCreateTableExistingTestsStillPass(t *testing.T) {
 		})
 	}
 }
+
+// --- Issue 1: Inline UNIQUE table constraint ---
+
+func TestParseCreateTableWithInlineUniqueConstraint(t *testing.T) {
+	t.Run("UNIQUE(val)", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id INT, val TEXT, UNIQUE(val));")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(create.Columns))
+		}
+	})
+
+	t.Run("UNIQUE(a, b) multi-column", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id INT, a TEXT, b TEXT, UNIQUE(a, b));")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 3 {
+			t.Fatalf("expected 3 columns, got %d", len(create.Columns))
+		}
+	})
+
+	t.Run("UNIQUE with other constraints", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id INT PRIMARY KEY, val TEXT UNIQUE, name TEXT, UNIQUE(id, name));")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 3 {
+			t.Fatalf("expected 3 columns, got %d", len(create.Columns))
+		}
+	})
+}
+
+// --- Issue 2: Inline REFERENCES constraint ---
+
+func TestParseCreateTableWithInlineReferences(t *testing.T) {
+	t.Run("REFERENCES parent(id)", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE child (id INT PRIMARY KEY, parent_id INT REFERENCES parent(id));")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(create.Columns))
+		}
+	})
+
+	t.Run("REFERENCES parent(id) ON DELETE CASCADE", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE child (id INT PRIMARY KEY, parent_id INT REFERENCES parent(id) ON DELETE CASCADE);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(create.Columns))
+		}
+	})
+
+	t.Run("REFERENCES with multiple columns", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE child (id INT, parent_id INT REFERENCES parent(id), name TEXT);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 3 {
+			t.Fatalf("expected 3 columns, got %d", len(create.Columns))
+		}
+	})
+}
+
+func TestParseCreateTableWithForeignKeyConstraint(t *testing.T) {
+	t.Run("FOREIGN KEY table constraint", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE child (id INT, parent_id INT, FOREIGN KEY(parent_id) REFERENCES parent(id));")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(create.Columns))
+		}
+	})
+
+	t.Run("FOREIGN KEY with ON DELETE CASCADE", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE child (id INT, parent_id INT, FOREIGN KEY(parent_id) REFERENCES parent(id) ON DELETE CASCADE);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(create.Columns))
+		}
+	})
+}
+
+func TestParseCreateTableWithCheckConstraint(t *testing.T) {
+	t.Run("CHECK table constraint", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE t (id INT, val INT, CHECK(val > 0));")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if len(create.Columns) != 2 {
+			t.Fatalf("expected 2 columns, got %d", len(create.Columns))
+		}
+	})
+}
+
+// --- Issue 3: PARTITION BY RANGE without explicit partitions ---
+
+func TestParseCreateTablePartitionByRangeNoPartitions(t *testing.T) {
+	t.Run("RANGE without partitions", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE documents (id INT PRIMARY KEY, created_at TIMESTAMP) PARTITION BY RANGE (created_at);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if create.PartitionBy == nil {
+			t.Fatal("expected PartitionBy to be set")
+		}
+		if create.PartitionBy.Type != "RANGE" {
+			t.Errorf("expected partition type RANGE, got %s", create.PartitionBy.Type)
+		}
+		if len(create.PartitionBy.Columns) != 1 || create.PartitionBy.Columns[0] != "created_at" {
+			t.Errorf("expected partition columns [created_at], got %v", create.PartitionBy.Columns)
+		}
+		if len(create.PartitionBy.Partitions) != 0 {
+			t.Errorf("expected 0 partitions, got %d", len(create.PartitionBy.Partitions))
+		}
+	})
+
+	t.Run("RANGE with partitions still works", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE orders (id INT, order_date DATE) PARTITION BY RANGE (order_date) (PARTITION p2023 VALUES LESS THAN ('2024-01-01'), PARTITION p2024 VALUES LESS THAN (MAXVALUE));")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if create.PartitionBy == nil {
+			t.Fatal("expected PartitionBy to be set")
+		}
+		if len(create.PartitionBy.Partitions) != 2 {
+			t.Errorf("expected 2 partitions, got %d", len(create.PartitionBy.Partitions))
+		}
+	})
+
+	t.Run("HASH without partitions", func(t *testing.T) {
+		stmt, err := Parse("CREATE TABLE sessions (id INT, user_id INT) PARTITION BY HASH (user_id);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		create, ok := stmt.(*CreateTableStatement)
+		if !ok {
+			t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+		}
+		if create.PartitionBy == nil {
+			t.Fatal("expected PartitionBy to be set")
+		}
+		if create.PartitionBy.Type != "HASH" {
+			t.Errorf("expected partition type HASH, got %s", create.PartitionBy.Type)
+		}
+	})
+}
+
+// --- Issue 4: COPY TO CSV ---
+
+func TestParseCopyToCSV(t *testing.T) {
+	t.Run("COPY TO with FORMAT CSV, HEADER", func(t *testing.T) {
+		stmt, err := Parse("COPY documents TO '/tmp/export.csv' WITH (FORMAT CSV, HEADER);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		copy, ok := stmt.(*CopyStatement)
+		if !ok {
+			t.Fatalf("expected *CopyStatement, got %T", stmt)
+		}
+		if copy.TableName != "documents" {
+			t.Fatalf("expected table name 'documents', got %q", copy.TableName)
+		}
+		if copy.IsFrom {
+			t.Fatal("expected IsFrom to be false")
+		}
+		if copy.Filename != "/tmp/export.csv" {
+			t.Fatalf("expected filename '/tmp/export.csv', got %q", copy.Filename)
+		}
+		if copy.Options.Format != "CSV" {
+			t.Fatalf("expected format 'CSV', got %q", copy.Options.Format)
+		}
+		if !copy.Options.Header {
+			t.Fatal("expected Header to be true")
+		}
+	})
+
+	t.Run("COPY TO with FORMAT CSV, HEADER TRUE", func(t *testing.T) {
+		stmt, err := Parse("COPY t TO 'out.csv' WITH (FORMAT CSV, HEADER TRUE);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		copy := stmt.(*CopyStatement)
+		if copy.Options.Format != "CSV" {
+			t.Fatalf("expected format 'CSV', got %q", copy.Options.Format)
+		}
+		if !copy.Options.Header {
+			t.Fatal("expected Header to be true")
+		}
+	})
+
+	t.Run("COPY TO with FORMAT CSV, HEADER FALSE", func(t *testing.T) {
+		stmt, err := Parse("COPY t TO 'out.csv' WITH (FORMAT CSV, HEADER FALSE);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		copy := stmt.(*CopyStatement)
+		if copy.Options.Header {
+			t.Fatal("expected Header to be false")
+		}
+	})
+
+	t.Run("COPY TO with FORMAT JSON still works", func(t *testing.T) {
+		stmt, err := Parse("COPY t TO 'out.json' WITH (FORMAT JSON);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		copy := stmt.(*CopyStatement)
+		if copy.Options.Format != "JSON" {
+			t.Fatalf("expected format 'JSON', got %q", copy.Options.Format)
+		}
+	})
+
+	t.Run("COPY TO default CSV format", func(t *testing.T) {
+		stmt, err := Parse("COPY t TO 'out.csv';")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		copy := stmt.(*CopyStatement)
+		if copy.Options.Format != "CSV" {
+			t.Fatalf("expected default format 'CSV', got %q", copy.Options.Format)
+		}
+	})
+
+	t.Run("COPY FROM still works", func(t *testing.T) {
+		stmt, err := Parse("COPY t FROM 'in.csv' WITH (FORMAT CSV, HEADER);")
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		copy := stmt.(*CopyStatement)
+		if !copy.IsFrom {
+			t.Fatal("expected IsFrom to be true")
+		}
+		if !copy.Options.Header {
+			t.Fatal("expected Header to be true")
+		}
+	})
+}
