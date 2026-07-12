@@ -411,6 +411,12 @@ func (p *sqlParser) parseCreateFunction() (Statement, error) {
 			return nil, err
 		}
 		params = append(params, param)
+		// Skip optional type annotation (e.g., a INT)
+		if p.current().Type == lexer.TOKEN_INT || p.current().Type == lexer.TOKEN_TEXT ||
+			p.current().Type == lexer.TOKEN_FLOAT_TYPE || p.current().Type == lexer.TOKEN_BOOL ||
+			p.current().Type == lexer.TOKEN_VARCHAR {
+			p.advance()
+		}
 		for p.current().Type == lexer.TOKEN_COMMA {
 			p.advance()
 			param, err = p.consumeIdent("parameter name")
@@ -418,6 +424,12 @@ func (p *sqlParser) parseCreateFunction() (Statement, error) {
 				return nil, err
 			}
 			params = append(params, param)
+			// Skip optional type annotation
+			if p.current().Type == lexer.TOKEN_INT || p.current().Type == lexer.TOKEN_TEXT ||
+				p.current().Type == lexer.TOKEN_FLOAT_TYPE || p.current().Type == lexer.TOKEN_BOOL ||
+				p.current().Type == lexer.TOKEN_VARCHAR {
+				p.advance()
+			}
 		}
 	}
 	if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
@@ -426,6 +438,10 @@ func (p *sqlParser) parseCreateFunction() (Statement, error) {
 	returnType := "TEXT"
 	if p.current().Type == lexer.TOKEN_RETURNS {
 		p.advance()
+		// Skip optional SETOF keyword (e.g., RETURNS SETOF TEXT)
+		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "SETOF" {
+			p.advance()
+		}
 		typeTok := p.current()
 		returnType = strings.ToUpper(typeTok.Literal)
 		p.advance()

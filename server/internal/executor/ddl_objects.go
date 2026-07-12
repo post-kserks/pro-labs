@@ -100,7 +100,7 @@ func loadObject(ctx *ExecutionContext, dbName, objType, name string) (map[string
 	}
 
 	for _, row := range rows {
-		if len(row) >= 3 && valuesEqual(row[0], name) && valuesEqual(row[1], objType) {
+		if len(row) >= 3 && valuesEqualCaseInsensitive(row[0], name) && valuesEqual(row[1], objType) {
 			defJSON, _ := row[2].(string)
 			if defJSON == "" {
 				return nil, nil

@@ -57,6 +57,12 @@ func evalBinary(expr *parser.BinaryExpr, row storage.Row, schema *storage.TableS
 	case "?":
 		return evalJsonHasKey(left, right)
 	case "||":
+		// String concatenation for PL/pgSQL if both operands are strings
+		if ls, lok := left.(string); lok {
+			if rs, rok := right.(string); rok {
+				return ls + rs, nil
+			}
+		}
 		return evalJsonMerge(left, right)
 	case "@@":
 		return evalFtsMatch(left, right)

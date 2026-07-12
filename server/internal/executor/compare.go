@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"strings"
 
 	"vaultdb/internal/storage"
 )
@@ -48,6 +49,24 @@ func valuesEqual(a, b storage.Value) bool {
 	}
 	// Fallback: string representation
 	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+}
+
+// valuesEqualCaseInsensitive compares two storage.Value values case-insensitively for strings.
+func valuesEqualCaseInsensitive(a, b storage.Value) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	// String comparison (case-insensitive)
+	if as, ok := a.(string); ok {
+		if bs, ok := b.(string); ok {
+			return strings.EqualFold(as, bs)
+		}
+	}
+	// Fall back to exact comparison
+	return valuesEqual(a, b)
 }
 
 // rowsEqual compares two table rows element by element.

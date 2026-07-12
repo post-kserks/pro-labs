@@ -49,6 +49,10 @@ func ExecutePLPGSQL(body string, params []string, args []interface{}, ctx *Execu
 				return res.scalar, nil
 			}
 			if res.rows != nil {
+				// For single-row single-column results, return the scalar value
+				if len(res.rows.Rows) == 1 && len(res.rows.Rows[0]) == 1 {
+					return valueToString(res.rows.Rows[0][0]), nil
+				}
 				return res.rows, nil
 			}
 		}
@@ -160,12 +164,14 @@ func parseDeclarations(decl string) []string {
 }
 
 // splitPLPGSQLStatements splits a PL/pgSQL body into individual statements on semicolons.
+// It tracks BEGIN/END nesting depth to avoid splitting inside blocks.
 func splitPLPGSQLStatements(body string) []string {
 	var stmts []string
 	var current strings.Builder
 	inSingleQuote := false
 	inDoubleQuote := false
 	escaped := false
+	beginDepth := 0
 
 	for _, ch := range body {
 		if escaped {
@@ -188,7 +194,7 @@ func splitPLPGSQLStatements(body string) []string {
 			current.WriteRune(ch)
 			continue
 		}
-		if ch == ';' && !inSingleQuote && !inDoubleQuote {
+		if ch == ';' && !inSingleQuote && !inDoubleQuote && beginDepth == 0 {
 			s := strings.TrimSpace(current.String())
 			if s != "" {
 				stmts = append(stmts, s)
@@ -197,6 +203,19 @@ func splitPLPGSQLStatements(body string) []string {
 			continue
 		}
 		current.WriteRune(ch)
+		// Track BEGIN/END nesting (only when not in quotes)
+		if !inSingleQuote && !inDoubleQuote {
+			// Check if we just completed a BEGIN or END word
+			trimmed := strings.TrimSpace(current.String())
+			upperTrimmed := strings.ToUpper(trimmed)
+			if strings.HasSuffix(upperTrimmed, "BEGIN") && (len(upperTrimmed) == 5 || !isIdentChar(upperTrimmed[len(upperTrimmed)-6])) {
+				beginDepth++
+			} else if strings.HasSuffix(upperTrimmed, "END") && (len(upperTrimmed) == 3 || !isIdentChar(upperTrimmed[len(upperTrimmed)-4])) {
+				if beginDepth > 0 {
+					beginDepth--
+				}
+			}
+		}
 	}
 	s := strings.TrimSpace(current.String())
 	if s != "" {
@@ -207,12 +226,33 @@ func splitPLPGSQLStatements(body string) []string {
 
 // executePLPGSQLStmt executes a single PL/pgSQL statement.
 func executePLPGSQLStmt(stmt string, vars map[string]interface{}, ctx *ExecutionContext) (*plpgsqlResult, error) {
-	upper := strings.ToUpper(strings.TrimSpace(stmt))
+	trimmed := strings.TrimSpace(stmt)
+	upper := strings.ToUpper(trimmed)
+
+	// BEGIN...END block: extract inner statements and execute
+	if strings.HasPrefix(upper, "BEGIN") {
+		endIdx := strings.LastIndex(upper, "END")
+		afterEnd := strings.TrimSpace(upper[endIdx+3:])
+		if endIdx > 0 && (afterEnd == "" || afterEnd == ";") {
+			inner := strings.TrimSpace(trimmed[5:endIdx])
+			innerStmts := splitPLPGSQLStatements(inner)
+			for _, s := range innerStmts {
+				res, err := executePLPGSQLStmt(s, vars, ctx)
+				if err != nil {
+					return nil, err
+				}
+				if res != nil {
+					return res, nil
+				}
+			}
+			return nil, nil
+		}
+	}
 
 	// Variable assignment: var := expr
-	if idx := strings.Index(strings.ToUpper(stmt), ":="); idx > 0 {
-		varName := strings.ToLower(strings.TrimSpace(stmt[:idx]))
-		exprStr := strings.TrimSpace(stmt[idx+2:])
+	if idx := strings.Index(upper, ":="); idx > 0 {
+		varName := strings.ToLower(strings.TrimSpace(trimmed[:idx]))
+		exprStr := strings.TrimSpace(trimmed[idx+2:])
 		val, err := evalPLPGSQLExpr(exprStr, vars, ctx)
 		if err != nil {
 			return nil, fmt.Errorf("assignment to %s: %w", varName, err)
