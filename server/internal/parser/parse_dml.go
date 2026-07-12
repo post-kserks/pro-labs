@@ -331,20 +331,51 @@ func (p *sqlParser) parseMerge() (Statement, error) {
 
 	var sourceTable string
 	var sourceQuery Statement
+	var sourceValues [][]Expression
+	var sourceColumns []string
 	if p.current().Type == lexer.TOKEN_LPAREN {
-		// USING (subquery) AS alias
-		p.advance()
-		sel, err := p.parseSelect()
-		if err != nil {
-			return nil, fmt.Errorf("MERGE USING subquery: %w", err)
-		}
-		// Check for set operations (UNION, INTERSECT, EXCEPT)
-		sourceQuery, err = p.parseSetOperation(sel)
-		if err != nil {
-			return nil, fmt.Errorf("MERGE USING subquery: %w", err)
-		}
-		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
-			return nil, err
+		p.advance() // consume '('
+		if p.current().Type == lexer.TOKEN_VALUES {
+			// USING (VALUES (row1), (row2), ...) AS alias(col1, col2)
+			p.advance() // consume VALUES
+			sourceValues = make([][]Expression, 0, 4)
+			for {
+				if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+					return nil, err
+				}
+				row, err := p.parseValueListUntilRParen()
+				if err != nil {
+					return nil, err
+				}
+				sourceValues = append(sourceValues, row)
+				if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+					return nil, err
+				}
+				if p.current().Type != lexer.TOKEN_COMMA {
+					break
+				}
+				p.advance()
+			}
+			if len(sourceValues) == 0 {
+				return nil, fmt.Errorf("syntax error: MERGE USING VALUES requires at least one row")
+			}
+			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				return nil, err
+			}
+		} else {
+			// USING (subquery) AS alias
+			sel, err := p.parseSelect()
+			if err != nil {
+				return nil, fmt.Errorf("MERGE USING subquery: %w", err)
+			}
+			// Check for set operations (UNION, INTERSECT, EXCEPT)
+			sourceQuery, err = p.parseSetOperation(sel)
+			if err != nil {
+				return nil, fmt.Errorf("MERGE USING subquery: %w", err)
+			}
+			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				return nil, err
+			}
 		}
 	} else {
 		sourceTable, err = p.consumeIdent("source table")
@@ -353,12 +384,32 @@ func (p *sqlParser) parseMerge() (Statement, error) {
 		}
 	}
 
-	// Optional alias
+	// Optional alias: AS alias or alias
 	var alias string
 	if p.current().Type == lexer.TOKEN_AS {
 		p.advance()
 		alias, err = p.consumeIdent("alias")
 		if err != nil {
+			return nil, err
+		}
+	} else if p.current().Type == lexer.TOKEN_IDENT && sourceValues != nil {
+		// For VALUES source, allow bare alias without AS keyword
+		// e.g., USING (VALUES ...) src(id, name)
+		// Only consume if not a reserved keyword and next token isn't ON
+		if !isReservedKeyword(p.current().Literal) && p.peek().Type != lexer.TOKEN_ON {
+			alias = p.current().Literal
+			p.advance()
+		}
+	}
+
+	// Column aliases for VALUES source: AS alias(col1, col2)
+	if sourceValues != nil && alias != "" && p.current().Type == lexer.TOKEN_LPAREN {
+		p.advance()
+		sourceColumns, err = p.parseIdentifierListUntilRParen("column name")
+		if err != nil {
+			return nil, err
+		}
+		if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
 			return nil, err
 		}
 	}
@@ -491,6 +542,8 @@ func (p *sqlParser) parseMerge() (Statement, error) {
 		TargetTable:    targetTable,
 		SourceTable:    sourceTable,
 		SourceQuery:    sourceQuery,
+		SourceValues:   sourceValues,
+		SourceColumns:  sourceColumns,
 		Alias:          alias,
 		OnCondition:    onCondition,
 		WhenMatched:    whenMatched,

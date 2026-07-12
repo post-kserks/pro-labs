@@ -154,10 +154,16 @@ func (c *MergeCommand) executeMerge(ctx *ExecutionContext, dbName string) (*Resu
 		return nil, err
 	}
 
-	// Read source: either a named table or a subquery
+	// Read source: either a named table, a subquery, or VALUES
 	var sourceRows []storage.Row
 	var sourceSchema *storage.TableSchema
-	if c.stmt.SourceQuery != nil {
+	if c.stmt.SourceValues != nil {
+		// VALUES source: evaluate expressions and build in-memory rows
+		sourceSchema, sourceRows, err = c.buildSourceFromValues(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("MERGE USING VALUES: %w", err)
+		}
+	} else if c.stmt.SourceQuery != nil {
 		// Execute subquery to obtain source rows and schema
 		srcResult, err := c.executeSourceSubquery(ctx)
 		if err != nil {
@@ -271,6 +277,47 @@ func (c *MergeCommand) executeMerge(ctx *ExecutionContext, dbName string) (*Resu
 func (c *MergeCommand) executeSourceSubquery(ctx *ExecutionContext) (*Result, error) {
 	cmd := &SelectCommand{stmt: c.stmt.SourceQuery.(*parser.SelectStatement)}
 	return cmd.Execute(ctx)
+}
+
+// buildSourceFromValues converts VALUES expressions into in-memory rows and a synthetic schema.
+func (c *MergeCommand) buildSourceFromValues(ctx *ExecutionContext) (*storage.TableSchema, []storage.Row, error) {
+	numCols := len(c.stmt.SourceValues[0])
+
+	// Build column names from aliases or defaults
+	colNames := c.stmt.SourceColumns
+	if len(colNames) == 0 {
+		colNames = make([]string, numCols)
+		for i := range colNames {
+			colNames[i] = fmt.Sprintf("col%d", i+1)
+		}
+	}
+	if len(colNames) != numCols {
+		return nil, nil, fmt.Errorf("expected %d column aliases, got %d", numCols, len(colNames))
+	}
+
+	cols := make([]storage.ColumnSchema, numCols)
+	for i, name := range colNames {
+		cols[i] = storage.ColumnSchema{Name: name}
+	}
+	schema := &storage.TableSchema{Name: "MERGE_VALUES_SOURCE", Columns: cols}
+
+	// Empty combined row for expression evaluation (no target columns available)
+	emptyCombined := make(storage.Row, 0)
+
+	rows := make([]storage.Row, 0, len(c.stmt.SourceValues))
+	for _, valueRow := range c.stmt.SourceValues {
+		row := make(storage.Row, numCols)
+		for i, expr := range valueRow {
+			val, err := evalOperand(expr, emptyCombined, nil, ctx)
+			if err != nil {
+				return nil, nil, fmt.Errorf("VALUES expression %d: %w", i+1, err)
+			}
+			row[i] = val
+		}
+		rows = append(rows, row)
+	}
+
+	return schema, rows, nil
 }
 
 // executeMergeHashJoin uses hash join for simple ON conditions (col = col).

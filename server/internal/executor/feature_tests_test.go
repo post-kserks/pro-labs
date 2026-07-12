@@ -226,6 +226,89 @@ func TestMergeNotMatchedSelectWithFilter(t *testing.T) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MERGE USING (VALUES ...) source tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+func TestMergeValuesSourceMixedMatchedAndNotMatched(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE TABLE mvt (id INT, name VARCHAR(100));")
+	executeSQL(t, session, "INSERT INTO mvt VALUES (1, 'existing');")
+
+	executeSQL(t, session, `
+		MERGE INTO mvt
+		USING (VALUES (1,'updated'), (2,'new')) AS src(id, name)
+		ON mvt.id = src.id
+		WHEN MATCHED THEN UPDATE SET name = src.name
+		WHEN NOT MATCHED THEN INSERT (id, name) VALUES (src.id, src.name);
+	`)
+
+	count := executeSQL(t, session, "SELECT COUNT(*) FROM mvt;")
+	if count.Rows[0][0] != "2" {
+		t.Errorf("expected 2 rows, got %s", count.Rows[0][0])
+	}
+
+	r1 := executeSQL(t, session, "SELECT name FROM mvt WHERE id = 1;")
+	if r1.Rows[0][0] != "updated" {
+		t.Errorf("expected 'updated', got %s", r1.Rows[0][0])
+	}
+
+	r2 := executeSQL(t, session, "SELECT name FROM mvt WHERE id = 2;")
+	if r2.Rows[0][0] != "new" {
+		t.Errorf("expected 'new', got %s", r2.Rows[0][0])
+	}
+}
+
+func TestMergeValuesSourceNotMatchedOnly(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE TABLE mvt2 (id INT, name VARCHAR(100));")
+
+	executeSQL(t, session, `
+		MERGE INTO mvt2
+		USING (VALUES (1,'a'), (2,'b'), (3,'c')) AS src(id, name)
+		ON mvt2.id = src.id
+		WHEN NOT MATCHED THEN INSERT (id, name) VALUES (src.id, src.name);
+	`)
+
+	count := executeSQL(t, session, "SELECT COUNT(*) FROM mvt2;")
+	if count.Rows[0][0] != "3" {
+		t.Errorf("expected 3 rows, got %s", count.Rows[0][0])
+	}
+
+	r1 := executeSQL(t, session, "SELECT name FROM mvt2 WHERE id = 1;")
+	if r1.Rows[0][0] != "a" {
+		t.Errorf("expected 'a', got %s", r1.Rows[0][0])
+	}
+}
+
+func TestMergeValuesSourceUpdateOnly(t *testing.T) {
+	session := setupSession(t)
+	executeSQL(t, session, "CREATE TABLE mvt3 (id INT, name VARCHAR(100));")
+	executeSQL(t, session, "INSERT INTO mvt3 VALUES (1, 'old1'), (2, 'old2');")
+
+	executeSQL(t, session, `
+		MERGE INTO mvt3
+		USING (VALUES (1,'new1'), (2,'new2')) AS src(id, name)
+		ON mvt3.id = src.id
+		WHEN MATCHED THEN UPDATE SET name = src.name;
+	`)
+
+	count := executeSQL(t, session, "SELECT COUNT(*) FROM mvt3;")
+	if count.Rows[0][0] != "2" {
+		t.Errorf("expected 2 rows, got %s", count.Rows[0][0])
+	}
+
+	r1 := executeSQL(t, session, "SELECT name FROM mvt3 WHERE id = 1;")
+	if r1.Rows[0][0] != "new1" {
+		t.Errorf("expected 'new1', got %s", r1.Rows[0][0])
+	}
+
+	r2 := executeSQL(t, session, "SELECT name FROM mvt3 WHERE id = 2;")
+	if r2.Rows[0][0] != "new2" {
+		t.Errorf("expected 'new2', got %s", r2.Rows[0][0])
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Trigger tests
 // ═══════════════════════════════════════════════════════════════════════════
 

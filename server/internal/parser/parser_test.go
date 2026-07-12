@@ -31,6 +31,8 @@ func TestParseValidStatements(t *testing.T) {
 		"EXPLAIN SELECT * FROM heroes;",
 		"EXPLAIN ANALYZE SELECT * FROM heroes WHERE level > 5;",
 		"HISTORY heroes KEY 1;",
+		"HISTORY heroes WHERE id = 1;",
+		"HISTORY heroes KEY 1 WHERE level = 10;",
 		"INSERT INTO heroes VALUES (1, 'Aragorn', 10);",
 		"INSERT INTO heroes (id, name) VALUES (1, 'test'), (2, 'test2');",
 		"UPDATE heroes SET level = 11 WHERE id = 1;",
@@ -76,6 +78,59 @@ func TestParseSelectShape(t *testing.T) {
 		t.Fatalf("unexpected table name: %s", sel.TableName)
 	}
 	if sel.Where == nil {
+		t.Fatal("expected WHERE expression")
+	}
+}
+
+func TestParseHistoryShape(t *testing.T) {
+	// KEY only
+	stmt, err := Parse("HISTORY heroes KEY 1;")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	h, ok := stmt.(*HistoryStatement)
+	if !ok {
+		t.Fatalf("expected *HistoryStatement, got %T", stmt)
+	}
+	if h.TableName != "heroes" {
+		t.Fatalf("unexpected table name: %s", h.TableName)
+	}
+	if h.Key == nil {
+		t.Fatal("expected KEY expression")
+	}
+	if h.Where != nil {
+		t.Fatal("expected no WHERE expression")
+	}
+
+	// WHERE only
+	stmt, err = Parse("HISTORY heroes WHERE id = 1;")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	h, ok = stmt.(*HistoryStatement)
+	if !ok {
+		t.Fatalf("expected *HistoryStatement, got %T", stmt)
+	}
+	if h.Key != nil {
+		t.Fatal("expected no KEY expression")
+	}
+	if h.Where == nil {
+		t.Fatal("expected WHERE expression")
+	}
+
+	// KEY + WHERE
+	stmt, err = Parse("HISTORY heroes KEY 1 WHERE level = 10;")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	h, ok = stmt.(*HistoryStatement)
+	if !ok {
+		t.Fatalf("expected *HistoryStatement, got %T", stmt)
+	}
+	if h.Key == nil {
+		t.Fatal("expected KEY expression")
+	}
+	if h.Where == nil {
 		t.Fatal("expected WHERE expression")
 	}
 }
@@ -164,6 +219,7 @@ func TestParseErrors(t *testing.T) {
 		"",
 		"CREATE TABLE heroes (id DOUBLE);",
 		"INSERT INTO heroes VALUES ();",
+		"HISTORY heroes;",
 	}
 
 	for _, query := range cases {
@@ -1639,6 +1695,82 @@ func TestParseMergeVariants(t *testing.T) {
 			}
 			if tc.hasReturning && merge.Returning == nil {
 				t.Fatal("expected Returning to be set")
+			}
+		})
+	}
+}
+
+func TestParseMergeUsingValues(t *testing.T) {
+	cases := []struct {
+		name          string
+		query         string
+		targetTable   string
+		alias         string
+		sourceCols    int
+		numValueRows  int
+		valueRowSizes []int
+	}{
+		{
+			name:          "VALUES with alias and columns",
+			query:         "MERGE INTO t USING (VALUES (1,'a'), (2,'b')) AS src(id, name) ON t.id = src.id WHEN MATCHED THEN UPDATE SET name = src.name WHEN NOT MATCHED THEN INSERT (id, name) VALUES (src.id, src.name);",
+			targetTable:   "t",
+			alias:         "src",
+			sourceCols:    2,
+			numValueRows:  2,
+			valueRowSizes: []int{2, 2},
+		},
+		{
+			name:          "VALUES single row",
+			query:         "MERGE INTO t USING (VALUES (1,'x')) AS s(a, b) ON t.id = s.a WHEN NOT MATCHED THEN INSERT (id, name) VALUES (s.a, s.b);",
+			targetTable:   "t",
+			alias:         "s",
+			sourceCols:    2,
+			numValueRows:  1,
+			valueRowSizes: []int{2},
+		},
+		{
+			name:          "VALUES with AS keyword before alias",
+			query:         "MERGE INTO t USING (VALUES (10, 20)) AS v(col1, col2) ON t.id = v.col1 WHEN NOT MATCHED THEN INSERT (id, val) VALUES (v.col1, v.col2);",
+			targetTable:   "t",
+			alias:         "v",
+			sourceCols:    2,
+			numValueRows:  1,
+			valueRowSizes: []int{2},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := Parse(tc.query)
+			if err != nil {
+				t.Fatalf("Parse returned error: %v", err)
+			}
+			merge, ok := stmt.(*MergeStatement)
+			if !ok {
+				t.Fatalf("expected *MergeStatement, got %T", stmt)
+			}
+			if merge.TargetTable != tc.targetTable {
+				t.Fatalf("expected target table %q, got %q", tc.targetTable, merge.TargetTable)
+			}
+			if merge.Alias != tc.alias {
+				t.Fatalf("expected alias %q, got %q", tc.alias, merge.Alias)
+			}
+			if len(merge.SourceValues) != tc.numValueRows {
+				t.Fatalf("expected %d value rows, got %d", tc.numValueRows, len(merge.SourceValues))
+			}
+			for i, expected := range tc.valueRowSizes {
+				if len(merge.SourceValues[i]) != expected {
+					t.Fatalf("value row %d: expected %d values, got %d", i, expected, len(merge.SourceValues[i]))
+				}
+			}
+			if len(merge.SourceColumns) != tc.sourceCols {
+				t.Fatalf("expected %d source columns, got %d", tc.sourceCols, len(merge.SourceColumns))
+			}
+			if merge.SourceTable != "" {
+				t.Fatalf("expected empty SourceTable, got %q", merge.SourceTable)
+			}
+			if merge.SourceQuery != nil {
+				t.Fatal("expected nil SourceQuery")
 			}
 		})
 	}

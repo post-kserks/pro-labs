@@ -145,7 +145,9 @@ type CTEStatement struct {
 type MergeStatement struct {
 	TargetTable    string
 	SourceTable    string
-	SourceQuery    Statement // subquery source (alternative to SourceTable)
+	SourceQuery    Statement        // subquery source (alternative to SourceTable)
+	SourceValues   [][]Expression   // VALUES source (alternative to SourceTable/SourceQuery)
+	SourceColumns  []string         // column aliases for VALUES source (e.g., AS src(id, name))
 	Alias          string
 	OnCondition    Expression
 	WhenMatched    *MergeWhenClause
@@ -248,6 +250,7 @@ type ExplainStatement struct {
 type HistoryStatement struct {
 	TableName string
 	Key       Expression
+	Where     Expression
 }
 
 type InsertStatement struct {
@@ -313,6 +316,7 @@ type CreateIndexStatement struct {
 	Column    string
 	Columns   []string // multi-column index
 	Unique    bool
+	IndexType string // optional: GIN, BTREE, GIST, HASH
 }
 
 type DropIndexStatement struct {
