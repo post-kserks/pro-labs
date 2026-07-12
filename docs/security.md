@@ -55,6 +55,11 @@ curl -X POST http://localhost:8080/admin/revoke-token \
   -d '{"token": "vdb_sk_token_to_revoke"}'
 ```
 
+```sql
+-- Via SQL
+REVOKE TOKEN 'vdb_sk_token_to_revoke';
+```
+
 **Behavior:**
 - Revoked tokens are rejected immediately on all subsequent requests
 - Revocation entries are cleaned up after 24 hours (revoked token data expires)
@@ -78,7 +83,7 @@ Tokens are assigned roles at registration:
 export VAULTDB_API_TOKENS="admin-token:ops:admin,app-token:myapp:writer,reader-token:mon:reader"
 ```
 
-> **Note:** Roles are currently hardcoded and cannot be customized via configuration.
+Custom roles can be created via `CREATE ROLE` and managed via `GRANT`/`REVOKE`. Built-in roles (admin, writer, reader) serve as defaults.
 
 ### Bypass Rules
 

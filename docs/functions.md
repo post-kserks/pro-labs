@@ -230,6 +230,7 @@ All operate on JSON arrays stored as text.
 |----------|-------------|---------|
 | `UUID()` | Generate UUIDv4 | `SELECT UUID();` → `'550e8400-e29b-41d4-a716-446655440000'` |
 | `AI_EMBED(text)` | Generate embedding vector | `SELECT AI_EMBED('hello world');` |
+| `BM25_SCORE(table, column, 'query')` | BM25 relevance score | `BM25_SCORE(docs, content, 'search')` |
 | `NULLIF(a, b)` | Return NULL if equal | `NULLIF(1, 1)` → `NULL` |
 | `COALESCE(a, b, ...)` | First non-null value | `COALESCE(NULL, 2, 3)` → `2` |
 

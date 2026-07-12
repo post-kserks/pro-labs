@@ -71,6 +71,32 @@ CREATE INDEX idx_users_name_age ON users (name, age);  -- composite index
 DROP INDEX idx_users_email;
 ```
 
+### CREATE UNIQUE INDEX
+
+```sql
+CREATE UNIQUE INDEX idx_users_email ON users (email);
+```
+
+UNIQUE constraints on columns are enforced on INSERT and UPDATE.
+
+### Fulltext Index
+
+```sql
+-- Fulltext index declaration in CREATE TABLE
+CREATE TABLE articles (
+    id INT PRIMARY KEY,
+    title TEXT,
+    content TEXT,
+    FULLTEXT(title, content)
+);
+
+-- Or inline column constraint
+CREATE TABLE articles (
+    id INT PRIMARY KEY,
+    content TEXT FULLTEXT
+);
+```
+
 ### Table Partitioning
 
 ```sql
@@ -204,6 +230,20 @@ SELECT * FROM users WHERE name ILIKE '%alice%';  -- case-insensitive
 SELECT * FROM users WHERE id IN (1, 2, 3);
 SELECT * FROM users WHERE email IS NOT NULL;
 SELECT * FROM users WHERE age BETWEEN 20 AND 30;
+```
+
+### Full-Text Search Operators
+
+```sql
+-- Full-text search operators
+SELECT * FROM documents WHERE content FTS_MATCH 'search terms';
+SELECT * FROM documents WHERE content @@ 'search terms';
+
+-- BM25 scoring
+SELECT id, title, bm25_score(documents, content, 'search terms') AS score
+FROM documents
+WHERE content FTS_MATCH 'search terms'
+ORDER BY score DESC;
 ```
 
 ### JSONB Operators in WHERE
@@ -487,6 +527,16 @@ WHEN MATCHED THEN UPDATE SET t.name = s.name
 WHEN NOT MATCHED THEN INSERT (id, name) VALUES (s.id, s.name);
 ```
 
+### MERGE with VALUES source
+
+```sql
+MERGE INTO documents d
+USING (VALUES (1, 'DOC-001', 'Report')) AS src(id, doc_number, title)
+ON d.doc_number = src.doc_number
+WHEN MATCHED THEN UPDATE SET title = src.title
+WHEN NOT MATCHED THEN INSERT (id, doc_number, title) VALUES (src.id, src.doc_number, src.title);
+```
+
 ---
 
 ## TRUNCATE
@@ -519,5 +569,48 @@ COMMIT;  -- only Alice is committed
 Query the version history of a row.
 
 ```sql
+-- HISTORY with KEY
+HISTORY users KEY 1;
+
+-- HISTORY with WHERE
 HISTORY users WHERE id = 1;
+
+-- HISTORY with KEY and WHERE
+HISTORY users KEY 1 WHERE created_at > '2026-01-01';
 ```
+
+---
+
+## Stored Functions (PL/pgSQL)
+
+Create stored functions with a minimal PL/pgSQL interpreter:
+
+```sql
+-- Simple function
+CREATE FUNCTION add(a INT, b INT) RETURNS INT AS $$
+BEGIN
+  RETURN a + b;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT add(2, 3);  -- returns 5
+
+-- Function with variables
+CREATE FUNCTION double_value(x INT) RETURNS INT AS $$
+DECLARE
+  result INT;
+BEGIN
+  result := x * 2;
+  RETURN result;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function with RETURN QUERY
+CREATE FUNCTION top_scorers(min_score INT) RETURNS TABLE(name TEXT, score INT) AS $$
+BEGIN
+  RETURN QUERY SELECT name, score FROM players WHERE score >= min_score;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+**Supported constructs:** DECLARE blocks, BEGIN/END, RETURN expression, variable assignment (:=), RETURN QUERY SELECT.
