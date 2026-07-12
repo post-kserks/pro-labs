@@ -31,18 +31,22 @@ VaultDB is not another lightweight embedded database. It's a full-featured SQL e
 
 - **DML**: INSERT, UPDATE, DELETE, UPSERT (ON CONFLICT), MERGE, TRUNCATE, COPY FROM/TO
 - **DQL**: SELECT with JOIN, CTE (recursive), window functions, subqueries, DISTINCT ON
-- **DDL**: CREATE/DROP/ALTER DATABASE/TABLE/INDEX/VIEW/TRIGGER/FUNCTION/PROCEDURE
+- **DDL**: CREATE/DROP/ALTER DATABASE/TABLE/INDEX/VIEW/TRIGGER/FUNCTION/PROCEDURE, UNIQUE constraints, UNIQUE indexes, FULLTEXT indexes
 - **Types**: INT, BIGINT, FLOAT, BOOL, TEXT, VARCHAR, NUMERIC, JSONB, VECTOR, TIMESTAMPTZ, BLOB, ARRAY
 - **JSONB operators**: `->`, `->>`, `@>`, `<@`, `||`, `?`
 - **Table partitioning**: RANGE and HASH partitioning with predicate-based pruning
 - **Full-text search**: BM25 ranking, snippet highlighting, stop words
+- **Stored functions**: PL/pgSQL interpreter (DECLARE, BEGIN/END, RETURN, RETURN QUERY)
+- **FTS operators**: FTS_MATCH, @@, bm25_score() relevance scoring
+- **MERGE**: MERGE with table, subquery, and VALUES sources
+- **HISTORY**: Query row version history with KEY and WHERE filters
 - **RBAC**: CREATE ROLE, DROP ROLE, GRANT, REVOKE with dynamic permissions
 
 ### Security
 
 - **TDE**: Transparent Data Encryption with AES-256-GCM, envelope encryption (DEK/KEK)
 - **Authentication**: HMAC-SHA256 token-based auth with constant-time comparison
-- **Token revocation**: Revoke compromised tokens without server restart (persisted to disk)
+- **Token revocation**: Revoke compromised tokens via SQL or HTTP API (persisted to disk)
 - **RBAC**: Role-based access control with SQL-managed roles (admin, writer, reader + custom)
 - **Audit log**: Hash-chain integrity, SHA-256, periodic verification, `VERIFY AUDIT LOG` command
 - **TLS**: Configurable enforcement, min version (1.2/1.3), mTLS support
@@ -208,6 +212,36 @@ REVOKE TOKEN 'vdb_sk_compromised_token_here';
 
 ```sql
 SELECT content FROM docs WHERE content FTS_MATCH 'database performance';
+```
+
+### UNIQUE constraints
+
+```sql
+CREATE TABLE users (
+    id INT PRIMARY KEY,
+    email VARCHAR(255) UNIQUE
+);
+CREATE UNIQUE INDEX idx_docs_number ON documents (doc_number);
+```
+
+### MERGE with VALUES
+
+```sql
+MERGE INTO target t
+USING (VALUES (1, 'Alice'), (2, 'Bob')) AS src(id, name)
+ON t.id = src.id
+WHEN MATCHED THEN UPDATE SET t.name = src.name
+WHEN NOT MATCHED THEN INSERT (id, name) VALUES (src.id, src.name);
+```
+
+### Stored functions
+
+```sql
+CREATE FUNCTION get_stats(min_age INT) RETURNS TABLE(name TEXT, age INT) AS $$
+BEGIN
+  RETURN QUERY SELECT name, age FROM users WHERE age >= min_age;
+END;
+$$ LANGUAGE plpgsql;
 ```
 
 ---
