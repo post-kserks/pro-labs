@@ -146,6 +146,12 @@ func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
 	// Build column index for O(1) lookups during expression evaluation
 	ensureColumnIndex(ctx, schema)
 
+	// Extract FTS query from WHERE for 2-arg bm25_score
+	ctx.FtsQuery = ""
+	if c.stmt.Where != nil {
+		ctx.FtsQuery = extractFtsQueryFromWhere(c.stmt.Where)
+	}
+
 	// Filter with WHERE
 	var filtered []storage.Row
 	if c.stmt.Where != nil {
@@ -473,6 +479,12 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 
 	// Build column index for O(1) lookups during expression evaluation.
 	ensureColumnIndex(ctx, combinedSchema)
+
+	// Extract FTS query from WHERE for 2-arg bm25_score
+	ctx.FtsQuery = ""
+	if c.stmt.Where != nil {
+		ctx.FtsQuery = extractFtsQueryFromWhere(c.stmt.Where)
+	}
 
 	// Filter rows (WHERE) — use parallel execution for large tables
 	var filtered []storage.Row
@@ -968,6 +980,12 @@ func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName s
 
 	// Build column index for O(1) lookups
 	ensureColumnIndex(ctx, schema)
+
+	// Extract FTS query from WHERE for 2-arg bm25_score
+	ctx.FtsQuery = ""
+	if c.stmt.Where != nil {
+		ctx.FtsQuery = extractFtsQueryFromWhere(c.stmt.Where)
+	}
 
 	// Filter with WHERE
 	var filtered []storage.Row

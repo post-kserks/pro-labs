@@ -18,6 +18,8 @@ func TestParseCreateRole(t *testing.T) {
 		{"simple", "CREATE ROLE analyst;", false, "analyst", ""},
 		{"with password", "CREATE ROLE dev WITH PASSWORD 'secret123';", false, "dev", "secret123"},
 		{"missing name", "CREATE ROLE;", true, "", ""},
+		{"user simple", "CREATE USER alice;", false, "alice", ""},
+		{"user with password", "CREATE USER bob WITH PASSWORD 'pass123';", false, "bob", "pass123"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

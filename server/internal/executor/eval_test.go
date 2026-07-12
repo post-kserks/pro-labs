@@ -402,6 +402,19 @@ func TestFtsMatchConsolidated(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("MATCH_keyword_as_FTS_alias", func(t *testing.T) {
+		resMatch := executeSQL(t, session, "SELECT id FROM fts_docs WHERE content MATCH 'quick fox' ORDER BY id;")
+		resFts := executeSQL(t, session, "SELECT id FROM fts_docs WHERE content FTS_MATCH 'quick fox' ORDER BY id;")
+		if len(resMatch.Rows) != len(resFts.Rows) {
+			t.Fatalf("MATCH and FTS_MATCH returned different row counts: %d vs %d", len(resMatch.Rows), len(resFts.Rows))
+		}
+		for i := range resMatch.Rows {
+			if resMatch.Rows[i][0] != resFts.Rows[i][0] {
+				t.Fatalf("row %d differs: MATCH=%s, FTS_MATCH=%s", i, resMatch.Rows[i][0], resFts.Rows[i][0])
+			}
+		}
+	})
 }
 
 func TestBm25ScoreFunction(t *testing.T) {
@@ -450,6 +463,46 @@ func TestBm25ScoreFunction(t *testing.T) {
 		for _, row := range res.Rows {
 			if len(row) < 2 {
 				t.Fatalf("expected at least 2 columns, got %d", len(row))
+			}
+		}
+	})
+
+	t.Run("two_arg_form_with_where", func(t *testing.T) {
+		res := executeSQL(t, session, "SELECT id, bm25_score('bm25_docs', 'content') AS score FROM bm25_docs WHERE content FTS_MATCH 'quick fox' ORDER BY score DESC;")
+		if len(res.Rows) != 2 {
+			t.Fatalf("expected 2 rows, got %d", len(res.Rows))
+		}
+		for _, row := range res.Rows {
+			if len(row) < 2 {
+				t.Fatalf("expected at least 2 columns, got %d", len(row))
+			}
+		}
+	})
+
+	t.Run("two_arg_form_with_MATCH_keyword", func(t *testing.T) {
+		res := executeSQL(t, session, "SELECT id, bm25_score('bm25_docs', 'content') AS score FROM bm25_docs WHERE content MATCH 'quick fox' ORDER BY score DESC;")
+		if len(res.Rows) != 2 {
+			t.Fatalf("expected 2 rows, got %d", len(res.Rows))
+		}
+		for _, row := range res.Rows {
+			if len(row) < 2 {
+				t.Fatalf("expected at least 2 columns, got %d", len(row))
+			}
+		}
+	})
+
+	t.Run("two_arg_form_without_where_returns_zero", func(t *testing.T) {
+		// 2-arg form without WHERE FTS_MATCH returns 0.0 for all rows (no query to match)
+		res := executeSQL(t, session, "SELECT id, bm25_score('bm25_docs', 'content') AS score FROM bm25_docs ORDER BY id;")
+		if len(res.Rows) != 3 {
+			t.Fatalf("expected 3 rows, got %d", len(res.Rows))
+		}
+		for _, row := range res.Rows {
+			if len(row) < 2 {
+				t.Fatalf("expected at least 2 columns, got %d", len(row))
+			}
+			if row[1] != "0" && row[1] != "0.0" {
+				t.Fatalf("expected score 0.0 for no query, got %s", row[1])
 			}
 		}
 	})

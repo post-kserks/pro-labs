@@ -65,6 +65,7 @@ func sanitizeErrorMessage(msg string) string {
 		"cannot",
 		"permission",
 		"aggregate",
+		"audit",
 	}
 
 	for _, pattern := range safePatterns {

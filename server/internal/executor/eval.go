@@ -48,7 +48,7 @@ func evalBinary(expr *parser.BinaryExpr, row storage.Row, schema *storage.TableS
 		return left != nil, nil
 	case "SEMANTIC_MATCH":
 		return evalSemanticMatch(left, right, ctx)
-	case "FTS_MATCH":
+	case "FTS_MATCH", "MATCH":
 		return evalFtsMatch(left, right)
 	case "@>":
 		return evalJsonContains(left, right)

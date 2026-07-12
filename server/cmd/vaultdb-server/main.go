@@ -179,7 +179,7 @@ func (l *ConnectionRateLimiter) Allow() bool {
 	return false
 }
 
-func handleConnection(ctx context.Context, conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, embedder ai.Embedder, serverWAL *wal.WAL, logger *slog.Logger, maxRequestSize int, queryTimeoutSec int, maxRows int, tcpKeepAliveSec int, tcpIdleTimeoutSec int, maxPreparedStmts int, rateLimitRPS int, rateLimitBurst int) {
+func handleConnection(ctx context.Context, conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, embedder ai.Embedder, serverWAL *wal.WAL, logger *slog.Logger, maxRequestSize int, queryTimeoutSec int, maxRows int, tcpKeepAliveSec int, tcpIdleTimeoutSec int, maxPreparedStmts int, rateLimitRPS int, rateLimitBurst int, auditLog *audit.TableLog) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("panic in connection handler",
@@ -203,6 +203,9 @@ func handleConnection(ctx context.Context, conn net.Conn, store storage.StorageE
 	if embedder != nil {
 		session.SetEmbedder(embedder)
 	}
+	if authManager != nil {
+		session.SetAuthManager(authManager)
+	}
 	if serverWAL != nil {
 		session.SetWAL(serverWAL)
 	}
@@ -214,6 +217,9 @@ func handleConnection(ctx context.Context, conn net.Conn, store storage.StorageE
 	}
 	if maxPreparedStmts > 0 {
 		session.SetMaxPreparedStatements(maxPreparedStmts)
+	}
+	if auditLog != nil {
+		session.AuditTable = auditLog
 	}
 	defer func() {
 		if session.IsInTx() {
@@ -596,7 +602,7 @@ func main() {
 				defer activeConnections.Add(-1)
 				defer metricsCollector.DecConnections()
 				defer connPool.Release(connInfo) // Release back to pool
-				handleConnection(ctx, c, store, metricsCollector, txm, br, authManager, embedder, serverWAL, logger, maxRequestSize, cfg.Server.QueryTimeoutSec, cfg.Server.MaxRows, cfg.Server.TCPKeepAliveSec, cfg.Server.TCPIdleTimeoutSec, cfg.Server.MaxPreparedStmts, cfg.Server.RateLimitRPS, cfg.Server.RateLimitBurst)
+				handleConnection(ctx, c, store, metricsCollector, txm, br, authManager, embedder, serverWAL, logger, maxRequestSize, cfg.Server.QueryTimeoutSec, cfg.Server.MaxRows, cfg.Server.TCPKeepAliveSec, cfg.Server.TCPIdleTimeoutSec, cfg.Server.MaxPreparedStmts, cfg.Server.RateLimitRPS, cfg.Server.RateLimitBurst, auditLog)
 			}(conn, connObj)
 		}
 	}()

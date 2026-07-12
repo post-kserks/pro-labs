@@ -54,6 +54,9 @@ func newSessionWithConfig(cfg Config) *executor.Session {
 	if cfg.Embedder != nil {
 		sess.SetEmbedder(cfg.Embedder)
 	}
+	if cfg.Auth != nil {
+		sess.SetAuthManager(cfg.Auth)
+	}
 	if cfg.QueryTimeoutSec > 0 {
 		sess.SetQueryTimeout(time.Duration(cfg.QueryTimeoutSec) * time.Second)
 	}

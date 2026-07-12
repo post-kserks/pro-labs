@@ -618,6 +618,7 @@ var keywords = map[string]TokenType{
 	"ILIKE":          TOKEN_ILIKE,
 	"SEMANTIC_MATCH": TOKEN_SEMANTIC_MATCH,
 	"FTS_MATCH":      TOKEN_FTS_MATCH,
+	"MATCH":          TOKEN_FTS_MATCH,
 	"ALTER":          TOKEN_ALTER,
 
 	"ADD":            TOKEN_ADD,

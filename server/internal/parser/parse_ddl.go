@@ -382,14 +382,14 @@ func (p *sqlParser) parseCreate() (Statement, error) {
 	case lexer.TOKEN_INDEX:
 		return p.parseCreateIndex()
 	case lexer.TOKEN_IDENT:
-		if strings.ToUpper(p.current().Literal) == "ROLE" {
+		if strings.ToUpper(p.current().Literal) == "ROLE" || strings.ToUpper(p.current().Literal) == "USER" {
 			return p.parseCreateRole()
 		}
 		// Handle CREATE UNIQUE INDEX
 		if strings.ToUpper(p.current().Literal) == "UNIQUE" {
 			return p.parseCreateIndex()
 		}
-		return nil, p.expectedError("DATABASE, TABLE, VIEW, INDEX or ROLE", p.current())
+		return nil, p.expectedError("DATABASE, TABLE, VIEW, INDEX, ROLE or USER", p.current())
 	default:
 		return nil, p.expectedError("DATABASE, TABLE, VIEW or INDEX", p.current())
 	}

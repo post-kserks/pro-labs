@@ -186,6 +186,11 @@ type ExecutionContext struct {
 	// triggerDepth tracks recursive trigger invocation depth.
 	// Incremented before executeTriggerBody, decremented after.
 	triggerDepth int
+
+	// FtsQuery holds the search query extracted from a WHERE ... FTS_MATCH/MATCH
+	// predicate. Set by the SELECT executor before column projection so that
+	// the 2-argument form bm25_score(table, col) can use it.
+	FtsQuery string
 }
 
 type Executor struct {

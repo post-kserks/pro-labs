@@ -647,11 +647,48 @@ func fnInitcapBuiltin(args []interface{}, ctx *ExecutionContext) (interface{}, e
 	return initcap(valueToString(args[0])), nil
 }
 
+// extractFtsQueryFromWhere walks a WHERE clause AST and returns the search
+// query from the first FTS_MATCH or @@ predicate it finds.
+func extractFtsQueryFromWhere(where parser.Expression) string {
+	if where == nil {
+		return ""
+	}
+	switch e := where.(type) {
+	case *parser.BinaryExpr:
+		if e.Operator == "FTS_MATCH" || e.Operator == "@" || e.Operator == "MATCH" {
+			if val, ok := e.Right.(*parser.Value); ok {
+				return val.StrVal
+			}
+		}
+		if q := extractFtsQueryFromWhere(e.Left); q != "" {
+			return q
+		}
+		if q := extractFtsQueryFromWhere(e.Right); q != "" {
+			return q
+		}
+	case *parser.AndExpr:
+		if q := extractFtsQueryFromWhere(e.Left); q != "" {
+			return q
+		}
+		return extractFtsQueryFromWhere(e.Right)
+	case *parser.OrExpr:
+		if q := extractFtsQueryFromWhere(e.Left); q != "" {
+			return q
+		}
+		return extractFtsQueryFromWhere(e.Right)
+	case *parser.NotExpr:
+		return extractFtsQueryFromWhere(e.Expr)
+	}
+	return ""
+}
+
 // fnBm25Score computes BM25 relevance score.
-// Usage: bm25_score(table_name, column_name, 'search query')
+// Usage: bm25_score(table_name, column_name, 'search query')  -- 3 args
+//
+//	bm25_score(table_name, column_name)                   -- 2 args (query from WHERE FTS_MATCH)
 func fnBm25Score(args []interface{}, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
-	if len(args) != 3 {
-		return nil, fmt.Errorf("BM25_SCORE requires 3 arguments: table_name, column_name, query")
+	if len(args) != 2 && len(args) != 3 {
+		return nil, fmt.Errorf("BM25_SCORE requires 2 or 3 arguments: bm25_score(table_name, column_name [, query])")
 	}
 	if ctx == nil || ctx.Storage == nil {
 		return nil, fmt.Errorf("BM25_SCORE: no storage engine available")
@@ -659,7 +696,18 @@ func fnBm25Score(args []interface{}, row storage.Row, schema *storage.TableSchem
 
 	tableName := valueToString(args[0])
 	colName := valueToString(args[1])
-	query := valueToString(args[2])
+
+	var query string
+	if len(args) == 3 {
+		query = valueToString(args[2])
+	} else {
+		query = ctx.FtsQuery
+	}
+
+	// If no query is available (2-arg form without WHERE FTS_MATCH), return 0.0
+	if query == "" {
+		return 0.0, nil
+	}
 
 	dbName, err := requireCurrentDB(ctx)
 	if err != nil {

@@ -44,6 +44,8 @@ func TestParseValidStatements(t *testing.T) {
 		"ARCHIVE AUDIT LOG TO '/tmp/audit.json' KEEP 100;",
 		"ARCHIVE AUDIT LOG;",
 		"ARCHIVE AUDIT LOG KEEP 50;",
+		"SELECT * FROM docs WHERE content MATCH 'search query';",
+		"CREATE USER alice WITH PASSWORD 'pass';",
 	}
 
 	for _, query := range queries {
