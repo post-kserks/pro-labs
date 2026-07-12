@@ -46,11 +46,11 @@ func NewBTreeIndex(name, column string, colIndex int) *BTreeIndex {
 	}
 }
 
-func (idx *BTreeIndex) Type() string    { return "btree" }
-func (idx *BTreeIndex) Name() string    { return idx.name }
-func (idx *BTreeIndex) Column() string  { return idx.column }
-func (idx *BTreeIndex) ColIndex() int   { return idx.colIndex }
-func (idx *BTreeIndex) IsUnique() bool  { return idx.unique }
+func (idx *BTreeIndex) Type() string     { return "btree" }
+func (idx *BTreeIndex) Name() string     { return idx.name }
+func (idx *BTreeIndex) Column() string   { return idx.column }
+func (idx *BTreeIndex) ColIndex() int    { return idx.colIndex }
+func (idx *BTreeIndex) IsUnique() bool   { return idx.unique }
 func (idx *BTreeIndex) SetUnique(u bool) { idx.unique = u }
 
 func (idx *BTreeIndex) Len() int {

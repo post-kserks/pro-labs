@@ -84,11 +84,11 @@ func NewGiSTIndex(name, column string, colIndex int) *GiSTIndex {
 	}
 }
 
-func (g *GiSTIndex) Type() string    { return "gist" }
-func (g *GiSTIndex) Name() string    { return g.name }
-func (g *GiSTIndex) Column() string  { return g.column }
-func (g *GiSTIndex) ColIndex() int   { return g.colIndex }
-func (g *GiSTIndex) IsUnique() bool  { return g.unique }
+func (g *GiSTIndex) Type() string     { return "gist" }
+func (g *GiSTIndex) Name() string     { return g.name }
+func (g *GiSTIndex) Column() string   { return g.column }
+func (g *GiSTIndex) ColIndex() int    { return g.colIndex }
+func (g *GiSTIndex) IsUnique() bool   { return g.unique }
 func (g *GiSTIndex) SetUnique(u bool) { g.unique = u }
 
 // Columns returns nil — GiST index does not support index-only scan.

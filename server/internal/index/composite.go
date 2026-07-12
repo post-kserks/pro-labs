@@ -33,11 +33,11 @@ func NewCompositeIndex(name string, columns []string, colIndex []int) *Composite
 	}
 }
 
-func (idx *CompositeIndex) Name() string    { return idx.name }
-func (idx *CompositeIndex) Column() string  { return strings.Join(idx.columns, ",") }
-func (idx *CompositeIndex) ColIndex() int   { return idx.colIndex[0] }
-func (idx *CompositeIndex) Type() string    { return "composite" }
-func (idx *CompositeIndex) IsUnique() bool  { return idx.unique }
+func (idx *CompositeIndex) Name() string     { return idx.name }
+func (idx *CompositeIndex) Column() string   { return strings.Join(idx.columns, ",") }
+func (idx *CompositeIndex) ColIndex() int    { return idx.colIndex[0] }
+func (idx *CompositeIndex) Type() string     { return "composite" }
+func (idx *CompositeIndex) IsUnique() bool   { return idx.unique }
 func (idx *CompositeIndex) SetUnique(u bool) { idx.unique = u }
 
 // Columns returns the column names this index covers.

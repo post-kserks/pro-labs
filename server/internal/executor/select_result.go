@@ -318,7 +318,7 @@ func (c *HistoryCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	// Build history schema for WHERE evaluation.
 	histSchema := &storage.TableSchema{
-		Name:    c.stmt.TableName,
+		Name:     c.stmt.TableName,
 		Database: dbName,
 	}
 	histSchema.Columns = append(histSchema.Columns,

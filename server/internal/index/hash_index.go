@@ -38,11 +38,11 @@ func New(name, column string, colIndex int) *HashIndex {
 	}
 }
 
-func (idx *HashIndex) Type() string    { return "hash" }
-func (idx *HashIndex) Name() string    { return idx.name }
-func (idx *HashIndex) Column() string  { return idx.column }
-func (idx *HashIndex) ColIndex() int   { return idx.colIndex }
-func (idx *HashIndex) IsUnique() bool  { return idx.unique }
+func (idx *HashIndex) Type() string     { return "hash" }
+func (idx *HashIndex) Name() string     { return idx.name }
+func (idx *HashIndex) Column() string   { return idx.column }
+func (idx *HashIndex) ColIndex() int    { return idx.colIndex }
+func (idx *HashIndex) IsUnique() bool   { return idx.unique }
 func (idx *HashIndex) SetUnique(u bool) { idx.unique = u }
 
 // Columns returns nil — hash index does not support index-only scan.

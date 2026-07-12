@@ -147,9 +147,9 @@ type CTEStatement struct {
 type MergeStatement struct {
 	TargetTable    string
 	SourceTable    string
-	SourceQuery    Statement        // subquery source (alternative to SourceTable)
-	SourceValues   [][]Expression   // VALUES source (alternative to SourceTable/SourceQuery)
-	SourceColumns  []string         // column aliases for VALUES source (e.g., AS src(id, name))
+	SourceQuery    Statement      // subquery source (alternative to SourceTable)
+	SourceValues   [][]Expression // VALUES source (alternative to SourceTable/SourceQuery)
+	SourceColumns  []string       // column aliases for VALUES source (e.g., AS src(id, name))
 	Alias          string
 	OnCondition    Expression
 	WhenMatched    *MergeWhenClause
@@ -502,7 +502,7 @@ func (*CreateRoleStatement) statementNode()           {}
 func (*DropRoleStatement) statementNode()             {}
 func (*GrantStatement) statementNode()                {}
 func (*RevokeStatement) statementNode()               {}
-func (*RevokeTokenStatement) statementNode()           {}
+func (*RevokeTokenStatement) statementNode()          {}
 func (*CTEStatement) statementNode()                  {}
 func (*CreateViewStatement) statementNode()           {}
 func (*DropViewStatement) statementNode()             {}
