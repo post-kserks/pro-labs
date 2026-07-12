@@ -1859,6 +1859,92 @@ func TestKillDuringBackupCreation(t *testing.T) {
 	}
 }
 
+// TestWALRecoveryAfterDirtyPagesFlushed tests that WAL recovery succeeds when
+// dirty pages have been flushed to disk before the crash. This is the scenario
+// that causes the "page is full" error: the buffer pool writes a dirty page to
+// disk (e.g. during LRU eviction or background flush), then the server crashes.
+// On recovery, the page on disk already contains the tuples, and re-inserting
+// them from WAL replay would fail without the fix.
+func TestWALRecoveryAfterDirtyPagesFlushed(t *testing.T) {
+	dir := t.TempDir()
+
+	walPath := filepath.Join(dir, "wal", "vaultdb.wal")
+	if err := os.MkdirAll(filepath.Dir(walPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Don't defer w.Close() — we simulate a crash by closing without cleanup.
+
+	txm := txmanager.NewManager()
+	engine, err := NewPageStorageEngine(dir, w, txm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := engine.CreateDatabase("testdb"); err != nil {
+		t.Fatal(err)
+	}
+	schema := TableSchema{
+		Name: "users",
+		Columns: []ColumnSchema{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+		},
+	}
+	if err := engine.CreateTable("testdb", schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows — these go into buffer pool (dirty) + WAL.
+	_, err = engine.InsertRows("testdb", "users", []Row{
+		{int64(1), "Alice"},
+		{int64(2), "Bob"},
+		{int64(3), "Charlie"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Flush dirty pages to disk WITHOUT doing a checkpoint.
+	// This simulates what the buffer pool does naturally (LRU eviction,
+	// background flush) before a crash. The pages on disk now contain the
+	// tuples, but the WAL still has the insert records.
+	engine.bufPool.FlushAll()
+
+	// Simulate crash: close WAL without checkpoint/truncate.
+	w.Close()
+
+	// Reopen — simulate server restart.
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+
+	txm2 := txmanager.NewManager()
+	engine2, err := NewPageStorageEngine(dir, w2, txm2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// WAL recovery must not fail with "page is full".
+	if err := engine2.RecoverFromWAL(); err != nil {
+		t.Fatalf("WAL recovery failed: %v", err)
+	}
+
+	count, err := engine2.CountRows("testdb", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 rows after recovery, got %d", count)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

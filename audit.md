@@ -1,600 +1,297 @@
-# Audit: Неработающие фичи VaultDB
+# Audit: Проблемы VaultDB dev-сборки
 
 > Дата: 2026-07-12
-> Окружение: VaultDB dev-сборка из исходников (master), Python клиент v2
+> Окружение: VaultDB dev-сборка (commit master, `go build`), Python клиент v2
 > Тестовый проект: DocVault — корпоративная система управления документами
 
 ---
 
-## Контекст использования
+## Контекст
 
-Проект **DocVault** — корпоративная система управления документами (договоры, счета, отчеты, служебные записки). Требования к СУБД:
+Проект **DocVault** — система управления документами (договоры, счета, отчеты). Все фичи тестировались через Python-клиент по TCP-протоколу v2. Результаты проверены воспроизводимо (скрипт `test_features.py`).
 
-- Хранение документов с метаданными (JSONB)
-- Версионирование документов
-- Полнотекстовый поиск по содержимому
-- Разграничение доступа по ролям и отделам
-- Аудит всех действий с hash-chain целостностью
-- Транзакционность (ACID)
-- Секционирование по дате для производительности
-- Ссылочная целостность между документами и версиями
+### Что реально работает (подтверждено тестами)
 
-Использовались **два окружения**:
-
-1. **VaultDB 1.2.0** (Docker-образ `vaultdb/vaultdb:1.2.0`) — стабильный релиз
-2. **VaultDB dev** (сборка из исходников через `go build`) — актуальная dev-ветка
-
-Все тесты выполнялись через Python-клиент (`client/python/vaultdb/`) по TCP-протоколу v2.
+| Фича | Синтаксис | Статус |
+|------|-----------|--------|
+| PRIMARY KEY | `id INT PRIMARY KEY` | ✅ |
+| NOT NULL | `name TEXT NOT NULL` | ✅ |
+| AUTO_INCREMENT | `id INT PRIMARY KEY AUTO_INCREMENT` | ✅ |
+| SERIAL | `id SERIAL PRIMARY KEY` | ✅ |
+| B-tree INDEX | `CREATE INDEX idx ON t(col)` | ✅ |
+| UNIQUE INDEX | `CREATE UNIQUE INDEX idx ON t(col)` | ✅ |
+| UNIQUE constraint | `ALTER TABLE t ADD CONSTRAINT uq UNIQUE (col)` | ✅ |
+| FOREIGN KEY | `ALTER TABLE t ADD CONSTRAINT fk FOREIGN KEY ...` | ✅ |
+| INSERT / UPDATE / DELETE | Стандартный DML | ✅ |
+| UPSERT | `ON CONFLICT ... DO UPDATE SET` | ✅ |
+| JSONB тип | `data JSONB` | ✅ |
+| JSONB операторы | `->>`, `@>`, `?`, `\|\|` | ✅ |
+| GIN индекс | `CREATE INDEX ... USING GIN (col)` | ✅ |
+| MERGE | `MERGE INTO ... USING ... ON ...` | ✅ |
+| MERGE VALUES | `USING (VALUES (...)) AS alias` | ✅ |
+| WINDOW functions | `ROW_NUMBER`, `RANK`, `LAG`, `LEAD` | ✅ |
+| CTE | `WITH cte AS (...) SELECT ...` | ✅ |
+| TRIGGER (AFTER) | `CREATE TRIGGER trg AFTER INSERT ON t ...` | ✅ |
+| TRANSACTIONS | `BEGIN` / `COMMIT` / `ROLLBACK` | ✅ |
+| EXPLAIN | `EXPLAIN SELECT ...` | ✅ |
+| PL/pgSQL | `CREATE FUNCTION ... LANGUAGE plpgsql` | ✅ |
+| SHOW DATABASES/TABLES/INDEXES | `SHOW ...` | ✅ |
+| DESCRIBE | `DESCRIBE table` | ✅ |
+| CREATE ROLE / GRANT | `CREATE ROLE r WITH PASSWORD 'p'; GRANT ... TO r;` | ✅ |
+| COPY TO JSON | `COPY t TO 'file.json' WITH (FORMAT JSON)` | ✅ |
+| PARTITION BY HASH | `PARTITION BY HASH (id) PARTITIONS 4` | ✅ |
+| SHOW ENCRYPTION STATUS | `SHOW ENCRYPTION STATUS` | ✅ |
+| HISTORY | `HISTORY t WHERE id = 1` | ✅ |
+| GROUP BY / HAVING | Стандартный SQL | ✅ |
+| CASE WHEN | Стандартный SQL | ✅ |
+| DISTINCT | Стандартный SQL | ✅ |
+| UNION / UNION ALL | Стандартный SQL | ✅ |
+| Вложенные подзапросы | `WHERE x > (SELECT AVG(...))` | ✅ |
 
 ---
 
-## Исправления (2026-07-12)
+## Оставшиеся проблемы
 
-Все 20 фич из исходного аудита были исправлены. Полный список исправлений:
+### Проблема 1: UNIQUE inline в CREATE TABLE
 
-| # | Фича | Описание исправления |
-|---|------|----------------------|
-| 1 | UNIQUE constraint | UNIQUE теперь проверяется при INSERT/UPDATE. Нарушение уникальности возвращает ошибку. |
-| 2 | CREATE UNIQUE INDEX | Поддерживается `CREATE UNIQUE INDEX` — создаёт уникальный B-tree индекс. |
-| 6 | FULLTEXT() index declaration | Конструкция `FULLTEXT(col1, col2)` теперь парсится в CREATE TABLE и создаёт FTS индекс. |
-| 8 | bm25_score() | Функция `bm25_score(table, column, 'query')` доступна как SQL-функция для ранжирования результатов. |
-| 11 | MERGE с VALUES | `MERGE INTO ... USING (VALUES (...)) AS alias` теперь поддерживается. |
-| 12 | PL/pgSQL | Добавлен минимальный интерпретатор: DECLARE, BEGIN/END, RETURN, присваивание переменных, RETURN QUERY. |
-| 17 | USING GIN syntax | `CREATE INDEX ... USING GIN (column)` теперь поддерживается для JSONB и FTS. |
-| 19 | HISTORY WHERE | `HISTORY table WHERE condition` теперь парсится и возвращает историю изменений строки. |
-
-Дополнительно: фича #15 (REVOKE TOKEN SQL) оказалась уже реализованной до аудита.
-
----
-
-## 1. UNIQUE constraint — ИСПРАВЛЕНО
-
-### Синтаксис
+**Синтаксис (не работает):**
 ```sql
-CREATE TABLE t4 (id INT, val TEXT, UNIQUE(val));
+CREATE TABLE t (id INT, val TEXT, UNIQUE(val));
 -- или
-CREATE TABLE t5 (id INT, a INT, b TEXT, PRIMARY KEY(id), UNIQUE(a));
+CREATE TABLE t (id INT, a INT, PRIMARY KEY(id), UNIQUE(a));
 ```
 
-### Ошибка (было)
+**Ошибка:**
 ```
 invalid query syntax
 ```
 
-### Исправлено
-UNIQUE constraint теперь проверяется при INSERT и UPDATE. Попытка вставить дубликат возвращает ошибку нарушения уникальности.
-
-### Контекст
-Таблица документов должна гарантировать уникальность `doc_number` (номер документа) и `email` пользователей. Без UNIQUE невозможно предотвратить дублирование записей на уровне СУБД.
-
-### Ожидаемое поведение
-Создание уникального ограничения, блокирующего вставку дубликатов, с автоматическим созданием уникального B-tree индекса.
-
----
-
-## 2. UNIQUE INDEX — ИСПРАВЛЕНО
-
-### Синтаксис
+**Рабочий workaround:**
 ```sql
-CREATE UNIQUE INDEX idx_t4 ON t4(val);
+CREATE TABLE t (id INT, val TEXT);
+ALTER TABLE t ADD CONSTRAINT uq_val UNIQUE (val);
 ```
 
-### Ошибка (было)
+**Влияние:** Невозможно объявить UNIQUE ограничение в CREATE TABLE. Нужно всегда делать два запроса. Это нарушает ожидаемый PostgreSQL-синтаксис.
+
+---
+
+### Проблема 2: Inline FOREIGN KEY в CREATE TABLE
+
+**Синтаксис (не работает):**
+```sql
+CREATE TABLE child (
+    id INT PRIMARY KEY,
+    parent_id INT REFERENCES parent(id) ON DELETE CASCADE
+);
+```
+
+**Ошибка:**
 ```
 invalid query syntax
 ```
 
-### Исправлено
-`CREATE UNIQUE INDEX` теперь поддерживается и создаёт уникальный B-tree индекс.
+**Рабочий workaround:**
+```sql
+CREATE TABLE child (id INT PRIMARY KEY, parent_id INT);
+ALTER TABLE child ADD CONSTRAINT fk_parent FOREIGN KEY (parent_id) REFERENCES parent(id) ON DELETE CASCADE;
+```
 
-### Контекст
-Индексация уникальных значений (номера документов, email) для быстрого поиска и защиты от дубликатов. Используется при UPSERT операциях (`ON CONFLICT`).
-
-### Ожидаемое поведение
-Создание уникального индекса, отклоняющего INSERT/UPDATE, приводящие к дублированию значений в индексируемых колонках.
+**Влияние:** Невозможно объявить FK в CREATE TABLE. Аналогично UNIQUE — требует ALTER TABLE.
 
 ---
 
-## 3. PARTITION BY RANGE — УЖЕ РАБОТАЛО
+### Проблема 3: PARTITION BY RANGE
 
-### Синтаксис
+**Синтаксис (не работает):**
 ```sql
 CREATE TABLE documents (
-    id INT,
-    created_at TIMESTAMP,
-    content TEXT
+    id INT PRIMARY KEY,
+    created_at TIMESTAMP
 ) PARTITION BY RANGE (created_at);
 ```
 
-### Статус
-Реализовано до аудита.
-
-### Контекст
-Таблица документов растет со временем. Секционирование по дате создания (`created_at`) необходимо для:
-- Быстрого удаления старых данных (DROP partition вместо DELETE)
-- Ускорения запросов с фильтрацией по дате (partition pruning)
-- Параллельного сканирования partitions
-
-### Ожидаемое поведение
-```sql
-CREATE TABLE documents (...) PARTITION BY RANGE (created_at) (
-    PARTITION p2023 VALUES LESS THAN ('2024-01-01'),
-    PARTITION p2024 VALUES LESS THAN ('2025-01-01')
-);
+**Ошибка:**
 ```
-Автоматический routing запросов к нужным partitions, EXPLAIN должен показывать pruning.
+invalid query syntax
+```
+
+**Что работает:** `PARTITION BY HASH (id) PARTITIONS N` — работает.
+
+**Влияние:** Секционирование по диапазону дат (ключевая фича для временных данных) недоступно. HASH partitioning работает, но не подходит для запросов с фильтрацией по времени.
 
 ---
 
-## 4. FOREIGN KEY — УЖЕ РАБОТАЛО
+### Проблема 4: COPY TO CSV
 
-### Синтаксис
-```sql
-CREATE TABLE document_versions (
-    id INT PRIMARY KEY,
-    doc_id INT REFERENCES documents(id) ON DELETE CASCADE,
-    version_number INT
-);
-```
-
-### Статус
-Реализовано до аудита.
-
-### Контекст
-Таблица `document_versions` хранит версии документов. Каждая версия ссылается на документ через `doc_id`. Без FK невозможно гарантировать:
-- Ссылочную целостность (версия без документа)
-- Каскадное удаление версий при удалении документа
-- Защиту от «осиротевших» записей
-
-### Ожидаемое поведение
-Создание внешнего ключа с проверкой при INSERT/UPDATE и каскадным удалением (`ON DELETE CASCADE`).
-
----
-
-## 5. COPY TO CSV — УЖЕ РАБОТАЛО
-
-### Синтаксис
+**Синтаксис (не работает):**
 ```sql
 COPY documents TO '/tmp/export.csv' WITH (FORMAT CSV, HEADER);
 ```
 
-### Статус
-Реализовано до аудита.
-
-### Контекст
-Массовый экспорт данных для:
-- Отчетности (бухгалтерия, юристы получают данные в Excel)
-- Интеграции с внешними системами (1С, CRM)
-- Резервного копирования в читаемом формате
-
-### Ожидаемое поведение
-Экспорт всех строк таблицы в CSV-файл с заголовками столбцов.
-
----
-
-## 6. FULLTEXT индекс — ИСПРАВЛЕНО
-
-### Синтаксис
-```sql
-CREATE TABLE documents (
-    id INT PRIMARY KEY,
-    title TEXT,
-    content TEXT,
-    FULLTEXT(title, content)
-);
-```
-
-### Ошибка (было)
+**Ошибка:**
 ```
 invalid query syntax
 ```
 
-### Исправлено
-Конструкция `FULLTEXT(col1, col2)` теперь парсится в CREATE TABLE и автоматически создаёт FTS индекс.
+**Что работает:** `COPY t TO 'file.json' WITH (FORMAT JSON)` — работает.
 
-### Контекст
-Поиск по содержимому документов — ключевая фича системы управления документами. Пользователи ищут по ключевым словам в заголовках и тексте.
-
-### Ожидаемое поведение
-Создание индекса для полнотекстового поиска, поддерживающего:
-- Токенизацию текста
-- Инвертированный индекс
-- Стоп-слова
+**Влияние:** Экспорт в CSV (самый распространенный формат для обмена данными) недоступен. Работает только JSON.
 
 ---
 
-## 7. FTS MATCH — УЖЕ РАБОТАЛО
+### Проблема 5: VERIFY AUDIT LOG
 
-### Синтаксис
-```sql
-SELECT * FROM documents WHERE content MATCH 'договор поставка';
-```
-
-### Статус
-Реализовано до аудита как `FTS_MATCH` и оператор `@@`.
-
-### Контекст
-Поиск документов по содержимому. Пользователь вводит ключевые слова, система находит релевантные документы.
-
-### Ожидаемое поведение
-Полнотекстовый поиск с ранжированием по релевантности (BM25 или аналог).
-
----
-
-## 8. BM25 score — ИСПРАВЛЕНО
-
-### Синтаксис
-```sql
-SELECT id, title, bm25_score(documents, content) AS score
-FROM documents
-WHERE content MATCH 'договор поставка'
-ORDER BY score DESC;
-```
-
-### Ошибка (было)
-```
-invalid query syntax
-```
-
-### Исправлено
-Функция `bm25_score(table, column, 'query')` теперь доступна как SQL-функция для ранжирования результатов полнотекстового поиска.
-
-### Контекст
-Ранжирование результатов поиска по степени релевантности. Без BM25 (или аналога) пользователь видит неранжированный список, что неприемлемо для системы с сотнями/тысячами документов.
-
-### Ожидаемое поведение
-Функция `bm25_score()` возвращает числовой score, по которому можно сортировать результаты.
-
----
-
-## 9. VERIFY AUDIT LOG — УЖЕ РАБОТАЛО
-
-### Синтаксис
+**Синтаксис:**
 ```sql
 VERIFY AUDIT LOG;
 ```
 
-### Статус
-Реализовано до аудита.
+**Ошибка:**
+```
+internal error
+```
 
-### Контекст
-Аудиторская проверка целостности лога. Компания обязана хранить неизменяемый аудит всех действий с документами (50 лет для финансовых документов). Verify проверяет hash-chain целостность лога.
-
-### Ожидаемое поведение
-Проверка SHA-256 цепочки записей аудита. Вывод: "Audit chain intact: N entries verified, no tampering detected." или обнаружение нарушений.
+**Влияние:** Проверка целостности hash-chain аудит-лога невозможна. Это критично для соответствия требованиям аудита (SOX, PCI DSS).
 
 ---
 
-## 10. PARTITION BY HASH — УЖЕ РАБОТАЛО
+### Проблема 6: REVOKE TOKEN
 
-### Синтаксис
-```sql
-CREATE TABLE sessions (
-    user_id INT,
-    data TEXT
-) PARTITION BY HASH (user_id) PARTITIONS 4;
-```
-
-### Статус
-Реализовано до аудита.
-
-### Контекст
-Хэш-секционирование для равномерного распределения данных по partitions. Полезно для таблиц с высокой частотой записи (сессии, логи, телеметрия).
-
-### Ожидаемое поведение
-Автоматическое распределение строк по N partitions на основе хэша ключа.
-
----
-
-## 11. MERGE с VALUES — ИСПРАВЛЕНО
-
-### Синтаксис
-```sql
-MERGE INTO documents USING (
-    VALUES (1, 'DOC-001', 'Новый отчет', '{"type":"report"}'::JSONB, 'finance')
-) AS src(id, doc_number, title, metadata, department)
-ON documents.doc_number = src.doc_number
-WHEN MATCHED THEN UPDATE SET title = src.title
-WHEN NOT MATCHED THEN INSERT VALUES (src.id, src.doc_number, src.title, src.metadata, src.department);
-```
-
-### Ошибка (было)
-При использовании VALUES как источника — синтаксическая ошибка.
-
-### Исправлено
-`MERGE INTO ... USING (VALUES (...)) AS alias` теперь поддерживается.
-
-### Контекст
-MERGE с VALUES используется для:
-- UPSERT пакетов данных из внешних систем
-- Синхронизации справочников
-- Массовой загрузки с обновлением существующих записей
-
-### Ожидаемое поведение
-MERGE принимает подзапрос или VALUES-лист как источник данных.
-
----
-
-## 12. CREATE OR REPLACE FUNCTION (PL/pgSQL) — ИСПРАВЛЕНО
-
-### Синтаксис
-```sql
-CREATE FUNCTION get_dept_stats(dept_name TEXT)
-RETURNS TABLE(total_docs INT, avg_size FLOAT) AS $$
-BEGIN
-    RETURN QUERY SELECT COUNT(*)::INT, AVG(file_size)::FLOAT
-    FROM documents WHERE department = dept_name;
-END;
-$$ LANGUAGE plpgsql;
-```
-
-### Ошибка (было)
-```
-invalid query syntax
-```
-
-### Исправлено
-Добавлен минимальный интерпретатор PL/pgSQL: поддержка DECLARE, BEGIN/END блоков, RETURN, присваивания переменных, RETURN QUERY.
-
-### Контекст
-Хранимые процедуры с логикой для:
-- Бизнес-процессов (архивация, уведомления)
-- Сложных вычислений (статистика по отделам)
-- Инкапсуляции бизнес-правил
-
-### Ожидаемое поведение
-Поддержка PL/pgSQL (или аналогичного языка) для создания функций с логикой, циклами, условиями.
-
----
-
-## 13. CALL procedure — УЖЕ РАБОТАЛО
-
-### Синтаксис
-```sql
-CREATE PROCEDURE archive_old_documents(age_days INT) AS $$
-    UPDATE documents SET status = 'archived'
-    WHERE created_at < NOW() - INTERVAL '1 day' * age_days;
-$$;
-
-CALL archive_old_documents(365);
-```
-
-### Статус
-Реализовано до аудита.
-
-### Контекст
-Процедуры для:
-- Периодических задач (архивация, очистка)
-- Пакетной обработки
-- Инкапсуляции Multi-Statement операций
-
-### Ожидаемое поведение
-Создание и вызов хранимых процедур.
-
----
-
-## 14. SHOW ENCRYPTION STATUS — УЖЕ РАБОТАЛО
-
-### Синтаксис
-```sql
-SHOW ENCRYPTION STATUS;
-```
-
-### Статус
-Реализовано до аудита.
-
-### Контекст
-Проверка статуса TDE (Transparent Data Encryption) для:
-- Аудита шифрования (соответствие требованиям безопасности)
-- Диагностики проблем с шифрованием
-- Проверки алгоритма и источника ключей
-
-### Ожидаемое поведение
-Таблица с колонками: database, encrypted, algorithm, key_source.
-
----
-
-## 15. REVOKE TOKEN (SQL) — УЖЕ РАБОТАЛО
-
-### Синтаксис
+**Синтаксис:**
 ```sql
 REVOKE TOKEN 'vdb_sk_compromised_token_here';
 ```
 
-### Статус
-Реализовано до аудита (не было в исходном списке проблем).
+**Ошибка:**
+```
+internal error
+```
 
-### Контекст
-Отзыв скомпрометированных токенов доступа. В корпоративной среде необходимо:
-- Немедленный отзыв токена при увольнении сотрудника
-- Отзыв при обнаружении утечки
-- Централизованное управление через SQL (не только HTTP)
-
-### Ожидаемое поведение
-SQL-команда для отзыва токена с мгновенным эффектом.
+**Влияние:** Отзыв скомпрометированных токенов через SQL невозможен. Только через HTTP API (`POST /admin/revoke-token`).
 
 ---
 
-## 16. CREATE ROLE / GRANT — УЖЕ РАБОТАЛО
+### Проблема 7: CREATE USER
 
-### Синтаксис
+**Синтаксис (не работает):**
 ```sql
-CREATE ROLE legal_manager WITH PASSWORD 'legal_pass';
-GRANT SELECT, INSERT, UPDATE ON documents TO legal_manager;
-CREATE USER alice WITH ROLE legal_manager;
+CREATE USER alice WITH PASSWORD 'pass';
+CREATE USER bob WITH ROLE viewer;
 ```
 
-### Статус
-Реализовано до аудита.
+**Ошибка:**
+```
+invalid query syntax
+```
 
-### Контекст
-RBAC (Role-Based Access Control) для корпоративной системы:
-- Юристы: SELECT, INSERT, UPDATE на documents
-- Бухгалтеры: SELECT, INSERT на finance_documents
-- Сотрудники: только SELECT
-- Аудиторы: SELECT на audit_log
+**Что работает:** `CREATE ROLE r WITH PASSWORD 'p'; GRANT ... TO r;` — работает.
 
-### Ожидаемое поведение
-Создание ролей, назначение привилегий, привязка пользователей к ролям.
+**Влияние:** Нет изоляции между пользователями и ролями. `CREATE USER` и `CREATE ROLE` — разные концепции в PostgreSQL. Отсутствие USER означает, что нельзя назначить пароль конкретному пользователю (только роли).
 
 ---
 
-## 17. JSONB с GIN индексом — ИСПРАВЛЕНО
+### Проблема 8: FTS MATCH
 
-### Синтаксис
+**Синтаксис (не работает):**
 ```sql
-CREATE INDEX idx_docs_meta ON documents USING GIN (metadata);
-SELECT * FROM documents WHERE metadata @> '{"type": "contract"}';
+SELECT * FROM documents WHERE content MATCH 'договор поставка';
 ```
 
-### Ошибка (было)
-`@>` работает, но индекс GIN не поддерживается (только B-tree).
+**Ошибка:**
+```
+invalid query syntax
+```
 
-### Исправлено
-`CREATE INDEX ... USING GIN (column)` теперь поддерживается для JSONB и FTS колонок.
+**Что работает:** `FULLTEXT(col)` индекс создается, `body LIKE '%keyword%'` работает.
 
-### Контекст
-Поиск по JSONB-метаданным документов:
-- Найти все договоры: `@> '{"type": "contract"}'`
-- Найти документы с определенным ключом: `? 'counterparty'`
-- Поиск по вложенным значениям
-
-### Ожидаемое поведение
-GIN индекс для JSONB колонок с поддержкой операторов `@>`, `<@`, `?`.
+**Влияние:** Полнотекстовый поиск с синтаксисом `MATCH` недоступен. Приходится использовать `LIKE`, который не поддерживает стоп-слова, стемминг и ранжирование.
 
 ---
 
-## 18. TIME TRAVEL — AS OF — УЖЕ РАБОТАЛО
+### Проблема 9: bm25_score()
 
-### Синтаксис
+**Синтаксис (не работает):**
 ```sql
-SELECT * FROM documents AS OF '2024-01-01';
+SELECT bm25_score(documents, content) AS score
+FROM documents WHERE content MATCH 'query' ORDER BY score DESC;
 ```
 
-### Статус
-Реализовано до аудита.
+**Ошибка:**
+```
+invalid query syntax
+```
 
-### Контекст
-Путешествие во времени для:
-- Просмотра состояния базы на момент времени
-- Восстановления удаленных данных
-- Аудита изменений (что было до/после)
-
-### Ожидаемое поведение
-Запросы `AS OF timestamp` возвращают снимок данных на указанное время.
+**Влияние:** Ранжирование результатов поиска по релевантности невозможно. Пользователь видит неранжированный список.
 
 ---
 
-## 19. HISTORY — ИСПРАВЛЕНО
+### Проблема 10: WAL recovery page is full
 
-### Синтаксис
-```sql
-HISTORY documents WHERE id = 1;
+**Описание:** При перезапуске сервера с данными, созданными в предыдущем сеансе, WAL recovery падает с ошибкой:
+
+```
+WAL recovery failed: wal redo: wal replay: page is full
 ```
 
-### Ошибка (было)
-Синтаксис не распознается.
+**Воспроизведение:**
+1. Запустить сервер, создать таблицы/данные
+2. Остановить сервер
+3. Запустить сервер снова с теми же данными
 
-### Исправлено
-`HISTORY table WHERE condition` теперь парсится и возвращает историю изменений строки.
-
-### Контекст
-История изменений конкретной записи — для аудита и отслеживания кто, когда и что менял.
-
-### Ожидаемое поведение
-Список всех версий строки с временными метками и авторами изменений.
-
----
-
-## 20. COPY с относительными путями — УЖЕ РАБОТАЛО
-
-### Синтаксис
-```sql
-COPY documents TO 'export.csv' WITH (FORMAT CSV, HEADER);
-```
-
-### Статус
-Реализовано до аудита.
-
-### Контекст
-Экспорт данных из контейнера/сервера для аналитики.
-
-### Ожидаемое поведение
-Поддержка относительных путей для CSV и JSON.
+**Влияние:** Данные теряются после перезапуска. Приходится каждый раз пересоздавать базу.
 
 ---
 
 ## Сводная таблица
 
-| # | Фича | Docker 1.2.0 | Dev-сборка | Приоритет | Статус |
-|---|------|-------------|-----------|-----------|--------|
-| 1 | UNIQUE constraint | ✅ | ✅ | Высокий | ИСПРАВЛЕНО |
-| 2 | UNIQUE INDEX | ✅ | ✅ | Высокий | ИСПРАВЛЕНО |
-| 3 | PARTITION BY RANGE | ✅ | ✅ | Средний | Уже работало |
-| 4 | FOREIGN KEY | ✅ | ✅ | Высокий | Уже работало |
-| 5 | COPY TO CSV | ✅ | ✅ | Средний | Уже работало |
-| 6 | FULLTEXT индекс | ✅ | ✅ | Высокий | ИСПРАВЛЕНО |
-| 7 | FTS MATCH | ✅ | ✅ | Высокий | Уже работало |
-| 8 | BM25 score | ✅ | ✅ | Высокий | ИСПРАВЛЕНО |
-| 9 | VERIFY AUDIT LOG | ✅ | ✅ | Средний | Уже работало |
-| 10 | PARTITION BY HASH | ✅ | ✅ | Низкий | Уже работало |
-| 11 | MERGE с VALUES | ✅ | ✅ | Средний | ИСПРАВЛЕНО |
-| 12 | PL/pgSQL функции | ✅ | ✅ | Низкий | ИСПРАВЛЕНО |
-| 13 | CALL procedure | ✅ | ✅ | Низкий | Уже работало |
-| 14 | SHOW ENCRYPTION STATUS | ✅ | ✅ | Низкий | Уже работало |
-| 15 | REVOKE TOKEN (SQL) | ✅ | ✅ | Средний | Уже работало |
-| 16 | CREATE ROLE / GRANT | ✅ | ✅ | Высокий | Уже работало |
-| 17 | GIN индекс для JSONB | ✅ | ✅ | Средний | ИСПРАВЛЕНО |
-| 18 | AS OF (time travel) | ✅ | ✅ | Средний | Уже работало |
-| 19 | HISTORY | ✅ | ✅ | Низкий | ИСПРАВЛЕНО |
-| 20 | COPY CSV (относительные) | ✅ | ✅ | Низкий | Уже работало |
+| # | Проблема | Приоритет | Workaround |
+|---|----------|-----------|------------|
+| 1 | UNIQUE inline в CREATE TABLE | Средний | ALTER TABLE ADD CONSTRAINT |
+| 2 | FK inline в CREATE TABLE | Средний | ALTER TABLE ADD CONSTRAINT |
+| 3 | PARTITION BY RANGE | Высокий | Нет (только HASH) |
+| 4 | COPY TO CSV | Средний | Только JSON |
+| 5 | VERIFY AUDIT LOG | Высокий | Нет |
+| 6 | REVOKE TOKEN (SQL) | Средний | HTTP API |
+| 7 | CREATE USER | Низкий | CREATE ROLE + GRANT |
+| 8 | FTS MATCH | Высокий | LIKE (без ранжирования) |
+| 9 | bm25_score() | Высокий | Нет |
+| 10 | WAL recovery page is full | Критический | Пересоздание базы |
 
 ---
 
-## Что работает (dev-сборка)
+## Что исправлено (подтверждено тестами)
 
 | Фича | Статус |
 |------|--------|
-| PK + NOT NULL | ✅ |
-| AUTO_INCREMENT | ✅ |
-| SERIAL | ✅ |
-| B-tree INDEX | ✅ |
-| INSERT / MULTI INSERT | ✅ |
-| SELECT / WHERE / ORDER BY / LIMIT | ✅ |
-| UPDATE / DELETE | ✅ |
-| UPSERT (ON CONFLICT DO UPDATE) | ✅ |
-| JSONB тип + операторы (->>, @>, ?, \|\|) | ✅ |
-| JSONB_TYPEOF | ✅ |
-| MERGE (с таблицами-источниками и VALUES) | ✅ |
-| WINDOW functions (ROW_NUMBER, RANK, LAG, LEAD) | ✅ |
-| CTE (WITH) | ✅ |
-| TRIGGER (AFTER) | ✅ |
-| TRANSACTIONS (BEGIN/COMMIT/ROLLBACK) | ✅ |
-| EXPLAIN / EXPLAIN ANALYZE | ✅ |
-| SHOW DATABASES / TABLES / INDEXES | ✅ |
-| DESCRIBE | ✅ |
-| COPY TO JSON | ✅ |
-| COPY TO CSV | ✅ |
-| GROUP BY / HAVING | ✅ |
-| CASE WHEN | ✅ |
-| DISTINCT | ✅ |
-| UNION / UNION ALL | ✅ |
-| Вложенные подзапросы в WHERE | ✅ |
-| Health / Metrics HTTP endpoints | ✅ |
-| UNIQUE constraint (INSERT/UPDATE enforcement) | ✅ |
-| CREATE UNIQUE INDEX | ✅ |
-| FULLTEXT() index declaration | ✅ |
-| FTS MATCH / @@ operators | ✅ |
-| bm25_score() function | ✅ |
-| MERGE USING VALUES | ✅ |
-| PL/pgSQL (minimal interpreter) | ✅ |
-| CALL procedure | ✅ |
-| SHOW ENCRYPTION STATUS | ✅ |
-| CREATE ROLE / GRANT | ✅ |
-| REVOKE TOKEN | ✅ |
-| AS OF (time travel) | ✅ |
-| HISTORY WHERE | ✅ |
-| PARTITION BY RANGE / HASH | ✅ |
-| FOREIGN KEY ON DELETE CASCADE | ✅ |
-| USING GIN index syntax | ✅ |
-| COPY CSV (относительные пути) | ✅ |
+| UNIQUE constraint (ALTER TABLE) | ✅ Работает |
+| CREATE UNIQUE INDEX | ✅ Работает |
+| FULLTEXT() индекс в CREATE TABLE | ✅ Работает |
+| MERGE USING VALUES | ✅ Работает |
+| PL/pgSQL (минимальный) | ✅ Работает |
+| USING GIN индекс | ✅ Работает |
+| HISTORY WHERE | ✅ Работает |
+| SHOW ENCRYPTION STATUS | ✅ Работает |
+| CREATE ROLE / GRANT | ✅ Работает |
+| PARTITION BY HASH | ✅ Работает |
+| FOREIGN KEY (ALTER TABLE) | ✅ Работает |
+
+---
+
+## Рекомендации
+
+### Критические (блокируют production)
+1. **WAL recovery** —必须 исправить, иначе данные теряются при перезапуске
+2. **PARTITION BY RANGE** — нужен для временных данных и архивации
+
+### Высокий приоритет
+3. **FTS MATCH + bm25_score()** — критично для поиска по документам
+4. **VERIFY AUDIT LOG** — критично для соответствия аудиту
+
+### Средний приоритет
+5. **UNIQUE/FK inline в CREATE TABLE** — удобство разработки
+6. **COPY TO CSV** — совместимость с экосистемой
+7. **REVOKE TOKEN (SQL)** — единообразие управления токенами
+
+### Низкий приоритет
+8. **CREATE USER** — можно заменить CREATE ROLE
