@@ -294,6 +294,15 @@ func executeUserDefinedFunction(dbName, funcName string, args []interface{}, ctx
 		return executeWASMFunction(body, opts, args)
 	}
 
+	// PL/pgSQL UDF path
+	if strings.EqualFold(language, "plpgsql") {
+		paramNames := make([]string, len(params))
+		for i, p := range params {
+			paramNames[i], _ = p.(string)
+		}
+		return ExecutePLPGSQL(body, paramNames, args, ctx)
+	}
+
 	// SQL UDF path
 	bodyStmt, err := parser.Parse(body)
 	if err != nil {

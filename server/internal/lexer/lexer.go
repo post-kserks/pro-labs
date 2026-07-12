@@ -361,7 +361,28 @@ func (l *Lexer) NextToken() Token {
 		tok = l.newToken(TOKEN_SLASH, "/", start)
 		l.readChar()
 	case '$':
-		l.readChar() // skip $
+		l.readChar() // skip first $
+		if l.ch == '$' {
+			// Dollar-quoted string: $$...$$
+			l.readChar() // skip second $
+			var b strings.Builder
+			for l.ch != 0 {
+				if l.ch == '$' {
+					// Check for closing $$
+					nextPos := l.readPosition
+					if nextPos < len(l.input) && l.input[nextPos] == '$' {
+						l.readChar() // skip first closing $
+						l.readChar() // skip second closing $
+						tok = l.newToken(TOKEN_STRING_LIT, b.String(), start)
+						return tok
+					}
+				}
+				b.WriteRune(l.ch)
+				l.readChar()
+			}
+			tok = l.newToken(TOKEN_ILLEGAL, "unterminated dollar-quoted string", start)
+			return tok
+		}
 		startNum := l.position
 		for isDigit(l.ch) {
 			l.readChar()

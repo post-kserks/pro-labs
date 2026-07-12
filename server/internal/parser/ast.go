@@ -54,15 +54,17 @@ type ColumnDef struct {
 	Unique        bool
 	AutoIncrement bool
 	Encrypted     bool
+	FullText      bool // inline FULLTEXT column constraint
 }
 
 type CreateTableStatement struct {
-	TableName   string
-	Columns     []ColumnDef
-	InferSchema bool
-	IfNotExists bool
-	Encrypted   bool
-	PartitionBy *PartitionSpec // nil = no partitioning
+	TableName       string
+	Columns         []ColumnDef
+	InferSchema     bool
+	IfNotExists     bool
+	Encrypted       bool
+	PartitionBy     *PartitionSpec // nil = no partitioning
+	FullTextColumns []string       // FULLTEXT(col1, col2) table constraint
 }
 
 // PartitionSpec describes how a table is partitioned.

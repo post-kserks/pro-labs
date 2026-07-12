@@ -644,22 +644,68 @@ func (p *sqlParser) parseCreateTable() (Statement, error) {
 	}
 
 	columns := make([]ColumnDef, 0, 8)
+	var fullTextColumns []string
 	for {
+		// Handle comma separator (between columns or after inline constraint)
+		if p.current().Type == lexer.TOKEN_COMMA {
+			p.advance()
+		}
+
+		// Check for FULLTEXT table constraint: FULLTEXT(col1, col2)
+		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "FULLTEXT" {
+			if p.peek().Type == lexer.TOKEN_LPAREN {
+				// Table constraint: FULLTEXT(col1, col2)
+				p.advance() // FULLTEXT
+				if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+					return nil, err
+				}
+				ftCols, err := p.parseIdentifierListUntilRParen("FULLTEXT column name")
+				if err != nil {
+					return nil, err
+				}
+				if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+					return nil, err
+				}
+				fullTextColumns = append(fullTextColumns, ftCols...)
+				// After FULLTEXT constraint, expect comma or closing paren
+				if p.current().Type == lexer.TOKEN_COMMA {
+					continue // comma handled at loop start
+				}
+				if p.current().Type == lexer.TOKEN_RPAREN {
+					p.advance()
+					break
+				}
+				return nil, p.expectedError("',' or ')'", p.current())
+			} else {
+				// Inline constraint: TEXT FULLTEXT — mark last column
+				if len(columns) == 0 {
+					return nil, p.syntaxError(p.current(), "FULLTEXT cannot appear as first column constraint")
+				}
+				p.advance() // consume FULLTEXT
+				columns[len(columns)-1].FullText = true
+				// Expect comma or closing paren after inline FULLTEXT
+				if p.current().Type == lexer.TOKEN_COMMA {
+					continue // comma handled at loop start
+				}
+				if p.current().Type == lexer.TOKEN_RPAREN {
+					p.advance()
+					break
+				}
+				return nil, p.expectedError("',' or ')'", p.current())
+			}
+		}
+
+		// Check for closing paren (end of column list)
+		if p.current().Type == lexer.TOKEN_RPAREN {
+			p.advance()
+			break
+		}
+
 		col, err := p.parseColumnDef()
 		if err != nil {
 			return nil, err
 		}
 		columns = append(columns, *col)
-
-		if p.current().Type == lexer.TOKEN_COMMA {
-			p.advance()
-			continue
-		}
-		if p.current().Type == lexer.TOKEN_RPAREN {
-			p.advance()
-			break
-		}
-		return nil, p.expectedError("',' or ')'", p.current())
 	}
 
 	if len(columns) == 0 {
@@ -684,7 +730,7 @@ func (p *sqlParser) parseCreateTable() (Statement, error) {
 		partitionBy = spec
 	}
 
-	return &CreateTableStatement{TableName: tableName, Columns: columns, IfNotExists: ifNotExists, Encrypted: encrypted, PartitionBy: partitionBy}, nil
+	return &CreateTableStatement{TableName: tableName, Columns: columns, IfNotExists: ifNotExists, Encrypted: encrypted, PartitionBy: partitionBy, FullTextColumns: fullTextColumns}, nil
 }
 
 func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
@@ -807,6 +853,12 @@ func (p *sqlParser) parseColumnDef() (*ColumnDef, error) {
 	if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "UNIQUE" {
 		p.advance()
 		col.Unique = true
+	}
+
+	// Inline FULLTEXT column constraint: content TEXT FULLTEXT
+	if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "FULLTEXT" {
+		p.advance()
+		col.FullText = true
 	}
 
 	if p.current().Type == lexer.TOKEN_NOT && p.peek().Type == lexer.TOKEN_NULL {

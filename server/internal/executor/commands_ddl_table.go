@@ -83,6 +83,25 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 
+	// Auto-create FTS indexes for FULLTEXT columns
+	if len(c.stmt.FullTextColumns) > 0 {
+		for _, col := range c.stmt.FullTextColumns {
+			indexName := "fts_" + c.stmt.TableName + "_" + col
+			if err := ctx.Storage.CreateIndex(dbName, c.stmt.TableName, indexName, col, "GIN"); err != nil {
+				return nil, fmt.Errorf("create fulltext index for column '%s': %w", col, err)
+			}
+		}
+	}
+	// Also collect inline FULLTEXT column constraints
+	for _, col := range c.stmt.Columns {
+		if col.FullText {
+			indexName := "fts_" + c.stmt.TableName + "_" + col.Name
+			if err := ctx.Storage.CreateIndex(dbName, c.stmt.TableName, indexName, col.Name, "GIN"); err != nil {
+				return nil, fmt.Errorf("create fulltext index for column '%s': %w", col.Name, err)
+			}
+		}
+	}
+
 	// If partitioned, create physical partition tables
 	if schema.PartitionBy != nil {
 		pt := storage.NewPartitionedTable(&schema)

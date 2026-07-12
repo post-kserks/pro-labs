@@ -4187,3 +4187,74 @@ func TestParserDepthLimitDefault(t *testing.T) {
 		t.Fatalf("defaultMaxParserDepth = %d, want 32", defaultMaxParserDepth)
 	}
 }
+
+func TestParseCreateTableWithFullTextConstraint(t *testing.T) {
+	stmt, err := Parse("CREATE TABLE t (id INT, content TEXT, FULLTEXT(content));")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	cts, ok := stmt.(*CreateTableStatement)
+	if !ok {
+		t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+	}
+	if cts.TableName != "t" {
+		t.Fatalf("expected table name 't', got '%s'", cts.TableName)
+	}
+	if len(cts.Columns) != 2 {
+		t.Fatalf("expected 2 columns, got %d", len(cts.Columns))
+	}
+	if len(cts.FullTextColumns) != 1 || cts.FullTextColumns[0] != "content" {
+		t.Fatalf("expected FullTextColumns=['content'], got %v", cts.FullTextColumns)
+	}
+}
+
+func TestParseCreateTableWithFullTextMultiColumn(t *testing.T) {
+	stmt, err := Parse("CREATE TABLE t (id INT, title TEXT, content TEXT, FULLTEXT(title, content));")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	cts, ok := stmt.(*CreateTableStatement)
+	if !ok {
+		t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+	}
+	if len(cts.Columns) != 3 {
+		t.Fatalf("expected 3 columns, got %d", len(cts.Columns))
+	}
+	if len(cts.FullTextColumns) != 2 || cts.FullTextColumns[0] != "title" || cts.FullTextColumns[1] != "content" {
+		t.Fatalf("expected FullTextColumns=['title', 'content'], got %v", cts.FullTextColumns)
+	}
+}
+
+func TestParseCreateTableWithInlineFullText(t *testing.T) {
+	stmt, err := Parse("CREATE TABLE t (id INT, content TEXT FULLTEXT);")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	cts, ok := stmt.(*CreateTableStatement)
+	if !ok {
+		t.Fatalf("expected *CreateTableStatement, got %T", stmt)
+	}
+	if len(cts.Columns) != 2 {
+		t.Fatalf("expected 2 columns, got %d", len(cts.Columns))
+	}
+	if !cts.Columns[1].FullText {
+		t.Fatal("expected column 'content' to have FullText=true")
+	}
+}
+
+func TestParseCreateTableExistingTestsStillPass(t *testing.T) {
+	queries := []string{
+		"CREATE TABLE heroes (id INT, name VARCHAR(100), alive BOOL);",
+		"CREATE TABLE IF NOT EXISTS t1 (a INT, b TEXT);",
+		"CREATE TABLE t2 (id INT PRIMARY KEY, val FLOAT NOT NULL);",
+		"CREATE TABLE t3 (id INT, val TEXT ENCRYPTED);",
+		"CREATE TABLE t4 (id INT, val TEXT, FULLTEXT(val));",
+	}
+	for _, query := range queries {
+		t.Run(query, func(t *testing.T) {
+			if _, err := Parse(query); err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", query, err)
+			}
+		})
+	}
+}
