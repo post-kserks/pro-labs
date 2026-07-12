@@ -129,6 +129,12 @@ func (m *mockStorageEngine) CreateIndex(dbName, tableName, indexName, column str
 func (m *mockStorageEngine) CreateIndexMulti(dbName, tableName, indexName string, columns []string) error {
 	return nil
 }
+func (m *mockStorageEngine) CreateIndexUnique(dbName, tableName, indexName, column string) error {
+	return nil
+}
+func (m *mockStorageEngine) CreateIndexMultiUnique(dbName, tableName, indexName string, columns []string) error {
+	return nil
+}
 func (m *mockStorageEngine) DropIndex(dbName, indexName string) error { return nil }
 func (m *mockStorageEngine) SetTableRLS(dbName, tableName string, enabled bool) error {
 	return nil

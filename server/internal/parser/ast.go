@@ -312,6 +312,7 @@ type CreateIndexStatement struct {
 	TableName string
 	Column    string
 	Columns   []string // multi-column index
+	Unique    bool
 }
 
 type DropIndexStatement struct {
@@ -453,6 +454,11 @@ type RevokeStatement struct {
 	From       string
 }
 
+// RevokeTokenStatement represents "REVOKE TOKEN 'xxx'".
+type RevokeTokenStatement struct {
+	Token string
+}
+
 func (*CreateDatabaseStatement) statementNode()       {}
 func (*DropDatabaseStatement) statementNode()         {}
 func (*UseDatabaseStatement) statementNode()          {}
@@ -490,6 +496,7 @@ func (*CreateRoleStatement) statementNode()           {}
 func (*DropRoleStatement) statementNode()             {}
 func (*GrantStatement) statementNode()                {}
 func (*RevokeStatement) statementNode()               {}
+func (*RevokeTokenStatement) statementNode()           {}
 func (*CTEStatement) statementNode()                  {}
 func (*CreateViewStatement) statementNode()           {}
 func (*DropViewStatement) statementNode()             {}
@@ -539,6 +546,7 @@ func (*CreateRoleStatement) StatementType() string           { return "CREATE_RO
 func (*DropRoleStatement) StatementType() string             { return "DROP_ROLE" }
 func (*GrantStatement) StatementType() string                { return "GRANT" }
 func (*RevokeStatement) StatementType() string               { return "REVOKE" }
+func (*RevokeTokenStatement) StatementType() string          { return "REVOKE_TOKEN" }
 func (*CTEStatement) StatementType() string                  { return "CTE" }
 func (*CreateViewStatement) StatementType() string           { return "CREATE_VIEW" }
 func (*DropViewStatement) StatementType() string             { return "DROP_VIEW" }

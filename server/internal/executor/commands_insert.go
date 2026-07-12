@@ -129,6 +129,11 @@ func (c *InsertCommand) fastPathInsert(ctx *ExecutionContext) (*Result, error) {
 		}
 	}
 
+	// Validate UNIQUE constraints
+	if err := enforceUniqueConstraints(dbName, c.stmt.TableName, schema, rowsToInsert, ctx); err != nil {
+		return nil, err
+	}
+
 	affected, err := ctx.Storage.InsertRows(dbName, c.stmt.TableName, rowsToInsert)
 	if err != nil {
 		return nil, err
@@ -251,6 +256,11 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		if err := enforceCheckConstraints(schema, row); err != nil {
 			return nil, fmt.Errorf("row %d: %w", i, err)
 		}
+	}
+
+	// Validate UNIQUE constraints
+	if err := enforceUniqueConstraints(dbName, c.stmt.TableName, schema, rowsToInsert, ctx); err != nil {
+		return nil, err
 	}
 
 	if c.stmt.OnConflict != nil {

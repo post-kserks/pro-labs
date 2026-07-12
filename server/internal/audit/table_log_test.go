@@ -253,6 +253,14 @@ func (m *mockStorage) CreateIndexMulti(dbName, tableName, indexName string, colu
 	return nil
 }
 
+func (m *mockStorage) CreateIndexUnique(dbName, tableName, indexName, column string) error {
+	return nil
+}
+
+func (m *mockStorage) CreateIndexMultiUnique(dbName, tableName, indexName string, columns []string) error {
+	return nil
+}
+
 func (m *mockStorage) DropIndex(dbName, indexName string) error {
 	return nil
 }

@@ -447,6 +447,14 @@ func (m *MockStorage) CreateIndexMulti(dbName, tableName, indexName string, colu
 	return m.CreateIndex(dbName, tableName, indexName, columns[0])
 }
 
+func (m *MockStorage) CreateIndexUnique(dbName, tableName, indexName, column string) error {
+	return m.CreateIndex(dbName, tableName, indexName, column)
+}
+
+func (m *MockStorage) CreateIndexMultiUnique(dbName, tableName, indexName string, columns []string) error {
+	return m.CreateIndexMulti(dbName, tableName, indexName, columns)
+}
+
 func (m *MockStorage) DropIndex(dbName, indexName string) error {
 	dbIdx := m.indexes[dbName]
 	if dbIdx == nil {

@@ -263,6 +263,11 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		return nil, err
 	}
 
+	// Validate UNIQUE constraints on updated rows
+	if err := enforceUniqueConstraintsOnUpdate(dbName, c.stmt.TableName, schema, indices, newValues, ctx); err != nil {
+		return nil, err
+	}
+
 	affected, err := ctx.Storage.UpdateRowsDirect(dbName, c.stmt.TableName, indices, newValues)
 	if err != nil {
 		return nil, err

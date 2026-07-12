@@ -39,6 +39,7 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			ComputedExpr:  parser.FormatExpression(column.Computed),
 			PrimaryKey:    column.PrimaryKey,
 			NotNull:       column.NotNull,
+			Unique:        column.Unique,
 			EnumValues:    column.EnumValues,
 			AutoIncrement: column.AutoIncrement,
 		}
@@ -364,7 +365,12 @@ func (c *CreateIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	if len(c.stmt.Columns) > 1 {
-		if err := ctx.Storage.CreateIndexMulti(dbName, c.stmt.TableName, c.stmt.IndexName, c.stmt.Columns); err != nil {
+		if c.stmt.Unique {
+			err = ctx.Storage.CreateIndexMultiUnique(dbName, c.stmt.TableName, c.stmt.IndexName, c.stmt.Columns)
+		} else {
+			err = ctx.Storage.CreateIndexMulti(dbName, c.stmt.TableName, c.stmt.IndexName, c.stmt.Columns)
+		}
+		if err != nil {
 			return nil, err
 		}
 		if ctx.Session.AuditLog != nil {
@@ -380,7 +386,12 @@ func (c *CreateIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if column == "" && len(c.stmt.Columns) == 1 {
 		column = c.stmt.Columns[0]
 	}
-	if err := ctx.Storage.CreateIndex(dbName, c.stmt.TableName, c.stmt.IndexName, column); err != nil {
+	if c.stmt.Unique {
+		err = ctx.Storage.CreateIndexUnique(dbName, c.stmt.TableName, c.stmt.IndexName, column)
+	} else {
+		err = ctx.Storage.CreateIndex(dbName, c.stmt.TableName, c.stmt.IndexName, column)
+	}
+	if err != nil {
 		return nil, err
 	}
 	if ctx.Session.AuditLog != nil {

@@ -1,9 +1,24 @@
 package parser
 
-import "vaultdb/internal/lexer"
+import (
+	"strings"
+
+	"vaultdb/internal/lexer"
+)
 
 func (p *sqlParser) parseCreateIndex() (Statement, error) {
-	p.advance()
+	// Check for optional UNIQUE keyword before INDEX
+	unique := false
+	if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "UNIQUE" {
+		unique = true
+		p.advance()
+	}
+
+	// Now we should be at INDEX
+	if err := p.consume(lexer.TOKEN_INDEX, "INDEX"); err != nil {
+		return nil, err
+	}
+
 	indexName, err := p.consumeIdent("index name")
 	if err != nil {
 		return nil, err
@@ -28,6 +43,7 @@ func (p *sqlParser) parseCreateIndex() (Statement, error) {
 	result := &CreateIndexStatement{
 		IndexName: indexName,
 		TableName: tableName,
+		Unique:    unique,
 	}
 	if len(columns) == 1 {
 		result.Column = columns[0]

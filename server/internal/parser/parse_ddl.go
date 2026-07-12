@@ -305,8 +305,13 @@ func (p *sqlParser) parseShow() (Statement, error) {
 		return stmt, nil
 	case lexer.TOKEN_INDEXES:
 		p.advance()
-		if err := p.consume(lexer.TOKEN_ON, "ON"); err != nil {
-			return nil, err
+		// Accept both ON and FROM for SHOW INDEXES
+		if p.current().Type == lexer.TOKEN_ON {
+			p.advance()
+		} else if p.current().Type == lexer.TOKEN_FROM {
+			p.advance()
+		} else {
+			return nil, p.expectedError("ON or FROM", p.current())
 		}
 		tableName, err := p.consumeIdent("table name")
 		if err != nil {
@@ -366,6 +371,10 @@ func (p *sqlParser) parseCreate() (Statement, error) {
 	case lexer.TOKEN_IDENT:
 		if strings.ToUpper(p.current().Literal) == "ROLE" {
 			return p.parseCreateRole()
+		}
+		// Handle CREATE UNIQUE INDEX
+		if strings.ToUpper(p.current().Literal) == "UNIQUE" {
+			return p.parseCreateIndex()
 		}
 		return nil, p.expectedError("DATABASE, TABLE, VIEW, INDEX or ROLE", p.current())
 	default:
@@ -1194,6 +1203,18 @@ func (p *sqlParser) parseGrant() (Statement, error) {
 
 func (p *sqlParser) parseRevoke() (Statement, error) {
 	p.advance() // REVOKE
+
+	// REVOKE TOKEN 'xxx' — revoke an auth token.
+	if p.current().Type == lexer.TOKEN_TOKEN {
+		p.advance() // TOKEN
+		tok := p.current()
+		if tok.Type != lexer.TOKEN_STRING_LIT {
+			return nil, p.expectedError("token string literal", tok)
+		}
+		tokenStr := tok.Literal
+		p.advance()
+		return &RevokeTokenStatement{Token: tokenStr}, nil
+	}
 
 	privileges, err := p.parsePrivilegeList()
 	if err != nil {
