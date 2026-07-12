@@ -622,6 +622,10 @@ func (p *sqlParser) parseCreateRole() (Statement, error) {
 			}
 			password = p.current().Literal
 			p.advance()
+		} else if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "ROLE" {
+			// CREATE USER ... WITH ROLE <role> — consume and ignore for now
+			p.advance() // ROLE
+			p.consumeIdent("role name")
 		}
 	}
 	return &CreateRoleStatement{Name: name, Password: password}, nil
