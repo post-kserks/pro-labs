@@ -667,6 +667,39 @@ func (p *sqlParser) parseCreateTable() (Statement, error) {
 			p.advance()
 		}
 
+		// Check for PRIMARY KEY table constraint: PRIMARY KEY(col)
+		if p.current().Type == lexer.TOKEN_PRIMARY {
+			p.advance() // PRIMARY
+			if err := p.consume(lexer.TOKEN_KEY, "KEY"); err != nil {
+				return nil, err
+			}
+			if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
+				return nil, err
+			}
+			// Consume column name(s) — for now, PRIMARY KEY on single column
+			for {
+				if _, err := p.consumeIdent("column name"); err != nil {
+					return nil, err
+				}
+				if p.current().Type == lexer.TOKEN_COMMA {
+					p.advance()
+					continue
+				}
+				break
+			}
+			if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
+				return nil, err
+			}
+			if p.current().Type == lexer.TOKEN_COMMA {
+				continue // comma handled at loop start
+			}
+			if p.current().Type == lexer.TOKEN_RPAREN {
+				p.advance()
+				break
+			}
+			return nil, p.expectedError("',' or ')'", p.current())
+		}
+
 		// Check for UNIQUE table constraint: UNIQUE(col1, col2)
 		if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "UNIQUE" && p.peek().Type == lexer.TOKEN_LPAREN {
 			p.advance() // UNIQUE

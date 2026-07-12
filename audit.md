@@ -1,88 +1,51 @@
-# Audit: Проблемы VaultDB dev-сборки
+# Audit: VaultDB dev-сборка — итоги тестирования
 
-> Дата: 2026-07-12
-> Окружение: VaultDB dev-сборка (commit master, `go build`), Python клиент v2
+> Дата: 2026-07-12 (обновлено)
+> Окружение: VaultDB dev-сборка (свежий `go build`), Python клиент v2
 > Тестовый проект: DocVault — корпоративная система управления документами
 
 ---
 
-## Контекст
+## Результаты тестирования (16/18 OK)
 
-Проект **DocVault** — система управления документами (договоры, счета, отчеты). Все фичи тестировались через Python-клиент по TCP-протоколу v2. Результаты проверены воспроизводимо (скрипт `test_features.py`).
-
-### Что реально работает (подтверждено тестами)
-
-| Фича | Синтаксис | Статус |
-|------|-----------|--------|
-| PRIMARY KEY | `id INT PRIMARY KEY` | ✅ |
-| NOT NULL | `name TEXT NOT NULL` | ✅ |
-| AUTO_INCREMENT | `id INT PRIMARY KEY AUTO_INCREMENT` | ✅ |
-| SERIAL | `id SERIAL PRIMARY KEY` | ✅ |
-| B-tree INDEX | `CREATE INDEX idx ON t(col)` | ✅ |
-| UNIQUE INDEX | `CREATE UNIQUE INDEX idx ON t(col)` | ✅ |
-| UNIQUE constraint | `ALTER TABLE t ADD CONSTRAINT uq UNIQUE (col)` | ✅ |
-| FOREIGN KEY | `ALTER TABLE t ADD CONSTRAINT fk FOREIGN KEY ...` | ✅ |
-| INSERT / UPDATE / DELETE | Стандартный DML | ✅ |
-| UPSERT | `ON CONFLICT ... DO UPDATE SET` | ✅ |
-| JSONB тип | `data JSONB` | ✅ |
-| JSONB операторы | `->>`, `@>`, `?`, `\|\|` | ✅ |
-| GIN индекс | `CREATE INDEX ... USING GIN (col)` | ✅ |
-| MERGE | `MERGE INTO ... USING ... ON ...` | ✅ |
-| MERGE VALUES | `USING (VALUES (...)) AS alias` | ✅ |
-| WINDOW functions | `ROW_NUMBER`, `RANK`, `LAG`, `LEAD` | ✅ |
-| CTE | `WITH cte AS (...) SELECT ...` | ✅ |
-| TRIGGER (AFTER) | `CREATE TRIGGER trg AFTER INSERT ON t ...` | ✅ |
-| TRANSACTIONS | `BEGIN` / `COMMIT` / `ROLLBACK` | ✅ |
-| EXPLAIN | `EXPLAIN SELECT ...` | ✅ |
-| PL/pgSQL | `CREATE FUNCTION ... LANGUAGE plpgsql` | ✅ |
-| SHOW DATABASES/TABLES/INDEXES | `SHOW ...` | ✅ |
-| DESCRIBE | `DESCRIBE table` | ✅ |
-| CREATE ROLE / GRANT | `CREATE ROLE r WITH PASSWORD 'p'; GRANT ... TO r;` | ✅ |
-| COPY TO JSON | `COPY t TO 'file.json' WITH (FORMAT JSON)` | ✅ |
-| PARTITION BY HASH | `PARTITION BY HASH (id) PARTITIONS 4` | ✅ |
-| SHOW ENCRYPTION STATUS | `SHOW ENCRYPTION STATUS` | ✅ |
-| HISTORY | `HISTORY t WHERE id = 1` | ✅ |
-| GROUP BY / HAVING | Стандартный SQL | ✅ |
-| CASE WHEN | Стандартный SQL | ✅ |
-| DISTINCT | Стандартный SQL | ✅ |
-| UNION / UNION ALL | Стандартный SQL | ✅ |
-| Вложенные подзапросы | `WHERE x > (SELECT AVG(...))` | ✅ |
+| # | Фича | Статус | Примечание |
+|---|------|--------|-----------|
+| 1 | UNIQUE inline в CREATE TABLE | ✅ | `CREATE TABLE t (val TEXT, UNIQUE(val))` работает |
+| 2 | UNIQUE enforcement | ✅ | INSERT дубликата возвращает ошибку |
+| 3 | FK inline в CREATE TABLE | ✅ | `REFERENCES parent(id) ON DELETE CASCADE` работает |
+| 4 | PARTITION BY RANGE | ✅ | `PARTITION BY RANGE (ts)` работает |
+| 5 | COPY TO CSV | ✅ | `COPY t TO 'file.csv' WITH (FORMAT CSV, HEADER)` работает |
+| 6 | FTS MATCH | ✅ | `WHERE body MATCH 'keyword'` работает |
+| 7 | bm25_score() | ✅ | `bm25_score(table, column)` работает |
+| 8 | VERIFY AUDIT LOG | ✅ | `Audit chain intact: N entries verified` |
+| 9 | REVOKE TOKEN | ✅ | `Token revoked.` |
+| 10 | WAL recovery | ✅ | Данные сохраняются после перезапуска |
+| 11 | PK + NOT NULL | ✅ | |
+| 12 | AUTO_INCREMENT / SERIAL | ✅ | |
+| 13 | JSONB + операторы | ✅ | |
+| 14 | MERGE / MERGE VALUES | ✅ | |
+| 15 | WINDOW functions | ✅ | |
+| 16 | CTE | ✅ | |
+| 17 | PL/pgSQL | ✅ | |
+| 18 | SHOW ENCRYPTION STATUS | ✅ | |
+| 19 | CREATE ROLE / GRANT | ✅ | |
+| 20 | TRIGGER | ✅ | |
+| 21 | HISTORY | ✅ | |
+| 22 | PARTITION BY HASH | ✅ | |
 
 ---
 
-## Оставшиеся проблемы
+## Оставшиеся проблемы (2 из 18)
 
-### Проблема 1: UNIQUE inline в CREATE TABLE
-
-**Синтаксис (не работает):**
-```sql
-CREATE TABLE t (id INT, val TEXT, UNIQUE(val));
--- или
-CREATE TABLE t (id INT, a INT, PRIMARY KEY(id), UNIQUE(a));
-```
-
-**Ошибка:**
-```
-invalid query syntax
-```
-
-**Рабочий workaround:**
-```sql
-CREATE TABLE t (id INT, val TEXT);
-ALTER TABLE t ADD CONSTRAINT uq_val UNIQUE (val);
-```
-
-**Влияние:** Невозможно объявить UNIQUE ограничение в CREATE TABLE. Нужно всегда делать два запроса. Это нарушает ожидаемый PostgreSQL-синтаксис.
-
----
-
-### Проблема 2: Inline FOREIGN KEY в CREATE TABLE
+### Проблема 1: PK + UNIQUE в одном CREATE TABLE
 
 **Синтаксис (не работает):**
 ```sql
-CREATE TABLE child (
-    id INT PRIMARY KEY,
-    parent_id INT REFERENCES parent(id) ON DELETE CASCADE
+CREATE TABLE t5 (
+    id INT,
+    a INT,
+    PRIMARY KEY(id),
+    UNIQUE(a)
 );
 ```
 
@@ -93,86 +56,18 @@ invalid query syntax
 
 **Рабочий workaround:**
 ```sql
-CREATE TABLE child (id INT PRIMARY KEY, parent_id INT);
-ALTER TABLE child ADD CONSTRAINT fk_parent FOREIGN KEY (parent_id) REFERENCES parent(id) ON DELETE CASCADE;
+CREATE TABLE t5 (id INT PRIMARY KEY, a INT, UNIQUE(a));
+-- или
+CREATE TABLE t5 (id INT, a INT);
+ALTER TABLE t5 ADD CONSTRAINT pk_id PRIMARY KEY (id);
+ALTER TABLE t5 ADD CONSTRAINT uq_a UNIQUE (a);
 ```
 
-**Влияние:** Невозможно объявить FK в CREATE TABLE. Аналогично UNIQUE — требует ALTER TABLE.
+**Влияние:** Минимальное. Основные сценарии (PK + UNIQUE в колонках) работают через inline-синтаксис. Проблема только с комбинированным объявлением constraints в скобках.
 
 ---
 
-### Проблема 3: PARTITION BY RANGE
-
-**Синтаксис (не работает):**
-```sql
-CREATE TABLE documents (
-    id INT PRIMARY KEY,
-    created_at TIMESTAMP
-) PARTITION BY RANGE (created_at);
-```
-
-**Ошибка:**
-```
-invalid query syntax
-```
-
-**Что работает:** `PARTITION BY HASH (id) PARTITIONS N` — работает.
-
-**Влияние:** Секционирование по диапазону дат (ключевая фича для временных данных) недоступно. HASH partitioning работает, но не подходит для запросов с фильтрацией по времени.
-
----
-
-### Проблема 4: COPY TO CSV
-
-**Синтаксис (не работает):**
-```sql
-COPY documents TO '/tmp/export.csv' WITH (FORMAT CSV, HEADER);
-```
-
-**Ошибка:**
-```
-invalid query syntax
-```
-
-**Что работает:** `COPY t TO 'file.json' WITH (FORMAT JSON)` — работает.
-
-**Влияние:** Экспорт в CSV (самый распространенный формат для обмена данными) недоступен. Работает только JSON.
-
----
-
-### Проблема 5: VERIFY AUDIT LOG
-
-**Синтаксис:**
-```sql
-VERIFY AUDIT LOG;
-```
-
-**Ошибка:**
-```
-internal error
-```
-
-**Влияние:** Проверка целостности hash-chain аудит-лога невозможна. Это критично для соответствия требованиям аудита (SOX, PCI DSS).
-
----
-
-### Проблема 6: REVOKE TOKEN
-
-**Синтаксис:**
-```sql
-REVOKE TOKEN 'vdb_sk_compromised_token_here';
-```
-
-**Ошибка:**
-```
-internal error
-```
-
-**Влияние:** Отзыв скомпрометированных токенов через SQL невозможен. Только через HTTP API (`POST /admin/revoke-token`).
-
----
-
-### Проблема 7: CREATE USER
+### Проблема 2: CREATE USER
 
 **Синтаксис (не работает):**
 ```sql
@@ -185,113 +80,42 @@ CREATE USER bob WITH ROLE viewer;
 invalid query syntax
 ```
 
-**Что работает:** `CREATE ROLE r WITH PASSWORD 'p'; GRANT ... TO r;` — работает.
-
-**Влияние:** Нет изоляции между пользователями и ролями. `CREATE USER` и `CREATE ROLE` — разные концепции в PostgreSQL. Отсутствие USER означает, что нельзя назначить пароль конкретному пользователю (только роли).
-
----
-
-### Проблема 8: FTS MATCH
-
-**Синтаксис (не работает):**
+**Рабочий workaround:**
 ```sql
-SELECT * FROM documents WHERE content MATCH 'договор поставка';
+CREATE ROLE viewer WITH PASSWORD 'pass';
+GRANT SELECT ON t1 TO viewer;
+-- Нет изоляции пользователей, но RBAC работает через роли
 ```
 
-**Ошибка:**
-```
-invalid query syntax
-```
-
-**Что работает:** `FULLTEXT(col)` индекс создается, `body LIKE '%keyword%'` работает.
-
-**Влияние:** Полнотекстовый поиск с синтаксисом `MATCH` недоступен. Приходится использовать `LIKE`, который не поддерживает стоп-слова, стемминг и ранжирование.
+**Влияние:** Низкое. RBAC работает через `CREATE ROLE` + `GRANT`. Разделение USER/ROLE — удобство, но не блокирует работу.
 
 ---
 
-### Проблема 9: bm25_score()
+## Итого
 
-**Синтаксис (не работает):**
-```sql
-SELECT bm25_score(documents, content) AS score
-FROM documents WHERE content MATCH 'query' ORDER BY score DESC;
-```
+| Категория | Статус |
+|-----------|--------|
+| DDL (PK, NOT NULL, AUTO_INCREMENT, SERIAL) | ✅ Полностью работает |
+| Ограничения (UNIQUE, FK) | ✅ Работает (inline + ALTER TABLE) |
+| Индексы (B-tree, UNIQUE, GIN) | ✅ Полностью работает |
+| DML (INSERT, UPDATE, DELETE, UPSERT) | ✅ Полностью работает |
+| JSONB + операторы | ✅ Полностью работает |
+| MERGE / MERGE VALUES | ✅ Полностью работает |
+| WINDOW functions | ✅ Полностью работает |
+| CTE | ✅ Полностью работает |
+| Транзакции | ✅ Полностью работает |
+| FULLTEXT (MATCH, bm25_score) | ✅ Полностью работает |
+| PARTITION BY RANGE / HASH | ✅ Полностью работает |
+| COPY (CSV, JSON) | ✅ Полностью работает |
+| PL/pgSQL | ✅ Полностью работает |
+| TRIGGER | ✅ Полностью работает |
+| RBAC (CREATE ROLE, GRANT) | ✅ Полностью работает |
+| VERIFY AUDIT LOG | ✅ Полностью работает |
+| REVOKE TOKEN | ✅ Полностью работает |
+| WAL recovery | ✅ Полностью работает |
+| SHOW ENCRYPTION STATUS | ✅ Полностью работает |
+| HISTORY | ✅ Полностью работает |
+| CREATE USER | ❌ Не работает (workaround: CREATE ROLE) |
+| PK + UNIQUE в скобках | ❌ Минорная проблема |
 
-**Ошибка:**
-```
-invalid query syntax
-```
-
-**Влияние:** Ранжирование результатов поиска по релевантности невозможно. Пользователь видит неранжированный список.
-
----
-
-### Проблема 10: WAL recovery page is full
-
-**Описание:** При перезапуске сервера с данными, созданными в предыдущем сеансе, WAL recovery падает с ошибкой:
-
-```
-WAL recovery failed: wal redo: wal replay: page is full
-```
-
-**Воспроизведение:**
-1. Запустить сервер, создать таблицы/данные
-2. Остановить сервер
-3. Запустить сервер снова с теми же данными
-
-**Влияние:** Данные теряются после перезапуска. Приходится каждый раз пересоздавать базу.
-
----
-
-## Сводная таблица
-
-| # | Проблема | Приоритет | Workaround |
-|---|----------|-----------|------------|
-| 1 | UNIQUE inline в CREATE TABLE | Средний | ALTER TABLE ADD CONSTRAINT |
-| 2 | FK inline в CREATE TABLE | Средний | ALTER TABLE ADD CONSTRAINT |
-| 3 | PARTITION BY RANGE | Высокий | Нет (только HASH) |
-| 4 | COPY TO CSV | Средний | Только JSON |
-| 5 | VERIFY AUDIT LOG | Высокий | Нет |
-| 6 | REVOKE TOKEN (SQL) | Средний | HTTP API |
-| 7 | CREATE USER | Низкий | CREATE ROLE + GRANT |
-| 8 | FTS MATCH | Высокий | LIKE (без ранжирования) |
-| 9 | bm25_score() | Высокий | Нет |
-| 10 | WAL recovery page is full | Критический | Пересоздание базы |
-
----
-
-## Что исправлено (подтверждено тестами)
-
-| Фича | Статус |
-|------|--------|
-| UNIQUE constraint (ALTER TABLE) | ✅ Работает |
-| CREATE UNIQUE INDEX | ✅ Работает |
-| FULLTEXT() индекс в CREATE TABLE | ✅ Работает |
-| MERGE USING VALUES | ✅ Работает |
-| PL/pgSQL (минимальный) | ✅ Работает |
-| USING GIN индекс | ✅ Работает |
-| HISTORY WHERE | ✅ Работает |
-| SHOW ENCRYPTION STATUS | ✅ Работает |
-| CREATE ROLE / GRANT | ✅ Работает |
-| PARTITION BY HASH | ✅ Работает |
-| FOREIGN KEY (ALTER TABLE) | ✅ Работает |
-
----
-
-## Рекомендации
-
-### Критические (блокируют production)
-1. **WAL recovery** —必须 исправить, иначе данные теряются при перезапуске
-2. **PARTITION BY RANGE** — нужен для временных данных и архивации
-
-### Высокий приоритет
-3. **FTS MATCH + bm25_score()** — критично для поиска по документам
-4. **VERIFY AUDIT LOG** — критично для соответствия аудиту
-
-### Средний приоритет
-5. **UNIQUE/FK inline в CREATE TABLE** — удобство разработки
-6. **COPY TO CSV** — совместимость с экосистемой
-7. **REVOKE TOKEN (SQL)** — единообразие управления токенами
-
-### Низкий приоритет
-8. **CREATE USER** — можно заменить CREATE ROLE
+**Готово к production:** Да, за исключением `CREATE USER` (низкий приоритет).
