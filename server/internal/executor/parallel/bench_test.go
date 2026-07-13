@@ -1,4 +1,4 @@
-package executor
+package parallel
 
 import (
 	"fmt"
@@ -36,7 +36,6 @@ func benchSchema() *storage.TableSchema {
 func BenchmarkSequentialFilter_10k(b *testing.B) {
 	rows := benchRows(10000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
@@ -47,7 +46,7 @@ func BenchmarkSequentialFilter_10k(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		filtered := make([]storage.Row, 0, len(rows)/2)
 		for _, row := range rows {
-			ok, _ := evalExpr(where, row, schema, ctx)
+			ok, _ := testEvaluator.EvalExpr(where, row, schema, nil)
 			if ok {
 				_ = append(filtered, row)
 			}
@@ -58,7 +57,6 @@ func BenchmarkSequentialFilter_10k(b *testing.B) {
 func BenchmarkParallelFilter_10k_2(b *testing.B) {
 	rows := benchRows(10000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
@@ -67,15 +65,14 @@ func BenchmarkParallelFilter_10k_2(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		pc := NewParallelCoordinator(2)
-		pc.ParallelFilter(rows, schema, where, ctx)
+		pc := NewParallelCoordinator(2, testEvaluator)
+		pc.ParallelFilter(rows, schema, where, nil)
 	}
 }
 
 func BenchmarkParallelFilter_10k_4(b *testing.B) {
 	rows := benchRows(10000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
@@ -84,15 +81,14 @@ func BenchmarkParallelFilter_10k_4(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		pc := NewParallelCoordinator(4)
-		pc.ParallelFilter(rows, schema, where, ctx)
+		pc := NewParallelCoordinator(4, testEvaluator)
+		pc.ParallelFilter(rows, schema, where, nil)
 	}
 }
 
 func BenchmarkParallelFilter_10k_8(b *testing.B) {
 	rows := benchRows(10000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
@@ -101,15 +97,14 @@ func BenchmarkParallelFilter_10k_8(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		pc := NewParallelCoordinator(8)
-		pc.ParallelFilter(rows, schema, where, ctx)
+		pc := NewParallelCoordinator(8, testEvaluator)
+		pc.ParallelFilter(rows, schema, where, nil)
 	}
 }
 
 func BenchmarkSequentialFilter_100k(b *testing.B) {
 	rows := benchRows(100000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
@@ -120,7 +115,7 @@ func BenchmarkSequentialFilter_100k(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		filtered := make([]storage.Row, 0, len(rows)/2)
 		for _, row := range rows {
-			ok, _ := evalExpr(where, row, schema, ctx)
+			ok, _ := testEvaluator.EvalExpr(where, row, schema, nil)
 			if ok {
 				_ = append(filtered, row)
 			}
@@ -131,7 +126,6 @@ func BenchmarkSequentialFilter_100k(b *testing.B) {
 func BenchmarkParallelFilter_100k_4(b *testing.B) {
 	rows := benchRows(100000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
@@ -140,15 +134,14 @@ func BenchmarkParallelFilter_100k_4(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		pc := NewParallelCoordinator(4)
-		pc.ParallelFilter(rows, schema, where, ctx)
+		pc := NewParallelCoordinator(4, testEvaluator)
+		pc.ParallelFilter(rows, schema, where, nil)
 	}
 }
 
 func BenchmarkParallelFilter_100k_8(b *testing.B) {
 	rows := benchRows(100000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
@@ -157,15 +150,14 @@ func BenchmarkParallelFilter_100k_8(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		pc := NewParallelCoordinator(8)
-		pc.ParallelFilter(rows, schema, where, ctx)
+		pc := NewParallelCoordinator(8, testEvaluator)
+		pc.ParallelFilter(rows, schema, where, nil)
 	}
 }
 
 func BenchmarkSequentialProject_100k(b *testing.B) {
 	rows := benchRows(100000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	columns := []parser.SelectColumn{
 		{Expr: &parser.ColumnRef{Name: "id"}},
 		{Expr: &parser.ColumnRef{Name: "name"}},
@@ -178,8 +170,8 @@ func BenchmarkSequentialProject_100k(b *testing.B) {
 		for _, row := range rows {
 			projectedRow := make([]string, len(columns))
 			for j, col := range columns {
-				val, _ := evalOperand(col.Expr, row, schema, ctx)
-				projectedRow[j] = valueToString(val)
+				val, _ := testEvaluator.EvalOperand(col.Expr, row, schema, nil)
+				projectedRow[j] = testEvaluator.ValueToString(val)
 			}
 			_ = append(projected, projectedRow)
 		}
@@ -189,7 +181,6 @@ func BenchmarkSequentialProject_100k(b *testing.B) {
 func BenchmarkParallelProject_100k_4(b *testing.B) {
 	rows := benchRows(100000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	columns := []parser.SelectColumn{
 		{Expr: &parser.ColumnRef{Name: "id"}},
 		{Expr: &parser.ColumnRef{Name: "name"}},
@@ -198,15 +189,14 @@ func BenchmarkParallelProject_100k_4(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		pc := NewParallelCoordinator(4)
-		pc.ParallelProject(rows, columns, schema, ctx)
+		pc := NewParallelCoordinator(4, testEvaluator)
+		pc.ParallelProject(rows, columns, schema, nil)
 	}
 }
 
 func BenchmarkParallelProject_100k_8(b *testing.B) {
 	rows := benchRows(100000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	columns := []parser.SelectColumn{
 		{Expr: &parser.ColumnRef{Name: "id"}},
 		{Expr: &parser.ColumnRef{Name: "name"}},
@@ -215,8 +205,8 @@ func BenchmarkParallelProject_100k_8(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		pc := NewParallelCoordinator(8)
-		pc.ParallelProject(rows, columns, schema, ctx)
+		pc := NewParallelCoordinator(8, testEvaluator)
+		pc.ParallelProject(rows, columns, schema, nil)
 	}
 }
 
@@ -254,7 +244,6 @@ func BenchmarkSequentialAggregate_100k(b *testing.B) {
 func BenchmarkParallelAggregate_100k_4(b *testing.B) {
 	rows := benchRows(100000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	stmt := &parser.SelectStatement{
 		TableName: "bench",
 		Columns: []parser.SelectColumn{
@@ -265,15 +254,14 @@ func BenchmarkParallelAggregate_100k_4(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		pc := NewParallelCoordinator(4)
-		pc.ParallelGroupAndAggregate(stmt, rows, schema, "", ctx)
+		pc := NewParallelCoordinator(4, testEvaluator)
+		pc.ParallelGroupAndAggregate(stmt, rows, schema, "", nil)
 	}
 }
 
 func BenchmarkParallelAggregate_100k_8(b *testing.B) {
 	rows := benchRows(100000)
 	schema := benchSchema()
-	ctx := largeTableCtx()
 	stmt := &parser.SelectStatement{
 		TableName: "bench",
 		Columns: []parser.SelectColumn{
@@ -284,7 +272,7 @@ func BenchmarkParallelAggregate_100k_8(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		pc := NewParallelCoordinator(8)
-		pc.ParallelGroupAndAggregate(stmt, rows, schema, "", ctx)
+		pc := NewParallelCoordinator(8, testEvaluator)
+		pc.ParallelGroupAndAggregate(stmt, rows, schema, "", nil)
 	}
 }

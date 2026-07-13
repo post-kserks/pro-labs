@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"vaultdb/internal/executor/parallel"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -488,8 +489,8 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 
 	// Filter rows (WHERE) — use parallel execution for large tables
 	var filtered []storage.Row
-	if ShouldUseParallel(ctx.Parallel, len(combinedRows), len(c.stmt.Joins) > 0, len(c.stmt.OrderBy) > 0) && c.stmt.Where != nil {
-		pc := NewParallelCoordinator(ctx.Parallel.NumWorkers)
+	if parallel.ShouldUseParallel(ctx.Parallel, len(combinedRows), len(c.stmt.Joins) > 0, len(c.stmt.OrderBy) > 0) && c.stmt.Where != nil {
+		pc := parallel.NewParallelCoordinator(ctx.Parallel.NumWorkers, sharedEvaluator)
 		filtered = pc.ParallelFilter(combinedRows, combinedSchema, c.stmt.Where, ctx)
 	} else {
 		filtered = make([]storage.Row, 0, len(combinedRows))
@@ -561,8 +562,8 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	}
 
 	resultRows := make([][]string, 0, len(filtered))
-	if ShouldUseParallel(ctx.Parallel, len(filtered), false, false) {
-		pc := NewParallelCoordinator(ctx.Parallel.NumWorkers)
+	if parallel.ShouldUseParallel(ctx.Parallel, len(filtered), false, false) {
+		pc := parallel.NewParallelCoordinator(ctx.Parallel.NumWorkers, sharedEvaluator)
 		resultRows = pc.ParallelProject(filtered, effectiveColumns, combinedSchema, ctx)
 	} else {
 		for _, row := range filtered {

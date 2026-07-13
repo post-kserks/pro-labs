@@ -11,6 +11,7 @@ import (
 	"vaultdb/internal/ai"
 	"vaultdb/internal/auth"
 	"vaultdb/internal/executor/optimizer"
+	"vaultdb/internal/executor/parallel"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -182,7 +183,7 @@ type ExecutionContext struct {
 	InCommitApply bool
 
 	// Parallel holds the parallel execution configuration for this query.
-	Parallel ParallelConfig
+	Parallel parallel.ParallelConfig
 
 	// triggerDepth tracks recursive trigger invocation depth.
 	// Incremented before executeTriggerBody, decremented after.
@@ -204,7 +205,7 @@ type Executor struct {
 	authMgr      *auth.Manager // RBAC: nil means permission checks disabled
 	queryTimeout time.Duration
 	maxRows      int
-	parallel     ParallelConfig
+	parallel     parallel.ParallelConfig
 	mu           sync.RWMutex
 }
 
@@ -247,14 +248,14 @@ func (e *Executor) SetMaxRows(n int) {
 }
 
 // SetParallelConfig configures parallel query execution.
-func (e *Executor) SetParallelConfig(cfg ParallelConfig) {
+func (e *Executor) SetParallelConfig(cfg parallel.ParallelConfig) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.parallel = cfg
 }
 
 // ParallelConfig returns the current parallel execution configuration.
-func (e *Executor) ParallelConfig() ParallelConfig {
+func (e *Executor) ParallelConfig() parallel.ParallelConfig {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.parallel

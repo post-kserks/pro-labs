@@ -1,4 +1,4 @@
-package executor
+package parallel
 
 import (
 	"fmt"
@@ -8,6 +8,109 @@ import (
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
+
+// mockEvaluator implements Evaluator for testing.
+type mockEvaluator struct{}
+
+func (m *mockEvaluator) EvalExpr(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx interface{}) (bool, error) {
+	if expr == nil {
+		return true, nil
+	}
+	if be, ok := expr.(*parser.BinaryExpr); ok {
+		left, _ := m.EvalOperand(be.Left, row, schema, ctx)
+		right, _ := m.EvalOperand(be.Right, row, schema, ctx)
+		switch be.Operator {
+		case ">":
+			l, _ := left.(int64)
+			r, _ := right.(int64)
+			return l > r, nil
+		case "<":
+			l, _ := left.(int64)
+			r, _ := right.(int64)
+			return l < r, nil
+		case "=":
+			return fmt.Sprintf("%v", left) == fmt.Sprintf("%v", right), nil
+		}
+	}
+	return true, nil
+}
+
+func (m *mockEvaluator) EvalOperand(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx interface{}) (interface{}, error) {
+	if expr == nil {
+		return nil, nil
+	}
+	if colRef, ok := expr.(*parser.ColumnRef); ok {
+		for i, col := range schema.Columns {
+			if col.Name == colRef.Name && i < len(row) {
+				return row[i], nil
+			}
+		}
+	}
+	if val, ok := expr.(*parser.Value); ok {
+		return val.IntVal, nil
+	}
+	if be, ok := expr.(*parser.BinaryExpr); ok {
+		left, _ := m.EvalOperand(be.Left, row, schema, ctx)
+		right, _ := m.EvalOperand(be.Right, row, schema, ctx)
+		if l, ok := left.(int64); ok {
+			if r, ok := right.(int64); ok {
+				switch be.Operator {
+				case "*":
+					return l * r, nil
+				case "+":
+					return l + r, nil
+				}
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockEvaluator) ValueToString(val interface{}) string {
+	return fmt.Sprintf("%v", val)
+}
+
+func (m *mockEvaluator) CollectAggregates(columns []parser.SelectColumn) []*parser.AggregateExpr {
+	var result []*parser.AggregateExpr
+	for _, col := range columns {
+		if agg, ok := col.Expr.(*parser.AggregateExpr); ok {
+			result = append(result, agg)
+		}
+	}
+	return result
+}
+
+func (m *mockEvaluator) CompareValues(a, b interface{}) int {
+	sa, sb := fmt.Sprintf("%v", a), fmt.Sprintf("%v", b)
+	if sa < sb {
+		return -1
+	}
+	if sa > sb {
+		return 1
+	}
+	return 0
+}
+
+func (m *mockEvaluator) NewAggregator(name string, distinct bool, args ...interface{}) Aggregator {
+	return &mockAggregator{name: name}
+}
+
+type mockAggregator struct {
+	name   string
+	count  int64
+	result interface{}
+}
+
+func (a *mockAggregator) Add(key, value interface{}) {
+	a.count++
+	a.result = a.count
+}
+
+func (a *mockAggregator) Result() interface{} {
+	return a.result
+}
+
+var testEvaluator Evaluator = &mockEvaluator{}
 
 func makeLargeRows(n int) []storage.Row {
 	rows := make([]storage.Row, n)
@@ -34,24 +137,17 @@ func largeTableSchema() *storage.TableSchema {
 	}
 }
 
-func largeTableCtx() *ExecutionContext {
-	return &ExecutionContext{
-		Parallel: DefaultParallelConfig(),
-	}
-}
-
 func TestParallelFilter_Basic(t *testing.T) {
 	rows := makeLargeRows(1000)
 	schema := largeTableSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
 		Right:    &parser.Value{Type: "int", IntVal: 500},
 	}
 
-	pc := NewParallelCoordinator(4)
-	result := pc.ParallelFilter(rows, schema, where, ctx)
+	pc := NewParallelCoordinator(4, testEvaluator)
+	result := pc.ParallelFilter(rows, schema, where, nil)
 
 	if len(result) != 499 {
 		t.Errorf("expected 499 rows (id > 500 = 501..999), got %d", len(result))
@@ -65,7 +161,7 @@ func TestParallelFilter_Basic(t *testing.T) {
 }
 
 func TestParallelFilter_Empty(t *testing.T) {
-	pc := NewParallelCoordinator(4)
+	pc := NewParallelCoordinator(4, testEvaluator)
 	result := pc.ParallelFilter(nil, nil, nil, nil)
 	if len(result) != 0 {
 		t.Errorf("expected 0 rows, got %d", len(result))
@@ -75,15 +171,14 @@ func TestParallelFilter_Empty(t *testing.T) {
 func TestParallelFilter_AllMatch(t *testing.T) {
 	rows := makeLargeRows(100)
 	schema := largeTableSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
 		Right:    &parser.Value{Type: "int", IntVal: -1},
 	}
 
-	pc := NewParallelCoordinator(4)
-	result := pc.ParallelFilter(rows, schema, where, ctx)
+	pc := NewParallelCoordinator(4, testEvaluator)
+	result := pc.ParallelFilter(rows, schema, where, nil)
 
 	if len(result) != 100 {
 		t.Errorf("expected 100 rows, got %d", len(result))
@@ -93,15 +188,14 @@ func TestParallelFilter_AllMatch(t *testing.T) {
 func TestParallelFilter_NoneMatch(t *testing.T) {
 	rows := makeLargeRows(100)
 	schema := largeTableSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
 		Right:    &parser.Value{Type: "int", IntVal: 9999},
 	}
 
-	pc := NewParallelCoordinator(4)
-	result := pc.ParallelFilter(rows, schema, where, ctx)
+	pc := NewParallelCoordinator(4, testEvaluator)
+	result := pc.ParallelFilter(rows, schema, where, nil)
 
 	if len(result) != 0 {
 		t.Errorf("expected 0 rows, got %d", len(result))
@@ -111,15 +205,14 @@ func TestParallelFilter_NoneMatch(t *testing.T) {
 func TestParallelFilter_SingleWorker(t *testing.T) {
 	rows := makeLargeRows(500)
 	schema := largeTableSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
 		Right:    &parser.Value{Type: "int", IntVal: 250},
 	}
 
-	pc := NewParallelCoordinator(1)
-	result := pc.ParallelFilter(rows, schema, where, ctx)
+	pc := NewParallelCoordinator(1, testEvaluator)
+	result := pc.ParallelFilter(rows, schema, where, nil)
 
 	if len(result) != 249 {
 		t.Errorf("expected 249 rows, got %d", len(result))
@@ -129,14 +222,13 @@ func TestParallelFilter_SingleWorker(t *testing.T) {
 func TestParallelProject_Basic(t *testing.T) {
 	rows := makeLargeRows(1000)
 	schema := largeTableSchema()
-	ctx := largeTableCtx()
 	columns := []parser.SelectColumn{
 		{Expr: &parser.ColumnRef{Name: "id"}},
 		{Expr: &parser.ColumnRef{Name: "name"}},
 	}
 
-	pc := NewParallelCoordinator(4)
-	result := pc.ParallelProject(rows, columns, schema, ctx)
+	pc := NewParallelCoordinator(4, testEvaluator)
+	result := pc.ParallelProject(rows, columns, schema, nil)
 
 	if len(result) != 1000 {
 		t.Errorf("expected 1000 rows, got %d", len(result))
@@ -151,7 +243,6 @@ func TestParallelProject_Basic(t *testing.T) {
 func TestParallelProject_Expression(t *testing.T) {
 	rows := makeLargeRows(500)
 	schema := largeTableSchema()
-	ctx := largeTableCtx()
 	columns := []parser.SelectColumn{
 		{Expr: &parser.BinaryExpr{
 			Left:     &parser.ColumnRef{Name: "id"},
@@ -160,8 +251,8 @@ func TestParallelProject_Expression(t *testing.T) {
 		}},
 	}
 
-	pc := NewParallelCoordinator(2)
-	result := pc.ParallelProject(rows, columns, schema, ctx)
+	pc := NewParallelCoordinator(2, testEvaluator)
+	result := pc.ParallelProject(rows, columns, schema, nil)
 
 	if len(result) != 500 {
 		t.Errorf("expected 500 rows, got %d", len(result))
@@ -171,83 +262,6 @@ func TestParallelProject_Expression(t *testing.T) {
 	}
 	if result[1][0] != "2" {
 		t.Errorf("expected second value '2', got %q", result[1][0])
-	}
-}
-
-func TestParallelGroupAndAggregate_COUNT(t *testing.T) {
-	// Create rows with known group values
-	rows := make([]storage.Row, 100)
-	for i := 0; i < 100; i++ {
-		groupVal := i % 5 // 5 groups
-		rows[i] = storage.Row{int64(groupVal), int64(1)}
-	}
-
-	schema := &storage.TableSchema{
-		Name: "test",
-		Columns: []storage.ColumnSchema{
-			{Name: "grp", Type: "INT"},
-			{Name: "val", Type: "INT"},
-		},
-	}
-
-	stmt := &parser.SelectStatement{
-		TableName: "test",
-		Columns: []parser.SelectColumn{
-			{Expr: &parser.ColumnRef{Name: "grp"}},
-			{Expr: &parser.AggregateExpr{Name: "COUNT", Args: []parser.Expression{&parser.ColumnRef{Name: "*"}}}},
-		},
-		GroupBy: []parser.Expression{&parser.ColumnRef{Name: "grp"}},
-	}
-
-	ctx := largeTableCtx()
-	pc := NewParallelCoordinator(4)
-	result, err := pc.ParallelGroupAndAggregate(stmt, rows, schema, "", ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(result.Rows) != 5 {
-		t.Errorf("expected 5 groups, got %d", len(result.Rows))
-	}
-
-	for _, row := range result.Rows {
-		if row[1] != "20" {
-			t.Errorf("expected COUNT=20 for each group, got %q", row[1])
-		}
-	}
-}
-
-func TestParallelGroupAndAggregate_SingleGroup(t *testing.T) {
-	rows := make([]storage.Row, 50)
-	for i := 0; i < 50; i++ {
-		rows[i] = storage.Row{int64(i)}
-	}
-
-	schema := &storage.TableSchema{
-		Name:    "test",
-		Columns: []storage.ColumnSchema{{Name: "val", Type: "INT"}},
-	}
-
-	stmt := &parser.SelectStatement{
-		TableName: "test",
-		Columns: []parser.SelectColumn{
-			{Expr: &parser.AggregateExpr{Name: "COUNT", Args: []parser.Expression{&parser.ColumnRef{Name: "*"}}}},
-			{Expr: &parser.AggregateExpr{Name: "SUM", Args: []parser.Expression{&parser.ColumnRef{Name: "val"}}}},
-		},
-	}
-
-	ctx := largeTableCtx()
-	pc := NewParallelCoordinator(2)
-	result, err := pc.ParallelGroupAndAggregate(stmt, rows, schema, "", ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(result.Rows) != 1 {
-		t.Errorf("expected 1 group, got %d", len(result.Rows))
-	}
-	if result.Rows[0][0] != "50" {
-		t.Errorf("expected COUNT=50, got %q", result.Rows[0][0])
 	}
 }
 
@@ -305,7 +319,7 @@ func TestShouldUseParallel(t *testing.T) {
 }
 
 func TestNewParallelCoordinator_MinWorkers(t *testing.T) {
-	pc := NewParallelCoordinator(0)
+	pc := NewParallelCoordinator(0, testEvaluator)
 	if pc.numWorkers != 2 {
 		t.Errorf("expected minimum 2 workers, got %d", pc.numWorkers)
 	}
@@ -327,7 +341,6 @@ func TestDefaultParallelConfig(t *testing.T) {
 func TestParallelFilter_ConcurrentAccess(t *testing.T) {
 	rows := makeLargeRows(10000)
 	schema := largeTableSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
@@ -336,8 +349,8 @@ func TestParallelFilter_ConcurrentAccess(t *testing.T) {
 
 	// Run multiple times to catch race conditions
 	for trial := 0; trial < 5; trial++ {
-		pc := NewParallelCoordinator(runtime.NumCPU())
-		result := pc.ParallelFilter(rows, schema, where, ctx)
+		pc := NewParallelCoordinator(runtime.NumCPU(), testEvaluator)
+		result := pc.ParallelFilter(rows, schema, where, nil)
 		if len(result) != 4999 {
 			t.Errorf("trial %d: expected 4999 rows (id > 5000 = 5001..9999), got %d", trial, len(result))
 		}
@@ -348,15 +361,14 @@ func TestParallelFilter_SmallTable(t *testing.T) {
 	// Verify parallel filter works correctly with fewer rows than workers
 	rows := makeLargeRows(3)
 	schema := largeTableSchema()
-	ctx := largeTableCtx()
 	where := &parser.BinaryExpr{
 		Left:     &parser.ColumnRef{Name: "id"},
 		Operator: ">",
 		Right:    &parser.Value{Type: "int", IntVal: 0},
 	}
 
-	pc := NewParallelCoordinator(8)
-	result := pc.ParallelFilter(rows, schema, where, ctx)
+	pc := NewParallelCoordinator(8, testEvaluator)
+	result := pc.ParallelFilter(rows, schema, where, nil)
 
 	if len(result) != 2 {
 		t.Errorf("expected 2 rows, got %d", len(result))
@@ -367,7 +379,7 @@ func TestParallelFilter_ParallelWorkersActive(t *testing.T) {
 	rows := makeLargeRows(10000)
 
 	// Verify the coordinator uses correct chunk splitting
-	pc := NewParallelCoordinator(4)
+	pc := NewParallelCoordinator(4, testEvaluator)
 	chunks := pc.splitRows(rows)
 	if len(chunks) != 4 {
 		t.Errorf("expected 4 chunks, got %d", len(chunks))

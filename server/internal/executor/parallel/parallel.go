@@ -1,4 +1,4 @@
-package executor
+package parallel
 
 import (
 	"runtime"
@@ -9,6 +9,32 @@ import (
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
+
+// Evaluator provides expression evaluation capabilities needed by parallel
+// operations. The executor package implements this interface to avoid a
+// circular dependency between executor and parallel.
+type Evaluator interface {
+	EvalExpr(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx interface{}) (bool, error)
+	EvalOperand(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx interface{}) (interface{}, error)
+	ValueToString(val interface{}) string
+	CollectAggregates(columns []parser.SelectColumn) []*parser.AggregateExpr
+	CompareValues(a, b interface{}) int
+	NewAggregator(name string, distinct bool, args ...interface{}) Aggregator
+}
+
+// Aggregator is the interface for aggregate operations.
+type Aggregator interface {
+	Add(key, value interface{})
+	Result() interface{}
+}
+
+// Result represents a query result from parallel operations.
+type Result struct {
+	Type     string
+	Columns  []string
+	Rows     [][]string
+	AsOfNote string
+}
 
 // ParallelConfig controls parallel query execution behavior.
 type ParallelConfig struct {
@@ -34,14 +60,15 @@ func DefaultParallelConfig() ParallelConfig {
 type ParallelCoordinator struct {
 	numWorkers int
 	wg         sync.WaitGroup
+	eval       Evaluator
 }
 
 // NewParallelCoordinator creates a coordinator with the given worker count.
-func NewParallelCoordinator(numWorkers int) *ParallelCoordinator {
+func NewParallelCoordinator(numWorkers int, eval Evaluator) *ParallelCoordinator {
 	if numWorkers < 1 {
 		numWorkers = 2
 	}
-	return &ParallelCoordinator{numWorkers: numWorkers}
+	return &ParallelCoordinator{numWorkers: numWorkers, eval: eval}
 }
 
 // ParallelFilter splits rows into chunks and filters each in a separate goroutine.
@@ -49,7 +76,7 @@ func (pc *ParallelCoordinator) ParallelFilter(
 	rows []storage.Row,
 	schema *storage.TableSchema,
 	where parser.Expression,
-	ctx *ExecutionContext,
+	ctx interface{},
 ) []storage.Row {
 	if len(rows) == 0 {
 		return nil
@@ -64,7 +91,7 @@ func (pc *ParallelCoordinator) ParallelFilter(
 			defer pc.wg.Done()
 			filtered := make([]storage.Row, 0, len(r)/2)
 			for _, row := range r {
-				ok, err := evalExpr(where, row, schema, ctx)
+				ok, err := pc.eval.EvalExpr(where, row, schema, ctx)
 				if err == nil && ok {
 					filtered = append(filtered, row)
 				}
@@ -91,7 +118,7 @@ func (pc *ParallelCoordinator) ParallelProject(
 	rows []storage.Row,
 	columns []parser.SelectColumn,
 	schema *storage.TableSchema,
-	ctx *ExecutionContext,
+	ctx interface{},
 ) [][]string {
 	if len(rows) == 0 {
 		return nil
@@ -108,11 +135,11 @@ func (pc *ParallelCoordinator) ParallelProject(
 			for _, row := range r {
 				projectedRow := make([]string, len(columns))
 				for j, col := range columns {
-					val, err := evalOperand(col.Expr, row, schema, ctx)
+					val, err := pc.eval.EvalOperand(col.Expr, row, schema, ctx)
 					if err != nil {
 						projectedRow[j] = "ERR"
 					} else {
-						projectedRow[j] = valueToString(val)
+						projectedRow[j] = pc.eval.ValueToString(val)
 					}
 				}
 				projected = append(projected, projectedRow)
@@ -141,7 +168,7 @@ func (pc *ParallelCoordinator) ParallelGroupAndAggregate(
 	rows []storage.Row,
 	schema *storage.TableSchema,
 	asOfNote string,
-	ctx *ExecutionContext,
+	ctx interface{},
 ) (*Result, error) {
 	type partialResult struct {
 		groups     map[string][]storage.Row
@@ -160,11 +187,11 @@ func (pc *ParallelCoordinator) ParallelGroupAndAggregate(
 			for _, row := range r {
 				keyParts := make([]string, len(stmt.GroupBy))
 				for gi, expr := range stmt.GroupBy {
-					val, err := evalOperand(expr, row, schema, ctx)
+					val, err := pc.eval.EvalOperand(expr, row, schema, ctx)
 					if err != nil {
 						continue
 					}
-					keyParts[gi] = valueToString(val)
+					keyParts[gi] = pc.eval.ValueToString(val)
 				}
 				key := strings.Join(keyParts, "\x00")
 				if _, ok := groups[key]; !ok {
@@ -218,21 +245,21 @@ func (pc *ParallelCoordinator) ParallelGroupAndAggregate(
 			continue
 		}
 
-		allAggExprs := collectAggregates(stmt.Columns)
+		allAggExprs := pc.eval.CollectAggregates(stmt.Columns)
 		aggMap := make(map[*parser.AggregateExpr]Aggregator)
 		for _, aggExpr := range allAggExprs {
 			if _, exists := aggMap[aggExpr]; !exists {
 				aggArgs := make([]interface{}, len(aggExpr.Args))
 				if len(groupRows) > 0 {
 					for j, argExpr := range aggExpr.Args {
-						argVal, err := evalOperand(argExpr, groupRows[0], schema, ctx)
+						argVal, err := pc.eval.EvalOperand(argExpr, groupRows[0], schema, ctx)
 						if err != nil {
 							argVal = nil
 						}
 						aggArgs[j] = argVal
 					}
 				}
-				aggMap[aggExpr] = NewAggregator(aggExpr.Name, aggExpr.Distinct, aggArgs...)
+				aggMap[aggExpr] = pc.eval.NewAggregator(aggExpr.Name, aggExpr.Distinct, aggArgs...)
 			}
 		}
 
@@ -250,7 +277,7 @@ func (pc *ParallelCoordinator) ParallelGroupAndAggregate(
 					if colRef, ok := aggExpr.Args[0].(*parser.ColumnRef); ok && colRef.Name == "*" {
 						val = int64(1)
 					} else {
-						val, _ = evalOperand(aggExpr.Args[0], row, schema, ctx)
+						val, _ = pc.eval.EvalOperand(aggExpr.Args[0], row, schema, ctx)
 					}
 				} else {
 					val = int64(1)
@@ -264,21 +291,21 @@ func (pc *ParallelCoordinator) ParallelGroupAndAggregate(
 		for i, col := range stmt.Columns {
 			if aggregators[i] != nil {
 				res := aggregators[i].Result()
-				resultRow[i] = valueToString(res)
+				resultRow[i] = pc.eval.ValueToString(res)
 				virtualRow[i] = res
 			} else {
-				val, err := evalOperand(col.Expr, groupRows[0], schema, ctx)
+				val, err := pc.eval.EvalOperand(col.Expr, groupRows[0], schema, ctx)
 				if err != nil {
 					resultRow[i] = "ERR"
 				} else {
-					resultRow[i] = valueToString(val)
+					resultRow[i] = pc.eval.ValueToString(val)
 					virtualRow[i] = val
 				}
 			}
 		}
 
 		if stmt.Having != nil {
-			ok, err := evalExpr(stmt.Having, virtualRow, schema, ctx)
+			ok, err := pc.eval.EvalExpr(stmt.Having, virtualRow, schema, ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -292,7 +319,7 @@ func (pc *ParallelCoordinator) ParallelGroupAndAggregate(
 
 	// Sort by ORDER BY columns
 	if len(stmt.OrderBy) > 0 {
-		sortResultRowsByOrder(resultRows, stmt.OrderBy, schema, stmt.Columns, ctx)
+		pc.sortResultRowsByOrder(resultRows, stmt.OrderBy, schema, stmt.Columns, ctx)
 	}
 
 	// LIMIT/OFFSET
@@ -352,12 +379,12 @@ func (pc *ParallelCoordinator) splitRows(rows []storage.Row) [][]storage.Row {
 }
 
 // sortResultRowsByOrder sorts result string rows by the given ORDER BY spec.
-func sortResultRowsByOrder(
+func (pc *ParallelCoordinator) sortResultRowsByOrder(
 	rows [][]string,
 	orderBy []parser.OrderItem,
 	schema *storage.TableSchema,
 	columns []parser.SelectColumn,
-	ctx *ExecutionContext,
+	ctx interface{},
 ) {
 	// Build a name→index map for column references
 	colIndex := make(map[string]int, len(columns))
@@ -391,7 +418,7 @@ func sortResultRowsByOrder(
 				continue
 			}
 
-			cmp := CompareValues(vi, vj)
+			cmp := pc.eval.CompareValues(vi, vj)
 			if cmp == 0 {
 				continue
 			}
