@@ -1,4 +1,4 @@
-package executor
+package eval
 
 import (
 	"container/list"
@@ -8,13 +8,10 @@ import (
 	"sync"
 )
 
-// compiledPattern — compiled LIKE pattern. For patterns with only '%',
-// a fast strings path is used (much faster than regexp); for patterns
-// with '_', regexp is compiled once and then cached.
 type compiledPattern struct {
 	simple   bool
-	segments []string       // for simple patterns: segments between '%'
-	re       *regexp.Regexp // for complex patterns
+	segments []string
+	re       *regexp.Regexp
 }
 
 func (cp *compiledPattern) match(text string) bool {
@@ -24,12 +21,8 @@ func (cp *compiledPattern) match(text string) bool {
 	return cp.re.MatchString(text)
 }
 
-// matchSegments checks text against a pattern split by '%':
-// first segment is prefix, last is suffix, middle segments must
-// appear in order between them.
 func matchSegments(text string, segs []string) bool {
 	if len(segs) == 1 {
-		// Pattern without '%' — exact match
 		return text == segs[0]
 	}
 	if !strings.HasPrefix(text, segs[0]) {
@@ -58,7 +51,6 @@ func matchSegments(text string, segs []string) bool {
 
 func compilePattern(pattern string) (*compiledPattern, error) {
 	if !strings.Contains(pattern, "_") {
-		// Only '%' and literals — fast path without regexp
 		return &compiledPattern{
 			simple:   true,
 			segments: strings.Split(pattern, "%"),
@@ -86,14 +78,11 @@ func compilePattern(pattern string) (*compiledPattern, error) {
 	return &compiledPattern{re: re}, nil
 }
 
-// likeCache — LRU cache of compiled patterns: a query like
-// WHERE name LIKE '%x%' on a million rows compiles the pattern once,
-// not a million times.
 type likePatternCache struct {
 	mu       sync.Mutex
 	capacity int
 	entries  map[string]*list.Element
-	order    *list.List // front = recently used
+	order    *list.List
 }
 
 type likeCacheEntry struct {
@@ -119,7 +108,6 @@ func (c *likePatternCache) getOrCompile(pattern string) (*compiledPattern, error
 	}
 	c.mu.Unlock()
 
-	// Compile without holding lock: compilation may be expensive
 	cp, err := compilePattern(pattern)
 	if err != nil {
 		return nil, err
@@ -128,7 +116,6 @@ func (c *likePatternCache) getOrCompile(pattern string) (*compiledPattern, error
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.entries[pattern]; ok {
-		// Someone compiled it in parallel
 		c.order.MoveToFront(el)
 		return el.Value.(*likeCacheEntry).compiled, nil
 	}
@@ -142,12 +129,10 @@ func (c *likePatternCache) getOrCompile(pattern string) (*compiledPattern, error
 	return cp, nil
 }
 
-// likeCache stores the last 256 compiled patterns.
 var likeCache = newLikePatternCache(256)
 
-// evalLike implements SQL LIKE: % matches any run of characters, _ matches a
-// single character. NULL operands never match.
-func evalLike(left, right interface{}) (bool, error) {
+// EvalLike implements SQL LIKE.
+func EvalLike(left, right interface{}) (bool, error) {
 	if left == nil || right == nil {
 		return false, nil
 	}
@@ -157,7 +142,7 @@ func evalLike(left, right interface{}) (bool, error) {
 	}
 	text, ok := left.(string)
 	if !ok {
-		text = valueToString(left)
+		text = ValueToString(left)
 	}
 
 	cp, err := likeCache.getOrCompile(pattern)
@@ -167,9 +152,8 @@ func evalLike(left, right interface{}) (bool, error) {
 	return cp.match(text), nil
 }
 
-// evalILike implements SQL ILIKE: case-insensitive pattern matching.
-// Same as evalLike but converts both operands to lowercase before matching.
-func evalILike(left, right interface{}) (bool, error) {
+// EvalILike implements SQL ILIKE.
+func EvalILike(left, right interface{}) (bool, error) {
 	if left == nil || right == nil {
 		return false, nil
 	}
@@ -179,7 +163,7 @@ func evalILike(left, right interface{}) (bool, error) {
 	}
 	text, ok := left.(string)
 	if !ok {
-		text = valueToString(left)
+		text = ValueToString(left)
 	}
 
 	cp, err := likeCache.getOrCompile(strings.ToLower(pattern))

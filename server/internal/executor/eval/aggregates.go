@@ -1,4 +1,4 @@
-package executor
+package eval
 
 import (
 	"encoding/json"
@@ -13,7 +13,6 @@ type Aggregator interface {
 	Result() interface{}
 }
 
-// countAgg handles COUNT(*) and COUNT(col).
 type countAgg struct {
 	count    int64
 	distinct bool
@@ -38,7 +37,6 @@ func (a *countAgg) Result() interface{} {
 	return a.count
 }
 
-// sumAgg handles SUM(col).
 type sumAgg struct {
 	sum     float64
 	hasVal  bool
@@ -49,7 +47,7 @@ func (a *sumAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
-	if f, ok := toFloat(v); ok {
+	if f, ok := ToFloat(v); ok {
 		if !a.hasVal {
 			a.allInts = true
 		}
@@ -73,7 +71,6 @@ func (a *sumAgg) Result() interface{} {
 	return a.sum
 }
 
-// avgAgg handles AVG(col).
 type avgAgg struct {
 	sum   float64
 	count int64
@@ -83,7 +80,7 @@ func (a *avgAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
-	if f, ok := toFloat(v); ok {
+	if f, ok := ToFloat(v); ok {
 		a.sum += f
 		a.count++
 	}
@@ -96,7 +93,6 @@ func (a *avgAgg) Result() interface{} {
 	return a.sum / float64(a.count)
 }
 
-// minAgg handles MIN(col).
 type minAgg struct {
 	min interface{}
 }
@@ -105,7 +101,7 @@ func (a *minAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
-	if a.min == nil || CompareValues(v, a.min) < 0 {
+	if a.min == nil || CompareOrdering(v, a.min) < 0 {
 		a.min = v
 	}
 }
@@ -114,7 +110,6 @@ func (a *minAgg) Result() interface{} {
 	return a.min
 }
 
-// maxAgg handles MAX(col).
 type maxAgg struct {
 	max interface{}
 }
@@ -123,7 +118,7 @@ func (a *maxAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
-	if a.max == nil || CompareValues(v, a.max) > 0 {
+	if a.max == nil || CompareOrdering(v, a.max) > 0 {
 		a.max = v
 	}
 }
@@ -132,7 +127,6 @@ func (a *maxAgg) Result() interface{} {
 	return a.max
 }
 
-// stringAgg handles STRING_AGG(col, delimiter).
 type stringAgg struct {
 	delimiter string
 	distinct  bool
@@ -144,7 +138,7 @@ func (a *stringAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
-	s := valueToString(v)
+	s := ValueToString(v)
 	if a.distinct {
 		if a.seen == nil {
 			a.seen = make(map[string]bool)
@@ -161,7 +155,6 @@ func (a *stringAgg) Result() interface{} {
 	return strings.Join(a.values, a.delimiter)
 }
 
-// boolAndAgg handles BOOL_AND(col) — all values true?
 type boolAndAgg struct {
 	hasVal bool
 	result bool
@@ -190,7 +183,6 @@ func (a *boolAndAgg) Result() interface{} {
 	return a.result
 }
 
-// boolOrAgg handles BOOL_OR(col) — at least one value true?
 type boolOrAgg struct {
 	hasVal bool
 	result bool
@@ -219,7 +211,6 @@ func (a *boolOrAgg) Result() interface{} {
 	return a.result
 }
 
-// stddevAgg handles STDDEV(col) using Welford's algorithm — O(1) memory.
 type stddevAgg struct {
 	n    int64
 	mean float64
@@ -230,7 +221,7 @@ func (a *stddevAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
-	if f, ok := toFloat(v); ok {
+	if f, ok := ToFloat(v); ok {
 		a.n++
 		delta := f - a.mean
 		a.mean += delta / float64(a.n)
@@ -250,7 +241,6 @@ func (a *stddevAgg) Result() interface{} {
 	return math.Sqrt(variance)
 }
 
-// varianceAgg handles VARIANCE(col) using Welford's algorithm — O(1) memory.
 type varianceAgg struct {
 	n    int64
 	mean float64
@@ -261,7 +251,7 @@ func (a *varianceAgg) Add(_, v interface{}) {
 	if v == nil {
 		return
 	}
-	if f, ok := toFloat(v); ok {
+	if f, ok := ToFloat(v); ok {
 		a.n++
 		delta := f - a.mean
 		a.mean += delta / float64(a.n)
@@ -280,7 +270,6 @@ func (a *varianceAgg) Result() interface{} {
 	return a.m2 / float64(a.n-1)
 }
 
-// jsonObjectAgg collects keys and values into a JSON object.
 type jsonObjectAgg struct {
 	keys   []string
 	values []interface{}
@@ -306,7 +295,7 @@ func (a *jsonObjectAgg) Result() interface{} {
 	return string(data)
 }
 
-// NewAggregator is a factory for aggregators. Args are used by STRING_AGG for the delimiter.
+// NewAggregator is a factory for aggregators.
 func NewAggregator(name string, distinct bool, args ...interface{}) Aggregator {
 	switch strings.ToUpper(name) {
 	case "COUNT":

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"vaultdb/internal/executor/eval"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -84,7 +85,7 @@ func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage
 							slog.Error("eval order by expression", "error", err)
 							return false
 						}
-						cmp := CompareValues(vi, vj)
+						cmp := eval.CompareOrdering(vi, vj)
 						if cmp == 0 {
 							continue
 						}
@@ -172,7 +173,7 @@ func (c *SelectCommand) preComputePartition(wf *parser.WindowFunctionExpr, parti
 			}
 			pd.evaluatedArgs[i] = val
 			f := float64(0)
-			if fv, ok := toFloat(val); ok {
+			if fv, ok := eval.ToFloat(val); ok {
 				f = fv
 			}
 			if i == 0 {
@@ -252,7 +253,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 		n := 1
 		if len(wf.Args) > 0 {
 			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
-				if i, ok := toInt64(v); ok {
+				if i, ok := eval.ToInt64(v); ok {
 					n = int(i)
 				}
 			}
@@ -272,7 +273,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 		offset := 1
 		if len(wf.Args) >= 2 {
 			if v, err := evalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
-				if i, ok := toInt64(v); ok {
+				if i, ok := eval.ToInt64(v); ok {
 					offset = int(i)
 				}
 			}
@@ -300,7 +301,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 		offset := 1
 		if len(wf.Args) >= 2 {
 			if v, err := evalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
-				if i, ok := toInt64(v); ok {
+				if i, ok := eval.ToInt64(v); ok {
 					offset = int(i)
 				}
 			}
@@ -350,7 +351,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 		n := 1
 		if len(wf.Args) >= 2 {
 			if v, err := evalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
-				if i, ok := toInt64(v); ok {
+				if i, ok := eval.ToInt64(v); ok {
 					n = int(i)
 				}
 			}
@@ -394,7 +395,7 @@ func (c *SelectCommand) computeWindowAggregate(wf *parser.WindowFunctionExpr, pa
 
 	// Fallback: compute from frame indices directly.
 	frameIndices := c.getFrameIndices(partitionIndices, currentPosInPartition, wf.Over.Frame, hasOrderBy)
-	agg := NewAggregator(name, false)
+	agg := eval.NewAggregator(name, false)
 	for _, idx := range frameIndices {
 		var val interface{}
 		if len(wf.Args) > 0 {
@@ -447,7 +448,7 @@ func aggregateFromPrefix(name string, pd *windowPartitionData, start, end int) i
 		// by the pre-evaluated args. We keep the simple loop here since
 		// prefix sums don't help and a deque adds complexity for marginal gain.
 		result := pd.evaluatedArgs[start]
-		cmpFn := CompareValues
+		cmpFn := eval.CompareOrdering
 		for i := start + 1; i < end; i++ {
 			c := cmpFn(pd.evaluatedArgs[i], result)
 			if (name == "MIN" && c < 0) || (name == "MAX" && c > 0) {
@@ -479,7 +480,7 @@ func (c *SelectCommand) rowsEqualByOrderBy(r1, r2 storage.Row, orderBy []parser.
 		if err != nil {
 			return false, fmt.Errorf("eval order by expression: %w", err)
 		}
-		if CompareValues(v1, v2) != 0 {
+		if eval.CompareOrdering(v1, v2) != 0 {
 			return false, nil
 		}
 	}

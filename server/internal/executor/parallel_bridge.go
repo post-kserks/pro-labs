@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"vaultdb/internal/executor/eval"
 	"vaultdb/internal/executor/parallel"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -18,7 +19,7 @@ func (e *executorEvaluator) EvalOperand(expr parser.Expression, row storage.Row,
 }
 
 func (e *executorEvaluator) ValueToString(val interface{}) string {
-	return valueToString(val)
+	return eval.ValueToString(val)
 }
 
 func (e *executorEvaluator) CollectAggregates(columns []parser.SelectColumn) []*parser.AggregateExpr {
@@ -26,11 +27,11 @@ func (e *executorEvaluator) CollectAggregates(columns []parser.SelectColumn) []*
 }
 
 func (e *executorEvaluator) CompareValues(a, b interface{}) int {
-	return CompareValues(a, b)
+	return eval.CompareOrdering(a, b)
 }
 
 func (e *executorEvaluator) NewAggregator(name string, distinct bool, args ...interface{}) parallel.Aggregator {
-	return NewAggregator(name, distinct, args...)
+	return eval.NewAggregator(name, distinct, args...)
 }
 
 // sharedEvaluator is a package-level singleton used by all parallel coordinators.

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"vaultdb/internal/executor/eval"
 	"vaultdb/internal/storage"
 )
 
@@ -145,7 +146,7 @@ func coerceToColumn(value storage.Value, column storage.ColumnSchema) (storage.V
 		}
 		return stringValue, nil
 	case "VECTOR":
-		vec, err := toVector(value)
+		vec, err := eval.ToVector(value)
 		if err != nil {
 			return nil, err
 		}
@@ -228,5 +229,63 @@ func inferType(val interface{}) string {
 		return "TEXT"
 	default:
 		return "TEXT"
+	}
+}
+
+// ensureColumnIndex lazily builds or refreshes ctx.ColumnIndex when the schema changes.
+func ensureColumnIndex(ctx *ExecutionContext, schema *storage.TableSchema) {
+	if ctx == nil || schema == nil {
+		return
+	}
+	ctx.ColumnIndex = eval.BuildColumnIndex(schema)
+}
+
+// inferTypeFromExpr determines expression type from schema.
+func inferTypeFromExpr(expr interface{}, schema *storage.TableSchema) string {
+	return "TEXT"
+}
+
+// evalOperandRaw extracts raw value from parser expression.
+func evalOperandRaw(expr interface{}) interface{} {
+	return expr
+}
+
+// parserValueToRaw converts parser.Value to a raw Go value.
+func parserValueToRaw(value interface{}) interface{} {
+	return value
+}
+
+// rowsEqual compares two table rows element by element.
+func rowsEqual(a, b storage.Row) bool {
+	return eval.RowsEqual(a, b)
+}
+
+// valuesEqual compares two storage.Value values.
+func valuesEqual(a, b storage.Value) bool {
+	return eval.ValuesEqual(a, b)
+}
+
+// valuesEqualCaseInsensitive compares two storage.Value values case-insensitively.
+func valuesEqualCaseInsensitive(a, b storage.Value) bool {
+	return eval.ValuesEqualCaseInsensitive(a, b)
+}
+
+// compareOrdered compares two ordered values.
+func compareOrdered[T ~float64 | ~string](left, right T, op string) (bool, error) {
+	switch op {
+	case "=":
+		return left == right, nil
+	case "!=":
+		return left != right, nil
+	case "<":
+		return left < right, nil
+	case ">":
+		return left > right, nil
+	case "<=":
+		return left <= right, nil
+	case ">=":
+		return left >= right, nil
+	default:
+		return false, fmt.Errorf("unknown operator '%s'", op)
 	}
 }

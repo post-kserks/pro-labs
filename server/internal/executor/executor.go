@@ -203,6 +203,15 @@ type ExecutionContext struct {
 	RunSubquery SubqueryRunner
 }
 
+// GetEmbedder implements eval.EmbedderProvider.
+func (ctx *ExecutionContext) GetEmbedder() ai.Embedder { return ctx.Embedder }
+
+// GetGoContext implements eval.EmbedderProvider.
+func (ctx *ExecutionContext) GetGoContext() context.Context { return ctx.Ctx }
+
+// SetColumnIndex implements eval.ColumnIndexProvider.
+func (ctx *ExecutionContext) SetColumnIndex(idx map[string]int) { ctx.ColumnIndex = idx }
+
 type Executor struct {
 	storage      storage.StorageEngine
 	metrics      *metrics.Collector

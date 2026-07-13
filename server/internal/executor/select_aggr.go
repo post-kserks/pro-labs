@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"vaultdb/internal/executor/eval"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -40,7 +41,7 @@ func collectAggregatesFromExpr(expr parser.Expression, result *[]*parser.Aggrega
 
 // resolveNestedAggregates replaces AggregateExpr nodes in an expression with their
 // computed values from aggregators, enabling arithmetic like AVG(x) + 1.
-func resolveNestedAggregates(expr parser.Expression, aggMap map[*parser.AggregateExpr]Aggregator, columns []parser.SelectColumn) (parser.Expression, error) {
+func resolveNestedAggregates(expr parser.Expression, aggMap map[*parser.AggregateExpr]eval.Aggregator, columns []parser.SelectColumn) (parser.Expression, error) {
 	switch e := expr.(type) {
 	case *parser.AggregateExpr:
 		// Find matching aggregator by pointer identity
@@ -96,7 +97,7 @@ func resolveNestedAggregates(expr parser.Expression, aggMap map[*parser.Aggregat
 
 // resolveAggregatesInExpr replaces AggregateExpr nodes in HAVING clause
 // with their computed values from the aggregators.
-func resolveAggregatesInExpr(expr parser.Expression, columns []parser.SelectColumn, aggregators []Aggregator) parser.Expression {
+func resolveAggregatesInExpr(expr parser.Expression, columns []parser.SelectColumn, aggregators []eval.Aggregator) parser.Expression {
 	switch e := expr.(type) {
 	case *parser.BinaryExpr:
 		return &parser.BinaryExpr{
@@ -211,7 +212,7 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 		allAggExprs := collectAggregates(c.stmt.Columns)
 
 		// Create aggregators for each unique aggregate
-		aggMap := make(map[*parser.AggregateExpr]Aggregator)
+		aggMap := make(map[*parser.AggregateExpr]eval.Aggregator)
 		for _, aggExpr := range allAggExprs {
 			if _, exists := aggMap[aggExpr]; !exists {
 				aggArgs := make([]interface{}, len(aggExpr.Args))
@@ -224,12 +225,12 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 						aggArgs[j] = argVal
 					}
 				}
-				aggMap[aggExpr] = NewAggregator(aggExpr.Name, aggExpr.Distinct, aggArgs...)
+				aggMap[aggExpr] = eval.NewAggregator(aggExpr.Name, aggExpr.Distinct, aggArgs...)
 			}
 		}
 
 		// Map column index to aggregator (for top-level aggregates)
-		aggregators := make([]Aggregator, len(c.stmt.Columns))
+		aggregators := make([]eval.Aggregator, len(c.stmt.Columns))
 		for i, col := range c.stmt.Columns {
 			if aggExpr, ok := col.Expr.(*parser.AggregateExpr); ok {
 				aggregators[i] = aggMap[aggExpr]

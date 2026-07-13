@@ -1,44 +1,47 @@
-package executor
+package eval
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
+	"vaultdb/internal/ai"
 	"vaultdb/internal/storage"
 )
 
-// ─── JSON Functions ─────────────────────────────────────────────────────────
-
-func fnJsonObject(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnJsonObject creates a JSON object from key-value pairs.
+func FnJsonObject(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args)%2 != 0 {
 		return nil, fmt.Errorf("JSON_OBJECT requires even number of arguments")
 	}
 	obj := make(map[string]interface{})
 	for i := 0; i < len(args); i += 2 {
-		key := valueToString(args[i])
+		key := ValueToString(args[i])
 		obj[key] = args[i+1]
 	}
 	data, _ := json.Marshal(obj)
 	return string(data), nil
 }
 
-func fnJsonArray(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnJsonArray creates a JSON array.
+func FnJsonArray(args []interface{}, _ interface{}) (interface{}, error) {
 	data, _ := json.Marshal(args)
 	return string(data), nil
 }
 
-func fnJsonExtract(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnJsonExtract extracts a value from JSON.
+func FnJsonExtract(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) < 2 {
 		return nil, fmt.Errorf("JSON_EXTRACT requires at least 2 arguments")
 	}
-	leftStr := valueToString(args[0])
+	leftStr := ValueToString(args[0])
 	data, err := storage.DecodeJSON([]byte(leftStr))
 	if err != nil {
 		return nil, fmt.Errorf("JSON_EXTRACT: not valid JSON")
 	}
 
 	for i := 1; i < len(args); i++ {
-		key := valueToString(args[i])
+		key := ValueToString(args[i])
 		switch v := data.(type) {
 		case map[string]interface{}:
 			data = v[key]
@@ -60,29 +63,32 @@ func fnJsonExtract(args []interface{}, ctx *ExecutionContext) (interface{}, erro
 	return string(result), nil
 }
 
-func fnJsonbBuildObject(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnJsonbBuildObject builds a JSONB object.
+func FnJsonbBuildObject(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args)%2 != 0 {
 		return nil, fmt.Errorf("JSONB_BUILD_OBJECT requires even number of arguments")
 	}
 	obj := make(map[string]interface{})
 	for i := 0; i < len(args); i += 2 {
-		key := valueToString(args[i])
+		key := ValueToString(args[i])
 		obj[key] = args[i+1]
 	}
 	data, _ := json.Marshal(obj)
 	return string(data), nil
 }
 
-func fnJsonbBuildArray(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnJsonbBuildArray builds a JSONB array.
+func FnJsonbBuildArray(args []interface{}, _ interface{}) (interface{}, error) {
 	data, _ := json.Marshal(args)
 	return string(data), nil
 }
 
-func fnJsonbArrayElements(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnJsonbArrayElements extracts elements from a JSONB array.
+func FnJsonbArrayElements(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("JSONB_ARRAY_ELEMENTS requires 1 argument")
 	}
-	s := valueToString(args[0])
+	s := ValueToString(args[0])
 	raw, err := storage.DecodeJSON([]byte(s))
 	if err != nil {
 		return nil, fmt.Errorf("JSONB_ARRAY_ELEMENTS: not a JSON array")
@@ -97,11 +103,12 @@ func fnJsonbArrayElements(args []interface{}, ctx *ExecutionContext) (interface{
 	return arr[0], nil
 }
 
-func fnJsonbTypeof(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnJsonbTypeof returns the type of a JSONB value.
+func FnJsonbTypeof(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("JSONB_TYPEOF requires 1 argument")
 	}
-	s := valueToString(args[0])
+	s := ValueToString(args[0])
 	v, err := storage.DecodeJSON([]byte(s))
 	if err != nil {
 		return "string", nil
@@ -124,12 +131,13 @@ func fnJsonbTypeof(args []interface{}, ctx *ExecutionContext) (interface{}, erro
 	}
 }
 
-func fnJsonbSet(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnJsonbSet sets a value in a JSONB object.
+func FnJsonbSet(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) != 3 {
 		return nil, fmt.Errorf("JSONB_SET requires 3 arguments: target, path, new_value")
 	}
-	targetStr := valueToString(args[0])
-	path := valueToString(args[1])
+	targetStr := ValueToString(args[0])
+	path := ValueToString(args[1])
 	newVal := args[2]
 
 	raw, err := storage.DecodeJSON([]byte(targetStr))
@@ -145,18 +153,19 @@ func fnJsonbSet(args []interface{}, ctx *ExecutionContext) (interface{}, error) 
 	return string(result), nil
 }
 
-func fnJsonbExtractPath(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnJsonbExtractPath extracts a value by path from JSONB.
+func FnJsonbExtractPath(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) < 2 {
 		return nil, fmt.Errorf("JSONB_EXTRACT_PATH requires at least 2 arguments")
 	}
-	leftStr := valueToString(args[0])
+	leftStr := ValueToString(args[0])
 	data, err := storage.DecodeJSON([]byte(leftStr))
 	if err != nil {
 		return nil, fmt.Errorf("JSONB_EXTRACT_PATH: not valid JSON")
 	}
 
 	for i := 1; i < len(args); i++ {
-		key := valueToString(args[i])
+		key := ValueToString(args[i])
 		switch v := data.(type) {
 		case map[string]interface{}:
 			data = v[key]
@@ -178,27 +187,34 @@ func fnJsonbExtractPath(args []interface{}, ctx *ExecutionContext) (interface{},
 	return string(result), nil
 }
 
-// ─── Misc Functions ─────────────────────────────────────────────────────────
-
-func fnAiEmbed(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnAiEmbed generates an embedding vector.
+func FnAiEmbed(args []interface{}, ctx interface{}) (interface{}, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("AI_EMBED requires 1 argument")
 	}
-	text := valueToString(args[0])
-	vec, err := embedText(ctx, text)
+	text := ValueToString(args[0])
+	var embedder ai.Embedder
+	var goCtx context.Context
+	if ep, ok := ctx.(EmbedderProvider); ok {
+		embedder = ep.GetEmbedder()
+		goCtx = ep.GetGoContext()
+	}
+	vec, err := EmbedText(embedder, goCtx, text)
 	if err != nil {
 		return nil, fmt.Errorf("AI_EMBED: %w", err)
 	}
 	return vec, nil
 }
 
-func fnUuid(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
-	return generateUUID()
+// FnUuid generates a UUID.
+func FnUuid(_ []interface{}, _ interface{}) (interface{}, error) {
+	return GenerateUUID()
 }
 
-func fnInterval(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnInterval returns the interval string.
+func FnInterval(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("INTERVAL requires 1 argument")
 	}
-	return valueToString(args[0]), nil
+	return ValueToString(args[0]), nil
 }

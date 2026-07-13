@@ -1,4 +1,4 @@
-package executor
+package eval
 
 import (
 	"fmt"
@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// parseTimestamp attempts to parse a string as a timestamp in various formats.
-func parseTimestamp(s string) (time.Time, error) {
+// ParseTimestamp attempts to parse a string as a timestamp in various formats.
+func ParseTimestamp(s string) (time.Time, error) {
 	formats := []string{
 		time.RFC3339,
 		"2006-01-02T15:04:05",
@@ -26,8 +26,8 @@ func parseTimestamp(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("cannot parse timestamp %q", s)
 }
 
-// sqlToGoLayout converts SQL date format to Go layout.
-func sqlToGoLayout(layout string) string {
+// SqlToGoLayout converts SQL date format to Go layout.
+func SqlToGoLayout(layout string) string {
 	sqlTokens := []struct{ sql, goLayout string }{
 		{"YYYY", "2006"},
 		{"YY", "06"},
@@ -47,8 +47,8 @@ func sqlToGoLayout(layout string) string {
 	return result
 }
 
-// isIntervalString checks if a string is a SQL interval.
-func isIntervalString(s string) bool {
+// IsIntervalString checks if a string is a SQL interval.
+func IsIntervalString(s string) bool {
 	s = strings.TrimSpace(s)
 	s = strings.ToUpper(s)
 	return strings.Contains(s, "INTERVAL") || strings.HasSuffix(s, "DAYS") ||
@@ -57,9 +57,9 @@ func isIntervalString(s string) bool {
 		strings.HasSuffix(s, "YEARS")
 }
 
-// evalDateInterval computes date interval arithmetic.
-func evalDateInterval(dateStr, intervalStr, op string) (interface{}, error) {
-	t, err := parseTimestamp(dateStr)
+// EvalDateInterval computes date interval arithmetic.
+func EvalDateInterval(dateStr, intervalStr, op string) (interface{}, error) {
+	t, err := ParseTimestamp(dateStr)
 	if err != nil {
 		return nil, fmt.Errorf("date interval: %w", err)
 	}
@@ -120,33 +120,33 @@ func evalDateInterval(dateStr, intervalStr, op string) (interface{}, error) {
 	return t.Format(time.RFC3339), nil
 }
 
-// fnNow returns the current time.
-func fnNow(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnNow returns the current time.
+func FnNow(_ []interface{}, _ interface{}) (interface{}, error) {
 	return time.Now().UTC().Format(time.RFC3339), nil
 }
 
-// fnCurrentDate returns the current date.
-func fnCurrentDate(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnCurrentDate returns the current date.
+func FnCurrentDate(_ []interface{}, _ interface{}) (interface{}, error) {
 	return time.Now().UTC().Format("2006-01-02"), nil
 }
 
-// fnCurrentTime returns the current time.
-func fnCurrentTime(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnCurrentTime returns the current time.
+func FnCurrentTime(_ []interface{}, _ interface{}) (interface{}, error) {
 	return time.Now().UTC().Format("15:04:05"), nil
 }
 
-// fnCurrentTimestamp returns the current timestamp.
-func fnCurrentTimestamp(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnCurrentTimestamp returns the current timestamp.
+func FnCurrentTimestamp(_ []interface{}, _ interface{}) (interface{}, error) {
 	return time.Now().UTC().Format(time.RFC3339), nil
 }
 
-// fnDateTrunc truncates timestamp to the specified part.
-func fnDateTrunc(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnDateTrunc truncates timestamp to the specified part.
+func FnDateTrunc(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("DATE_TRUNC requires 2 arguments")
 	}
-	part := strings.ToUpper(valueToString(args[0]))
-	ts, err := parseTimestamp(valueToString(args[1]))
+	part := strings.ToUpper(ValueToString(args[0]))
+	ts, err := ParseTimestamp(ValueToString(args[1]))
 	if err != nil {
 		return nil, fmt.Errorf("DATE_TRUNC: %w", err)
 	}
@@ -168,21 +168,21 @@ func fnDateTrunc(args []interface{}, ctx *ExecutionContext) (interface{}, error)
 	}
 }
 
-// fnExtract extracts a part from a timestamp.
-func fnExtract(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnExtract extracts a part from a timestamp.
+func FnExtract(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) < 1 || len(args) > 2 {
 		return nil, fmt.Errorf("EXTRACT requires 1 or 2 arguments")
 	}
 	if len(args) == 1 {
-		s := valueToString(args[0])
-		ts, err := parseTimestamp(s)
+		s := ValueToString(args[0])
+		ts, err := ParseTimestamp(s)
 		if err != nil {
 			return nil, fmt.Errorf("EXTRACT: %w", err)
 		}
 		return int64(ts.Unix()), nil
 	}
-	field := strings.ToUpper(valueToString(args[0]))
-	t, err := parseTimestamp(valueToString(args[1]))
+	field := strings.ToUpper(ValueToString(args[0]))
+	t, err := ParseTimestamp(ValueToString(args[1]))
 	if err != nil {
 		return nil, fmt.Errorf("EXTRACT: %w", err)
 	}
@@ -208,18 +208,18 @@ func fnExtract(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	}
 }
 
-// fnAge computes time difference.
-func fnAge(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnAge computes time difference.
+func FnAge(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) < 1 || len(args) > 2 {
 		return nil, fmt.Errorf("AGE requires 1 or 2 arguments")
 	}
-	ts, err := parseTimestamp(valueToString(args[0]))
+	ts, err := ParseTimestamp(ValueToString(args[0]))
 	if err != nil {
 		return nil, fmt.Errorf("AGE: %w", err)
 	}
 	var diff time.Duration
 	if len(args) == 2 {
-		ts2, err := parseTimestamp(valueToString(args[1]))
+		ts2, err := ParseTimestamp(ValueToString(args[1]))
 		if err != nil {
 			return nil, fmt.Errorf("AGE: %w", err)
 		}
@@ -234,14 +234,14 @@ func fnAge(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return fmt.Sprintf("%d days %d hours %d mins %d secs", days, hours, minutes, seconds), nil
 }
 
-// fnToDate converts string to date.
-func fnToDate(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnToDate converts string to date.
+func FnToDate(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("TO_DATE requires 2 arguments")
 	}
-	s := valueToString(args[0])
-	layout := valueToString(args[1])
-	goLayout := sqlToGoLayout(layout)
+	s := ValueToString(args[0])
+	layout := ValueToString(args[1])
+	goLayout := SqlToGoLayout(layout)
 	t, err := time.Parse(goLayout, s)
 	if err != nil {
 		return nil, fmt.Errorf("TO_DATE: %w", err)
@@ -249,26 +249,26 @@ func fnToDate(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return t.Format("2006-01-02"), nil
 }
 
-// fnToChar formats timestamp to string.
-func fnToChar(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnToChar formats timestamp to string.
+func FnToChar(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("TO_CHAR requires 2 arguments")
 	}
-	ts, err := parseTimestamp(valueToString(args[0]))
+	ts, err := ParseTimestamp(ValueToString(args[0]))
 	if err != nil {
 		return nil, fmt.Errorf("TO_CHAR: %w", err)
 	}
-	layout := valueToString(args[1])
+	layout := ValueToString(args[1])
 	return ts.Format(layout), nil
 }
 
-// fnToTimestamp converts a string to a timestamp.
-func fnToTimestamp(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnToTimestamp converts a string to a timestamp.
+func FnToTimestamp(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("TO_TIMESTAMP requires 2 arguments")
 	}
-	s := valueToString(args[0])
-	layout := valueToString(args[1])
+	s := ValueToString(args[0])
+	layout := ValueToString(args[1])
 	t, err := time.Parse(layout, s)
 	if err != nil {
 		return nil, fmt.Errorf("TO_TIMESTAMP: %w", err)
@@ -276,21 +276,21 @@ func fnToTimestamp(args []interface{}, ctx *ExecutionContext) (interface{}, erro
 	return t.Format(time.RFC3339), nil
 }
 
-// fnDateAdd adds an interval to a date.
-func fnDateAdd(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnDateAdd adds an interval to a date.
+func FnDateAdd(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) != 3 {
 		return nil, fmt.Errorf("DATE_ADD requires 3 arguments: date, amount, unit")
 	}
-	dateStr := valueToString(args[0])
-	t, err := parseTimestamp(dateStr)
+	dateStr := ValueToString(args[0])
+	t, err := ParseTimestamp(dateStr)
 	if err != nil {
 		return nil, fmt.Errorf("DATE_ADD: %w", err)
 	}
-	amount, ok := toFloat(args[1])
+	amount, ok := ToFloat(args[1])
 	if !ok {
 		return nil, fmt.Errorf("DATE_ADD: amount must be numeric")
 	}
-	unit := strings.ToUpper(valueToString(args[2]))
+	unit := strings.ToUpper(ValueToString(args[2]))
 	switch unit {
 	case "YEAR":
 		t = t.AddDate(int(amount), 0, 0)
@@ -310,21 +310,21 @@ func fnDateAdd(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return t.Format(time.RFC3339), nil
 }
 
-// fnDateSub subtracts an interval from a date.
-func fnDateSub(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnDateSub subtracts an interval from a date.
+func FnDateSub(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) != 3 {
 		return nil, fmt.Errorf("DATE_SUB requires 3 arguments: date, amount, unit")
 	}
-	dateStr := valueToString(args[0])
-	t, err := parseTimestamp(dateStr)
+	dateStr := ValueToString(args[0])
+	t, err := ParseTimestamp(dateStr)
 	if err != nil {
 		return nil, fmt.Errorf("DATE_SUB: %w", err)
 	}
-	amount, ok := toFloat(args[1])
+	amount, ok := ToFloat(args[1])
 	if !ok {
 		return nil, fmt.Errorf("DATE_SUB: amount must be numeric")
 	}
-	unit := strings.ToUpper(valueToString(args[2]))
+	unit := strings.ToUpper(ValueToString(args[2]))
 	switch unit {
 	case "YEAR":
 		t = t.AddDate(-int(amount), 0, 0)
@@ -344,17 +344,17 @@ func fnDateSub(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
 	return t.Format(time.RFC3339), nil
 }
 
-// fnDateDiff computes difference between two dates.
-func fnDateDiff(args []interface{}, ctx *ExecutionContext) (interface{}, error) {
+// FnDateDiff computes difference between two dates.
+func FnDateDiff(args []interface{}, _ interface{}) (interface{}, error) {
 	if len(args) != 3 {
 		return nil, fmt.Errorf("DATE_DIFF requires 3 arguments: unit, date1, date2")
 	}
-	unit := strings.ToUpper(valueToString(args[0]))
-	t1, err := parseTimestamp(valueToString(args[1]))
+	unit := strings.ToUpper(ValueToString(args[0]))
+	t1, err := ParseTimestamp(ValueToString(args[1]))
 	if err != nil {
 		return nil, fmt.Errorf("DATE_DIFF: %w", err)
 	}
-	t2, err := parseTimestamp(valueToString(args[2]))
+	t2, err := ParseTimestamp(ValueToString(args[2]))
 	if err != nil {
 		return nil, fmt.Errorf("DATE_DIFF: %w", err)
 	}

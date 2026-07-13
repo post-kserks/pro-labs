@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"vaultdb/internal/executor/eval"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -35,27 +36,27 @@ func evalBinary(expr *parser.BinaryExpr, row storage.Row, schema *storage.TableS
 
 	switch expr.Operator {
 	case "=", "!=", "<", ">", "<=", ">=":
-		return compareValues(left, right, expr.Operator)
+		return eval.CompareValues(left, right, expr.Operator)
 	case "+", "-", "*", "/":
-		return evalArithmetic(left, right, expr.Operator)
+		return eval.EvalArithmetic(left, right, expr.Operator)
 	case "LIKE":
-		return evalLike(left, right)
+		return eval.EvalLike(left, right)
 	case "ILIKE":
-		return evalILike(left, right)
+		return eval.EvalILike(left, right)
 	case "IS":
 		return left == nil, nil
 	case "IS NOT":
 		return left != nil, nil
 	case "SEMANTIC_MATCH":
-		return evalSemanticMatch(left, right, ctx)
+		return eval.EvalSemanticMatch(left, right, ctx)
 	case "FTS_MATCH", "MATCH":
-		return evalFtsMatch(left, right)
+		return eval.EvalFtsMatch(left, right)
 	case "@>":
-		return evalJsonContains(left, right)
+		return eval.EvalJsonContains(left, right)
 	case "<@":
-		return evalJsonContainedBy(left, right)
+		return eval.EvalJsonContainedBy(left, right)
 	case "?":
-		return evalJsonHasKey(left, right)
+		return eval.EvalJsonHasKey(left, right)
 	case "||":
 		// String concatenation for PL/pgSQL if both operands are strings
 		if ls, lok := left.(string); lok {
@@ -63,9 +64,9 @@ func evalBinary(expr *parser.BinaryExpr, row storage.Row, schema *storage.TableS
 				return ls + rs, nil
 			}
 		}
-		return evalJsonMerge(left, right)
+		return eval.EvalJsonMerge(left, right)
 	case "@@":
-		return evalFtsMatch(left, right)
+		return eval.EvalFtsMatch(left, right)
 	default:
 		return nil, fmt.Errorf("unsupported operator '%s'", expr.Operator)
 	}
@@ -77,26 +78,26 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 	}
 	switch e := expr.(type) {
 	case parser.Value:
-		return parserValueToRaw(e), nil
+		return eval.ParserValueToRaw(e), nil
 	case *parser.Value:
-		return parserValueToRaw(*e), nil
+		return eval.ParserValueToRaw(*e), nil
 	case *parser.ColumnRef:
 		var colIdx map[string]int
 		if ctx != nil {
 			colIdx = ctx.ColumnIndex
 		}
 		if e.Table == "old" && ctx != nil && ctx.OldRow != nil {
-			return resolveColumn(ctx.OldRow, schema, e.Name, colIdx)
+			return eval.ResolveColumn(ctx.OldRow, schema, e.Name, colIdx)
 		}
 		if e.Table == "new" && ctx != nil && ctx.NewRow != nil {
-			return resolveColumn(ctx.NewRow, schema, e.Name, colIdx)
+			return eval.ResolveColumn(ctx.NewRow, schema, e.Name, colIdx)
 		}
 		if e.Table != "" {
-			if val, err := resolveColumn(row, schema, e.Table+"."+e.Name, colIdx); err == nil {
+			if val, err := eval.ResolveColumn(row, schema, e.Table+"."+e.Name, colIdx); err == nil {
 				return val, nil
 			}
 		}
-		return resolveColumn(row, schema, e.Name, colIdx)
+		return eval.ResolveColumn(row, schema, e.Name, colIdx)
 	case *parser.BinaryExpr:
 		return evalBinary(e, row, schema, ctx)
 	case *parser.AndExpr:
@@ -128,10 +129,6 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 	case *parser.FunctionCall:
 		return evalFunctionCall(e, row, schema, ctx)
 	case *parser.AggregateExpr:
-		// In SELECT context with aggregates, this is reached when the aggregate
-		// is nested inside an expression (e.g., AVG(x) + 1). The top-level
-		// aggregate executor handles standalone AggregateExpr nodes.
-		// Return nil to avoid breaking arithmetic expressions.
 		return nil, nil
 	case *parser.CastExpr:
 		return evalCast(e, row, schema, ctx)
@@ -152,10 +149,9 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 	case *parser.SubqueryExpr:
 		return executeSubquery(e, row, schema, ctx)
 	case *parser.WindowFunctionExpr:
-		// Resolve window function to the pre-computed column value
 		if ctx != nil && ctx.WindowCols != nil {
 			if colName, ok := ctx.WindowCols[e]; ok {
-				return resolveColumn(row, schema, colName, ctx.ColumnIndex)
+				return eval.ResolveColumn(row, schema, colName, ctx.ColumnIndex)
 			}
 		}
 		return nil, nil
@@ -193,8 +189,8 @@ func evalInExpr(e *parser.InExpr, row storage.Row, schema *storage.TableSchema, 
 				}
 				rightVal := r[0]
 				// Try numeric conversion if types don't match
-				if lf, lok := toFloat(leftVal); lok {
-					if rf, rok := toFloat(rightVal); rok {
+				if lf, lok := eval.ToFloat(leftVal); lok {
+					if rf, rok := eval.ToFloat(rightVal); rok {
 						cmp, _ := compareOrdered(lf, rf, "=")
 						if cmp {
 							if e.Not {
@@ -205,7 +201,7 @@ func evalInExpr(e *parser.InExpr, row storage.Row, schema *storage.TableSchema, 
 						continue
 					}
 				}
-				cmp, err := compareValues(leftVal, rightVal, "=")
+				cmp, err := eval.CompareValues(leftVal, rightVal, "=")
 				if err != nil {
 					continue
 				}
@@ -226,7 +222,7 @@ func evalInExpr(e *parser.InExpr, row storage.Row, schema *storage.TableSchema, 
 		if err != nil {
 			return false, err
 		}
-		cmp, err := compareValues(leftVal, rightVal, "=")
+		cmp, err := eval.CompareValues(leftVal, rightVal, "=")
 		if err != nil {
 			return false, err
 		}
@@ -255,10 +251,10 @@ func evalCast(e *parser.CastExpr, row storage.Row, schema *storage.TableSchema, 
 
 	switch strings.ToUpper(e.TargetType) {
 	case "INT":
-		if i, ok := toInt64(val); ok {
+		if i, ok := eval.ToInt64(val); ok {
 			return i, nil
 		}
-		if f, ok := toFloat(val); ok {
+		if f, ok := eval.ToFloat(val); ok {
 			return int64(f), nil
 		}
 		if s, ok := val.(string); ok {
@@ -267,7 +263,7 @@ func evalCast(e *parser.CastExpr, row storage.Row, schema *storage.TableSchema, 
 			}
 		}
 	case "FLOAT":
-		if f, ok := toFloat(val); ok {
+		if f, ok := eval.ToFloat(val); ok {
 			return f, nil
 		}
 		if s, ok := val.(string); ok {
@@ -276,12 +272,12 @@ func evalCast(e *parser.CastExpr, row storage.Row, schema *storage.TableSchema, 
 			}
 		}
 	case "TEXT", "VARCHAR":
-		return valueToString(val), nil
+		return eval.ValueToString(val), nil
 	case "BOOL":
 		if b, ok := val.(bool); ok {
 			return b, nil
 		}
-		s := strings.ToUpper(valueToString(val))
+		s := strings.ToUpper(eval.ValueToString(val))
 		if s == "TRUE" || s == "1" {
 			return true, nil
 		}
@@ -309,7 +305,7 @@ func evalCase(e *parser.CaseExpr, row storage.Row, schema *storage.TableSchema, 
 			if err != nil {
 				return nil, err
 			}
-			if CompareValues(baseVal, whenVal) == 0 {
+			if eval.CompareOrdering(baseVal, whenVal) == 0 {
 				return evalOperand(when.Result, row, schema, ctx)
 			}
 		} else {
@@ -344,11 +340,11 @@ func evalBetweenExpr(e *parser.BetweenExpr, row storage.Row, schema *storage.Tab
 		return false, err
 	}
 
-	cmpLower, err := compareValues(val, lower, ">=")
+	cmpLower, err := eval.CompareValues(val, lower, ">=")
 	if err != nil {
 		return false, err
 	}
-	cmpUpper, err := compareValues(val, upper, "<=")
+	cmpUpper, err := eval.CompareValues(val, upper, "<=")
 	if err != nil {
 		return false, err
 	}
@@ -413,7 +409,7 @@ func evalComparisonSubquery(e *parser.ComparisonSubqueryExpr, row storage.Row, s
 	values := make([]interface{}, 0, len(res.Rows))
 	for _, r := range res.Rows {
 		if len(r) > 0 {
-			val, err := convertStringToValue(r[0], storage.ColumnSchema{Type: "TEXT"})
+			val, err := eval.ConvertStringValue(r[0], storage.ColumnSchema{Type: "TEXT"})
 			if err == nil {
 				values = append(values, val)
 			} else {
@@ -425,7 +421,7 @@ func evalComparisonSubquery(e *parser.ComparisonSubqueryExpr, row storage.Row, s
 	switch e.Quantifier {
 	case "ALL":
 		for _, v := range values {
-			cmp, err := compareValues(leftVal, v, e.Operator)
+			cmp, err := eval.CompareValues(leftVal, v, e.Operator)
 			if err != nil {
 				return false, err
 			}
@@ -436,7 +432,7 @@ func evalComparisonSubquery(e *parser.ComparisonSubqueryExpr, row storage.Row, s
 		return true, nil
 	case "ANY", "SOME":
 		for _, v := range values {
-			cmp, err := compareValues(leftVal, v, e.Operator)
+			cmp, err := eval.CompareValues(leftVal, v, e.Operator)
 			if err != nil {
 				return false, err
 			}
@@ -473,7 +469,7 @@ func evalCheckExprAST(expr parser.Expression, row storage.Row, schema *storage.T
 		if err != nil {
 			return false, err
 		}
-		return compareValues(left, right, e.Operator)
+		return eval.CompareValues(left, right, e.Operator)
 	case *parser.AndExpr:
 		left, err := evalCheckExprAST(e.Left, row, schema)
 		if err != nil {
@@ -510,7 +506,7 @@ func evalCheckExprAST(expr parser.Expression, row storage.Row, schema *storage.T
 			if err != nil {
 				return false, err
 			}
-			cmp, err := compareValues(leftVal, rightVal, "=")
+			cmp, err := eval.CompareValues(leftVal, rightVal, "=")
 			if err != nil {
 				continue
 			}
@@ -538,5 +534,64 @@ func evalCheckExprAST(expr parser.Expression, row storage.Row, schema *storage.T
 		return false, fmt.Errorf("CHECK function must return bool, got %T", val)
 	default:
 		return false, fmt.Errorf("unsupported CHECK expression type: %T", expr)
+	}
+}
+
+// evalJsonPath evaluates a JSON path expression (->, ->>).
+func evalJsonPath(e *parser.JsonPathExpr, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
+	left, err := evalOperand(e.Left, row, schema, ctx)
+	if err != nil {
+		return nil, err
+	}
+	if left == nil {
+		return nil, nil
+	}
+
+	var data map[string]interface{}
+	switch v := left.(type) {
+	case map[string]interface{}:
+		data = v
+	case string:
+		raw, err := storage.DecodeJSON([]byte(v))
+		if err != nil {
+			return nil, nil
+		}
+		data, _ = raw.(map[string]interface{})
+		if data == nil {
+			return nil, nil
+		}
+	default:
+		return nil, nil
+	}
+
+	val, ok := data[e.Path]
+	if !ok {
+		return nil, nil
+	}
+
+	if e.Op == "->>" {
+		return eval.ValueToString(val), nil
+	}
+	return val, nil
+}
+
+// evalJSONAccess evaluates JSONB expression operators (@>, ?).
+func evalJSONAccess(e *parser.JSONAccess, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
+	left, err := evalOperand(e.Expr, row, schema, ctx)
+	if err != nil {
+		return nil, err
+	}
+	right, err := evalOperand(e.Argument, row, schema, ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	switch e.Operator {
+	case "@>":
+		return eval.EvalJsonContains(left, right)
+	case "?":
+		return eval.EvalJsonHasKey(left, right)
+	default:
+		return nil, fmt.Errorf("unsupported JSONB operator '%s'", e.Operator)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"vaultdb/internal/executor/eval"
 	"vaultdb/internal/executor/optimizer"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -22,7 +23,7 @@ func (c *SelectCommand) resolveLimitOffset(ctx *ExecutionContext) (int, bool, in
 	if c.stmt.LimitExpr != nil {
 		val, err := evalOperand(c.stmt.LimitExpr, nil, nil, ctx)
 		if err == nil {
-			if v, ok := toInt64(val); ok {
+			if v, ok := eval.ToInt64(val); ok {
 				limit = int(v)
 				hasLimit = true
 			}
@@ -31,7 +32,7 @@ func (c *SelectCommand) resolveLimitOffset(ctx *ExecutionContext) (int, bool, in
 	if c.stmt.OffsetExpr != nil {
 		val, err := evalOperand(c.stmt.OffsetExpr, nil, nil, ctx)
 		if err == nil {
-			if v, ok := toInt64(val); ok {
+			if v, ok := eval.ToInt64(val); ok {
 				offset = int(v)
 				hasOffset = true
 			}
@@ -52,7 +53,7 @@ func (c *SelectCommand) applyOrderBy(rows []storage.Row, schema *storage.TableSc
 				continue
 			}
 
-			cmp := CompareValues(vi, vj)
+			cmp := eval.CompareOrdering(vi, vj)
 			if cmp == 0 {
 				continue
 			}
@@ -327,7 +328,7 @@ func (c *HistoryCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		storage.ColumnSchema{Name: "deleted_tx", Type: "TEXT"},
 	)
 	histSchema.Columns = append(histSchema.Columns, schema.Columns...)
-	colIdx := buildColumnIndex(histSchema)
+	colIdx := eval.BuildColumnIndex(histSchema)
 
 	var filteredRows [][]string
 	for _, version := range history {

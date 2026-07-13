@@ -1,4 +1,4 @@
-package executor
+package eval
 
 import (
 	"fmt"
@@ -7,75 +7,65 @@ import (
 	"vaultdb/internal/storage"
 )
 
-// valuesEqual compares two storage.Value values.
-// Uses type-safe comparison: first numbers, then strings, then bools,
-// and only as a last resort falls back to fmt.Sprintf.
-func valuesEqual(a, b storage.Value) bool {
+// ValuesEqual compares two storage.Value values.
+func ValuesEqual(a, b storage.Value) bool {
 	if a == nil && b == nil {
 		return true
 	}
 	if a == nil || b == nil {
 		return false
 	}
-	// Numeric comparison
-	if af, aok := toFloat(a); aok {
-		if bf, bok := toFloat(b); bok {
+	if af, aok := ToFloat(a); aok {
+		if bf, bok := ToFloat(b); bok {
 			return af == bf
 		}
 	}
-	// String comparison
 	if as, ok := a.(string); ok {
 		if bs, ok := b.(string); ok {
 			return as == bs
 		}
 	}
-	// Bool comparison
 	if ab, ok := a.(bool); ok {
 		if bb, ok := b.(bool); ok {
 			return ab == bb
 		}
 	}
-	// Int64 comparison
 	if ai, ok := a.(int64); ok {
 		if bi, ok := b.(int64); ok {
 			return ai == bi
 		}
 	}
-	// Float64 comparison
 	if af, ok := a.(float64); ok {
 		if bf, ok := b.(float64); ok {
 			return af == bf
 		}
 	}
-	// Fallback: string representation
 	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 }
 
-// valuesEqualCaseInsensitive compares two storage.Value values case-insensitively for strings.
-func valuesEqualCaseInsensitive(a, b storage.Value) bool {
+// ValuesEqualCaseInsensitive compares two storage.Value values case-insensitively for strings.
+func ValuesEqualCaseInsensitive(a, b storage.Value) bool {
 	if a == nil && b == nil {
 		return true
 	}
 	if a == nil || b == nil {
 		return false
 	}
-	// String comparison (case-insensitive)
 	if as, ok := a.(string); ok {
 		if bs, ok := b.(string); ok {
 			return strings.EqualFold(as, bs)
 		}
 	}
-	// Fall back to exact comparison
-	return valuesEqual(a, b)
+	return ValuesEqual(a, b)
 }
 
-// rowsEqual compares two table rows element by element.
-func rowsEqual(a, b storage.Row) bool {
+// RowsEqual compares two table rows element by element.
+func RowsEqual(a, b storage.Row) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if !valuesEqual(a[i], b[i]) {
+		if !ValuesEqual(a[i], b[i]) {
 			return false
 		}
 	}

@@ -3,6 +3,8 @@ package executor
 import (
 	"math"
 	"testing"
+
+	"vaultdb/internal/executor/eval"
 )
 
 func TestWelfordVariance(t *testing.T) {
@@ -29,7 +31,7 @@ func TestWelfordVariance(t *testing.T) {
 		{
 			name:   "known variance",
 			values: []float64{1, 2, 3, 4, 5},
-			want:   2.5, // sample variance
+			want:   2.5,
 		},
 		{
 			name:   "identical values",
@@ -40,7 +42,7 @@ func TestWelfordVariance(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			agg := &varianceAgg{}
+			agg := eval.NewAggregator("VARIANCE", false)
 			for _, v := range tt.values {
 				agg.Add(nil, v)
 			}
@@ -99,7 +101,7 @@ func TestWelfordStddev(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			agg := &stddevAgg{}
+			agg := eval.NewAggregator("STDDEV", false)
 			for _, v := range tt.values {
 				agg.Add(nil, v)
 			}
@@ -111,7 +113,6 @@ func TestWelfordStddev(t *testing.T) {
 				}
 				return
 			}
-
 			got, ok := result.(float64)
 			if !ok {
 				t.Fatalf("expected float64, got %T", result)
@@ -124,7 +125,7 @@ func TestWelfordStddev(t *testing.T) {
 }
 
 func TestWelfordNilIgnored(t *testing.T) {
-	agg := &varianceAgg{}
+	agg := eval.NewAggregator("VARIANCE", false)
 	agg.Add(nil, 1.0)
 	agg.Add(nil, nil)
 	agg.Add(nil, 3.0)
@@ -134,15 +135,13 @@ func TestWelfordNilIgnored(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected float64, got %T", result)
 	}
-	// variance of [1, 3] = 2.0 (sample variance)
 	if math.Abs(got-2.0) > 1e-10 {
 		t.Errorf("variance = %v, want 2.0", got)
 	}
 }
 
 func TestWelfordLargeDataset(t *testing.T) {
-	agg := &varianceAgg{}
-	// Add 1 million values, all equal to 100
+	agg := eval.NewAggregator("VARIANCE", false)
 	for i := 0; i < 1_000_000; i++ {
 		agg.Add(nil, 100.0)
 	}
@@ -159,14 +158,12 @@ func TestWelfordLargeDataset(t *testing.T) {
 func TestWelfordSequentialVsBatch(t *testing.T) {
 	values := []float64{10, 20, 30, 40, 50, 60, 70, 80, 90, 100}
 
-	// Sequential add
-	aggSeq := &varianceAgg{}
+	aggSeq := eval.NewAggregator("VARIANCE", false)
 	for _, v := range values {
 		aggSeq.Add(nil, v)
 	}
 
-	// Batch add (all at once via loop)
-	aggBatch := &varianceAgg{}
+	aggBatch := eval.NewAggregator("VARIANCE", false)
 	for _, v := range values {
 		aggBatch.Add(nil, v)
 	}

@@ -1,31 +1,28 @@
-package executor
+package eval
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
-	"time"
 
 	"vaultdb/internal/ai"
 	"vaultdb/internal/fts"
-	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
 
 const (
 	ftsScoreThreshold      = 0.1
 	semanticMatchThreshold = 0.7
-	embeddingTimeout       = 10 * time.Second
 )
 
-// evalFtsMatch performs full-text search (FTS_MATCH and @@).
-func evalFtsMatch(left, right interface{}) (bool, error) {
-	return evalFtsMatchScored(valueToString(left), valueToString(right)) > ftsScoreThreshold, nil
+// EvalFtsMatch performs full-text search (FTS_MATCH and @@).
+func EvalFtsMatch(left, right interface{}) (bool, error) {
+	return EvalFtsMatchScored(ValueToString(left), ValueToString(right)) > ftsScoreThreshold, nil
 }
 
-// evalFtsMatchScored computes the full-text match score.
-func evalFtsMatchScored(text, query string) float64 {
+// EvalFtsMatchScored computes the full-text match score.
+func EvalFtsMatchScored(text, query string) float64 {
 	queryTerms := fts.Tokenize(query)
 	if len(queryTerms) == 0 {
 		return 1.0
@@ -50,10 +47,10 @@ func evalFtsMatchScored(text, query string) float64 {
 	return score
 }
 
-// evalJsonContains checks if a JSON object/array contains all keys/elements of another.
-func evalJsonContains(left, right interface{}) (interface{}, error) {
-	leftStr := valueToString(left)
-	rightStr := valueToString(right)
+// EvalJsonContains checks if a JSON object/array contains all keys/elements of another.
+func EvalJsonContains(left, right interface{}) (interface{}, error) {
+	leftStr := ValueToString(left)
+	rightStr := ValueToString(right)
 	rawLeft, err := storage.DecodeJSON([]byte(leftStr))
 	if err != nil {
 		return nil, fmt.Errorf("JSON contains: left is not valid JSON")
@@ -63,7 +60,6 @@ func evalJsonContains(left, right interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("JSON contains: right is not valid JSON")
 	}
 
-	// Object containment: check that all keys in right exist in left with matching values.
 	if leftObj, lok := rawLeft.(map[string]interface{}); lok {
 		rightObj, rok := rawRight.(map[string]interface{})
 		if !rok {
@@ -81,7 +77,6 @@ func evalJsonContains(left, right interface{}) (interface{}, error) {
 		return true, nil
 	}
 
-	// Array containment (original logic).
 	leftArr, lok := rawLeft.([]interface{})
 	if !lok {
 		return nil, fmt.Errorf("JSON contains: left is not JSON array or object")
@@ -102,17 +97,16 @@ func evalJsonContains(left, right interface{}) (interface{}, error) {
 	return true, nil
 }
 
-// jsonValuesEqual compares two decoded JSON values for equality.
 func jsonValuesEqual(a, b interface{}) bool {
 	aj, _ := json.Marshal(a)
 	bj, _ := json.Marshal(b)
 	return string(aj) == string(bj)
 }
 
-// evalJsonContainedBy checks if a JSON object/array is contained within another.
-func evalJsonContainedBy(left, right interface{}) (interface{}, error) {
-	leftStr := valueToString(left)
-	rightStr := valueToString(right)
+// EvalJsonContainedBy checks if a JSON object/array is contained within another.
+func EvalJsonContainedBy(left, right interface{}) (interface{}, error) {
+	leftStr := ValueToString(left)
+	rightStr := ValueToString(right)
 	rawLeft, err := storage.DecodeJSON([]byte(leftStr))
 	if err != nil {
 		return nil, fmt.Errorf("JSON contained by: left is not valid JSON")
@@ -122,7 +116,6 @@ func evalJsonContainedBy(left, right interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("JSON contained by: right is not valid JSON")
 	}
 
-	// Object containment: left is contained by right means right contains left.
 	if leftObj, lok := rawLeft.(map[string]interface{}); lok {
 		rightObj, rok := rawRight.(map[string]interface{})
 		if !rok {
@@ -140,7 +133,6 @@ func evalJsonContainedBy(left, right interface{}) (interface{}, error) {
 		return true, nil
 	}
 
-	// Array containment (original logic).
 	leftArr, lok := rawLeft.([]interface{})
 	if !lok {
 		return nil, fmt.Errorf("JSON contained by: left is not JSON array or object")
@@ -161,10 +153,10 @@ func evalJsonContainedBy(left, right interface{}) (interface{}, error) {
 	return true, nil
 }
 
-// evalJsonHasKey checks for the presence of a key in a JSON object.
-func evalJsonHasKey(left, right interface{}) (interface{}, error) {
-	leftStr := valueToString(left)
-	key := valueToString(right)
+// EvalJsonHasKey checks for the presence of a key in a JSON object.
+func EvalJsonHasKey(left, right interface{}) (interface{}, error) {
+	leftStr := ValueToString(left)
+	key := ValueToString(right)
 	raw, err := storage.DecodeJSON([]byte(leftStr))
 	if err != nil {
 		return nil, fmt.Errorf("JSON has key: left is not JSON object")
@@ -177,10 +169,10 @@ func evalJsonHasKey(left, right interface{}) (interface{}, error) {
 	return exists, nil
 }
 
-// evalJsonMerge merges two JSON objects.
-func evalJsonMerge(left, right interface{}) (interface{}, error) {
-	leftStr := valueToString(left)
-	rightStr := valueToString(right)
+// EvalJsonMerge merges two JSON objects.
+func EvalJsonMerge(left, right interface{}) (interface{}, error) {
+	leftStr := ValueToString(left)
+	rightStr := ValueToString(right)
 	rawLeft, err := storage.DecodeJSON([]byte(leftStr))
 	if err != nil {
 		return nil, fmt.Errorf("JSON merge: left is not JSON object")
@@ -204,69 +196,51 @@ func evalJsonMerge(left, right interface{}) (interface{}, error) {
 	return string(data), nil
 }
 
-// evalOperandRaw extracts raw value from parser expression.
-func evalOperandRaw(expr parser.Expression) interface{} {
-	if expr == nil {
-		return nil
-	}
-	switch e := expr.(type) {
-	case parser.Value:
-		return parserValueToRaw(e)
-	case *parser.Value:
-		return parserValueToRaw(*e)
-	default:
-		return nil
-	}
+// EvalOperandRaw extracts raw value from parser expression.
+func EvalOperandRaw(val interface{}) interface{} {
+	// This is a helper that just returns the value as-is for expressions
+	// that have already been evaluated to raw values.
+	return val
 }
 
-// evalSemanticMatch compares operands by cosine similarity.
-func evalSemanticMatch(left, right interface{}, ctx *ExecutionContext) (bool, error) {
-	v1, err := operandVector(left, ctx)
+// EvalSemanticMatch compares operands by cosine similarity.
+func EvalSemanticMatch(left, right interface{}, ctx interface{}) (bool, error) {
+	v1, err := OperandVector(left, ctx)
 	if err != nil {
 		return false, fmt.Errorf("SEMANTIC_MATCH: %w", err)
 	}
-	v2, err := operandVector(right, ctx)
+	v2, err := OperandVector(right, ctx)
 	if err != nil {
 		return false, fmt.Errorf("SEMANTIC_MATCH: %w", err)
 	}
 
-	sim := cosineSimilarity(v1, v2)
+	sim := CosineSimilarity(v1, v2)
 	return sim > semanticMatchThreshold, nil
 }
 
-// operandVector converts an operand to a vector.
-func operandVector(val interface{}, ctx *ExecutionContext) ([]float64, error) {
-	if v, err := toVector(val); err == nil {
+// OperandVector converts an operand to a vector.
+func OperandVector(val interface{}, ctx interface{}) ([]float64, error) {
+	if v, err := ToVector(val); err == nil {
 		return v, nil
 	}
-	return embedText(ctx, valueToString(val))
-}
-
-// embedText calls the configured embedding provider with a timeout.
-func embedText(ctx *ExecutionContext, text string) ([]float64, error) {
-	var embedder ai.Embedder = ai.NoopEmbedder{}
-	var baseCtx context.Context = context.Background()
-	if ctx != nil {
-		if ctx.Embedder != nil {
-			embedder = ctx.Embedder
-		}
-		if ctx.Ctx != nil {
-			baseCtx = ctx.Ctx
-		}
+	var embedder ai.Embedder
+	var goCtx context.Context
+	if ep, ok := ctx.(EmbedderProvider); ok {
+		embedder = ep.GetEmbedder()
+		goCtx = ep.GetGoContext()
 	}
-	embedCtx, cancel := context.WithTimeout(baseCtx, embeddingTimeout)
-	defer cancel()
-	return embedder.Embed(embedCtx, text)
+	return EmbedText(embedder, goCtx, ValueToString(val))
 }
 
-func toVector(val interface{}) ([]float64, error) {
+// ToVector converts a value to a float64 vector.
+func ToVector(val interface{}) ([]float64, error) {
 	switch v := val.(type) {
 	case []float64:
 		return v, nil
 	case []interface{}:
 		res := make([]float64, len(v))
 		for i, x := range v {
-			if f, ok := toFloat(x); ok {
+			if f, ok := ToFloat(x); ok {
 				res[i] = f
 			}
 		}
@@ -280,7 +254,8 @@ func toVector(val interface{}) ([]float64, error) {
 	return nil, fmt.Errorf("cannot convert %T to VECTOR", val)
 }
 
-func cosineSimilarity(v1, v2 []float64) float64 {
+// CosineSimilarity computes cosine similarity between two vectors.
+func CosineSimilarity(v1, v2 []float64) float64 {
 	if len(v1) != len(v2) || len(v1) == 0 {
 		return 0
 	}
@@ -294,63 +269,4 @@ func cosineSimilarity(v1, v2 []float64) float64 {
 		return 0
 	}
 	return dot / (math.Sqrt(n1) * math.Sqrt(n2))
-}
-
-// evalJsonPath evaluates a JSON path expression (->, ->>).
-func evalJsonPath(e *parser.JsonPathExpr, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
-	left, err := evalOperand(e.Left, row, schema, ctx)
-	if err != nil {
-		return nil, err
-	}
-	if left == nil {
-		return nil, nil
-	}
-
-	var data map[string]interface{}
-	switch v := left.(type) {
-	case map[string]interface{}:
-		data = v
-	case string:
-		raw, err := storage.DecodeJSON([]byte(v))
-		if err != nil {
-			return nil, nil
-		}
-		data, _ = raw.(map[string]interface{})
-		if data == nil {
-			return nil, nil
-		}
-	default:
-		return nil, nil
-	}
-
-	val, ok := data[e.Path]
-	if !ok {
-		return nil, nil
-	}
-
-	if e.Op == "->>" {
-		return valueToString(val), nil
-	}
-	return val, nil
-}
-
-// evalJSONAccess evaluates JSONB expression operators (@>, ?).
-func evalJSONAccess(e *parser.JSONAccess, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
-	left, err := evalOperand(e.Expr, row, schema, ctx)
-	if err != nil {
-		return nil, err
-	}
-	right, err := evalOperand(e.Argument, row, schema, ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	switch e.Operator {
-	case "@>":
-		return evalJsonContains(left, right)
-	case "?":
-		return evalJsonHasKey(left, right)
-	default:
-		return nil, fmt.Errorf("unsupported JSONB operator '%s'", e.Operator)
-	}
 }

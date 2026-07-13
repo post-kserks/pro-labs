@@ -1,12 +1,12 @@
-package executor
+package eval
 
 import (
 	"fmt"
 	"math"
 )
 
-// compareValues compares two values using an operator.
-func compareValues(left, right interface{}, op string) (bool, error) {
+// CompareValues compares two values using an operator.
+func CompareValues(left, right interface{}, op string) (bool, error) {
 	if left == nil || right == nil {
 		switch op {
 		case "=":
@@ -18,8 +18,8 @@ func compareValues(left, right interface{}, op string) (bool, error) {
 		}
 	}
 
-	if lf, lok := toFloat(left); lok {
-		rf, rok := toFloat(right)
+	if lf, lok := ToFloat(left); lok {
+		rf, rok := ToFloat(right)
 		if !rok {
 			return false, fmt.Errorf("type mismatch in comparison: %T %s %T", left, op, right)
 		}
@@ -51,8 +51,8 @@ func compareValues(left, right interface{}, op string) (bool, error) {
 	}
 }
 
-// CompareValues returns -1 if a < b, 1 if a > b, 0 if a == b.
-func CompareValues(a, b interface{}) int {
+// CompareOrdering returns -1 if a < b, 1 if a > b, 0 if a == b.
+func CompareOrdering(a, b interface{}) int {
 	if a == nil && b == nil {
 		return 0
 	}
@@ -63,8 +63,8 @@ func CompareValues(a, b interface{}) int {
 		return 1
 	}
 
-	if af, aok := toFloat(a); aok {
-		if bf, bok := toFloat(b); bok {
+	if af, aok := ToFloat(a); aok {
+		if bf, bok := ToFloat(b); bok {
 			if af < bf {
 				return -1
 			}
@@ -98,8 +98,6 @@ func CompareValues(a, b interface{}) int {
 		}
 	}
 
-	// Types are incompatible — treat as not equal.
-	// This avoids incorrect sort order from returning -1 on mismatch.
 	return 0
 }
 
@@ -122,23 +120,23 @@ func compareOrdered[T ~float64 | ~string](left, right T, op string) (bool, error
 	}
 }
 
-// evalArithmetic performs arithmetic operations.
-func evalArithmetic(left, right interface{}, op string) (interface{}, error) {
+// EvalArithmetic performs arithmetic operations.
+func EvalArithmetic(left, right interface{}, op string) (interface{}, error) {
 	if left == nil || right == nil {
 		return nil, nil
 	}
 
-	leftStr := valueToString(left)
-	rightStr := valueToString(right)
-	if isIntervalString(rightStr) && (op == "+" || op == "-") {
-		return evalDateInterval(leftStr, rightStr, op)
+	leftStr := ValueToString(left)
+	rightStr := ValueToString(right)
+	if IsIntervalString(rightStr) && (op == "+" || op == "-") {
+		return EvalDateInterval(leftStr, rightStr, op)
 	}
-	if isIntervalString(leftStr) && (op == "+" || op == "-") {
-		return evalDateInterval(rightStr, leftStr, op)
+	if IsIntervalString(leftStr) && (op == "+" || op == "-") {
+		return EvalDateInterval(rightStr, leftStr, op)
 	}
 
-	lf, lok := toFloat(left)
-	rf, rok := toFloat(right)
+	lf, lok := ToFloat(left)
+	rf, rok := ToFloat(right)
 	if !lok || !rok {
 		return nil, fmt.Errorf("arithmetic requires numeric operands, got %T and %T", left, right)
 	}

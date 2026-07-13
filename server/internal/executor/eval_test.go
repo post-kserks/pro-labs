@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"vaultdb/internal/executor/eval"
 	"vaultdb/internal/storage"
 )
 
@@ -583,8 +584,8 @@ func TestResolveColumnCached(t *testing.T) {
 	row := storage.Row{int64(1), "alice", 9.5}
 
 	t.Run("unqualified match via cache", func(t *testing.T) {
-		idx := buildColumnIndex(schema)
-		got, err := resolveColumn(row, schema, "val", idx)
+		idx := eval.BuildColumnIndex(schema)
+		got, err := eval.ResolveColumn(row, schema, "val", idx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -594,8 +595,8 @@ func TestResolveColumnCached(t *testing.T) {
 	})
 
 	t.Run("case-insensitive cache lookup", func(t *testing.T) {
-		idx := buildColumnIndex(schema)
-		got, err := resolveColumn(row, schema, "VAL", idx)
+		idx := eval.BuildColumnIndex(schema)
+		got, err := eval.ResolveColumn(row, schema, "VAL", idx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -605,7 +606,7 @@ func TestResolveColumnCached(t *testing.T) {
 	})
 
 	t.Run("unqualified fallback to linear scan", func(t *testing.T) {
-		got, err := resolveColumn(row, schema, "score", nil)
+		got, err := eval.ResolveColumn(row, schema, "score", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -615,8 +616,8 @@ func TestResolveColumnCached(t *testing.T) {
 	})
 
 	t.Run("unknown column returns error", func(t *testing.T) {
-		idx := buildColumnIndex(schema)
-		_, err := resolveColumn(row, schema, "nonexistent", idx)
+		idx := eval.BuildColumnIndex(schema)
+		_, err := eval.ResolveColumn(row, schema, "nonexistent", idx)
 		if err == nil {
 			t.Fatal("expected error for unknown column")
 		}
@@ -634,17 +635,17 @@ func BenchmarkResolveColumnCached(b *testing.B) {
 		},
 	}
 	row := storage.Row{int64(1), "alice", 9.5, true}
-	idx := buildColumnIndex(schema)
+	idx := eval.BuildColumnIndex(schema)
 
 	b.Run("cached", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			resolveColumn(row, schema, "val", idx)
+			eval.ResolveColumn(row, schema, "val", idx)
 		}
 	})
 
 	b.Run("linear_scan", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			resolveColumn(row, schema, "val", nil)
+			eval.ResolveColumn(row, schema, "val", nil)
 		}
 	})
 }
