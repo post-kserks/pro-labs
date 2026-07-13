@@ -1,4 +1,4 @@
-package executor
+package dml
 
 import (
 	"bufio"
@@ -11,14 +11,13 @@ import (
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/executor/types"
 )
 
 // MaxCopyRows is the default maximum number of rows that COPY FROM will import.
-// This prevents loading unbounded data into memory.
 const MaxCopyRows = 1_000_000
 
 // validateCopyPath checks that the COPY filename is safe.
-// It rejects absolute paths, path traversal, and paths outside the data directory.
 func validateCopyPath(filename string, dataDir string) (string, error) {
 	cleaned := filepath.Clean(filename)
 	if filepath.IsAbs(cleaned) {
@@ -39,8 +38,22 @@ type CopyFromCommand struct {
 	stmt *parser.CopyStatement
 }
 
-func (c *CopyFromCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+type CopyToCommand struct {
+	stmt *parser.CopyStatement
+}
+
+func init() {
+	types.RegisterCommand("COPY", func(stmt parser.Statement) types.Command {
+		copyStmt := stmt.(*parser.CopyStatement)
+		if copyStmt.IsFrom {
+			return &CopyFromCommand{stmt: copyStmt}
+		}
+		return &CopyToCommand{stmt: copyStmt}
+	})
+}
+
+func (c *CopyFromCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +94,7 @@ func (c *CopyFromCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	if len(rows) == 0 {
-		return &Result{Type: "affected", Affected: 0, Message: "COPY: 0 rows imported"}, nil
+		return &types.Result{Type: "affected", Affected: 0, Message: "COPY: 0 rows imported"}, nil
 	}
 
 	if len(rows) > MaxCopyRows {
@@ -95,19 +108,15 @@ func (c *CopyFromCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
 
-	return &Result{
+	return &types.Result{
 		Type:     "affected",
 		Affected: affected,
 		Message:  fmt.Sprintf("COPY: %d rows imported", affected),
 	}, nil
 }
 
-type CopyToCommand struct {
-	stmt *parser.CopyStatement
-}
-
-func (c *CopyToCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func (c *CopyToCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +161,7 @@ func (c *CopyToCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("COPY TO failed during write: %w", err)
 	}
 
-	return &Result{
+	return &types.Result{
 		Type:     "affected",
 		Affected: count,
 		Message:  fmt.Sprintf("COPY: %d rows exported", count),
@@ -419,7 +428,6 @@ func coerceCSVValue(s string, colType string) (interface{}, error) {
 	case "JSON", "JSONB":
 		return s, nil
 	default:
-		// TEXT, VARCHAR, CHAR, UUID, DATE, TIME, TIMESTAMP, TIMESTAMPTZ, etc.
 		return s, nil
 	}
 }

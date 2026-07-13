@@ -1,4 +1,4 @@
-package executor
+package dml
 
 // DELETE command implementation.
 
@@ -8,14 +8,24 @@ import (
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
+	"vaultdb/internal/executor/types"
 )
 
 type DeleteCommand struct {
 	stmt *parser.DeleteStatement
 }
 
-func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, _ := requireCurrentDB(ctx)
+// SetStmt sets the statement for this command.
+func (c *DeleteCommand) SetStmt(stmt *parser.DeleteStatement) { c.stmt = stmt }
+
+func init() {
+	types.RegisterCommand("DELETE", func(stmt parser.Statement) types.Command {
+		return &DeleteCommand{stmt: stmt.(*parser.DeleteStatement)}
+	})
+}
+
+func (c *DeleteCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, _ := types.RequireCurrentDB(ctx)
 	if dbName != "" {
 		if err := enforceRLSPolicies(ctx, dbName, c.stmt.TableName); err != nil {
 			return nil, err
@@ -23,11 +33,11 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	activeTx := ctx.Session.GetActiveTx()
 	if activeTx != nil && activeTx.State == txmanager.TxActive {
-		frozen, err := freezeDelete(c.stmt, ctx)
+		frozen, err := types.FreezeDelete(c.stmt, ctx)
 		if err != nil {
 			return nil, err
 		}
-		dbName, _ := requireCurrentDB(ctx)
+		dbName, _ := types.RequireCurrentDB(ctx)
 		var deletedRows []storage.Row
 		if dbName != "" && ctx.Storage.TableExists(dbName, c.stmt.TableName) {
 			schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
@@ -35,7 +45,7 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 				rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 				if err == nil {
 					for _, row := range rows {
-						match, err := evalExpr(frozen.Where, row, schema, ctx)
+						match, err := types.EvalExpr(frozen.Where, row, schema, ctx)
 						if err == nil && match {
 							deletedRows = append(deletedRows, row)
 						}
@@ -44,28 +54,29 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			}
 		}
 
-		ctx.Session.GetTxManager().AddOp(activeTx, txmanager.PendingOp{
+		ctx.TxManager.AddOp(activeTx, txmanager.PendingOp{
 			Type:    "delete",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
 			Payload: frozen,
 			Row:     deletedRows,
 		})
-		return &Result{
+		return &types.Result{
 			Type:    "message",
 			Message: fmt.Sprintf("Buffered DELETE (tx %d). Not committed yet.", ctx.Session.GetActiveTx().ID),
 		}, nil
 	}
-	return c.executeImmediate(ctx)
+	return c.ExecuteImmediate(ctx)
 }
 
-func (c *DeleteCommand) executeImmediate(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+// ExecuteImmediate applies the DELETE immediately (skips tx buffering).
+func (c *DeleteCommand) ExecuteImmediate(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return c.executeImmediateInner(ctx)
 	}
-	var result *Result
-	err = mutateUnderTableLock(ctx, dbName, c.stmt.TableName, func() error {
+	var result *types.Result
+	err = types.MutateUnderTableLock(ctx, dbName, c.stmt.TableName, func() error {
 		var e error
 		result, e = c.executeImmediateInner(ctx)
 		return e
@@ -73,7 +84,7 @@ func (c *DeleteCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 	return result, err
 }
 
-func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, error) {
+func (c *DeleteCommand) executeImmediateInner(ctx *types.ExecutionContext) (*types.Result, error) {
 	if ctx.Ctx != nil {
 		select {
 		case <-ctx.Ctx.Done():
@@ -82,7 +93,7 @@ func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		}
 	}
 
-	dbName, err := requireCurrentDB(ctx)
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +108,7 @@ func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	}
 
 	// Build column index for O(1) lookups during WHERE evaluation.
-	ensureColumnIndex(ctx, schema)
+	types.EnsureColumnIndex(ctx, schema)
 
 	rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 	if err != nil {
@@ -111,7 +122,7 @@ func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 
 	indices := make([]int, 0, len(rows))
 	for idx, row := range rows {
-		match, err := evalExpr(c.stmt.Where, row, schema, ctx)
+		match, err := types.EvalExpr(c.stmt.Where, row, schema, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -120,10 +131,10 @@ func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		}
 	}
 
-	if err := enforceForeignKeysOnDelete(ctx, dbName, c.stmt.TableName, indices); err != nil {
+	if err := types.EnforceForeignKeysOnDelete(ctx, dbName, c.stmt.TableName, indices); err != nil {
 		return nil, err
 	}
-	if err := enforceCascadeDeletes(ctx, dbName, c.stmt.TableName, indices); err != nil {
+	if err := types.EnforceCascadeDeletes(ctx, dbName, c.stmt.TableName, indices); err != nil {
 		return nil, err
 	}
 
@@ -133,20 +144,18 @@ func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if asSession(ctx).planCache != nil {
-		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
-	}
+	invalidatePlanCache(ctx, c.stmt.TableName)
 
-	fireTriggers(ctx, dbName, c.stmt.TableName, "DELETE")
+	types.FireTriggers(ctx, dbName, c.stmt.TableName, "DELETE")
 
 	if c.stmt.Returning != nil {
 		return c.executeReturningDelete(ctx, dbName, schema, indices, rows)
 	}
 
-	return &Result{Type: "affected", Affected: affected}, nil
+	return &types.Result{Type: "affected", Affected: affected}, nil
 }
 
-func (c *DeleteCommand) executeReturningDelete(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, indices []int, preDeleteRows []storage.Row) (*Result, error) {
+func (c *DeleteCommand) executeReturningDelete(ctx *types.ExecutionContext, dbName string, schema *storage.TableSchema, indices []int, preDeleteRows []storage.Row) (*types.Result, error) {
 	var deletedRows []storage.Row
 	for _, idx := range indices {
 		if idx < len(preDeleteRows) {

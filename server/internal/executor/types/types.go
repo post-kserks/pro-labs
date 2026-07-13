@@ -50,7 +50,9 @@ type Command interface {
 }
 
 // BroadcasterInterface is the minimal interface commands need from Broadcaster.
-type BroadcasterInterface interface{} // concrete Broadcaster in executor; no cycle-safe contract yet
+type BroadcasterInterface interface {
+	NotifyTableChanged(dbName, tableName string, ctx *ExecutionContext)
+}
 
 // SessionInterface is the minimal interface commands need from Session.
 type SessionInterface interface {
@@ -1119,5 +1121,164 @@ func FormatValueForCache(v parser.Value) string {
 		return "F"
 	default:
 		return "?"
+	}
+}
+
+// ─── Expression to SQL ──────────────────────────────────────────────────────
+
+// ExprToSQL converts a parser expression back to SQL text for storage.
+func ExprToSQL(expr parser.Expression) string {
+	if expr == nil {
+		return ""
+	}
+	switch e := expr.(type) {
+	case *parser.ColumnRef:
+		return e.Name
+	case parser.Value:
+		return FormatValueForExpr(e)
+	case *parser.Value:
+		return FormatValueForExpr(*e)
+	case *parser.BinaryExpr:
+		return "(" + ExprToSQL(e.Left) + " " + e.Operator + " " + ExprToSQL(e.Right) + ")"
+	case *parser.AndExpr:
+		return "(" + ExprToSQL(e.Left) + " AND " + ExprToSQL(e.Right) + ")"
+	case *parser.OrExpr:
+		return "(" + ExprToSQL(e.Left) + " OR " + ExprToSQL(e.Right) + ")"
+	case *parser.NotExpr:
+		return "(NOT " + ExprToSQL(e.Expr) + ")"
+	case *parser.InExpr:
+		args := make([]string, len(e.Right))
+		for i, a := range e.Right {
+			args[i] = ExprToSQL(a)
+		}
+		op := " IN "
+		if e.Not {
+			op = " NOT IN "
+		}
+		return "(" + ExprToSQL(e.Left) + op + "(" + strings.Join(args, ", ") + "))"
+	case *parser.BetweenExpr:
+		op := " BETWEEN "
+		if e.Not {
+			op = " NOT BETWEEN "
+		}
+		return "(" + ExprToSQL(e.Expr) + op + ExprToSQL(e.Lower) + " AND " + ExprToSQL(e.Upper) + ")"
+	case *parser.CastExpr:
+		return "CAST(" + ExprToSQL(e.Expr) + " AS " + e.TargetType + ")"
+	case *parser.JsonPathExpr:
+		return ExprToSQL(e.Left) + "->>'" + e.Path + "'"
+	case *parser.JSONAccess:
+		return ExprToSQL(e.Expr) + " " + e.Operator + " " + ExprToSQL(e.Argument)
+	default:
+		return fmt.Sprintf("%v", expr)
+	}
+}
+
+// FormatValueForExpr formats a parser.Value as SQL text.
+func FormatValueForExpr(v parser.Value) string {
+	switch v.Type {
+	case "int":
+		return strconv.FormatInt(v.IntVal, 10)
+	case "float":
+		return strconv.FormatFloat(v.FltVal, 'f', -1, 64)
+	case "string":
+		return "'" + strings.ReplaceAll(v.StrVal, "'", "''") + "'"
+	case "bool":
+		if v.BoolVal {
+			return "TRUE"
+		}
+		return "FALSE"
+	case "null":
+		return "NULL"
+	default:
+		return v.StrVal
+	}
+}
+
+// ─── Function Injection Hooks ────────────────────────────────────────────────
+// These variables are set by the root executor package at init time.
+// Subpackages (e.g. commands/dml) call the exported wrappers below
+// instead of importing the root package, which avoids circular dependencies.
+
+// EvalOperandFn evaluates a parser expression against a row.
+var EvalOperandFn func(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error)
+
+// EvalExprFn evaluates a parser expression and returns a boolean result.
+var EvalExprFn func(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (bool, error)
+
+// EvaluateCheckExprFn evaluates a CHECK constraint expression string against a row.
+var EvaluateCheckExprFn func(exprStr string, row storage.Row, schema *storage.TableSchema) (bool, error)
+
+// FreezeInsertFn returns a copy of INSERT with volatile functions frozen.
+var FreezeInsertFn func(s *parser.InsertStatement, ctx *ExecutionContext) (*parser.InsertStatement, error)
+
+// FreezeUpdateFn returns a copy of UPDATE with volatile functions frozen.
+var FreezeUpdateFn func(s *parser.UpdateStatement, ctx *ExecutionContext) (*parser.UpdateStatement, error)
+
+// FreezeDeleteFn returns a copy of DELETE with volatile functions frozen.
+var FreezeDeleteFn func(s *parser.DeleteStatement, ctx *ExecutionContext) (*parser.DeleteStatement, error)
+
+// ApplyTxOverlayFn applies buffered transaction operations on top of base rows.
+var ApplyTxOverlayFn func(ctx *ExecutionContext, db, table string, base []storage.Row) ([]storage.Row, error)
+
+// MutateUnderTableLockFn executes fn under per-table commit lock.
+var MutateUnderTableLockFn func(ctx *ExecutionContext, db, table string, fn func() error) error
+
+// FireTriggersFn fires AFTER triggers for a table mutation event.
+var FireTriggersFn func(ctx *ExecutionContext, dbName, tableName, event string)
+
+// NotifyBroadcasterFn notifies the broadcaster about a table mutation.
+// This is separate from the other hooks because the Broadcaster type
+// lives in the root executor package and can't be directly referenced.
+var NotifyBroadcasterFn func(ctx *ExecutionContext, dbName, tableName string)
+
+// EvalOperand evaluates a parser expression against a row.
+func EvalOperand(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
+	return EvalOperandFn(expr, row, schema, ctx)
+}
+
+// EvalExpr evaluates a parser expression and returns a boolean result.
+func EvalExpr(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (bool, error) {
+	return EvalExprFn(expr, row, schema, ctx)
+}
+
+// EvaluateCheckExpr evaluates a CHECK constraint expression string against a row.
+func EvaluateCheckExpr(exprStr string, row storage.Row, schema *storage.TableSchema) (bool, error) {
+	return EvaluateCheckExprFn(exprStr, row, schema)
+}
+
+// FreezeInsert returns a copy of INSERT with volatile functions frozen.
+func FreezeInsert(s *parser.InsertStatement, ctx *ExecutionContext) (*parser.InsertStatement, error) {
+	return FreezeInsertFn(s, ctx)
+}
+
+// FreezeUpdate returns a copy of UPDATE with volatile functions frozen.
+func FreezeUpdate(s *parser.UpdateStatement, ctx *ExecutionContext) (*parser.UpdateStatement, error) {
+	return FreezeUpdateFn(s, ctx)
+}
+
+// FreezeDelete returns a copy of DELETE with volatile functions frozen.
+func FreezeDelete(s *parser.DeleteStatement, ctx *ExecutionContext) (*parser.DeleteStatement, error) {
+	return FreezeDeleteFn(s, ctx)
+}
+
+// ApplyTxOverlay applies buffered transaction operations on top of base rows.
+func ApplyTxOverlay(ctx *ExecutionContext, db, table string, base []storage.Row) ([]storage.Row, error) {
+	return ApplyTxOverlayFn(ctx, db, table, base)
+}
+
+// MutateUnderTableLock executes fn under per-table commit lock.
+func MutateUnderTableLock(ctx *ExecutionContext, db, table string, fn func() error) error {
+	return MutateUnderTableLockFn(ctx, db, table, fn)
+}
+
+// FireTriggers fires AFTER triggers for a table mutation event.
+func FireTriggers(ctx *ExecutionContext, dbName, tableName, event string) {
+	FireTriggersFn(ctx, dbName, tableName, event)
+}
+
+// NotifyBroadcaster notifies the broadcaster about a table mutation.
+func NotifyBroadcaster(ctx *ExecutionContext, dbName, tableName string) {
+	if NotifyBroadcasterFn != nil {
+		NotifyBroadcasterFn(ctx, dbName, tableName)
 	}
 }

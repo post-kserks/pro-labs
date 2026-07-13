@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strings"
 
+	"vaultdb/internal/executor/commands/dml"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
@@ -88,8 +89,9 @@ func applyTxOverlay(ctx *ExecutionContext, db, table string, base []storage.Row)
 			if !ok {
 				return nil, fmt.Errorf("tx overlay: invalid insert payload type %T", op.Payload)
 			}
-			cmd := &InsertCommand{stmt: s}
-			newRows, err := cmd.buildRows(schema, ctx)
+			cmd := &dml.InsertCommand{}
+			cmd.SetStmt(s)
+			newRows, err := cmd.BuildRows(schema, ctx)
 			if err != nil {
 				return nil, err
 			}

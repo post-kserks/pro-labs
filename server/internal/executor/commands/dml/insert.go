@@ -1,4 +1,4 @@
-package executor
+package dml
 
 // INSERT command implementation.
 
@@ -10,13 +10,23 @@ import (
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
+	"vaultdb/internal/executor/types"
 )
 
 type InsertCommand struct {
 	stmt *parser.InsertStatement
 }
 
-func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+// SetStmt sets the statement for this command. Used by the root executor's commit-apply path.
+func (c *InsertCommand) SetStmt(stmt *parser.InsertStatement) { c.stmt = stmt }
+
+func init() {
+	types.RegisterCommand("INSERT", func(stmt parser.Statement) types.Command {
+		return &InsertCommand{stmt: stmt.(*parser.InsertStatement)}
+	})
+}
+
+func (c *InsertCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	// Fast path: single row, no conflicts, no returning, no tx active
 	if len(c.stmt.Rows) == 1 && c.stmt.OnConflict == nil && c.stmt.Returning == nil &&
 		c.stmt.SelectQuery == nil && !c.stmt.OrReplace &&
@@ -24,7 +34,7 @@ func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return c.fastPathInsert(ctx)
 	}
 
-	dbName, _ := requireCurrentDB(ctx)
+	dbName, _ := types.RequireCurrentDB(ctx)
 	if dbName != "" {
 		if err := enforceRLSPolicies(ctx, dbName, c.stmt.TableName); err != nil {
 			return nil, err
@@ -32,27 +42,27 @@ func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	activeTx := ctx.Session.GetActiveTx()
 	if activeTx != nil && activeTx.State == txmanager.TxActive {
-		frozen, err := freezeInsert(c.stmt, ctx)
+		frozen, err := types.FreezeInsert(c.stmt, ctx)
 		if err != nil {
 			return nil, err
 		}
-		asSession(ctx).TxManager.AddOp(activeTx, txmanager.PendingOp{
+		ctx.TxManager.AddOp(activeTx, txmanager.PendingOp{
 			Type:    "insert",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
 			Payload: frozen,
 		})
-		return &Result{
+		return &types.Result{
 			Type:    "message",
 			Message: fmt.Sprintf("Buffered INSERT (tx %d). Not committed yet.", ctx.Session.GetActiveTx().ID),
 		}, nil
 	}
-	return c.executeImmediate(ctx)
+	return c.ExecuteImmediate(ctx)
 }
 
 // fastPathInsert handles single-row inserts without table lock overhead.
-func (c *InsertCommand) fastPathInsert(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func (c *InsertCommand) fastPathInsert(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -70,8 +80,8 @@ func (c *InsertCommand) fastPathInsert(ctx *ExecutionContext) (*Result, error) {
 	if len(schema.Columns) == 0 && len(c.stmt.Rows) > 0 {
 		inferredCols := make([]storage.ColumnSchema, 0, len(c.stmt.Rows[0]))
 		for i, expr := range c.stmt.Rows[0] {
-			val, _ := evalOperand(expr, nil, nil, ctx)
-			colType := inferType(val)
+			val, _ := types.EvalOperand(expr, nil, nil, ctx)
+			colType := types.InferType(val)
 			name := fmt.Sprintf("col%d", i)
 			if len(c.stmt.Columns) > i {
 				name = c.stmt.Columns[i]
@@ -89,16 +99,16 @@ func (c *InsertCommand) fastPathInsert(ctx *ExecutionContext) (*Result, error) {
 		}
 	}
 
-	rowsToInsert, err := c.buildRows(schema, ctx)
+	rowsToInsert, err := c.BuildRows(schema, ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := fillAutoIncrementColumns(ctx, dbName, c.stmt.TableName, schema, rowsToInsert); err != nil {
+	if err := types.FillAutoIncrementColumns(ctx, dbName, c.stmt.TableName, schema, rowsToInsert); err != nil {
 		return nil, err
 	}
 
-	if err := enforceForeignKeysOnInsert(ctx, dbName, c.stmt.TableName, rowsToInsert); err != nil {
+	if err := types.EnforceForeignKeysOnInsert(ctx, dbName, c.stmt.TableName, rowsToInsert); err != nil {
 		return nil, err
 	}
 
@@ -108,7 +118,7 @@ func (c *InsertCommand) fastPathInsert(ctx *ExecutionContext) (*Result, error) {
 			return nil, fmt.Errorf("NOT NULL constraint failed for column '%s'", col.Name)
 		}
 		if col.Type == "ENUM" && len(col.EnumValues) > 0 && j < len(rowsToInsert[0]) && rowsToInsert[0][j] != nil {
-			val := valueToString(rowsToInsert[0][j])
+			val := types.ValueToString(rowsToInsert[0][j])
 			valid := false
 			for _, ev := range col.EnumValues {
 				if val == ev {
@@ -140,21 +150,21 @@ func (c *InsertCommand) fastPathInsert(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if asSession(ctx).planCache != nil {
-		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
-	}
-	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
+	invalidatePlanCache(ctx, c.stmt.TableName)
+	types.FireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
 
-	return &Result{Type: "affected", Affected: affected}, nil
+	return &types.Result{Type: "affected", Affected: affected}, nil
 }
 
-func (c *InsertCommand) executeImmediate(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+// ExecuteImmediate applies the INSERT immediately (skips tx buffering).
+// Used by the commit-apply path in the root executor.
+func (c *InsertCommand) ExecuteImmediate(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return c.executeImmediateInner(ctx)
 	}
-	var result *Result
-	err = mutateUnderTableLock(ctx, dbName, c.stmt.TableName, func() error {
+	var result *types.Result
+	err = types.MutateUnderTableLock(ctx, dbName, c.stmt.TableName, func() error {
 		var e error
 		result, e = c.executeImmediateInner(ctx)
 		return e
@@ -162,7 +172,7 @@ func (c *InsertCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 	return result, err
 }
 
-func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, error) {
+func (c *InsertCommand) executeImmediateInner(ctx *types.ExecutionContext) (*types.Result, error) {
 	if ctx.Ctx != nil {
 		select {
 		case <-ctx.Ctx.Done():
@@ -171,7 +181,7 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		}
 	}
 
-	dbName, err := requireCurrentDB(ctx)
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -198,8 +208,8 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	if len(schema.Columns) == 0 && len(c.stmt.Rows) > 0 {
 		inferredCols := make([]storage.ColumnSchema, 0, len(c.stmt.Rows[0]))
 		for i, expr := range c.stmt.Rows[0] {
-			val, _ := evalOperand(expr, nil, nil, ctx)
-			colType := inferType(val)
+			val, _ := types.EvalOperand(expr, nil, nil, ctx)
+			colType := types.InferType(val)
 			name := fmt.Sprintf("col%d", i)
 			if len(c.stmt.Columns) > i {
 				name = c.stmt.Columns[i]
@@ -217,16 +227,16 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		}
 	}
 
-	rowsToInsert, err := c.buildRows(schema, ctx)
+	rowsToInsert, err := c.BuildRows(schema, ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := fillAutoIncrementColumns(ctx, dbName, c.stmt.TableName, schema, rowsToInsert); err != nil {
+	if err := types.FillAutoIncrementColumns(ctx, dbName, c.stmt.TableName, schema, rowsToInsert); err != nil {
 		return nil, err
 	}
 
-	if err := enforceForeignKeysOnInsert(ctx, dbName, c.stmt.TableName, rowsToInsert); err != nil {
+	if err := types.EnforceForeignKeysOnInsert(ctx, dbName, c.stmt.TableName, rowsToInsert); err != nil {
 		return nil, err
 	}
 
@@ -236,7 +246,7 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 				return nil, fmt.Errorf("NOT NULL constraint failed for column '%s'", col.Name)
 			}
 			if col.Type == "ENUM" && len(col.EnumValues) > 0 && j < len(row) && row[j] != nil {
-				val := valueToString(row[j])
+				val := types.ValueToString(row[j])
 				valid := false
 				for _, ev := range col.EnumValues {
 					if val == ev {
@@ -278,19 +288,18 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if asSession(ctx).planCache != nil {
-		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
-	}
-	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
+	invalidatePlanCache(ctx, c.stmt.TableName)
+	types.FireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
 
 	if c.stmt.Returning != nil {
 		return c.executeReturning(ctx, dbName, schema, rowsToInsert)
 	}
 
-	return &Result{Type: "affected", Affected: affected}, nil
+	return &types.Result{Type: "affected", Affected: affected}, nil
 }
 
-func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionContext) ([]storage.Row, error) {
+// BuildRows constructs the storage rows from the INSERT statement's value lists.
+func (c *InsertCommand) BuildRows(schema *storage.TableSchema, ctx *types.ExecutionContext) ([]storage.Row, error) {
 	result := make([]storage.Row, 0, len(c.stmt.Rows))
 
 	if len(c.stmt.Columns) == 0 {
@@ -300,11 +309,11 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 			}
 			normalized := make(storage.Row, len(row))
 			for i, expr := range row {
-				val, err := evalOperand(expr, nil, nil, ctx)
+				val, err := types.EvalOperand(expr, nil, nil, ctx)
 				if err != nil {
 					return nil, fmt.Errorf("column '%s': %w", schema.Columns[i].Name, err)
 				}
-				converted, err := normalizeForColumn(val, schema.Columns[i])
+				converted, err := types.NormalizeForColumn(val, schema.Columns[i])
 				if err != nil {
 					return nil, fmt.Errorf("column '%s': %w", schema.Columns[i].Name, err)
 				}
@@ -349,11 +358,11 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 
 		for i, expr := range row {
 			colIdx := mappedColumns[i]
-			val, err := evalOperand(expr, nil, nil, ctx)
+			val, err := types.EvalOperand(expr, nil, nil, ctx)
 			if err != nil {
 				return nil, fmt.Errorf("column '%s': %w", schema.Columns[colIdx].Name, err)
 			}
-			converted, err := normalizeForColumn(val, schema.Columns[colIdx])
+			converted, err := types.NormalizeForColumn(val, schema.Columns[colIdx])
 			if err != nil {
 				return nil, fmt.Errorf("column '%s': %w", schema.Columns[colIdx].Name, err)
 			}
@@ -369,7 +378,7 @@ func (c *InsertCommand) buildRows(schema *storage.TableSchema, ctx *ExecutionCon
 	return result, nil
 }
 
-func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, rowsToInsert []storage.Row) (*Result, error) {
+func (c *InsertCommand) executeUpsert(ctx *types.ExecutionContext, dbName string, schema *storage.TableSchema, rowsToInsert []storage.Row) (*types.Result, error) {
 	affected := 0
 
 	conflictCols := c.stmt.OnConflict.Columns
@@ -423,7 +432,7 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 					}
 				} else {
 					for _, assign := range c.stmt.OnConflict.Assignments {
-						val, err := evalOperand(assign.Value, row, schema, ctx)
+						val, err := types.EvalOperand(assign.Value, row, schema, ctx)
 						if err != nil {
 							return nil, err
 						}
@@ -451,11 +460,9 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if asSession(ctx).planCache != nil {
-		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
-	}
+	invalidatePlanCache(ctx, c.stmt.TableName)
 
-	return &Result{Type: "affected", Affected: affected}, nil
+	return &types.Result{Type: "affected", Affected: affected}, nil
 }
 
 func buildUpsertConflictKey(row storage.Row, conflictCols []string, colIdxMap map[string]int) string {
@@ -469,13 +476,13 @@ func buildUpsertConflictKey(row storage.Row, conflictCols []string, colIdxMap ma
 			continue
 		}
 		if ci < len(row) {
-			b.WriteString(valueToString(row[ci]))
+			b.WriteString(types.ValueToString(row[ci]))
 		}
 	}
 	return b.String()
 }
 
-func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string, schema *storage.TableSchema) (*Result, error) {
+func (c *InsertCommand) executeInsertSelect(ctx *types.ExecutionContext, dbName string, schema *storage.TableSchema) (*types.Result, error) {
 	res, err := ctx.RunSubquery.RunSubquery(ctx, c.stmt.SelectQuery)
 	if err != nil {
 		return nil, fmt.Errorf("INSERT ... SELECT: %w", err)
@@ -514,18 +521,16 @@ func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if asSession(ctx).planCache != nil {
-		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
-	}
+	invalidatePlanCache(ctx, c.stmt.TableName)
 
 	if c.stmt.Returning != nil {
 		return c.executeReturning(ctx, dbName, schema, rowsToInsert)
 	}
 
-	return &Result{Type: "affected", Affected: affected}, nil
+	return &types.Result{Type: "affected", Affected: affected}, nil
 }
 
-func (c *InsertCommand) executeReturning(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, insertedRows []storage.Row) (*Result, error) {
+func (c *InsertCommand) executeReturning(ctx *types.ExecutionContext, dbName string, schema *storage.TableSchema, insertedRows []storage.Row) (*types.Result, error) {
 	return executeReturningGeneric(insertedRows, c.stmt.Returning, schema, ctx)
 }
 
@@ -557,8 +562,6 @@ func convertStringToValue(s string, col storage.ColumnSchema) (storage.Value, er
 }
 
 // applyDefaults fills in DEFAULT values for columns that were not specified
-// in the INSERT column list. specifiedCols is a set of column indices that
-// were explicitly provided in the INSERT statement.
 func applyDefaults(row storage.Row, schema *storage.TableSchema, specifiedCols map[int]bool) {
 	for i, col := range schema.Columns {
 		if row[i] == nil && col.Default != nil && !specifiedCols[i] {
@@ -568,18 +571,18 @@ func applyDefaults(row storage.Row, schema *storage.TableSchema, specifiedCols m
 }
 
 // applyComputedColumns evaluates computed column expressions and sets the values.
-func applyComputedColumns(row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) error {
+func applyComputedColumns(row storage.Row, schema *storage.TableSchema, ctx *types.ExecutionContext) error {
 	for i, col := range schema.Columns {
 		if col.IsComputed && col.ComputedExpr != "" {
 			expr, err := parser.ParseExpression(col.ComputedExpr)
 			if err != nil {
 				return fmt.Errorf("parsing computed expression for column '%s': %w", col.Name, err)
 			}
-			val, err := evalOperand(expr, row, schema, ctx)
+			val, err := types.EvalOperand(expr, row, schema, ctx)
 			if err != nil {
 				return fmt.Errorf("evaluating computed expression for column '%s': %w", col.Name, err)
 			}
-			converted, err := normalizeForColumn(val, col)
+			converted, err := types.NormalizeForColumn(val, col)
 			if err != nil {
 				return fmt.Errorf("normalizing computed expression for column '%s': %w", col.Name, err)
 			}
@@ -590,7 +593,7 @@ func applyComputedColumns(row storage.Row, schema *storage.TableSchema, ctx *Exe
 }
 
 // executePartitionedInsert routes rows to the correct partition for a partitioned table.
-func (c *InsertCommand) executePartitionedInsert(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, rowsToInsert []storage.Row) (*Result, error) {
+func (c *InsertCommand) executePartitionedInsert(ctx *types.ExecutionContext, dbName string, schema *storage.TableSchema, rowsToInsert []storage.Row) (*types.Result, error) {
 	pt := storage.NewPartitionedTable(schema)
 	if pt == nil {
 		return nil, fmt.Errorf("table '%s' has partition spec but could not initialize partition routing", c.stmt.TableName)
@@ -616,10 +619,8 @@ func (c *InsertCommand) executePartitionedInsert(ctx *ExecutionContext, dbName s
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if asSession(ctx).planCache != nil {
-		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
-	}
-	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
+	invalidatePlanCache(ctx, c.stmt.TableName)
+	types.FireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
 
-	return &Result{Type: "affected", Affected: totalAffected}, nil
+	return &types.Result{Type: "affected", Affected: totalAffected}, nil
 }

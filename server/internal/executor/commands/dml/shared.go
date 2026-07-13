@@ -1,18 +1,17 @@
-package executor
+package dml
 
 // Shared DML utilities: RETURNING projection, mutation notification,
 // RLS enforcement, CHECK constraint enforcement.
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/executor/types"
 )
 
-func executeReturningGeneric(rows []storage.Row, returningCols []parser.SelectColumn, schema *storage.TableSchema, ctx *ExecutionContext, oldRows ...storage.Row) (*Result, error) {
+func executeReturningGeneric(rows []storage.Row, returningCols []parser.SelectColumn, schema *storage.TableSchema, ctx *types.ExecutionContext, oldRows ...storage.Row) (*types.Result, error) {
 	resultRows := make([][]string, 0, len(rows))
 
 	starMode := len(returningCols) == 0
@@ -32,16 +31,16 @@ func executeReturningGeneric(rows []storage.Row, returningCols []parser.SelectCo
 		if starMode {
 			projected = make([]string, len(row))
 			for i := range row {
-				projected[i] = valueToString(row[i])
+				projected[i] = types.ValueToString(row[i])
 			}
 		} else {
 			projected = make([]string, len(returningCols))
 			for i, col := range returningCols {
-				val, err := evalOperand(col.Expr, row, schema, ctx)
+				val, err := types.EvalOperand(col.Expr, row, schema, ctx)
 				if err != nil {
 					projected[i] = "ERR"
 				} else {
-					projected[i] = valueToString(val)
+					projected[i] = types.ValueToString(val)
 				}
 			}
 		}
@@ -73,30 +72,28 @@ func executeReturningGeneric(rows []storage.Row, returningCols []parser.SelectCo
 			}
 		}
 	}
-	return &Result{
+	return &types.Result{
 		Type:    "rows",
 		Columns: projectColumns,
 		Rows:    resultRows,
 	}, nil
 }
 
-func notifyMutation(ctx *ExecutionContext, dbName, tableName string) {
+func notifyMutation(ctx *types.ExecutionContext, dbName, tableName string) {
 	if ctx.Stats != nil {
 		ctx.Stats.InvalidateStats(dbName, tableName)
 	}
-	if ctx.Session != nil && asSession(ctx).resultCache != nil {
-		func() { if rc := ctx.Session.GetResultCache(); rc != nil { rc.(*ResultCache).Invalidate(tableName) } }()
+	if ctx.Session != nil {
+		ctx.Session.InvalidateResultCache(tableName)
 	}
 	if ctx.TxManager != nil {
 		ctx.TxManager.BumpTableVersion(dbName, tableName)
 	}
-	if b, ok := ctx.Broadcaster.(*Broadcaster); ok && b != nil {
-		b.NotifyTableChanged(dbName, tableName, ctx)
-	}
+	types.NotifyBroadcaster(ctx, dbName, tableName)
 }
 
 // enforceRLSPolicies checks if RLS is enabled and policies exist for the table.
-func enforceRLSPolicies(ctx *ExecutionContext, dbName, tableName string) error {
+func enforceRLSPolicies(ctx *types.ExecutionContext, dbName, tableName string) error {
 	schema, err := ctx.Storage.GetTableSchema(dbName, tableName)
 	if err != nil {
 		return err
@@ -111,8 +108,7 @@ func enforceRLSPolicies(ctx *ExecutionContext, dbName, tableName string) error {
 }
 
 // filterRowsWithRLS applies RLS USING policies to filter rows.
-// Returns only rows that match at least one policy's USING expression.
-func filterRowsWithRLS(rows []storage.Row, schema *storage.TableSchema, ctx *ExecutionContext, dbName, tableName string) ([]storage.Row, error) {
+func filterRowsWithRLS(rows []storage.Row, schema *storage.TableSchema, ctx *types.ExecutionContext, dbName, tableName string) ([]storage.Row, error) {
 	if !schema.RLSEnabled {
 		return rows, nil
 	}
@@ -132,7 +128,7 @@ func filterRowsWithRLS(rows []storage.Row, schema *storage.TableSchema, ctx *Exe
 			if err != nil {
 				return nil, fmt.Errorf("RLS policy '%s': invalid expression: %w", policy.Name, err)
 			}
-			ok, err := evalOperand(expr, row, schema, ctx)
+			ok, err := types.EvalOperand(expr, row, schema, ctx)
 			if err != nil {
 				continue
 			}
@@ -148,77 +144,10 @@ func filterRowsWithRLS(rows []storage.Row, schema *storage.TableSchema, ctx *Exe
 	return filtered, nil
 }
 
-// exprToSQL converts a parser expression back to SQL text for storage.
-func exprToSQL(expr parser.Expression) string {
-	if expr == nil {
-		return ""
-	}
-	switch e := expr.(type) {
-	case *parser.ColumnRef:
-		return e.Name
-	case parser.Value:
-		return formatValue(e)
-	case *parser.Value:
-		return formatValue(*e)
-	case *parser.BinaryExpr:
-		return "(" + exprToSQL(e.Left) + " " + e.Operator + " " + exprToSQL(e.Right) + ")"
-	case *parser.AndExpr:
-		return "(" + exprToSQL(e.Left) + " AND " + exprToSQL(e.Right) + ")"
-	case *parser.OrExpr:
-		return "(" + exprToSQL(e.Left) + " OR " + exprToSQL(e.Right) + ")"
-	case *parser.NotExpr:
-		return "(NOT " + exprToSQL(e.Expr) + ")"
-	case *parser.InExpr:
-		args := make([]string, len(e.Right))
-		for i, a := range e.Right {
-			args[i] = exprToSQL(a)
-		}
-		op := " IN "
-		if e.Not {
-			op = " NOT IN "
-		}
-		return "(" + exprToSQL(e.Left) + op + "(" + strings.Join(args, ", ") + "))"
-	case *parser.BetweenExpr:
-		op := " BETWEEN "
-		if e.Not {
-			op = " NOT BETWEEN "
-		}
-		return "(" + exprToSQL(e.Expr) + op + exprToSQL(e.Lower) + " AND " + exprToSQL(e.Upper) + ")"
-	case *parser.CastExpr:
-		return "CAST(" + exprToSQL(e.Expr) + " AS " + e.TargetType + ")"
-	case *parser.JsonPathExpr:
-		return exprToSQL(e.Left) + "->>'" + e.Path + "'"
-	case *parser.JSONAccess:
-		return exprToSQL(e.Expr) + " " + e.Operator + " " + exprToSQL(e.Argument)
-	default:
-		return fmt.Sprintf("%v", expr)
-	}
-}
-
-func formatValue(v parser.Value) string {
-	switch v.Type {
-	case "int":
-		return strconv.FormatInt(v.IntVal, 10)
-	case "float":
-		return strconv.FormatFloat(v.FltVal, 'f', -1, 64)
-	case "string":
-		return "'" + strings.ReplaceAll(v.StrVal, "'", "''") + "'"
-	case "bool":
-		if v.BoolVal {
-			return "TRUE"
-		}
-		return "FALSE"
-	case "null":
-		return "NULL"
-	default:
-		return v.StrVal
-	}
-}
-
 func enforceCheckConstraints(schema *storage.TableSchema, row storage.Row) error {
 	for _, c := range schema.Constraints {
 		if c.Type == "CHECK" && c.Expr != "" {
-			ok, err := evaluateCheckExpr(c.Expr, row, schema)
+			ok, err := types.EvaluateCheckExpr(c.Expr, row, schema)
 			if err != nil {
 				return fmt.Errorf("CHECK constraint '%s': %w", c.Name, err)
 			}
@@ -231,7 +160,7 @@ func enforceCheckConstraints(schema *storage.TableSchema, row storage.Row) error
 }
 
 // enforceUniqueConstraints checks UNIQUE column constraints against existing rows.
-func enforceUniqueConstraints(dbName, tableName string, schema *storage.TableSchema, rows []storage.Row, ctx *ExecutionContext) error {
+func enforceUniqueConstraints(dbName, tableName string, schema *storage.TableSchema, rows []storage.Row, ctx *types.ExecutionContext) error {
 	existingRows, err := ctx.Storage.ReadCurrentRows(dbName, tableName)
 	if err != nil {
 		return err
@@ -266,7 +195,7 @@ func enforceUniqueConstraints(dbName, tableName string, schema *storage.TableSch
 }
 
 // enforceUniqueConstraintsOnUpdate checks UNIQUE constraints for UPDATE operations.
-func enforceUniqueConstraintsOnUpdate(dbName, tableName string, schema *storage.TableSchema, indices []int, newValues []storage.Row, ctx *ExecutionContext) error {
+func enforceUniqueConstraintsOnUpdate(dbName, tableName string, schema *storage.TableSchema, indices []int, newValues []storage.Row, ctx *types.ExecutionContext) error {
 	existingRows, err := ctx.Storage.ReadCurrentRows(dbName, tableName)
 	if err != nil {
 		return err
@@ -300,12 +229,11 @@ func enforceUniqueConstraintsOnUpdate(dbName, tableName string, schema *storage.
 		}
 	}
 
-	// Also check unique index constraints (skip for updates - unique indexes are enforced at insert time)
 	return nil
 }
 
 // enforceUniqueIndexConstraints checks UNIQUE index constraints against existing rows.
-func enforceUniqueIndexConstraints(dbName, tableName string, rows []storage.Row, ctx *ExecutionContext) error {
+func enforceUniqueIndexConstraints(dbName, tableName string, rows []storage.Row, ctx *types.ExecutionContext) error {
 	indexNames, err := ctx.Storage.ListIndexes(dbName, tableName)
 	if err != nil {
 		return err
@@ -320,11 +248,9 @@ func enforceUniqueIndexConstraints(dbName, tableName string, rows []storage.Row,
 			continue
 		}
 
-		// For single-column indexes, check for duplicate values
 		colName := idx.Column()
 		colIdx := idx.ColIndex()
 
-		// Build set of existing values from the index
 		existingRows, err := ctx.Storage.ReadCurrentRows(dbName, tableName)
 		if err != nil {
 			return err
@@ -338,7 +264,6 @@ func enforceUniqueIndexConstraints(dbName, tableName string, rows []storage.Row,
 			}
 		}
 
-		// Check new rows against existing keys
 		for _, row := range rows {
 			if colIdx < len(row) && row[colIdx] != nil {
 				key := fmt.Sprintf("%v", row[colIdx])
@@ -351,4 +276,16 @@ func enforceUniqueIndexConstraints(dbName, tableName string, rows []storage.Row,
 	}
 
 	return nil
+}
+
+// invalidatePlanCache invalidates the plan cache for a table if available.
+func invalidatePlanCache(ctx *types.ExecutionContext, tableName string) {
+	if ctx.Session != nil {
+		ctx.Session.InvalidatePlanCache(tableName)
+	}
+}
+
+// rowsEqual compares two rows element by element.
+func rowsEqual(a, b storage.Row) bool {
+	return types.RowsEqual(a, b)
 }

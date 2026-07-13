@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"vaultdb/internal/executor/commands/dml"
 	"vaultdb/internal/parser"
 )
 
@@ -339,7 +340,7 @@ func TestCopyFromCSVRowLimitExceeded(t *testing.T) {
 
 	// Generate a CSV file with more rows than MaxCopyRows
 	var sb strings.Builder
-	for i := 0; i <= MaxCopyRows; i++ {
+	for i := 0; i <= dml.MaxCopyRows; i++ {
 		sb.WriteString(fmt.Sprintf("%d,User%d,%d,8.0,TRUE,Bio\n", i, i, 20+i%50))
 	}
 	if err := os.WriteFile(filepath.Join(dataDir, relPath), []byte(sb.String()), 0644); err != nil {

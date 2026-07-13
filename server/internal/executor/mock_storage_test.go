@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"vaultdb/internal/executor/commands/dml"
 	"vaultdb/internal/index"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -575,7 +576,8 @@ func TestInsertCommand(t *testing.T) {
 		},
 	}
 
-	cmd := &InsertCommand{stmt: stmt}
+	cmd := &dml.InsertCommand{}
+	cmd.SetStmt(stmt)
 	result, err := cmd.Execute(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -814,7 +816,8 @@ func TestUpsertTOCTOU(t *testing.T) {
 			},
 		}
 
-		cmd := &InsertCommand{stmt: stmt}
+		cmd := &dml.InsertCommand{}
+	cmd.SetStmt(stmt)
 		result, err := cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -863,7 +866,8 @@ func TestUpsertTOCTOU(t *testing.T) {
 			},
 		}
 
-		cmd := &InsertCommand{stmt: stmt}
+		cmd := &dml.InsertCommand{}
+	cmd.SetStmt(stmt)
 		result, err := cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -915,7 +919,8 @@ func TestUpsertTOCTOU(t *testing.T) {
 			},
 		}
 
-		cmd := &InsertCommand{stmt: stmt}
+		cmd := &dml.InsertCommand{}
+	cmd.SetStmt(stmt)
 		result, err := cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

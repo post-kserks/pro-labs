@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"vaultdb/internal/executor/commands/dml"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
@@ -146,8 +147,9 @@ func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) (int, error) {
 			if !ok {
 				return i, fmt.Errorf("op %d: invalid insert payload type", i)
 			}
-			cmd := &InsertCommand{stmt: stmt}
-			if _, err := cmd.executeImmediate(ctx); err != nil {
+			cmd := &dml.InsertCommand{}
+			cmd.SetStmt(stmt)
+			if _, err := cmd.ExecuteImmediate(ctx); err != nil {
 				return i, err
 			}
 		case "update":
@@ -155,8 +157,9 @@ func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) (int, error) {
 			if !ok {
 				return i, fmt.Errorf("op %d: invalid update payload type", i)
 			}
-			cmd := &UpdateCommand{stmt: stmt}
-			if _, err := cmd.executeImmediate(ctx); err != nil {
+			cmd := &dml.UpdateCommand{}
+			cmd.SetStmt(stmt)
+			if _, err := cmd.ExecuteImmediate(ctx); err != nil {
 				return i, err
 			}
 		case "delete":
@@ -164,8 +167,9 @@ func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) (int, error) {
 			if !ok {
 				return i, fmt.Errorf("op %d: invalid delete payload type", i)
 			}
-			cmd := &DeleteCommand{stmt: stmt}
-			if _, err := cmd.executeImmediate(ctx); err != nil {
+			cmd := &dml.DeleteCommand{}
+			cmd.SetStmt(stmt)
+			if _, err := cmd.ExecuteImmediate(ctx); err != nil {
 				return i, err
 			}
 		case "truncate":
@@ -238,7 +242,8 @@ func undoInsert(ctx *ExecutionContext, op txmanager.PendingOp) error {
 	if !ok || stmt == nil {
 		return fmt.Errorf("undo insert: invalid payload type")
 	}
-	cmd := &InsertCommand{stmt: stmt}
+	cmd := &dml.InsertCommand{}
+	cmd.SetStmt(stmt)
 	insertCmd := &insertUndoHelper{cmd: cmd}
 	rowsToUndo, err := insertCmd.buildRows(schema, ctx)
 	if err != nil {
@@ -277,11 +282,11 @@ func undoInsert(ctx *ExecutionContext, op txmanager.PendingOp) error {
 }
 
 type insertUndoHelper struct {
-	cmd *InsertCommand
+	cmd *dml.InsertCommand
 }
 
 func (h *insertUndoHelper) buildRows(schema *storage.TableSchema, ctx *ExecutionContext) ([]storage.Row, error) {
-	return h.cmd.buildRows(schema, ctx)
+	return h.cmd.BuildRows(schema, ctx)
 }
 
 func undoUpdate(ctx *ExecutionContext, op txmanager.PendingOp) error {

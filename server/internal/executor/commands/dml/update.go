@@ -1,4 +1,4 @@
-package executor
+package dml
 
 // UPDATE command implementation.
 
@@ -10,14 +10,24 @@ import (
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
+	"vaultdb/internal/executor/types"
 )
 
 type UpdateCommand struct {
 	stmt *parser.UpdateStatement
 }
 
-func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, _ := requireCurrentDB(ctx)
+// SetStmt sets the statement for this command.
+func (c *UpdateCommand) SetStmt(stmt *parser.UpdateStatement) { c.stmt = stmt }
+
+func init() {
+	types.RegisterCommand("UPDATE", func(stmt parser.Statement) types.Command {
+		return &UpdateCommand{stmt: stmt.(*parser.UpdateStatement)}
+	})
+}
+
+func (c *UpdateCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, _ := types.RequireCurrentDB(ctx)
 	if dbName != "" {
 		if err := enforceRLSPolicies(ctx, dbName, c.stmt.TableName); err != nil {
 			return nil, err
@@ -25,21 +35,21 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 	activeTx := ctx.Session.GetActiveTx()
 	if activeTx != nil && activeTx.State == txmanager.TxActive {
-		frozen, err := freezeUpdate(c.stmt, ctx)
+		frozen, err := types.FreezeUpdate(c.stmt, ctx)
 		if err != nil {
 			return nil, err
 		}
-		dbName, _ := requireCurrentDB(ctx)
+		dbName, _ := types.RequireCurrentDB(ctx)
 		var oldRows []storage.Row
 		var oldIndices []int
 		if dbName != "" && ctx.Storage.TableExists(dbName, c.stmt.TableName) {
 			schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
 			if err == nil {
-				ensureColumnIndex(ctx, schema)
+				types.EnsureColumnIndex(ctx, schema)
 				rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
 				if err == nil {
 					for idx, row := range rows {
-						match, err := evalExpr(frozen.Where, row, schema, ctx)
+						match, err := types.EvalExpr(frozen.Where, row, schema, ctx)
 						if err == nil && match {
 							oldRows = append(oldRows, row)
 							oldIndices = append(oldIndices, idx)
@@ -49,7 +59,7 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			}
 		}
 
-		asSession(ctx).TxManager.AddOp(activeTx, txmanager.PendingOp{
+		ctx.TxManager.AddOp(activeTx, txmanager.PendingOp{
 			Type:    "update",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
@@ -57,21 +67,22 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			OldRow:  oldRows,
 			Row:     oldIndices,
 		})
-		return &Result{
+		return &types.Result{
 			Type:    "message",
 			Message: fmt.Sprintf("Buffered UPDATE (tx %d). Not committed yet.", ctx.Session.GetActiveTx().ID),
 		}, nil
 	}
-	return c.executeImmediate(ctx)
+	return c.ExecuteImmediate(ctx)
 }
 
-func (c *UpdateCommand) executeImmediate(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+// ExecuteImmediate applies the UPDATE immediately (skips tx buffering).
+func (c *UpdateCommand) ExecuteImmediate(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return c.executeImmediateInner(ctx)
 	}
-	var result *Result
-	err = mutateUnderTableLock(ctx, dbName, c.stmt.TableName, func() error {
+	var result *types.Result
+	err = types.MutateUnderTableLock(ctx, dbName, c.stmt.TableName, func() error {
 		var e error
 		result, e = c.executeImmediateInner(ctx)
 		return e
@@ -79,7 +90,7 @@ func (c *UpdateCommand) executeImmediate(ctx *ExecutionContext) (*Result, error)
 	return result, err
 }
 
-func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, error) {
+func (c *UpdateCommand) executeImmediateInner(ctx *types.ExecutionContext) (*types.Result, error) {
 	if ctx.Ctx != nil {
 		select {
 		case <-ctx.Ctx.Done():
@@ -88,7 +99,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		}
 	}
 
-	dbName, err := requireCurrentDB(ctx)
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +202,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	}
 
 	// Build column index for O(1) lookups during WHERE evaluation.
-	ensureColumnIndex(ctx, evalSchema)
+	types.EnsureColumnIndex(ctx, evalSchema)
 
 	indices := make([]int, 0)
 	var matchedRows []storage.Row
@@ -199,7 +210,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	if fromRows != nil {
 		seenTarget := make(map[int]bool)
 		for idx, row := range evalRows {
-			match, err := evalExpr(c.stmt.Where, row, evalSchema, ctx)
+			match, err := types.EvalExpr(c.stmt.Where, row, evalSchema, ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -215,7 +226,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		}
 	} else {
 		for idx, row := range evalRows {
-			match, err := evalExpr(c.stmt.Where, row, evalSchema, ctx)
+			match, err := types.EvalExpr(c.stmt.Where, row, evalSchema, ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -233,7 +244,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		newRow := make(storage.Row, len(row))
 		copy(newRow, row)
 		for _, assign := range c.stmt.Assignments {
-			val, err := evalOperand(assign.Value, matchedEvalRows[i], evalSchema, ctx)
+			val, err := types.EvalOperand(assign.Value, matchedEvalRows[i], evalSchema, ctx)
 			if err != nil {
 				return nil, fmt.Errorf("column '%s': %w", assign.Column, err)
 			}
@@ -255,7 +266,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 		newValues[i] = newRow
 	}
 
-	if err := enforceForeignKeysOnUpdate(ctx, dbName, c.stmt.TableName, indices, newValues); err != nil {
+	if err := types.EnforceForeignKeysOnUpdate(ctx, dbName, c.stmt.TableName, indices, newValues); err != nil {
 		return nil, err
 	}
 
@@ -270,19 +281,17 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if asSession(ctx).planCache != nil {
-		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
-	}
+	invalidatePlanCache(ctx, c.stmt.TableName)
 
-	fireTriggers(ctx, dbName, c.stmt.TableName, "UPDATE")
+	types.FireTriggers(ctx, dbName, c.stmt.TableName, "UPDATE")
 
 	if c.stmt.Returning != nil {
 		return c.executeReturningUpdate(ctx, dbName, schema, indices, newValues, matchedRows)
 	}
 
-	return &Result{Type: "affected", Affected: affected}, nil
+	return &types.Result{Type: "affected", Affected: affected}, nil
 }
 
-func (c *UpdateCommand) executeReturningUpdate(ctx *ExecutionContext, dbName string, schema *storage.TableSchema, indices []int, newValues []storage.Row, oldValues []storage.Row) (*Result, error) {
+func (c *UpdateCommand) executeReturningUpdate(ctx *types.ExecutionContext, dbName string, schema *storage.TableSchema, indices []int, newValues []storage.Row, oldValues []storage.Row) (*types.Result, error) {
 	return executeReturningGeneric(newValues, c.stmt.Returning, schema, ctx, oldValues...)
 }

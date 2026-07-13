@@ -10,6 +10,7 @@ import (
 
 	"vaultdb/internal/ai"
 	"vaultdb/internal/auth"
+	_ "vaultdb/internal/executor/commands/dml"
 	"vaultdb/internal/executor/parallel"
 	"vaultdb/internal/executor/types"
 	"vaultdb/internal/metrics"
@@ -59,9 +60,6 @@ func init() {
 	registerCommand(reflect.TypeOf((*parser.SelectStatement)(nil)), func(s parser.Statement) Command { return &SelectCommand{stmt: s.(*parser.SelectStatement)} })
 	registerCommand(reflect.TypeOf((*parser.ExplainStatement)(nil)), func(s parser.Statement) Command { return &ExplainCommand{stmt: s.(*parser.ExplainStatement)} })
 	registerCommand(reflect.TypeOf((*parser.HistoryStatement)(nil)), func(s parser.Statement) Command { return &HistoryCommand{stmt: s.(*parser.HistoryStatement)} })
-	registerCommand(reflect.TypeOf((*parser.InsertStatement)(nil)), func(s parser.Statement) Command { return &InsertCommand{stmt: s.(*parser.InsertStatement)} })
-	registerCommand(reflect.TypeOf((*parser.UpdateStatement)(nil)), func(s parser.Statement) Command { return &UpdateCommand{stmt: s.(*parser.UpdateStatement)} })
-	registerCommand(reflect.TypeOf((*parser.DeleteStatement)(nil)), func(s parser.Statement) Command { return &DeleteCommand{stmt: s.(*parser.DeleteStatement)} })
 	registerCommand(reflect.TypeOf((*parser.VacuumStatement)(nil)), func(s parser.Statement) Command { return &VacuumCommand{stmt: s.(*parser.VacuumStatement)} })
 	registerCommand(reflect.TypeOf((*parser.CreateIndexStatement)(nil)), func(s parser.Statement) Command { return &CreateIndexCommand{stmt: s.(*parser.CreateIndexStatement)} })
 	registerCommand(reflect.TypeOf((*parser.DropIndexStatement)(nil)), func(s parser.Statement) Command { return &DropIndexCommand{stmt: s.(*parser.DropIndexStatement)} })
@@ -77,8 +75,6 @@ func init() {
 	registerCommand(reflect.TypeOf((*parser.CreatePolicyStatement)(nil)), func(s parser.Statement) Command { return &CreatePolicyCommand{stmt: s.(*parser.CreatePolicyStatement)} })
 	registerCommand(reflect.TypeOf((*parser.EnableRlsStatement)(nil)), func(s parser.Statement) Command { return &EnableRlsCommand{stmt: s.(*parser.EnableRlsStatement)} })
 	registerCommand(reflect.TypeOf((*parser.CTEStatement)(nil)), func(s parser.Statement) Command { return &CTECommand{stmt: s.(*parser.CTEStatement)} })
-	registerCommand(reflect.TypeOf((*parser.TruncateStatement)(nil)), func(s parser.Statement) Command { return &TruncateCommand{stmt: s.(*parser.TruncateStatement)} })
-	registerCommand(reflect.TypeOf((*parser.MergeStatement)(nil)), func(s parser.Statement) Command { return &MergeCommand{stmt: s.(*parser.MergeStatement)} })
 	registerCommand(reflect.TypeOf((*parser.SavepointStatement)(nil)), func(s parser.Statement) Command { return &SavepointCommand{stmt: s.(*parser.SavepointStatement)} })
 	registerCommand(reflect.TypeOf((*parser.RollbackToSavepointStatement)(nil)), func(s parser.Statement) Command {
 		return &RollbackToSavepointCommand{stmt: s.(*parser.RollbackToSavepointStatement)}
@@ -128,13 +124,6 @@ func init() {
 	})
 	registerCommand(reflect.TypeOf((*parser.RevokeTokenStatement)(nil)), func(s parser.Statement) Command {
 		return &RevokeTokenCommand{stmt: s.(*parser.RevokeTokenStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.CopyStatement)(nil)), func(s parser.Statement) Command {
-		stmt := s.(*parser.CopyStatement)
-		if stmt.IsFrom {
-			return &CopyFromCommand{stmt: stmt}
-		}
-		return &CopyToCommand{stmt: stmt}
 	})
 }
 
@@ -289,10 +278,20 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 }
 
 // CommandFactory creates a Command from a parser.Statement using the registry.
+// First checks the local reflect.Type-based registry, then falls back to the
+// types package's string-name registry (used by subpackages like commands/dml).
 func CommandFactory(stmt parser.Statement) (Command, error) {
+	if stmt == nil {
+		return nil, fmt.Errorf("nil statement")
+	}
 	stmtType := reflect.TypeOf(stmt)
 	if factory, ok := commandRegistry[stmtType]; ok {
 		return factory(stmt), nil
+	}
+	// Fallback: check types registry by statement name
+	typesFactory := types.GetCommandFactory()(stmt.StatementType(), stmt)
+	if typesFactory != nil {
+		return typesFactory, nil
 	}
 	return nil, fmt.Errorf("unknown statement type: %T", stmt)
 }
