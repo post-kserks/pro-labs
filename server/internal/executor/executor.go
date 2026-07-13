@@ -10,6 +10,7 @@ import (
 
 	"vaultdb/internal/ai"
 	"vaultdb/internal/auth"
+	"vaultdb/internal/executor/optimizer"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -153,7 +154,7 @@ type ExecutionContext struct {
 	Broadcaster *Broadcaster
 	Embedder    ai.Embedder
 	WAL         *wal.WAL
-	Stats       *StatisticsCollector
+	Stats       *optimizer.StatisticsCollector
 	Ctx         context.Context
 
 	// ColumnIndex caches lowercased column name → position for O(1) lookups.

@@ -1,4 +1,4 @@
-package executor
+package optimizer
 
 import (
 	"testing"
@@ -7,7 +7,7 @@ import (
 )
 
 func TestPredicatePushdown_SingleTable(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -36,7 +36,7 @@ func TestPredicatePushdown_SingleTable(t *testing.T) {
 }
 
 func TestPredicatePushdown_JoinSplit(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -85,7 +85,7 @@ func TestPredicatePushdown_JoinSplit(t *testing.T) {
 }
 
 func TestPredicatePushdown_NoWhere(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -105,7 +105,7 @@ func TestPredicatePushdown_NoWhere(t *testing.T) {
 }
 
 func TestPredicatePushdown_AndChain(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -197,7 +197,7 @@ func TestAppendConjunction(t *testing.T) {
 }
 
 func TestCollectTables(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	opt := NewOptimizer(store)
 
 	stmt := &parser.SelectStatement{

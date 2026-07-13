@@ -1,4 +1,4 @@
-package executor
+package optimizer
 
 // Join reordering and method selection.
 

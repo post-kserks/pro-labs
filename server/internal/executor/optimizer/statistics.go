@@ -1,4 +1,4 @@
-package executor
+package optimizer
 
 import (
 	"fmt"
@@ -88,6 +88,9 @@ func (sc *StatisticsCollector) collectStats(dbName, tableName string) *TableStat
 
 	// If table is empty — return basic statistics
 	if rowCount == 0 {
+		if schema == nil {
+			return stats
+		}
 		for _, col := range schema.Columns {
 			stats.ColumnStats[strings.ToLower(col.Name)] = &ColumnStatistics{
 				ColumnName:    col.Name,

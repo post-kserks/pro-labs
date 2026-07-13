@@ -1,4 +1,4 @@
-package executor
+package optimizer
 
 // Plan formatting for EXPLAIN output.
 

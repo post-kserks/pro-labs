@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"vaultdb/internal/executor/optimizer"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -240,8 +241,8 @@ func (c *ExplainCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	// Use optimized plan if available
-	optimizer := NewOptimizer(ctx.Storage)
-	optPlan, err := optimizer.OptimizePlan(dbName, c.stmt.Inner)
+	opt := optimizer.NewOptimizer(ctx.Storage)
+	optPlan, err := opt.OptimizePlan(dbName, c.stmt.Inner)
 	if err != nil {
 		return nil, err
 	}

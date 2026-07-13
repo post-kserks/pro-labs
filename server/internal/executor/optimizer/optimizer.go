@@ -1,4 +1,4 @@
-package executor
+package optimizer
 
 // Core optimizer types and main entry point.
 

@@ -5,6 +5,7 @@ package executor
 // scans, reducing rows before JOINs and final WHERE evaluation.
 
 import (
+	"vaultdb/internal/executor/optimizer"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -47,10 +48,10 @@ func applyPushdownFilter(dbName string, stmt *parser.SelectStatement, tableName 
 	}
 
 	store := ctx.Storage
-	optimizer := NewOptimizer(store)
+	opt := optimizer.NewOptimizer(store)
 
 	clone := cloneSelectStatement(stmt)
-	plan, err := optimizer.OptimizePlan(dbName, clone)
+	plan, err := opt.OptimizePlan(dbName, clone)
 	if err != nil || plan == nil {
 		return rows, nil
 	}

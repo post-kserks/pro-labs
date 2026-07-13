@@ -1,4 +1,4 @@
-package executor
+package optimizer
 
 // Cost estimation for query plans.
 

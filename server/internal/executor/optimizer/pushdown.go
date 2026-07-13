@@ -1,4 +1,4 @@
-package executor
+package optimizer
 
 // Projection pushdown, decorrelation, and column reference collection.
 

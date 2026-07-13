@@ -1,4 +1,4 @@
-package executor
+package optimizer
 
 import (
 	"testing"
@@ -7,7 +7,7 @@ import (
 )
 
 func TestReorderJoins_SmallestFirst(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -40,7 +40,7 @@ func TestReorderJoins_SmallestFirst(t *testing.T) {
 }
 
 func TestReorderJoins_SingleJoin(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -68,7 +68,7 @@ func TestReorderJoins_SingleJoin(t *testing.T) {
 }
 
 func TestPushdownProjections_SingleTable(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -102,7 +102,7 @@ func TestPushdownProjections_SingleTable(t *testing.T) {
 }
 
 func TestPushdownProjections_Join(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -147,7 +147,7 @@ func TestPushdownProjections_Join(t *testing.T) {
 }
 
 func TestPushdownProjections_SelectStar(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -171,7 +171,7 @@ func TestPushdownProjections_SelectStar(t *testing.T) {
 }
 
 func TestDecorrelateSubquery_SimpleIN(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -218,7 +218,7 @@ func TestDecorrelateSubquery_SimpleIN(t *testing.T) {
 }
 
 func TestDecorrelateSubquery_NoSubquery(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -242,7 +242,7 @@ func TestDecorrelateSubquery_NoSubquery(t *testing.T) {
 }
 
 func TestDecorrelateSubquery_NonCorrelated(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
@@ -278,7 +278,7 @@ func TestDecorrelateSubquery_NonCorrelated(t *testing.T) {
 }
 
 func TestReorderJoins_PreservesMethods(t *testing.T) {
-	store := NewMockStorage()
+	store := newMockStorage()
 	store.ensureDB("testdb")
 	opt := NewOptimizer(store)
 
