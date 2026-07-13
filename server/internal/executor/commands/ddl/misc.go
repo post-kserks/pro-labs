@@ -1,4 +1,4 @@
-package executor
+package ddl
 
 // DDL commands for vacuum, migration, policies, views, triggers, functions, procedures.
 
@@ -13,6 +13,7 @@ import (
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/executor/types"
 )
 
 // validateWASMPath resolves a WASM file:// URI and ensures it is contained within
@@ -41,8 +42,14 @@ type VacuumCommand struct {
 	stmt *parser.VacuumStatement
 }
 
-func (c *VacuumCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("VACUUM", func(stmt parser.Statement) types.Command {
+		return &VacuumCommand{stmt: stmt.(*parser.VacuumStatement)}
+	})
+}
+
+func (c *VacuumCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +93,7 @@ func (c *VacuumCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		})
 	}
 
-	return &Result{
+	return &types.Result{
 		Type:    "rows",
 		Columns: columns,
 		Rows:    resRows,
@@ -97,8 +104,14 @@ type MigrationCommand struct {
 	stmt *parser.MigrationStatement
 }
 
-func (c *MigrationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("MIGRATION", func(stmt parser.Statement) types.Command {
+		return &MigrationCommand{stmt: stmt.(*parser.MigrationStatement)}
+	})
+}
+
+func (c *MigrationCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +146,7 @@ func (c *MigrationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if _, err := ctx.Storage.InsertRows(dbName, migrationTable, []storage.Row{row}); err != nil {
 			return nil, err
 		}
-		return &Result{Type: "message", Message: fmt.Sprintf("Migration '%s' created.", c.stmt.Name)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Migration '%s' created.", c.stmt.Name)}, nil
 
 	case "APPLY":
 		rows, err := ctx.Storage.ReadCurrentRows(dbName, migrationTable)
@@ -147,7 +160,7 @@ func (c *MigrationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 				if row[2] != nil && row[2] != "NULL" {
 					return nil, fmt.Errorf("migration '%s' already applied", c.stmt.Name)
 				}
-				sqlToApply = valueToString(row[1])
+				sqlToApply = types.ValueToString(row[1])
 				rowIdx = i
 				break
 			}
@@ -170,7 +183,7 @@ func (c *MigrationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}); err != nil {
 			return nil, fmt.Errorf("migration '%s' applied but recording it failed: %w", c.stmt.Name, err)
 		}
-		return &Result{Type: "message", Message: fmt.Sprintf("Migration '%s' applied.", c.stmt.Name)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Migration '%s' applied.", c.stmt.Name)}, nil
 
 	case "PREVIEW":
 		previewRows, err := ctx.Storage.ReadCurrentRows(dbName, migrationTable)
@@ -179,13 +192,13 @@ func (c *MigrationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 		for _, row := range previewRows {
 			if row[0] == c.stmt.Name {
-				sqlToApply := valueToString(row[1])
+				sqlToApply := types.ValueToString(row[1])
 				applied := row[2] != nil && row[2] != "NULL"
 				status := "not applied"
 				if applied {
 					status = "already applied"
 				}
-				return &Result{
+				return &types.Result{
 					Type:    "rows",
 					Columns: []string{"migration", "status", "sql"},
 					Rows:    [][]string{{c.stmt.Name, status, sqlToApply}},
@@ -217,7 +230,7 @@ func (c *MigrationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}); err != nil {
 			return nil, fmt.Errorf("migration rollback failed: %w", err)
 		}
-		return &Result{Type: "message", Message: fmt.Sprintf("Migration '%s' rolled back.", c.stmt.Name)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Migration '%s' rolled back.", c.stmt.Name)}, nil
 	default:
 		return nil, fmt.Errorf("unknown migration operation: %s", c.stmt.Op)
 	}
@@ -227,15 +240,21 @@ type CreatePolicyCommand struct {
 	stmt *parser.CreatePolicyStatement
 }
 
-func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("CREATE_POLICY", func(stmt parser.Statement) types.Command {
+		return &CreatePolicyCommand{stmt: stmt.(*parser.CreatePolicyStatement)}
+	})
+}
+
+func (c *CreatePolicyCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	usingSQL := ""
 	if c.stmt.Using != nil {
-		usingSQL = exprToSQL(c.stmt.Using)
+		usingSQL = types.ExprToSQL(c.stmt.Using)
 	}
 	policy := storage.RLSPolicy{
 		Name:      c.stmt.Name,
@@ -248,12 +267,12 @@ func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if err := ctx.Storage.AddPolicy(dbName, c.stmt.TableName, policy); err != nil {
 			return nil, fmt.Errorf("add policy: %w", err)
 		}
-	} else if err := addViewPolicy(ctx, dbName, c.stmt.TableName, policy); err != nil {
+	} else if err := types.AddViewPolicy(ctx, dbName, c.stmt.TableName, policy); err != nil {
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
 
-	if ctx.Session != nil && asSession(ctx).resultCache != nil {
-		func() { if rc := ctx.Session.GetResultCache(); rc != nil { rc.(*ResultCache).Invalidate(c.stmt.TableName) } }()
+	if ctx.Session != nil {
+		ctx.Session.InvalidateResultCache(c.stmt.TableName)
 	}
 
 	if ctx.Session.GetAuditLog() != nil {
@@ -262,15 +281,21 @@ func (c *CreatePolicyCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "CREATE POLICY", dbName+"."+c.stmt.Name, fmt.Sprintf("table=%s", c.stmt.TableName))
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Policy '%s' created.", c.stmt.Name)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Policy '%s' created.", c.stmt.Name)}, nil
 }
 
 type EnableRlsCommand struct {
 	stmt *parser.EnableRlsStatement
 }
 
-func (c *EnableRlsCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("ENABLE_RLS", func(stmt parser.Statement) types.Command {
+		return &EnableRlsCommand{stmt: stmt.(*parser.EnableRlsStatement)}
+	})
+}
+
+func (c *EnableRlsCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -278,12 +303,12 @@ func (c *EnableRlsCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if err := ctx.Storage.SetTableRLS(dbName, c.stmt.TableName, true); err != nil {
 			return nil, err
 		}
-	} else if err := setViewRLS(ctx, dbName, c.stmt.TableName, true); err != nil {
+	} else if err := types.SetViewRLS(ctx, dbName, c.stmt.TableName, true); err != nil {
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
 
-	if ctx.Session != nil && asSession(ctx).resultCache != nil {
-		func() { if rc := ctx.Session.GetResultCache(); rc != nil { rc.(*ResultCache).Invalidate(c.stmt.TableName) } }()
+	if ctx.Session != nil {
+		ctx.Session.InvalidateResultCache(c.stmt.TableName)
 	}
 	if ctx.Session.GetAuditLog() != nil {
 		ctx.Session.GetAuditLog().LogDDL("ENABLE RLS", dbName, c.stmt.TableName, "")
@@ -291,15 +316,21 @@ func (c *EnableRlsCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "ENABLE RLS", dbName+"."+c.stmt.TableName, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("RLS enabled on table '%s'.", c.stmt.TableName)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("RLS enabled on table '%s'.", c.stmt.TableName)}, nil
 }
 
 type CreateViewCommand struct {
 	stmt *parser.CreateViewStatement
 }
 
-func (c *CreateViewCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("CREATE_VIEW", func(stmt parser.Statement) types.Command {
+		return &CreateViewCommand{stmt: stmt.(*parser.CreateViewStatement)}
+	})
+}
+
+func (c *CreateViewCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +346,7 @@ func (c *CreateViewCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		"query": querySQL,
 	}
 
-	if err := storeObject(ctx, dbName, objTypeView, c.stmt.Name, vd); err != nil {
+	if err := types.StoreObject(ctx, dbName, types.ObjTypeView, c.stmt.Name, vd); err != nil {
 		return nil, fmt.Errorf("create view: %w", err)
 	}
 
@@ -325,15 +356,21 @@ func (c *CreateViewCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "CREATE VIEW", dbName+"."+c.stmt.Name, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("View '%s' created.", c.stmt.Name)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("View '%s' created.", c.stmt.Name)}, nil
 }
 
 type DropViewCommand struct {
 	stmt *parser.DropViewStatement
 }
 
-func (c *DropViewCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("DROP_VIEW", func(stmt parser.Statement) types.Command {
+		return &DropViewCommand{stmt: stmt.(*parser.DropViewStatement)}
+	})
+}
+
+func (c *DropViewCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +379,7 @@ func (c *DropViewCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("drop view: %w", err)
 	}
 
-	if err := deleteObject(ctx, dbName, objTypeView, c.stmt.Name); err != nil {
+	if err := types.DeleteObject(ctx, dbName, types.ObjTypeView, c.stmt.Name); err != nil {
 		return nil, fmt.Errorf("drop view: %w", err)
 	}
 
@@ -352,15 +389,21 @@ func (c *DropViewCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "DROP VIEW", dbName+"."+c.stmt.Name, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("View '%s' dropped.", c.stmt.Name)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("View '%s' dropped.", c.stmt.Name)}, nil
 }
 
 type CreateTriggerCommand struct {
 	stmt *parser.CreateTriggerStatement
 }
 
-func (c *CreateTriggerCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("CREATE_TRIGGER", func(stmt parser.Statement) types.Command {
+		return &CreateTriggerCommand{stmt: stmt.(*parser.CreateTriggerStatement)}
+	})
+}
+
+func (c *CreateTriggerCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +420,7 @@ func (c *CreateTriggerCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		"body":   c.stmt.Body,
 	}
 
-	if err := storeObject(ctx, dbName, objTypeTrigger, c.stmt.Name, td); err != nil {
+	if err := types.StoreObject(ctx, dbName, types.ObjTypeTrigger, c.stmt.Name, td); err != nil {
 		return nil, fmt.Errorf("create trigger: %w", err)
 	}
 
@@ -387,15 +430,21 @@ func (c *CreateTriggerCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "CREATE TRIGGER", dbName+"."+c.stmt.Name, fmt.Sprintf("table=%s event=%s", c.stmt.TableName, c.stmt.Event))
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Trigger '%s' created on table '%s'.", c.stmt.Name, c.stmt.TableName)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Trigger '%s' created on table '%s'.", c.stmt.Name, c.stmt.TableName)}, nil
 }
 
 type DropTriggerCommand struct {
 	stmt *parser.DropTriggerStatement
 }
 
-func (c *DropTriggerCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("DROP_TRIGGER", func(stmt parser.Statement) types.Command {
+		return &DropTriggerCommand{stmt: stmt.(*parser.DropTriggerStatement)}
+	})
+}
+
+func (c *DropTriggerCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +453,7 @@ func (c *DropTriggerCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("drop trigger: %w", err)
 	}
 
-	if err := deleteObject(ctx, dbName, objTypeTrigger, c.stmt.Name); err != nil {
+	if err := types.DeleteObject(ctx, dbName, types.ObjTypeTrigger, c.stmt.Name); err != nil {
 		return nil, fmt.Errorf("drop trigger: %w", err)
 	}
 
@@ -414,15 +463,21 @@ func (c *DropTriggerCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "DROP TRIGGER", dbName+"."+c.stmt.Name, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Trigger '%s' dropped.", c.stmt.Name)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Trigger '%s' dropped.", c.stmt.Name)}, nil
 }
 
 type CreateFunctionCommand struct {
 	stmt *parser.CreateFunctionStatement
 }
 
-func (c *CreateFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("CREATE_FUNCTION", func(stmt parser.Statement) types.Command {
+		return &CreateFunctionCommand{stmt: stmt.(*parser.CreateFunctionStatement)}
+	})
+}
+
+func (c *CreateFunctionCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +504,7 @@ func (c *CreateFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) 
 		default:
 			return nil, fmt.Errorf("function body must be a SELECT statement")
 		}
-		if containsSubqueryDML(selStmt) {
+		if types.ContainsSubqueryDML(selStmt) {
 			return nil, fmt.Errorf("function body contains DML in subqueries")
 		}
 	}
@@ -476,7 +531,7 @@ func (c *CreateFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) 
 		fd["options"] = c.stmt.Options
 	}
 
-	if err := storeObject(ctx, dbName, objTypeFunction, c.stmt.Name, fd); err != nil {
+	if err := types.StoreObject(ctx, dbName, types.ObjTypeFunction, c.stmt.Name, fd); err != nil {
 		return nil, fmt.Errorf("create function: %w", err)
 	}
 
@@ -486,15 +541,21 @@ func (c *CreateFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) 
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "CREATE FUNCTION", dbName+"."+c.stmt.Name, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Function '%s' created.", c.stmt.Name)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Function '%s' created.", c.stmt.Name)}, nil
 }
 
 type DropFunctionCommand struct {
 	stmt *parser.DropFunctionStatement
 }
 
-func (c *DropFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("DROP_FUNCTION", func(stmt parser.Statement) types.Command {
+		return &DropFunctionCommand{stmt: stmt.(*parser.DropFunctionStatement)}
+	})
+}
+
+func (c *DropFunctionCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +564,7 @@ func (c *DropFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("drop function: %w", err)
 	}
 
-	if err := deleteObject(ctx, dbName, objTypeFunction, c.stmt.Name); err != nil {
+	if err := types.DeleteObject(ctx, dbName, types.ObjTypeFunction, c.stmt.Name); err != nil {
 		return nil, fmt.Errorf("drop function: %w", err)
 	}
 
@@ -513,61 +574,21 @@ func (c *DropFunctionCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "DROP FUNCTION", dbName+"."+c.stmt.Name, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Function '%s' dropped.", c.stmt.Name)}, nil
-}
-
-func fireTriggers(ctx *ExecutionContext, dbName, tableName, event string) {
-	const maxTriggerDepth = 3
-	if ctx.TriggerDepth() >= maxTriggerDepth {
-		slog.Warn("trigger recursion depth limit reached", "table", tableName, "event", event)
-		return
-	}
-
-	triggers, err := loadAllObjectsByType(ctx, dbName, objTypeTrigger)
-	if err != nil {
-		slog.Warn("failed to load triggers", "error", err)
-		return
-	}
-	for _, td := range triggers {
-		triggerTable, _ := td["table"].(string)
-		triggerEvent, _ := td["event"].(string)
-		timing, _ := td["timing"].(string)
-		body, _ := td["body"].(string)
-		name, _ := td["name"].(string)
-
-		if triggerTable != tableName || !strings.EqualFold(triggerEvent, event) {
-			continue
-		}
-		if timing != "AFTER" {
-			continue
-		}
-		if body == "" {
-			continue
-		}
-		ctx.SetTriggerDepth(ctx.TriggerDepth() + 1)
-		err := executeTriggerBody(ctx, body)
-		ctx.SetTriggerDepth(ctx.TriggerDepth() - 1)
-		if err != nil {
-			slog.Error("trigger body execution failed", "trigger", name, "error", err)
-		}
-	}
-}
-
-func executeTriggerBody(ctx *ExecutionContext, body string) error {
-	stmt, err := parser.Parse(body)
-	if err != nil {
-		return fmt.Errorf("trigger body parse: %w", err)
-	}
-	_, err = ctx.RunSubquery.RunSubquery(ctx, stmt)
-	return err
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Function '%s' dropped.", c.stmt.Name)}, nil
 }
 
 type CreateProcedureCommand struct {
 	stmt *parser.CreateProcedureStatement
 }
 
-func (c *CreateProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("CREATE_PROCEDURE", func(stmt parser.Statement) types.Command {
+		return &CreateProcedureCommand{stmt: stmt.(*parser.CreateProcedureStatement)}
+	})
+}
+
+func (c *CreateProcedureCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -618,7 +639,7 @@ func (c *CreateProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error)
 		pd["options"] = c.stmt.Options
 	}
 
-	if err := storeObject(ctx, dbName, objTypeProcedure, c.stmt.Name, pd); err != nil {
+	if err := types.StoreObject(ctx, dbName, types.ObjTypeProcedure, c.stmt.Name, pd); err != nil {
 		return nil, fmt.Errorf("create procedure: %w", err)
 	}
 
@@ -628,15 +649,21 @@ func (c *CreateProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error)
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "CREATE PROCEDURE", dbName+"."+c.stmt.Name, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Procedure '%s' created.", c.stmt.Name)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Procedure '%s' created.", c.stmt.Name)}, nil
 }
 
 type DropProcedureCommand struct {
 	stmt *parser.DropProcedureStatement
 }
 
-func (c *DropProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("DROP_PROCEDURE", func(stmt parser.Statement) types.Command {
+		return &DropProcedureCommand{stmt: stmt.(*parser.DropProcedureStatement)}
+	})
+}
+
+func (c *DropProcedureCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -645,7 +672,7 @@ func (c *DropProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("drop procedure: %w", err)
 	}
 
-	if err := deleteObject(ctx, dbName, objTypeProcedure, c.stmt.Name); err != nil {
+	if err := types.DeleteObject(ctx, dbName, types.ObjTypeProcedure, c.stmt.Name); err != nil {
 		return nil, fmt.Errorf("drop procedure: %w", err)
 	}
 
@@ -655,15 +682,21 @@ func (c *DropProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "DROP PROCEDURE", dbName+"."+c.stmt.Name, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Procedure '%s' dropped.", c.stmt.Name)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Procedure '%s' dropped.", c.stmt.Name)}, nil
 }
 
 type CallProcedureCommand struct {
 	stmt *parser.CallProcedureStatement
 }
 
-func (c *CallProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("CALL_PROCEDURE", func(stmt parser.Statement) types.Command {
+		return &CallProcedureCommand{stmt: stmt.(*parser.CallProcedureStatement)}
+	})
+}
+
+func (c *CallProcedureCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -672,7 +705,7 @@ func (c *CallProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("call procedure: %w", err)
 	}
 
-	pd, err := loadObject(ctx, dbName, objTypeProcedure, c.stmt.Name)
+	pd, err := types.LoadObject(ctx, dbName, types.ObjTypeProcedure, c.stmt.Name)
 	if err != nil {
 		return nil, fmt.Errorf("call procedure: %w", err)
 	}
@@ -691,7 +724,7 @@ func (c *CallProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	// Support multi-statement bodies: split by ; and execute each
-	var lastResult *Result
+	var lastResult *types.Result
 	parts := splitSQLStatements(body)
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -712,8 +745,60 @@ func (c *CallProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if lastResult != nil {
 		return lastResult, nil
 	}
-	return &Result{Type: "message", Message: "procedure executed (no result)"}, nil
+	return &types.Result{Type: "message", Message: "procedure executed (no result)"}, nil
 }
+
+type ShowEncryptionStatusCommand struct {
+	stmt *parser.ShowEncryptionStatusStatement
+}
+
+func init() {
+	types.RegisterCommand("SHOW_ENCRYPTION_STATUS", func(stmt parser.Statement) types.Command {
+		return &ShowEncryptionStatusCommand{stmt: stmt.(*parser.ShowEncryptionStatusStatement)}
+	})
+}
+
+func (c *ShowEncryptionStatusCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	dekPath := filepath.Join(ctx.Storage.DataDir(), dbName, ".dek.enc")
+	metaPath := filepath.Join(ctx.Storage.DataDir(), dbName, ".encryption_meta.json")
+
+	encrypted := false
+	algorithm := "-"
+	keySource := "-"
+
+	if _, err := os.Stat(dekPath); err == nil {
+		encrypted = true
+		algorithm = "AES-256-GCM"
+
+		if data, err := os.ReadFile(metaPath); err == nil {
+			var meta struct {
+				KeySource string `json:"key_source"`
+			}
+			if json.Unmarshal(data, &meta) == nil && meta.KeySource != "" {
+				keySource = meta.KeySource
+			}
+		}
+	}
+
+	encStr := "no"
+	if encrypted {
+		encStr = "yes"
+	}
+
+	rows := [][]string{{dbName, encStr, algorithm, keySource}}
+	return &types.Result{
+		Type:    "rows",
+		Columns: []string{"database", "encrypted", "algorithm", "key_source"},
+		Rows:    rows,
+	}, nil
+}
+
+// ─── Local helpers ─────────────────────────────────────────────────────────
 
 func isProcedureBodySafe(stmt parser.Statement) bool {
 	switch stmt.(type) {
@@ -799,188 +884,4 @@ func splitSQLStatements(sql string) []string {
 		parts = append(parts, current.String())
 	}
 	return parts
-}
-
-// containsSubqueryDML recursively walks a SELECT statement's expressions and
-// subqueries to detect any non-SELECT (INSERT/UPDATE/DELETE) DML.
-func containsSubqueryDML(sel *parser.SelectStatement) bool {
-	// Walk CTEs
-	for _, cte := range sel.CTEs {
-		if containsStatementDML(cte.Query) {
-			return true
-		}
-	}
-	// Walk FROM subquery
-	if sel.FromSubquery != nil {
-		if containsSubqueryDML(sel.FromSubquery) {
-			return true
-		}
-	}
-	// Walk JOINs
-	for _, j := range sel.Joins {
-		if containsExprDML(j.Condition) {
-			return true
-		}
-	}
-	// Walk column expressions
-	for _, col := range sel.Columns {
-		if containsExprDML(col.Expr) {
-			return true
-		}
-	}
-	// Walk WHERE, HAVING
-	if containsExprDML(sel.Where) {
-		return true
-	}
-	if containsExprDML(sel.Having) {
-		return true
-	}
-	// Walk GROUP BY, ORDER BY expressions
-	for _, e := range sel.GroupBy {
-		if containsExprDML(e) {
-			return true
-		}
-	}
-	for _, o := range sel.OrderBy {
-		if containsExprDML(o.Expr) {
-			return true
-		}
-	}
-	return false
-}
-
-// containsStatementDML checks if a Statement contains DML subqueries.
-func containsStatementDML(stmt parser.Statement) bool {
-	if sel, ok := stmt.(*parser.SelectStatement); ok {
-		return containsSubqueryDML(sel)
-	}
-	return false // non-SELECT statements as CTE body are fine here
-}
-
-// containsExprDML checks if an Expression tree contains a subquery with DML.
-func containsExprDML(expr parser.Expression) bool {
-	if expr == nil {
-		return false
-	}
-	switch e := expr.(type) {
-	case *parser.SubqueryExpr:
-		if sel, ok := e.Query.(*parser.SelectStatement); ok {
-			return containsSubqueryDML(sel)
-		}
-		return true // non-SELECT subquery is DML
-	case *parser.ExistsExpr:
-		if sel, ok := e.Select.(*parser.SelectStatement); ok {
-			return containsSubqueryDML(sel)
-		}
-		return true
-	case *parser.ComparisonSubqueryExpr:
-		if sel, ok := e.Subquery.(*parser.SelectStatement); ok {
-			return containsSubqueryDML(sel)
-		}
-		return true
-	case *parser.BinaryExpr:
-		return containsExprDML(e.Left) || containsExprDML(e.Right)
-	case *parser.AndExpr:
-		return containsExprDML(e.Left) || containsExprDML(e.Right)
-	case *parser.OrExpr:
-		return containsExprDML(e.Left) || containsExprDML(e.Right)
-	case *parser.NotExpr:
-		return containsExprDML(e.Expr)
-	case *parser.InExpr:
-		if containsExprDML(e.Left) {
-			return true
-		}
-		for _, r := range e.Right {
-			if containsExprDML(r) {
-				return true
-			}
-		}
-		return false
-	case *parser.BetweenExpr:
-		return containsExprDML(e.Expr) || containsExprDML(e.Lower) || containsExprDML(e.Upper)
-	case *parser.CaseExpr:
-		if e.Base != nil && containsExprDML(e.Base) {
-			return true
-		}
-		for _, w := range e.Whens {
-			if containsExprDML(w.Condition) || containsExprDML(w.Result) {
-				return true
-			}
-		}
-		return e.Else != nil && containsExprDML(e.Else)
-	case *parser.CastExpr:
-		return containsExprDML(e.Expr)
-	case *parser.FunctionCall:
-		for _, a := range e.Args {
-			if containsExprDML(a) {
-				return true
-			}
-		}
-		return false
-	case *parser.AggregateExpr:
-		for _, a := range e.Args {
-			if containsExprDML(a) {
-				return true
-			}
-		}
-		return false
-	case *parser.WindowFunctionExpr:
-		for _, a := range e.Args {
-			if containsExprDML(a) {
-				return true
-			}
-		}
-		for _, p := range e.Over.PartitionBy {
-			if containsExprDML(p) {
-				return true
-			}
-		}
-		return false
-	default:
-		return false
-	}
-}
-
-type ShowEncryptionStatusCommand struct {
-	stmt *parser.ShowEncryptionStatusStatement
-}
-
-func (c *ShowEncryptionStatusCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	dekPath := filepath.Join(ctx.Storage.DataDir(), dbName, ".dek.enc")
-	metaPath := filepath.Join(ctx.Storage.DataDir(), dbName, ".encryption_meta.json")
-
-	encrypted := false
-	algorithm := "-"
-	keySource := "-"
-
-	if _, err := os.Stat(dekPath); err == nil {
-		encrypted = true
-		algorithm = "AES-256-GCM"
-
-		if data, err := os.ReadFile(metaPath); err == nil {
-			var meta struct {
-				KeySource string `json:"key_source"`
-			}
-			if json.Unmarshal(data, &meta) == nil && meta.KeySource != "" {
-				keySource = meta.KeySource
-			}
-		}
-	}
-
-	encStr := "no"
-	if encrypted {
-		encStr = "yes"
-	}
-
-	rows := [][]string{{dbName, encStr, algorithm, keySource}}
-	return &Result{
-		Type:    "rows",
-		Columns: []string{"database", "encrypted", "algorithm", "key_source"},
-		Rows:    rows,
-	}, nil
 }

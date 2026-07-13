@@ -10,6 +10,7 @@ import (
 
 	"vaultdb/internal/ai"
 	"vaultdb/internal/auth"
+	_ "vaultdb/internal/executor/commands/ddl"
 	_ "vaultdb/internal/executor/commands/dml"
 	"vaultdb/internal/executor/parallel"
 	"vaultdb/internal/executor/types"
@@ -41,29 +42,11 @@ func registerCommand(stmtType reflect.Type, factory commandFactory) {
 }
 
 func init() {
-	// Register all command factories
-	registerCommand(reflect.TypeOf((*parser.CreateDatabaseStatement)(nil)), func(s parser.Statement) Command {
-		return &CreateDatabaseCommand{stmt: s.(*parser.CreateDatabaseStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.DropDatabaseStatement)(nil)), func(s parser.Statement) Command { return &DropDatabaseCommand{stmt: s.(*parser.DropDatabaseStatement)} })
-	registerCommand(reflect.TypeOf((*parser.AlterTableStatement)(nil)), func(s parser.Statement) Command { return &AlterTableCommand{stmt: s.(*parser.AlterTableStatement)} })
-	registerCommand(reflect.TypeOf((*parser.UseDatabaseStatement)(nil)), func(s parser.Statement) Command { return &UseDatabaseCommand{stmt: s.(*parser.UseDatabaseStatement)} })
-	registerCommand(reflect.TypeOf((*parser.ShowDatabasesStatement)(nil)), func(s parser.Statement) Command {
-		return &ShowDatabasesCommand{stmt: s.(*parser.ShowDatabasesStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.ShowTablesStatement)(nil)), func(s parser.Statement) Command { return &ShowTablesCommand{stmt: s.(*parser.ShowTablesStatement)} })
-	registerCommand(reflect.TypeOf((*parser.DescribeTableStatement)(nil)), func(s parser.Statement) Command {
-		return &DescribeTableCommand{stmt: s.(*parser.DescribeTableStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.CreateTableStatement)(nil)), func(s parser.Statement) Command { return &CreateTableCommand{stmt: s.(*parser.CreateTableStatement)} })
-	registerCommand(reflect.TypeOf((*parser.DropTableStatement)(nil)), func(s parser.Statement) Command { return &DropTableCommand{stmt: s.(*parser.DropTableStatement)} })
+	// DDL commands registered via commands/ddl/ blank import.
+	// Non-DDL commands registered here.
 	registerCommand(reflect.TypeOf((*parser.SelectStatement)(nil)), func(s parser.Statement) Command { return &SelectCommand{stmt: s.(*parser.SelectStatement)} })
 	registerCommand(reflect.TypeOf((*parser.ExplainStatement)(nil)), func(s parser.Statement) Command { return &ExplainCommand{stmt: s.(*parser.ExplainStatement)} })
 	registerCommand(reflect.TypeOf((*parser.HistoryStatement)(nil)), func(s parser.Statement) Command { return &HistoryCommand{stmt: s.(*parser.HistoryStatement)} })
-	registerCommand(reflect.TypeOf((*parser.VacuumStatement)(nil)), func(s parser.Statement) Command { return &VacuumCommand{stmt: s.(*parser.VacuumStatement)} })
-	registerCommand(reflect.TypeOf((*parser.CreateIndexStatement)(nil)), func(s parser.Statement) Command { return &CreateIndexCommand{stmt: s.(*parser.CreateIndexStatement)} })
-	registerCommand(reflect.TypeOf((*parser.DropIndexStatement)(nil)), func(s parser.Statement) Command { return &DropIndexCommand{stmt: s.(*parser.DropIndexStatement)} })
-	registerCommand(reflect.TypeOf((*parser.ShowIndexesStatement)(nil)), func(s parser.Statement) Command { return &ShowIndexesCommand{stmt: s.(*parser.ShowIndexesStatement)} })
 	registerCommand(reflect.TypeOf((*parser.BeginStatement)(nil)), func(s parser.Statement) Command { return &BeginCommand{stmt: s.(*parser.BeginStatement)} })
 	registerCommand(reflect.TypeOf((*parser.CommitStatement)(nil)), func(s parser.Statement) Command { return &CommitCommand{stmt: s.(*parser.CommitStatement)} })
 	registerCommand(reflect.TypeOf((*parser.RollbackStatement)(nil)), func(s parser.Statement) Command { return &RollbackCommand{stmt: s.(*parser.RollbackStatement)} })
@@ -71,9 +54,6 @@ func init() {
 	registerCommand(reflect.TypeOf((*parser.ExecuteStatement)(nil)), func(s parser.Statement) Command { return &ExecutePreparedCommand{stmt: s.(*parser.ExecuteStatement)} })
 	registerCommand(reflect.TypeOf((*parser.DeallocateStatement)(nil)), func(s parser.Statement) Command { return &DeallocateCommand{stmt: s.(*parser.DeallocateStatement)} })
 	registerCommand(reflect.TypeOf((*parser.SetOperationStatement)(nil)), func(s parser.Statement) Command { return &SetOperationCommand{stmt: s.(*parser.SetOperationStatement)} })
-	registerCommand(reflect.TypeOf((*parser.MigrationStatement)(nil)), func(s parser.Statement) Command { return &MigrationCommand{stmt: s.(*parser.MigrationStatement)} })
-	registerCommand(reflect.TypeOf((*parser.CreatePolicyStatement)(nil)), func(s parser.Statement) Command { return &CreatePolicyCommand{stmt: s.(*parser.CreatePolicyStatement)} })
-	registerCommand(reflect.TypeOf((*parser.EnableRlsStatement)(nil)), func(s parser.Statement) Command { return &EnableRlsCommand{stmt: s.(*parser.EnableRlsStatement)} })
 	registerCommand(reflect.TypeOf((*parser.CTEStatement)(nil)), func(s parser.Statement) Command { return &CTECommand{stmt: s.(*parser.CTEStatement)} })
 	registerCommand(reflect.TypeOf((*parser.SavepointStatement)(nil)), func(s parser.Statement) Command { return &SavepointCommand{stmt: s.(*parser.SavepointStatement)} })
 	registerCommand(reflect.TypeOf((*parser.RollbackToSavepointStatement)(nil)), func(s parser.Statement) Command {
@@ -81,28 +61,6 @@ func init() {
 	})
 	registerCommand(reflect.TypeOf((*parser.ReleaseSavepointStatement)(nil)), func(s parser.Statement) Command {
 		return &ReleaseSavepointCommand{stmt: s.(*parser.ReleaseSavepointStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.CreateViewStatement)(nil)), func(s parser.Statement) Command { return &CreateViewCommand{stmt: s.(*parser.CreateViewStatement)} })
-	registerCommand(reflect.TypeOf((*parser.DropViewStatement)(nil)), func(s parser.Statement) Command { return &DropViewCommand{stmt: s.(*parser.DropViewStatement)} })
-	registerCommand(reflect.TypeOf((*parser.CreateTriggerStatement)(nil)), func(s parser.Statement) Command {
-		return &CreateTriggerCommand{stmt: s.(*parser.CreateTriggerStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.DropTriggerStatement)(nil)), func(s parser.Statement) Command { return &DropTriggerCommand{stmt: s.(*parser.DropTriggerStatement)} })
-	registerCommand(reflect.TypeOf((*parser.CreateFunctionStatement)(nil)), func(s parser.Statement) Command {
-		return &CreateFunctionCommand{stmt: s.(*parser.CreateFunctionStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.DropFunctionStatement)(nil)), func(s parser.Statement) Command { return &DropFunctionCommand{stmt: s.(*parser.DropFunctionStatement)} })
-	registerCommand(reflect.TypeOf((*parser.CreateProcedureStatement)(nil)), func(s parser.Statement) Command {
-		return &CreateProcedureCommand{stmt: s.(*parser.CreateProcedureStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.DropProcedureStatement)(nil)), func(s parser.Statement) Command {
-		return &DropProcedureCommand{stmt: s.(*parser.DropProcedureStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.CallProcedureStatement)(nil)), func(s parser.Statement) Command {
-		return &CallProcedureCommand{stmt: s.(*parser.CallProcedureStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.ShowEncryptionStatusStatement)(nil)), func(s parser.Statement) Command {
-		return &ShowEncryptionStatusCommand{stmt: s.(*parser.ShowEncryptionStatusStatement)}
 	})
 	registerCommand(reflect.TypeOf((*parser.VerifyAuditLogStatement)(nil)), func(s parser.Statement) Command {
 		return &VerifyAuditLogCommand{stmt: s.(*parser.VerifyAuditLogStatement)}

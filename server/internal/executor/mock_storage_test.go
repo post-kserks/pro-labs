@@ -507,7 +507,10 @@ func TestCreateDatabaseCommand(t *testing.T) {
 			Session: session,
 		}
 		stmt := &parser.CreateDatabaseStatement{DatabaseName: "testdb"}
-		cmd := &CreateDatabaseCommand{stmt: stmt}
+		cmd, err := CommandFactory(stmt)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		result, err := cmd.Execute(ctx)
 		if err != nil {
@@ -530,9 +533,12 @@ func TestCreateDatabaseCommand(t *testing.T) {
 			Session: session,
 		}
 		stmt := &parser.CreateDatabaseStatement{DatabaseName: "testdb"}
-		cmd := &CreateDatabaseCommand{stmt: stmt}
+		cmd, err := CommandFactory(stmt)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-		_, err := cmd.Execute(ctx)
+		_, err = cmd.Execute(ctx)
 		if err == nil {
 			t.Fatal("expected error")
 		}

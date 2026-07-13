@@ -1,6 +1,11 @@
 package executor
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
 	"vaultdb/internal/executor/types"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -143,4 +148,153 @@ func addViewPolicy(ctx *ExecutionContext, dbName, viewName string, policy storag
 
 func ResultCacheKey(stmt *parser.SelectStatement, dbName string) string {
 	return types.ResultCacheKey(stmt, dbName)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// DDL helpers that remain in root for use by non-DDL files (RBAC, hooks).
+// Canonical DDL command implementations live in commands/ddl/.
+// ──────────────────────────────────────────────────────────────────────────────
+
+func sanitizeObjectName(name string) (string, error) {
+	if err := storage.ValidateObjectName(name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func fireTriggers(ctx *ExecutionContext, dbName, tableName, event string) {
+	const maxTriggerDepth = 3
+	if ctx.TriggerDepth() >= maxTriggerDepth {
+		return
+	}
+
+	triggers, err := loadAllObjectsByType(ctx, dbName, types.ObjTypeTrigger)
+	if err != nil {
+		return
+	}
+	for _, td := range triggers {
+		triggerTable, _ := td["table"].(string)
+		triggerEvent, _ := td["event"].(string)
+		timing, _ := td["timing"].(string)
+		body, _ := td["body"].(string)
+		name, _ := td["name"].(string)
+
+		if triggerTable != tableName || !strings.EqualFold(triggerEvent, event) {
+			continue
+		}
+		if timing != "AFTER" {
+			continue
+		}
+		if body == "" {
+			continue
+		}
+		ctx.SetTriggerDepth(ctx.TriggerDepth() + 1)
+		err := executeTriggerBody(ctx, body)
+		ctx.SetTriggerDepth(ctx.TriggerDepth() - 1)
+		if err != nil {
+			_ = name // logged via slog in production
+		}
+	}
+}
+
+func executeTriggerBody(ctx *ExecutionContext, body string) error {
+	stmt, err := parser.Parse(body)
+	if err != nil {
+		return fmt.Errorf("trigger body parse: %w", err)
+	}
+	_, err = ctx.RunSubquery.RunSubquery(ctx, stmt)
+	return err
+}
+
+// ─── Validation helpers (used by tests in root package) ─────────────────────
+
+func isMigrationSafe(stmt parser.Statement) bool {
+	switch s := stmt.(type) {
+	case *parser.SelectStatement, *parser.InsertStatement, *parser.UpdateStatement, *parser.DeleteStatement:
+		return true
+	case *parser.CreateTableStatement:
+		name := strings.ToLower(s.TableName)
+		return !strings.HasPrefix(name, "_") && name != "vaultdb_audit_log"
+	case *parser.CreateIndexStatement:
+		return true
+	case *parser.CreateViewStatement:
+		return true
+	case *parser.AlterTableStatement:
+		return isAlterTableSafe(s)
+	default:
+		return false
+	}
+}
+
+func isAlterTableSafe(stmt *parser.AlterTableStatement) bool {
+	switch stmt.Action.(type) {
+	case *parser.AlterAddColumn, *parser.AlterAddConstraint:
+		return true
+	default:
+		return false
+	}
+}
+
+func splitSQLStatements(sql string) []string {
+	var parts []string
+	var current strings.Builder
+	inSingleQuote := false
+	inDoubleQuote := false
+	escaped := false
+
+	for _, ch := range sql {
+		if escaped {
+			current.WriteRune(ch)
+			escaped = false
+			continue
+		}
+		if ch == '\\' && (inSingleQuote || inDoubleQuote) {
+			current.WriteRune(ch)
+			escaped = true
+			continue
+		}
+		if ch == '\'' && !inDoubleQuote {
+			inSingleQuote = !inSingleQuote
+			current.WriteRune(ch)
+			continue
+		}
+		if ch == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			current.WriteRune(ch)
+			continue
+		}
+		if ch == ';' && !inSingleQuote && !inDoubleQuote {
+			parts = append(parts, current.String())
+			current.Reset()
+			continue
+		}
+		current.WriteRune(ch)
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	return parts
+}
+
+func containsSubqueryDML(sel *parser.SelectStatement) bool {
+	return types.ContainsSubqueryDML(sel)
+}
+
+func validateWASMPath(rawBody string, dataDir string) (string, error) {
+	raw := strings.TrimPrefix(rawBody, "file://")
+
+	if filepath.IsAbs(raw) {
+		return "", fmt.Errorf("WASM path must not be absolute: %s", raw)
+	}
+
+	absPath := filepath.Clean(filepath.Join(dataDir, raw))
+	absDataDir := filepath.Clean(dataDir)
+	if !strings.HasPrefix(absPath, absDataDir+string(os.PathSeparator)) && absPath != absDataDir {
+		return "", fmt.Errorf("WASM path escapes data directory: %s", raw)
+	}
+
+	if _, err := os.Stat(absPath); err != nil {
+		return "", fmt.Errorf("WASM module not found: %s", absPath)
+	}
+	return absPath, nil
 }

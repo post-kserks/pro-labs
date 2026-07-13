@@ -1,4 +1,4 @@
-package executor
+package ddl
 
 // Shared DDL utilities.
 

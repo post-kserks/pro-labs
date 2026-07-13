@@ -298,7 +298,10 @@ func TestObjectPersistenceMockStorage(t *testing.T) {
 			Name:  "v1",
 			Query: &parser.SelectStatement{TableName: "t"},
 		}
-		cmd := &CreateViewCommand{stmt: stmt}
+		cmd, err := CommandFactory(stmt)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		result, err := cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -330,14 +333,20 @@ func TestObjectPersistenceMockStorage(t *testing.T) {
 			Name:  "v1",
 			Query: &parser.SelectStatement{TableName: "t"},
 		}
-		cmd := &CreateViewCommand{stmt: stmt}
-		_, err := cmd.Execute(ctx)
+		cmd, err := CommandFactory(stmt)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		_, err = cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("create error: %v", err)
 		}
 
 		dropStmt := &parser.DropViewStatement{Name: "v1"}
-		dropCmd := &DropViewCommand{stmt: dropStmt}
+		dropCmd, err := CommandFactory(dropStmt)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		_, err = dropCmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("drop error: %v", err)
@@ -366,8 +375,11 @@ func TestObjectPersistenceMockStorage(t *testing.T) {
 			Event:     "INSERT",
 			Body:      "INSERT INTO log VALUES (1);",
 		}
-		cmd := &CreateTriggerCommand{stmt: stmt}
-		_, err := cmd.Execute(ctx)
+		cmd, err := CommandFactory(stmt)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		_, err = cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -391,15 +403,18 @@ func TestObjectPersistenceMockStorage(t *testing.T) {
 		store.CreateDatabase("mydb")
 		ctx := &ExecutionContext{Storage: store, Session: session}
 
-		_, _ = (&CreateViewCommand{stmt: &parser.CreateViewStatement{
+		cmd1, _ := CommandFactory(&parser.CreateViewStatement{
 			Name: "v1", Query: &parser.SelectStatement{TableName: "t"},
-		}}).Execute(ctx)
-		_, _ = (&CreateViewCommand{stmt: &parser.CreateViewStatement{
+		})
+		_, _ = cmd1.Execute(ctx)
+		cmd2, _ := CommandFactory(&parser.CreateViewStatement{
 			Name: "v2", Query: &parser.SelectStatement{TableName: "t"},
-		}}).Execute(ctx)
-		_, _ = (&CreateTriggerCommand{stmt: &parser.CreateTriggerStatement{
+		})
+		_, _ = cmd2.Execute(ctx)
+		cmd3, _ := CommandFactory(&parser.CreateTriggerStatement{
 			Name: "tr1", TableName: "t", Timing: "AFTER", Event: "INSERT", Body: "SELECT 1;",
-		}}).Execute(ctx)
+		})
+		_, _ = cmd3.Execute(ctx)
 
 		views, err := loadAllObjectsByType(ctx, "mydb", objTypeView)
 		if err != nil {
@@ -442,7 +457,10 @@ func TestObjectPersistenceMockStorage(t *testing.T) {
 		})
 
 		stmt := &parser.ShowTablesStatement{}
-		cmd := &ShowTablesCommand{stmt: stmt}
+		cmd, err := CommandFactory(stmt)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		result, err := cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

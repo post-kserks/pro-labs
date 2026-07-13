@@ -1282,3 +1282,145 @@ func NotifyBroadcaster(ctx *ExecutionContext, dbName, tableName string) {
 		NotifyBroadcasterFn(ctx, dbName, tableName)
 	}
 }
+
+// ─── DML Detection in Expressions ──────────────────────────────────────────
+
+// ContainsSubqueryDML recursively walks a SELECT statement's expressions and
+// subqueries to detect any non-SELECT (INSERT/UPDATE/DELETE) DML.
+func ContainsSubqueryDML(sel *parser.SelectStatement) bool {
+	// Walk CTEs
+	for _, cte := range sel.CTEs {
+		if ContainsStatementDML(cte.Query) {
+			return true
+		}
+	}
+	// Walk FROM subquery
+	if sel.FromSubquery != nil {
+		if ContainsSubqueryDML(sel.FromSubquery) {
+			return true
+		}
+	}
+	// Walk JOINs
+	for _, j := range sel.Joins {
+		if ContainsExprDML(j.Condition) {
+			return true
+		}
+	}
+	// Walk column expressions
+	for _, col := range sel.Columns {
+		if ContainsExprDML(col.Expr) {
+			return true
+		}
+	}
+	// Walk WHERE, HAVING
+	if ContainsExprDML(sel.Where) {
+		return true
+	}
+	if ContainsExprDML(sel.Having) {
+		return true
+	}
+	// Walk GROUP BY, ORDER BY expressions
+	for _, e := range sel.GroupBy {
+		if ContainsExprDML(e) {
+			return true
+		}
+	}
+	for _, o := range sel.OrderBy {
+		if ContainsExprDML(o.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+// ContainsStatementDML checks if a Statement contains DML subqueries.
+func ContainsStatementDML(stmt parser.Statement) bool {
+	if sel, ok := stmt.(*parser.SelectStatement); ok {
+		return ContainsSubqueryDML(sel)
+	}
+	return false // non-SELECT statements as CTE body are fine here
+}
+
+// ContainsExprDML checks if an Expression tree contains a subquery with DML.
+func ContainsExprDML(expr parser.Expression) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *parser.SubqueryExpr:
+		if sel, ok := e.Query.(*parser.SelectStatement); ok {
+			return ContainsSubqueryDML(sel)
+		}
+		return true // non-SELECT subquery is DML
+	case *parser.ExistsExpr:
+		if sel, ok := e.Select.(*parser.SelectStatement); ok {
+			return ContainsSubqueryDML(sel)
+		}
+		return true
+	case *parser.ComparisonSubqueryExpr:
+		if sel, ok := e.Subquery.(*parser.SelectStatement); ok {
+			return ContainsSubqueryDML(sel)
+		}
+		return true
+	case *parser.BinaryExpr:
+		return ContainsExprDML(e.Left) || ContainsExprDML(e.Right)
+	case *parser.AndExpr:
+		return ContainsExprDML(e.Left) || ContainsExprDML(e.Right)
+	case *parser.OrExpr:
+		return ContainsExprDML(e.Left) || ContainsExprDML(e.Right)
+	case *parser.NotExpr:
+		return ContainsExprDML(e.Expr)
+	case *parser.InExpr:
+		if ContainsExprDML(e.Left) {
+			return true
+		}
+		for _, r := range e.Right {
+			if ContainsExprDML(r) {
+				return true
+			}
+		}
+		return false
+	case *parser.BetweenExpr:
+		return ContainsExprDML(e.Expr) || ContainsExprDML(e.Lower) || ContainsExprDML(e.Upper)
+	case *parser.CaseExpr:
+		if e.Base != nil && ContainsExprDML(e.Base) {
+			return true
+		}
+		for _, w := range e.Whens {
+			if ContainsExprDML(w.Condition) || ContainsExprDML(w.Result) {
+				return true
+			}
+		}
+		return e.Else != nil && ContainsExprDML(e.Else)
+	case *parser.CastExpr:
+		return ContainsExprDML(e.Expr)
+	case *parser.FunctionCall:
+		for _, a := range e.Args {
+			if ContainsExprDML(a) {
+				return true
+			}
+		}
+		return false
+	case *parser.AggregateExpr:
+		for _, a := range e.Args {
+			if ContainsExprDML(a) {
+				return true
+			}
+		}
+		return false
+	case *parser.WindowFunctionExpr:
+		for _, a := range e.Args {
+			if ContainsExprDML(a) {
+				return true
+			}
+		}
+		for _, p := range e.Over.PartitionBy {
+			if ContainsExprDML(p) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}

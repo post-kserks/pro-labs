@@ -1,4 +1,4 @@
-package executor
+package ddl
 
 // DDL commands for table and index operations.
 
@@ -8,14 +8,21 @@ import (
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/executor/types"
 )
 
 type CreateTableCommand struct {
 	stmt *parser.CreateTableStatement
 }
 
-func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("CREATE_TABLE", func(stmt parser.Statement) types.Command {
+		return &CreateTableCommand{stmt: stmt.(*parser.CreateTableStatement)}
+	})
+}
+
+func (c *CreateTableCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +33,7 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	// IF NOT EXISTS: skip silently if table already exists
 	if c.stmt.IfNotExists && ctx.Storage.TableExists(dbName, c.stmt.TableName) {
-		return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' already exists, skipping.", c.stmt.TableName)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Table '%s' already exists, skipping.", c.stmt.TableName)}, nil
 	}
 
 	columns := make([]storage.ColumnSchema, 0, len(c.stmt.Columns))
@@ -44,11 +51,11 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			AutoIncrement: column.AutoIncrement,
 		}
 		if column.Default != nil {
-			val, err := evalOperand(column.Default, nil, nil, ctx)
+			val, err := types.EvalOperand(column.Default, nil, nil, ctx)
 			if err != nil {
 				return nil, fmt.Errorf("evaluating default for column '%s': %w", column.Name, err)
 			}
-			converted, err := normalizeForColumn(val, col)
+			converted, err := types.NormalizeForColumn(val, col)
 			if err != nil {
 				return nil, fmt.Errorf("normalizing default for column '%s': %w", column.Name, err)
 			}
@@ -123,15 +130,21 @@ func (c *CreateTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "CREATE TABLE", dbName+"."+c.stmt.TableName, fmt.Sprintf("columns=%d", len(columns)))
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' created successfully.", c.stmt.TableName)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Table '%s' created successfully.", c.stmt.TableName)}, nil
 }
 
 type DropTableCommand struct {
 	stmt *parser.DropTableStatement
 }
 
-func (c *DropTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("DROP_TABLE", func(stmt parser.Statement) types.Command {
+		return &DropTableCommand{stmt: stmt.(*parser.DropTableStatement)}
+	})
+}
+
+func (c *DropTableCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -141,15 +154,11 @@ func (c *DropTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	// IF EXISTS: skip silently if table doesn't exist
 	if c.stmt.IfExists && !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
-		return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' does not exist, skipping.", c.stmt.TableName)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Table '%s' does not exist, skipping.", c.stmt.TableName)}, nil
 	}
 
-	if asSession(ctx).planCache != nil {
-		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
-	}
-	if asSession(ctx).resultCache != nil {
-		func() { if rc := ctx.Session.GetResultCache(); rc != nil { rc.(*ResultCache).Invalidate(c.stmt.TableName) } }()
-	}
+	ctx.Session.InvalidatePlanCache(c.stmt.TableName)
+	ctx.Session.InvalidateResultCache(c.stmt.TableName)
 	if err := ctx.Storage.DropTable(dbName, c.stmt.TableName); err != nil {
 		return nil, err
 	}
@@ -159,15 +168,21 @@ func (c *DropTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "DROP TABLE", dbName+"."+c.stmt.TableName, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' dropped successfully.", c.stmt.TableName)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Table '%s' dropped successfully.", c.stmt.TableName)}, nil
 }
 
 type AlterTableCommand struct {
 	stmt *parser.AlterTableStatement
 }
 
-func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("ALTER_TABLE", func(stmt parser.Statement) types.Command {
+		return &AlterTableCommand{stmt: stmt.(*parser.AlterTableStatement)}
+	})
+}
+
+func (c *AlterTableCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -176,12 +191,8 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("table '%s' does not exist", c.stmt.TableName)
 	}
 
-	if asSession(ctx).planCache != nil {
-		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
-	}
-	if asSession(ctx).resultCache != nil {
-		func() { if rc := ctx.Session.GetResultCache(); rc != nil { rc.(*ResultCache).Invalidate(c.stmt.TableName) } }()
-	}
+	ctx.Session.InvalidatePlanCache(c.stmt.TableName)
+	ctx.Session.InvalidateResultCache(c.stmt.TableName)
 
 	switch action := c.stmt.Action.(type) {
 	case *parser.AlterAddColumn:
@@ -194,7 +205,7 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 		var defaultVal interface{}
 		if action.Column.Default != nil {
-			defaultVal, err = evalOperand(action.Column.Default, nil, nil, ctx)
+			defaultVal, err = types.EvalOperand(action.Column.Default, nil, nil, ctx)
 			if err != nil {
 				return nil, fmt.Errorf("evaluating default value: %w", err)
 			}
@@ -208,7 +219,7 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if ctx.Session.GetAuditTable() != nil {
 			ctx.Session.LogAudit("session", "ALTER TABLE ADD COLUMN", dbName+"."+c.stmt.TableName, fmt.Sprintf("column=%s", col.Name))
 		}
-		return &Result{Type: "message", Message: fmt.Sprintf("Column '%s' added to table '%s'.", col.Name, c.stmt.TableName)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Column '%s' added to table '%s'.", col.Name, c.stmt.TableName)}, nil
 
 	case *parser.AlterDropColumn:
 		if err := ctx.Storage.AlterTableDropColumn(dbName, c.stmt.TableName, action.ColumnName); err != nil {
@@ -220,7 +231,7 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if ctx.Session.GetAuditTable() != nil {
 			ctx.Session.LogAudit("session", "ALTER TABLE DROP COLUMN", dbName+"."+c.stmt.TableName, fmt.Sprintf("column=%s", action.ColumnName))
 		}
-		return &Result{Type: "message", Message: fmt.Sprintf("Column '%s' dropped from table '%s'.", action.ColumnName, c.stmt.TableName)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Column '%s' dropped from table '%s'.", action.ColumnName, c.stmt.TableName)}, nil
 
 	case *parser.AlterRenameColumn:
 		if err := ctx.Storage.AlterTableRenameColumn(dbName, c.stmt.TableName, action.OldName, action.NewName); err != nil {
@@ -232,7 +243,7 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if ctx.Session.GetAuditTable() != nil {
 			ctx.Session.LogAudit("session", "ALTER TABLE RENAME COLUMN", dbName+"."+c.stmt.TableName, fmt.Sprintf("from=%s to=%s", action.OldName, action.NewName))
 		}
-		return &Result{Type: "message", Message: fmt.Sprintf("Column '%s' renamed to '%s' in table '%s'.", action.OldName, action.NewName, c.stmt.TableName)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Column '%s' renamed to '%s' in table '%s'.", action.OldName, action.NewName, c.stmt.TableName)}, nil
 
 	case *parser.AlterRenameTable:
 		if err := ctx.Storage.AlterTableRenameTable(dbName, c.stmt.TableName, action.NewName); err != nil {
@@ -244,7 +255,7 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if ctx.Session.GetAuditTable() != nil {
 			ctx.Session.LogAudit("session", "ALTER TABLE RENAME", dbName+"."+c.stmt.TableName, fmt.Sprintf("to=%s", action.NewName))
 		}
-		return &Result{Type: "message", Message: fmt.Sprintf("Table '%s' renamed to '%s'.", c.stmt.TableName, action.NewName)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Table '%s' renamed to '%s'.", c.stmt.TableName, action.NewName)}, nil
 
 	case *parser.AlterAddConstraint:
 		schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName)
@@ -279,7 +290,7 @@ func (c *AlterTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if ctx.Session.GetAuditTable() != nil {
 			ctx.Session.LogAudit("session", "ALTER TABLE ADD CONSTRAINT", dbName+"."+c.stmt.TableName, fmt.Sprintf("constraint=%s", action.Name))
 		}
-		return &Result{Type: "message", Message: fmt.Sprintf("Constraint '%s' added to table '%s'.", action.Name, c.stmt.TableName)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Constraint '%s' added to table '%s'.", action.Name, c.stmt.TableName)}, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported ALTER TABLE action: %T", action)
@@ -290,8 +301,14 @@ type ShowTablesCommand struct {
 	stmt *parser.ShowTablesStatement
 }
 
-func (c *ShowTablesCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := resolveDatabase(ctx, c.stmt.DatabaseName)
+func init() {
+	types.RegisterCommand("SHOW_TABLES", func(stmt parser.Statement) types.Command {
+		return &ShowTablesCommand{stmt: stmt.(*parser.ShowTablesStatement)}
+	})
+}
+
+func (c *ShowTablesCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.ResolveDatabase(ctx, c.stmt.DatabaseName)
 	if err != nil {
 		return nil, err
 	}
@@ -303,20 +320,26 @@ func (c *ShowTablesCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	rows := make([][]string, 0, len(tables))
 	for _, table := range tables {
-		if table.Name == systemTableName {
+		if table.Name == types.SystemTableName {
 			continue
 		}
 		rows = append(rows, []string{table.Name, fmt.Sprintf("%d", table.RowCount)})
 	}
-	return &Result{Type: "rows", Columns: []string{"table", "rows"}, Rows: rows}, nil
+	return &types.Result{Type: "rows", Columns: []string{"table", "rows"}, Rows: rows}, nil
 }
 
 type DescribeTableCommand struct {
 	stmt *parser.DescribeTableStatement
 }
 
-func (c *DescribeTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := resolveDatabase(ctx, c.stmt.DatabaseName)
+func init() {
+	types.RegisterCommand("DESCRIBE_TABLE", func(stmt parser.Statement) types.Command {
+		return &DescribeTableCommand{stmt: stmt.(*parser.DescribeTableStatement)}
+	})
+}
+
+func (c *DescribeTableCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.ResolveDatabase(ctx, c.stmt.DatabaseName)
 	if err != nil {
 		return nil, err
 	}
@@ -341,12 +364,12 @@ func (c *DescribeTableCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 		rows = append(rows, []string{
 			column.Name,
-			formatColumnType(column),
+			types.FormatColumnType(column),
 			nullable,
 			createdAt,
 		})
 	}
-	return &Result{
+	return &types.Result{
 		Type:    "rows",
 		Columns: []string{"column", "type", "nullable", "created_at"},
 		Rows:    rows,
@@ -357,8 +380,14 @@ type ShowIndexesCommand struct {
 	stmt *parser.ShowIndexesStatement
 }
 
-func (c *ShowIndexesCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("SHOW_INDEXES", func(stmt parser.Statement) types.Command {
+		return &ShowIndexesCommand{stmt: stmt.(*parser.ShowIndexesStatement)}
+	})
+}
+
+func (c *ShowIndexesCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -370,15 +399,21 @@ func (c *ShowIndexesCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	for i, name := range names {
 		resRows[i] = []string{name}
 	}
-	return &Result{Type: "rows", Columns: []string{"index"}, Rows: resRows}, nil
+	return &types.Result{Type: "rows", Columns: []string{"index"}, Rows: resRows}, nil
 }
 
 type CreateIndexCommand struct {
 	stmt *parser.CreateIndexStatement
 }
 
-func (c *CreateIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("CREATE_INDEX", func(stmt parser.Statement) types.Command {
+		return &CreateIndexCommand{stmt: stmt.(*parser.CreateIndexStatement)}
+	})
+}
+
+func (c *CreateIndexCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +433,7 @@ func (c *CreateIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if ctx.Session.GetAuditTable() != nil {
 			ctx.Session.LogAudit("session", "CREATE INDEX", dbName+"."+c.stmt.IndexName, fmt.Sprintf("table=%s columns=%v", c.stmt.TableName, c.stmt.Columns))
 		}
-		return &Result{Type: "message", Message: fmt.Sprintf("Multi-column index '%s' created successfully.", c.stmt.IndexName)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Multi-column index '%s' created successfully.", c.stmt.IndexName)}, nil
 	}
 
 	column := c.stmt.Column
@@ -419,15 +454,21 @@ func (c *CreateIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "CREATE INDEX", dbName+"."+c.stmt.IndexName, fmt.Sprintf("table=%s column=%s", c.stmt.TableName, column))
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Index '%s' created successfully.", c.stmt.IndexName)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Index '%s' created successfully.", c.stmt.IndexName)}, nil
 }
 
 type DropIndexCommand struct {
 	stmt *parser.DropIndexStatement
 }
 
-func (c *DropIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func init() {
+	types.RegisterCommand("DROP_INDEX", func(stmt parser.Statement) types.Command {
+		return &DropIndexCommand{stmt: stmt.(*parser.DropIndexStatement)}
+	})
+}
+
+func (c *DropIndexCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -440,5 +481,5 @@ func (c *DropIndexCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "DROP INDEX", dbName+"."+c.stmt.IndexName, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Index '%s' dropped successfully.", c.stmt.IndexName)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Index '%s' dropped successfully.", c.stmt.IndexName)}, nil
 }

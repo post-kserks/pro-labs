@@ -1,4 +1,4 @@
-package executor
+package ddl
 
 // DDL commands for database operations.
 
@@ -8,26 +8,33 @@ import (
 
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
+	"vaultdb/internal/executor/types"
 )
 
 type CreateDatabaseCommand struct {
 	stmt *parser.CreateDatabaseStatement
 }
 
-func (c *CreateDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+func init() {
+	types.RegisterCommand("CREATE_DATABASE", func(stmt parser.Statement) types.Command {
+		return &CreateDatabaseCommand{stmt: stmt.(*parser.CreateDatabaseStatement)}
+	})
+}
+
+func (c *CreateDatabaseCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	if _, err := sanitizeObjectName(c.stmt.DatabaseName); err != nil {
 		return nil, fmt.Errorf("create database: %w", err)
 	}
 	// IF NOT EXISTS: skip silently if database already exists
 	if c.stmt.IfNotExists && ctx.Storage.DatabaseExists(c.stmt.DatabaseName) {
-		return &Result{Type: "message", Message: fmt.Sprintf("Database '%s' already exists, skipping.", c.stmt.DatabaseName)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Database '%s' already exists, skipping.", c.stmt.DatabaseName)}, nil
 	}
 	if err := ctx.Storage.CreateDatabase(c.stmt.DatabaseName); err != nil {
 		return nil, err
 	}
 
 	objectsSchema := storage.TableSchema{
-		Name: systemTableName,
+		Name: types.SystemTableName,
 		Columns: []storage.ColumnSchema{
 			{Name: "name", Type: "TEXT"},
 			{Name: "type", Type: "TEXT"},
@@ -45,20 +52,26 @@ func (c *CreateDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) 
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "CREATE DATABASE", c.stmt.DatabaseName, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Database '%s' created successfully.", c.stmt.DatabaseName)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Database '%s' created successfully.", c.stmt.DatabaseName)}, nil
 }
 
 type DropDatabaseCommand struct {
 	stmt *parser.DropDatabaseStatement
 }
 
-func (c *DropDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+func init() {
+	types.RegisterCommand("DROP_DATABASE", func(stmt parser.Statement) types.Command {
+		return &DropDatabaseCommand{stmt: stmt.(*parser.DropDatabaseStatement)}
+	})
+}
+
+func (c *DropDatabaseCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	if _, err := sanitizeObjectName(c.stmt.DatabaseName); err != nil {
 		return nil, fmt.Errorf("drop database: %w", err)
 	}
 	// IF EXISTS: skip silently if database doesn't exist
 	if c.stmt.IfExists && !ctx.Storage.DatabaseExists(c.stmt.DatabaseName) {
-		return &Result{Type: "message", Message: fmt.Sprintf("Database '%s' does not exist, skipping.", c.stmt.DatabaseName)}, nil
+		return &types.Result{Type: "message", Message: fmt.Sprintf("Database '%s' does not exist, skipping.", c.stmt.DatabaseName)}, nil
 	}
 	if err := ctx.Storage.DropDatabase(c.stmt.DatabaseName); err != nil {
 		return nil, err
@@ -72,14 +85,20 @@ func (c *DropDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "DROP DATABASE", c.stmt.DatabaseName, "")
 	}
-	return &Result{Type: "message", Message: fmt.Sprintf("Database '%s' dropped successfully.", c.stmt.DatabaseName)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Database '%s' dropped successfully.", c.stmt.DatabaseName)}, nil
 }
 
 type UseDatabaseCommand struct {
 	stmt *parser.UseDatabaseStatement
 }
 
-func (c *UseDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+func init() {
+	types.RegisterCommand("USE_DATABASE", func(stmt parser.Statement) types.Command {
+		return &UseDatabaseCommand{stmt: stmt.(*parser.UseDatabaseStatement)}
+	})
+}
+
+func (c *UseDatabaseCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	if _, err := sanitizeObjectName(c.stmt.DatabaseName); err != nil {
 		return nil, fmt.Errorf("use database: %w", err)
 	}
@@ -87,14 +106,20 @@ func (c *UseDatabaseCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("database '%s' does not exist", c.stmt.DatabaseName)
 	}
 	ctx.Session.SetCurrentDatabase(c.stmt.DatabaseName)
-	return &Result{Type: "message", Message: fmt.Sprintf("Using database '%s'.", c.stmt.DatabaseName)}, nil
+	return &types.Result{Type: "message", Message: fmt.Sprintf("Using database '%s'.", c.stmt.DatabaseName)}, nil
 }
 
 type ShowDatabasesCommand struct {
 	stmt *parser.ShowDatabasesStatement
 }
 
-func (c *ShowDatabasesCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+func init() {
+	types.RegisterCommand("SHOW_DATABASES", func(stmt parser.Statement) types.Command {
+		return &ShowDatabasesCommand{stmt: stmt.(*parser.ShowDatabasesStatement)}
+	})
+}
+
+func (c *ShowDatabasesCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	names, err := ctx.Storage.ListDatabases()
 	if err != nil {
 		return nil, err
@@ -104,5 +129,5 @@ func (c *ShowDatabasesCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	for _, name := range names {
 		rows = append(rows, []string{name})
 	}
-	return &Result{Type: "rows", Columns: []string{"database"}, Rows: rows}, nil
+	return &types.Result{Type: "rows", Columns: []string{"database"}, Rows: rows}, nil
 }
