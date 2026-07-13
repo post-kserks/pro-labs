@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"vaultdb/internal/executor/eval"
+	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
 
@@ -252,6 +253,9 @@ func evalOperandRaw(expr interface{}) interface{} {
 
 // parserValueToRaw converts parser.Value to a raw Go value.
 func parserValueToRaw(value interface{}) interface{} {
+	if pv, ok := value.(parser.Value); ok {
+		return eval.ParserValueToRaw(pv)
+	}
 	return value
 }
 
