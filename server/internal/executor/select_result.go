@@ -372,20 +372,11 @@ type SetOperationCommand struct {
 }
 
 func (c *SetOperationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	leftCmd, err := CommandFactory(c.stmt.Left)
+	leftRes, err := ctx.RunSubquery.RunSubquery(ctx, c.stmt.Left)
 	if err != nil {
 		return nil, err
 	}
-	rightCmd, err := CommandFactory(c.stmt.Right)
-	if err != nil {
-		return nil, err
-	}
-
-	leftRes, err := leftCmd.Execute(ctx)
-	if err != nil {
-		return nil, err
-	}
-	rightRes, err := rightCmd.Execute(ctx)
+	rightRes, err := ctx.RunSubquery.RunSubquery(ctx, c.stmt.Right)
 	if err != nil {
 		return nil, err
 	}
@@ -454,11 +445,7 @@ func (c *SetOperationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 }
 
 func (c *SelectCommand) executeDerivedTable(ctx *ExecutionContext) (*Result, error) {
-	subCmd, err := CommandFactory(c.stmt.FromSubquery)
-	if err != nil {
-		return nil, fmt.Errorf("derived table: %w", err)
-	}
-	subResult, err := subCmd.Execute(ctx)
+	subResult, err := ctx.RunSubquery.RunSubquery(ctx, c.stmt.FromSubquery)
 	if err != nil {
 		return nil, fmt.Errorf("derived table: %w", err)
 	}

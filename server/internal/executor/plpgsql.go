@@ -365,12 +365,7 @@ func executeReturnQuery(queryStr string, vars map[string]interface{}, ctx *Execu
 		return nil, fmt.Errorf("RETURN QUERY: parse error: %w", err)
 	}
 
-	cmd, err := CommandFactory(stmt)
-	if err != nil {
-		return nil, fmt.Errorf("RETURN QUERY: %w", err)
-	}
-
-	result, err := cmd.Execute(ctx)
+	result, err := ctx.RunSubquery.RunSubquery(ctx, stmt)
 	if err != nil {
 		return nil, fmt.Errorf("RETURN QUERY: %w", err)
 	}

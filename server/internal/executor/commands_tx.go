@@ -434,11 +434,7 @@ func (c *ExecutePreparedCommand) Execute(ctx *ExecutionContext) (*Result, error)
 	// on fully-bound SQL, so each parameter set produces a unique hash and the
 	// cache never hits. Enabling it requires re-keying on (stmt-name, param-types)
 	// across PlanCache.Get/Put, invalidation paths, and all callers.
-	cmd, err := CommandFactory(boundStmt)
-	if err != nil {
-		return nil, err
-	}
-	return cmd.Execute(ctx)
+	return ctx.RunSubquery.RunSubquery(ctx, boundStmt)
 }
 
 type DeallocateCommand struct {

@@ -136,12 +136,7 @@ func executeSubquery(sub *parser.SubqueryExpr, outerRow storage.Row, outerSchema
 		cmd = sub.Query
 	}
 
-	command, err := CommandFactory(cmd)
-	if err != nil {
-		return nil, err
-	}
-
-	res, err := command.Execute(ctx)
+	res, err := ctx.RunSubquery.RunSubquery(ctx, cmd)
 	if err != nil {
 		return nil, err
 	}

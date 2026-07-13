@@ -183,11 +183,7 @@ func evalInExpr(e *parser.InExpr, row storage.Row, schema *storage.TableSchema, 
 			} else {
 				cmdStmt = sub.Query
 			}
-			cmd, err := CommandFactory(cmdStmt)
-			if err != nil {
-				return false, err
-			}
-			res, err := cmd.Execute(ctx)
+			res, err := ctx.RunSubquery.RunSubquery(ctx, cmdStmt)
 			if err != nil {
 				return false, err
 			}
@@ -380,12 +376,7 @@ func evalExistsExpr(e *parser.ExistsExpr, row storage.Row, schema *storage.Table
 		cmdStmt = e.Select
 	}
 
-	cmd, err := CommandFactory(cmdStmt)
-	if err != nil {
-		return false, fmt.Errorf("EXISTS: %w", err)
-	}
-
-	res, err := cmd.Execute(ctx)
+	res, err := ctx.RunSubquery.RunSubquery(ctx, cmdStmt)
 	if err != nil {
 		return false, fmt.Errorf("EXISTS: %w", err)
 	}
@@ -414,11 +405,7 @@ func evalComparisonSubquery(e *parser.ComparisonSubqueryExpr, row storage.Row, s
 		cmdStmt = e.Subquery
 	}
 
-	cmd, err := CommandFactory(cmdStmt)
-	if err != nil {
-		return false, err
-	}
-	res, err := cmd.Execute(ctx)
+	res, err := ctx.RunSubquery.RunSubquery(ctx, cmdStmt)
 	if err != nil {
 		return false, err
 	}

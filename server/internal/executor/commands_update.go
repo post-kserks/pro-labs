@@ -106,11 +106,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	var fromSchema *storage.TableSchema
 	if c.stmt.FromSubquery != nil {
 		// FROM (SELECT ...) AS alias — execute the subquery
-		subCmd, err := CommandFactory(c.stmt.FromSubquery)
-		if err != nil {
-			return nil, fmt.Errorf("FROM subquery: %w", err)
-		}
-		subResult, err := subCmd.Execute(ctx)
+		subResult, err := ctx.RunSubquery.RunSubquery(ctx, c.stmt.FromSubquery)
 		if err != nil {
 			return nil, fmt.Errorf("FROM subquery: %w", err)
 		}

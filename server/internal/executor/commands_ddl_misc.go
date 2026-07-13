@@ -558,11 +558,7 @@ func executeTriggerBody(ctx *ExecutionContext, body string) error {
 	if err != nil {
 		return fmt.Errorf("trigger body parse: %w", err)
 	}
-	cmd, err := CommandFactory(stmt)
-	if err != nil {
-		return fmt.Errorf("trigger body command: %w", err)
-	}
-	_, err = cmd.Execute(ctx)
+	_, err = ctx.RunSubquery.RunSubquery(ctx, stmt)
 	return err
 }
 
@@ -706,11 +702,7 @@ func (c *CallProcedureCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("procedure '%s' body: %w", c.stmt.Name, err)
 		}
-		cmd, err := CommandFactory(stmt)
-		if err != nil {
-			return nil, fmt.Errorf("procedure '%s': %w", c.stmt.Name, err)
-		}
-		result, err := cmd.Execute(ctx)
+		result, err := ctx.RunSubquery.RunSubquery(ctx, stmt)
 		if err != nil {
 			return nil, err
 		}

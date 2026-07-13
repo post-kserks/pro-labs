@@ -60,12 +60,7 @@ func (s *CTEScope) ExecuteCTE(cte *CTEDefinition, ctx *ExecutionContext) (*Resul
 		return cte.Result, nil
 	}
 
-	cmd, err := CommandFactory(cte.Query)
-	if err != nil {
-		return nil, fmt.Errorf("CTE '%s': %w", cte.Name, err)
-	}
-
-	res, err := cmd.Execute(ctx)
+	res, err := ctx.RunSubquery.RunSubquery(ctx, cte.Query)
 	if err != nil {
 		return nil, fmt.Errorf("CTE '%s': %w", cte.Name, err)
 	}
@@ -210,11 +205,11 @@ func ExecuteCTEStatement(stmt *parser.CTEStatement, ctx *ExecutionContext) (*Res
 		return cmd.Execute(ctx)
 	}
 
-	cmd, err := CommandFactory(stmt.Body)
+	res, err := ctx.RunSubquery.RunSubquery(ctx, stmt.Body)
 	if err != nil {
 		return nil, err
 	}
-	return cmd.Execute(ctx)
+	return res, nil
 }
 
 func executeRecursiveCTE(cte *parser.CTEDefinition, scope *CTEScope, ctx *ExecutionContext) (*Result, error) {
@@ -226,11 +221,7 @@ func executeRecursiveCTE(cte *parser.CTEDefinition, scope *CTEScope, ctx *Execut
 		return nil, fmt.Errorf("recursive CTE only supports UNION ALL, got %s", setOp.Op)
 	}
 
-	anchorCmd, err := CommandFactory(setOp.Left)
-	if err != nil {
-		return nil, fmt.Errorf("recursive CTE anchor: %w", err)
-	}
-	anchorRes, err := anchorCmd.Execute(ctx)
+	anchorRes, err := ctx.RunSubquery.RunSubquery(ctx, setOp.Left)
 	if err != nil {
 		return nil, fmt.Errorf("recursive CTE anchor: %w", err)
 	}
@@ -287,11 +278,7 @@ func executeRecursiveCTE(cte *parser.CTEDefinition, scope *CTEScope, ctx *Execut
 			ctx.Session.resultCache.Invalidate(tmpTable)
 		}
 
-		recursiveCmd, err := CommandFactory(setOp.Right)
-		if err != nil {
-			return nil, fmt.Errorf("recursive CTE recursive member: %w", err)
-		}
-		iterRes, err := recursiveCmd.Execute(ctx)
+		iterRes, err := ctx.RunSubquery.RunSubquery(ctx, setOp.Right)
 		if err != nil {
 			return nil, fmt.Errorf("recursive CTE recursive member: %w", err)
 		}

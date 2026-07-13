@@ -476,12 +476,7 @@ func buildUpsertConflictKey(row storage.Row, conflictCols []string, colIdxMap ma
 }
 
 func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string, schema *storage.TableSchema) (*Result, error) {
-	cmd, err := CommandFactory(c.stmt.SelectQuery)
-	if err != nil {
-		return nil, fmt.Errorf("INSERT ... SELECT: %w", err)
-	}
-
-	res, err := cmd.Execute(ctx)
+	res, err := ctx.RunSubquery.RunSubquery(ctx, c.stmt.SelectQuery)
 	if err != nil {
 		return nil, fmt.Errorf("INSERT ... SELECT: %w", err)
 	}

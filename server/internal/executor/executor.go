@@ -19,6 +19,11 @@ import (
 	"vaultdb/internal/wal"
 )
 
+// SubqueryRunner allows subpackages to execute subqueries without importing the command layer.
+type SubqueryRunner interface {
+	RunSubquery(ctx *ExecutionContext, stmt parser.Statement) (*Result, error)
+}
+
 // commandFactory is a function that creates a Command from a parser.Statement.
 type commandFactory func(stmt parser.Statement) Command
 
@@ -193,6 +198,9 @@ type ExecutionContext struct {
 	// predicate. Set by the SELECT executor before column projection so that
 	// the 2-argument form bm25_score(table, col) can use it.
 	FtsQuery string
+
+	// RunSubquery allows eval/functions to execute subqueries without importing CommandFactory.
+	RunSubquery SubqueryRunner
 }
 
 type Executor struct {
@@ -268,6 +276,19 @@ func (e *Executor) SetAuthManager(m *auth.Manager) {
 	e.authMgr = m
 }
 
+// subqueryRunner implements SubqueryRunner by delegating to CommandFactory.
+type subqueryRunner struct {
+	executor *Executor
+}
+
+func (r *subqueryRunner) RunSubquery(ctx *ExecutionContext, stmt parser.Statement) (*Result, error) {
+	cmd, err := CommandFactory(stmt)
+	if err != nil {
+		return nil, err
+	}
+	return cmd.Execute(ctx)
+}
+
 func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	start := time.Now()
 	cmd, err := CommandFactory(stmt)
@@ -313,6 +334,7 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 		Ctx:          queryCtx,
 		SnapshotTxID: sess.SnapshotTxID(),
 		Parallel:     parallelCfg,
+		RunSubquery:  &subqueryRunner{executor: e},
 	}
 	result, err := cmd.Execute(ctx)
 
