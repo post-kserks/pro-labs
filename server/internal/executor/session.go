@@ -149,6 +149,17 @@ func (s *Session) SetQueryTimeout(d time.Duration) {
 	s.executor.SetQueryTimeout(d)
 }
 
+// Storage returns the underlying storage engine.
+func (s *Session) Storage() storage.StorageEngine {
+	return s.executor.storage
+}
+
+// Run executes a parsed statement directly, bypassing the normal Execute path.
+// This is used for concurrent testing scenarios.
+func (s *Session) Run(stmt parser.Statement) (*Result, error) {
+	return s.executor.Run(stmt, s)
+}
+
 // SetMaxRows sets the maximum number of rows in SELECT results.
 func (s *Session) SetMaxRows(n int) {
 	s.executor.SetMaxRows(n)

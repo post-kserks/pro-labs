@@ -1,4 +1,4 @@
-package executor
+package dml_test
 
 import (
 	"fmt"
@@ -7,15 +7,16 @@ import (
 	"strings"
 	"testing"
 
+	"vaultdb/internal/executor"
 	"vaultdb/internal/executor/commands/dml"
 	"vaultdb/internal/parser"
 )
 
-func setupCopyTable(t *testing.T) (*Session, string, string) {
+func setupCopyTable(t *testing.T) (*executor.Session, string, string) {
 	t.Helper()
-	session := setupSession(t)
-	executeSQL(t, session, "CREATE TABLE people (id INT, name VARCHAR(100), age INT, score FLOAT, active BOOL, bio TEXT);")
-	dataDir := session.executor.storage.DataDir()
+	session := executor.SetupSession(t)
+	executor.ExecuteSQL(t, session, "CREATE TABLE people (id INT, name VARCHAR(100), age INT, score FLOAT, active BOOL, bio TEXT);")
+	dataDir := session.Storage().DataDir()
 	return session, dataDir, "copy_test.csv"
 }
 
@@ -27,12 +28,12 @@ func TestCopyFromCSV(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
+	result := executor.ExecuteSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
 	if result.Affected != 3 {
 		t.Fatalf("expected 3 rows imported, got %d", result.Affected)
 	}
 
-	res := executeSQL(t, session, "SELECT * FROM people ORDER BY id;")
+	res := executor.ExecuteSQL(t, session, "SELECT * FROM people ORDER BY id;")
 	if len(res.Rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(res.Rows))
 	}
@@ -52,12 +53,12 @@ func TestCopyFromCSVWithHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV, HEADER true);")
+	result := executor.ExecuteSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV, HEADER true);")
 	if result.Affected != 2 {
 		t.Fatalf("expected 2 rows imported, got %d", result.Affected)
 	}
 
-	res := executeSQL(t, session, "SELECT * FROM people ORDER BY id;")
+	res := executor.ExecuteSQL(t, session, "SELECT * FROM people ORDER BY id;")
 	if len(res.Rows) != 2 {
 		t.Fatalf("expected 2 rows, got %d", len(res.Rows))
 	}
@@ -71,12 +72,12 @@ func TestCopyFromCSVCustomDelimiter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV, DELIMITER '|');")
+	result := executor.ExecuteSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV, DELIMITER '|');")
 	if result.Affected != 2 {
 		t.Fatalf("expected 2 rows imported, got %d", result.Affected)
 	}
 
-	res := executeSQL(t, session, "SELECT * FROM people ORDER BY id;")
+	res := executor.ExecuteSQL(t, session, "SELECT * FROM people ORDER BY id;")
 	if len(res.Rows) != 2 {
 		t.Fatalf("expected 2 rows, got %d", len(res.Rows))
 	}
@@ -93,12 +94,12 @@ func TestCopyFromCSVQuotedFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
+	result := executor.ExecuteSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
 	if result.Affected != 2 {
 		t.Fatalf("expected 2 rows imported, got %d", result.Affected)
 	}
 
-	res := executeSQL(t, session, "SELECT * FROM people ORDER BY id;")
+	res := executor.ExecuteSQL(t, session, "SELECT * FROM people ORDER BY id;")
 	if res.Rows[0][1] != "Alice, Jr." {
 		t.Fatalf("expected 'Alice, Jr.', got %v", res.Rows[0][1])
 	}
@@ -110,10 +111,10 @@ func TestCopyFromCSVQuotedFields(t *testing.T) {
 func TestCopyToCSV(t *testing.T) {
 	session, dataDir, relPath := setupCopyTable(t)
 
-	executeSQL(t, session, "INSERT INTO people VALUES (1, 'Alice', 30, 9.5, TRUE, 'Engineer');")
-	executeSQL(t, session, "INSERT INTO people VALUES (2, 'Bob', 25, 8.3, FALSE, 'Designer');")
+	executor.ExecuteSQL(t, session, "INSERT INTO people VALUES (1, 'Alice', 30, 9.5, TRUE, 'Engineer');")
+	executor.ExecuteSQL(t, session, "INSERT INTO people VALUES (2, 'Bob', 25, 8.3, FALSE, 'Designer');")
 
-	result := executeSQL(t, session, "COPY people TO '"+relPath+"' WITH (FORMAT CSV, HEADER true);")
+	result := executor.ExecuteSQL(t, session, "COPY people TO '"+relPath+"' WITH (FORMAT CSV, HEADER true);")
 	if result.Affected != 2 {
 		t.Fatalf("expected 2 rows exported, got %d", result.Affected)
 	}
@@ -138,9 +139,9 @@ func TestCopyToCSV(t *testing.T) {
 func TestCopyToCSVWithoutHeader(t *testing.T) {
 	session, dataDir, relPath := setupCopyTable(t)
 
-	executeSQL(t, session, "INSERT INTO people VALUES (1, 'Alice', 30, 9.5, TRUE, 'Engineer');")
+	executor.ExecuteSQL(t, session, "INSERT INTO people VALUES (1, 'Alice', 30, 9.5, TRUE, 'Engineer');")
 
-	result := executeSQL(t, session, "COPY people TO '"+relPath+"' WITH (FORMAT CSV, HEADER false);")
+	result := executor.ExecuteSQL(t, session, "COPY people TO '"+relPath+"' WITH (FORMAT CSV, HEADER false);")
 	if result.Affected != 1 {
 		t.Fatalf("expected 1 row exported, got %d", result.Affected)
 	}
@@ -170,12 +171,12 @@ func TestCopyFromJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT JSON);")
+	result := executor.ExecuteSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT JSON);")
 	if result.Affected != 2 {
 		t.Fatalf("expected 2 rows imported, got %d", result.Affected)
 	}
 
-	res := executeSQL(t, session, "SELECT * FROM people ORDER BY id;")
+	res := executor.ExecuteSQL(t, session, "SELECT * FROM people ORDER BY id;")
 	if len(res.Rows) != 2 {
 		t.Fatalf("expected 2 rows, got %d", len(res.Rows))
 	}
@@ -189,10 +190,10 @@ func TestCopyToJSONL(t *testing.T) {
 
 	relPath := "output.jsonl"
 
-	executeSQL(t, session, "INSERT INTO people VALUES (1, 'Alice', 30, 9.5, TRUE, 'Engineer');")
-	executeSQL(t, session, "INSERT INTO people VALUES (2, 'Bob', 25, 8.3, FALSE, 'Designer');")
+	executor.ExecuteSQL(t, session, "INSERT INTO people VALUES (1, 'Alice', 30, 9.5, TRUE, 'Engineer');")
+	executor.ExecuteSQL(t, session, "INSERT INTO people VALUES (2, 'Bob', 25, 8.3, FALSE, 'Designer');")
 
-	result := executeSQL(t, session, "COPY people TO '"+relPath+"' WITH (FORMAT JSON);")
+	result := executor.ExecuteSQL(t, session, "COPY people TO '"+relPath+"' WITH (FORMAT JSON);")
 	if result.Affected != 2 {
 		t.Fatalf("expected 2 rows exported, got %d", result.Affected)
 	}
@@ -216,34 +217,34 @@ func TestCopyFromNonexistentTable(t *testing.T) {
 	relPath := "test.csv"
 	os.WriteFile(filepath.Join(dataDir, relPath), []byte("1,foo\n"), 0644)
 
-	executeSQLExpectError(t, session, "COPY nonexistent FROM '"+relPath+"';")
+	executor.ExecuteSQLExpectError(t, session, "COPY nonexistent FROM '"+relPath+"';")
 }
 
 func TestCopyFromNonexistentFile(t *testing.T) {
 	session, _, _ := setupCopyTable(t)
-	executeSQLExpectError(t, session, "COPY people FROM 'nonexistent/file.csv';")
+	executor.ExecuteSQLExpectError(t, session, "COPY people FROM 'nonexistent/file.csv';")
 }
 
 func TestCopyRoundTrip(t *testing.T) {
 	session, _, _ := setupCopyTable(t)
 
 	// Insert original data
-	executeSQL(t, session, "INSERT INTO people VALUES (1, 'Alice', 30, 9.5, TRUE, 'Engineer');")
-	executeSQL(t, session, "INSERT INTO people VALUES (2, 'Bob', 25, 8.3, FALSE, 'Designer');")
+	executor.ExecuteSQL(t, session, "INSERT INTO people VALUES (1, 'Alice', 30, 9.5, TRUE, 'Engineer');")
+	executor.ExecuteSQL(t, session, "INSERT INTO people VALUES (2, 'Bob', 25, 8.3, FALSE, 'Designer');")
 
 	// Export
 	exportRelPath := "export.csv"
-	executeSQL(t, session, "COPY people TO '"+exportRelPath+"' WITH (FORMAT CSV);")
+	executor.ExecuteSQL(t, session, "COPY people TO '"+exportRelPath+"' WITH (FORMAT CSV);")
 
 	// Create new table and import
-	executeSQL(t, session, "CREATE TABLE people2 (id INT, name VARCHAR(100), age INT, score FLOAT, active BOOL, bio TEXT);")
-	result := executeSQL(t, session, "COPY people2 FROM '"+exportRelPath+"' WITH (FORMAT CSV);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE people2 (id INT, name VARCHAR(100), age INT, score FLOAT, active BOOL, bio TEXT);")
+	result := executor.ExecuteSQL(t, session, "COPY people2 FROM '"+exportRelPath+"' WITH (FORMAT CSV);")
 	if result.Affected != 2 {
 		t.Fatalf("expected 2 rows imported into people2, got %d", result.Affected)
 	}
 
 	// Verify
-	res := executeSQL(t, session, "SELECT * FROM people2 ORDER BY id;")
+	res := executor.ExecuteSQL(t, session, "SELECT * FROM people2 ORDER BY id;")
 	if len(res.Rows) != 2 {
 		t.Fatalf("expected 2 rows, got %d", len(res.Rows))
 	}
@@ -262,7 +263,7 @@ func TestCopyFromCSVEmptyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
+	result := executor.ExecuteSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
 	if result.Affected != 0 {
 		t.Fatalf("expected 0 rows imported from empty file, got %d", result.Affected)
 	}
@@ -284,21 +285,21 @@ func searchString(s, sub string) bool {
 // Security tests for path validation
 func TestCopyPathValidationRejectsAbsolutePaths(t *testing.T) {
 	session, _, _ := setupCopyTable(t)
-	executeSQLExpectError(t, session, "COPY people FROM '/etc/passwd';")
-	executeSQLExpectError(t, session, "COPY people TO '/tmp/evil.csv';")
+	executor.ExecuteSQLExpectError(t, session, "COPY people FROM '/etc/passwd';")
+	executor.ExecuteSQLExpectError(t, session, "COPY people TO '/tmp/evil.csv';")
 }
 
 func TestCopyPathValidationRejectsTraversal(t *testing.T) {
 	session, _, _ := setupCopyTable(t)
-	executeSQLExpectError(t, session, "COPY people FROM '../../../etc/passwd';")
-	executeSQLExpectError(t, session, "COPY people FROM 'subdir/../../etc/passwd';")
-	executeSQLExpectError(t, session, "COPY people TO '../../../tmp/evil.csv';")
+	executor.ExecuteSQLExpectError(t, session, "COPY people FROM '../../../etc/passwd';")
+	executor.ExecuteSQLExpectError(t, session, "COPY people FROM 'subdir/../../etc/passwd';")
+	executor.ExecuteSQLExpectError(t, session, "COPY people TO '../../../tmp/evil.csv';")
 }
 
 func TestCopyPathValidationRejectsEmptyFilename(t *testing.T) {
 	session, _, _ := setupCopyTable(t)
-	executeSQLExpectError(t, session, "COPY people FROM '';")
-	executeSQLExpectError(t, session, "COPY people TO '';")
+	executor.ExecuteSQLExpectError(t, session, "COPY people FROM '';")
+	executor.ExecuteSQLExpectError(t, session, "COPY people TO '';")
 }
 
 func TestDelimiterValidationRejectsLongDelimiter(t *testing.T) {
@@ -325,12 +326,12 @@ func TestDelimiterValidationAcceptsValidDelimiter(t *testing.T) {
 	}
 
 	// Single char delimiter
-	executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (DELIMITER '|');")
+	executor.ExecuteSQL(t, session, "COPY people FROM '"+relPath+"' WITH (DELIMITER '|');")
 	// TAB keyword
-	executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (DELIMITER TAB);")
+	executor.ExecuteSQL(t, session, "COPY people FROM '"+relPath+"' WITH (DELIMITER TAB);")
 	// Multi-char up to 20 should work
 	validDelim := strings.Repeat("ab", 10) // 20 chars
-	executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (DELIMITER '"+validDelim+"');")
+	executor.ExecuteSQL(t, session, "COPY people FROM '"+relPath+"' WITH (DELIMITER '"+validDelim+"');")
 }
 
 // --- COPY Row Limit Tests ---
@@ -353,9 +354,9 @@ func TestCopyFromCSVRowLimitExceeded(t *testing.T) {
 	}
 	// The limit is checked at execution time, not parse time.
 	// Execute directly with a fresh session that has no MAX_COPY_ROWS override.
-	session2 := setupSession(t)
-	executeSQL(t, session2, "CREATE TABLE people (id INT, name VARCHAR(100), age INT, score FLOAT, active BOOL, bio TEXT);")
-	executeSQLExpectError(t, session2, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
+	session2 := executor.SetupSession(t)
+	executor.ExecuteSQL(t, session2, "CREATE TABLE people (id INT, name VARCHAR(100), age INT, score FLOAT, active BOOL, bio TEXT);")
+	executor.ExecuteSQLExpectError(t, session2, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
 }
 
 func TestCopyFromCSVWithinLimit(t *testing.T) {
@@ -370,7 +371,7 @@ func TestCopyFromCSVWithinLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := executeSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
+	result := executor.ExecuteSQL(t, session, "COPY people FROM '"+relPath+"' WITH (FORMAT CSV);")
 	if result.Affected != 100 {
 		t.Fatalf("expected 100 rows imported, got %d", result.Affected)
 	}

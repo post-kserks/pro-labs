@@ -1,13 +1,15 @@
-package executor
+package sel_test
 
 import (
 	"testing"
+
+	"vaultdb/internal/executor"
 )
 
 func TestRecursiveCTEGenerateNumbers(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	result := executeSQL(t, session, `
+	result := executor.ExecuteSQL(t, session, `
 		WITH RECURSIVE numbers(n) AS (
 			SELECT 1
 			UNION ALL
@@ -32,9 +34,9 @@ func TestRecursiveCTEGenerateNumbers(t *testing.T) {
 }
 
 func TestRecursiveCTEFibonacci(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	result := executeSQL(t, session, `
+	result := executor.ExecuteSQL(t, session, `
 		WITH RECURSIVE fib(a, b) AS (
 			SELECT 0, 1
 			UNION ALL
@@ -59,9 +61,9 @@ func TestRecursiveCTEFibonacci(t *testing.T) {
 }
 
 func TestRecursiveCTEDepthLimit(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	result := executeSQL(t, session, `
+	result := executor.ExecuteSQL(t, session, `
 		WITH RECURSIVE countdown(n) AS (
 			SELECT 10
 			UNION ALL

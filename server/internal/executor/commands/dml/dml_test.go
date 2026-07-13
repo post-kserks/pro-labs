@@ -1,16 +1,15 @@
-package executor
+package dml_test
 
 import (
-	"fmt"
 	"testing"
 
-	"vaultdb/internal/parser"
+	"vaultdb/internal/executor"
 )
 
 func TestInsertReturningUsesPreMutationData(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	result := executeSQL(t, session, "INSERT INTO heroes VALUES (10, 'Frodo', 15, TRUE, 9.0, 'Ring bearer') RETURNING *;")
+	result := executor.ExecuteSQL(t, session, "INSERT INTO heroes VALUES (10, 'Frodo', 15, TRUE, 9.0, 'Ring bearer') RETURNING *;")
 	if result.Type != "rows" {
 		t.Fatalf("expected rows result, got %s", result.Type)
 	}
@@ -26,10 +25,10 @@ func TestInsertReturningUsesPreMutationData(t *testing.T) {
 }
 
 func TestUpdateReturningUsesPostMutationData(t *testing.T) {
-	session := setupSession(t)
-	seedHeroes(t, session)
+	session := executor.SetupSession(t)
+	executor.SeedHeroes(t, session)
 
-	result := executeSQL(t, session, "UPDATE heroes SET level = 99 WHERE name = 'Aragorn' RETURNING name, level;")
+	result := executor.ExecuteSQL(t, session, "UPDATE heroes SET level = 99 WHERE name = 'Aragorn' RETURNING name, level;")
 	if result.Type != "rows" {
 		t.Fatalf("expected rows result, got %s", result.Type)
 	}
@@ -45,10 +44,10 @@ func TestUpdateReturningUsesPostMutationData(t *testing.T) {
 }
 
 func TestDeleteReturningUsesPreMutationData(t *testing.T) {
-	session := setupSession(t)
-	seedHeroes(t, session)
+	session := executor.SetupSession(t)
+	executor.SeedHeroes(t, session)
 
-	result := executeSQL(t, session, "DELETE FROM heroes WHERE name = 'Boromir' RETURNING *;")
+	result := executor.ExecuteSQL(t, session, "DELETE FROM heroes WHERE name = 'Boromir' RETURNING *;")
 	if result.Type != "rows" {
 		t.Fatalf("expected rows result, got %s", result.Type)
 	}
@@ -66,16 +65,16 @@ func TestDeleteReturningUsesPreMutationData(t *testing.T) {
 	}
 
 	// Verify the row was actually deleted
-	verify := executeSQL(t, session, "SELECT COUNT(*) FROM heroes WHERE name = 'Boromir';")
+	verify := executor.ExecuteSQL(t, session, "SELECT COUNT(*) FROM heroes WHERE name = 'Boromir';")
 	if len(verify.Rows) != 1 || verify.Rows[0][0] != "0" {
 		t.Fatalf("expected 0 rows after delete, got %q", verify.Rows[0][0])
 	}
 }
 
 func TestInsertReturningMultipleRows(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	result := executeSQL(t, session, "INSERT INTO heroes VALUES (20, 'Pippin', 3, TRUE, 5.0, 'Hobbit'), (21, 'Merry', 4, TRUE, 5.5, 'Hobbit') RETURNING id, name;")
+	result := executor.ExecuteSQL(t, session, "INSERT INTO heroes VALUES (20, 'Pippin', 3, TRUE, 5.0, 'Hobbit'), (21, 'Merry', 4, TRUE, 5.5, 'Hobbit') RETURNING id, name;")
 	if result.Type != "rows" {
 		t.Fatalf("expected rows result, got %s", result.Type)
 	}
@@ -91,10 +90,10 @@ func TestInsertReturningMultipleRows(t *testing.T) {
 }
 
 func TestUpdateReturningMultipleRows(t *testing.T) {
-	session := setupSession(t)
-	seedHeroes(t, session)
+	session := executor.SetupSession(t)
+	executor.SeedHeroes(t, session)
 
-	result := executeSQL(t, session, "UPDATE heroes SET score = 10.0 WHERE alive = TRUE RETURNING name, score;")
+	result := executor.ExecuteSQL(t, session, "UPDATE heroes SET score = 10.0 WHERE alive = TRUE RETURNING name, score;")
 	if result.Type != "rows" {
 		t.Fatalf("expected rows result, got %s", result.Type)
 	}
@@ -110,10 +109,10 @@ func TestUpdateReturningMultipleRows(t *testing.T) {
 }
 
 func TestUpdateReturningOldNewSyntax(t *testing.T) {
-	session := setupSession(t)
-	seedHeroes(t, session)
+	session := executor.SetupSession(t)
+	executor.SeedHeroes(t, session)
 
-	result := executeSQL(t, session, "UPDATE heroes SET level = 99 WHERE name = 'Aragorn' RETURNING name, old.level AS old_level, new.level AS new_level;")
+	result := executor.ExecuteSQL(t, session, "UPDATE heroes SET level = 99 WHERE name = 'Aragorn' RETURNING name, old.level AS old_level, new.level AS new_level;")
 	if result.Type != "rows" {
 		t.Fatalf("expected rows result, got %s", result.Type)
 	}
@@ -132,10 +131,10 @@ func TestUpdateReturningOldNewSyntax(t *testing.T) {
 }
 
 func TestDeleteReturningOldSyntax(t *testing.T) {
-	session := setupSession(t)
-	seedHeroes(t, session)
+	session := executor.SetupSession(t)
+	executor.SeedHeroes(t, session)
 
-	result := executeSQL(t, session, "DELETE FROM heroes WHERE name = 'Boromir' RETURNING old.name, old.level;")
+	result := executor.ExecuteSQL(t, session, "DELETE FROM heroes WHERE name = 'Boromir' RETURNING old.name, old.level;")
 	if result.Type != "rows" {
 		t.Fatalf("expected rows result, got %s", result.Type)
 	}
@@ -151,10 +150,10 @@ func TestDeleteReturningOldSyntax(t *testing.T) {
 }
 
 func TestInsertReturningNewSyntax(t *testing.T) {
-	session := setupSession(t)
-	seedHeroes(t, session)
+	session := executor.SetupSession(t)
+	executor.SeedHeroes(t, session)
 
-	result := executeSQL(t, session, "INSERT INTO heroes VALUES (10, 'Frodo', 15, TRUE, 9.0, 'Ring bearer') RETURNING new.id, new.name;")
+	result := executor.ExecuteSQL(t, session, "INSERT INTO heroes VALUES (10, 'Frodo', 15, TRUE, 9.0, 'Ring bearer') RETURNING new.id, new.name;")
 	if result.Type != "rows" {
 		t.Fatalf("expected rows result, got %s", result.Type)
 	}
@@ -170,14 +169,14 @@ func TestInsertReturningNewSyntax(t *testing.T) {
 }
 
 func TestMergeWhenNotMatchedValidation(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE target (id INT, name VARCHAR(100));")
-	executeSQL(t, session, "CREATE TABLE source (id INT, val VARCHAR(100));")
-	executeSQL(t, session, "INSERT INTO source VALUES (1, 'hello');")
+	executor.ExecuteSQL(t, session, "CREATE TABLE target (id INT, name VARCHAR(100));")
+	executor.ExecuteSQL(t, session, "CREATE TABLE source (id INT, val VARCHAR(100));")
+	executor.ExecuteSQL(t, session, "INSERT INTO source VALUES (1, 'hello');")
 
 	// More columns than values
-	executeSQLExpectError(t, session, `
+	executor.ExecuteSQLExpectError(t, session, `
 		MERGE INTO target
 		USING source AS s
 		ON target.id = s.id
@@ -187,7 +186,7 @@ func TestMergeWhenNotMatchedValidation(t *testing.T) {
 	`)
 
 	// More values than columns
-	executeSQLExpectError(t, session, `
+	executor.ExecuteSQLExpectError(t, session, `
 		MERGE INTO target
 		USING source AS s
 		ON target.id = s.id
@@ -197,7 +196,7 @@ func TestMergeWhenNotMatchedValidation(t *testing.T) {
 	`)
 
 	// Correct count should work
-	executeSQL(t, session, `
+	executor.ExecuteSQL(t, session, `
 		MERGE INTO target
 		USING source AS s
 		ON target.id = s.id
@@ -208,10 +207,10 @@ func TestMergeWhenNotMatchedValidation(t *testing.T) {
 }
 
 func TestDeleteReturningMultipleRows(t *testing.T) {
-	session := setupSession(t)
-	seedHeroes(t, session)
+	session := executor.SetupSession(t)
+	executor.SeedHeroes(t, session)
 
-	result := executeSQL(t, session, "DELETE FROM heroes WHERE alive = FALSE RETURNING name;")
+	result := executor.ExecuteSQL(t, session, "DELETE FROM heroes WHERE alive = FALSE RETURNING name;")
 	if result.Type != "rows" {
 		t.Fatalf("expected rows result, got %s", result.Type)
 	}
@@ -224,144 +223,97 @@ func TestDeleteReturningMultipleRows(t *testing.T) {
 }
 
 func TestTruncateBasic(t *testing.T) {
-	session := setupSession(t)
-	seedHeroes(t, session)
+	session := executor.SetupSession(t)
+	executor.SeedHeroes(t, session)
 
-	result := executeSQL(t, session, "TRUNCATE heroes;")
+	result := executor.ExecuteSQL(t, session, "TRUNCATE heroes;")
 	if result.Type != "message" {
 		t.Fatalf("expected message result, got %s", result.Type)
 	}
 
-	count := executeSQL(t, session, "SELECT COUNT(*) FROM heroes;")
+	count := executor.ExecuteSQL(t, session, "SELECT COUNT(*) FROM heroes;")
 	if count.Rows[0][0] != "0" {
 		t.Fatalf("expected 0 rows after TRUNCATE, got %s", count.Rows[0][0])
 	}
 }
 
 func TestTruncateInsideTransaction(t *testing.T) {
-	session := setupSession(t)
-	seedHeroes(t, session)
+	session := executor.SetupSession(t)
+	executor.SeedHeroes(t, session)
 
-	executeSQL(t, session, "BEGIN;")
-	executeSQL(t, session, "TRUNCATE heroes;")
+	executor.ExecuteSQL(t, session, "BEGIN;")
+	executor.ExecuteSQL(t, session, "TRUNCATE heroes;")
 
 	// Read-your-own-writes (Bug #1): buffered TRUNCATE is visible to the same
 	// transaction — table reads as empty via tx-overlay.
-	count := executeSQL(t, session, "SELECT COUNT(*) FROM heroes;")
+	count := executor.ExecuteSQL(t, session, "SELECT COUNT(*) FROM heroes;")
 	if count.Rows[0][0] != "0" {
 		t.Fatalf("expected 0 rows within tx after buffered TRUNCATE, got %s", count.Rows[0][0])
 	}
 
-	executeSQL(t, session, "COMMIT;")
+	executor.ExecuteSQL(t, session, "COMMIT;")
 
-	count = executeSQL(t, session, "SELECT COUNT(*) FROM heroes;")
+	count = executor.ExecuteSQL(t, session, "SELECT COUNT(*) FROM heroes;")
 	if count.Rows[0][0] != "0" {
 		t.Fatalf("expected 0 rows after COMMIT, got %s", count.Rows[0][0])
 	}
 }
 
-func TestTruncateConcurrentInsertAtomicity(t *testing.T) {
-	session := setupSession(t)
-	seedHeroes(t, session)
-
-	txm := session.TxManager
-	exec := session.executor
-
-	// Run TRUNCATE and concurrent INSERT in parallel.
-	// The implicit transaction in TRUNCATE uses version-based conflict detection.
-	// One of two outcomes is valid:
-	//   1) TRUNCATE wins: table has 0 or 1 rows (the late insert arrived after TRUNCATE committed)
-	//   2) INSERT wins: TRUNCATE fails with conflict, table has >= 4 original rows
-	var truncateErr error
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		stmt, _ := parser.Parse("INSERT INTO heroes VALUES (10, 'Concurrent', 1, TRUE, 5.0, 'Race');")
-		sess2 := &Session{
-			currentDB: "mydb",
-			TxManager: txm,
-		}
-		exec.Run(stmt, sess2)
-	}()
-
-	stmt, _ := parser.Parse("TRUNCATE heroes;")
-	_, truncateErr = exec.Run(stmt, session)
-	<-done
-
-	count := executeSQL(t, session, "SELECT COUNT(*) FROM heroes;")
-	rowCount := 0
-	fmt.Sscanf(count.Rows[0][0], "%d", &rowCount)
-
-	if truncateErr == nil {
-		// TRUNCATE committed. The concurrent INSERT may or may not have landed
-		// after our commit. Either 0 rows (INSERT lost) or 1 row (INSERT landed after).
-		if rowCount > 1 {
-			t.Fatalf("TRUNCATE succeeded but table has %d rows (expected 0 or 1)", rowCount)
-		}
-	} else {
-		// TRUNCATE commit failed due to version conflict. Original rows should be intact.
-		if rowCount < 4 {
-			t.Fatalf("TRUNCATE failed but table has only %d rows (expected >= 4), err: %v", rowCount, truncateErr)
-		}
-	}
-}
-
 func TestCreateTableWithNotNull(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE nn_test (id INT NOT NULL, name VARCHAR(100), age INT);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE nn_test (id INT NOT NULL, name VARCHAR(100), age INT);")
 
 	// Verify the table was created
-	result := executeSQL(t, session, "SELECT * FROM nn_test;")
+	result := executor.ExecuteSQL(t, session, "SELECT * FROM nn_test;")
 	if result.Type != "rows" {
 		t.Fatalf("expected rows result, got %s", result.Type)
 	}
 }
 
 func TestInsertNullIntoNotNullColumn(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE nn_test (id INT NOT NULL, name VARCHAR(100), age INT);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE nn_test (id INT NOT NULL, name VARCHAR(100), age INT);")
 
 	// Inserting NULL into a NOT NULL column should fail
-	executeSQLExpectError(t, session, "INSERT INTO nn_test (id, name) VALUES (NULL, 'Alice');")
+	executor.ExecuteSQLExpectError(t, session, "INSERT INTO nn_test (id, name) VALUES (NULL, 'Alice');")
 
 	// Inserting a valid value should succeed
-	executeSQL(t, session, "INSERT INTO nn_test (id, name) VALUES (1, 'Alice');")
+	executor.ExecuteSQL(t, session, "INSERT INTO nn_test (id, name) VALUES (1, 'Alice');")
 
 	// Inserting NULL into a nullable column should succeed
-	executeSQL(t, session, "INSERT INTO nn_test (id, name, age) VALUES (2, 'Bob', NULL);")
+	executor.ExecuteSQL(t, session, "INSERT INTO nn_test (id, name, age) VALUES (2, 'Bob', NULL);")
 }
 
 func TestUpdateNullIntoNotNullColumn(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE nn_test (id INT NOT NULL, name VARCHAR(100), age INT);")
-	executeSQL(t, session, "INSERT INTO nn_test (id, name, age) VALUES (1, 'Alice', 30);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE nn_test (id INT NOT NULL, name VARCHAR(100), age INT);")
+	executor.ExecuteSQL(t, session, "INSERT INTO nn_test (id, name, age) VALUES (1, 'Alice', 30);")
 
 	// Updating a NOT NULL column to NULL should fail
-	executeSQLExpectError(t, session, "UPDATE nn_test SET id = NULL WHERE id = 1;")
+	executor.ExecuteSQLExpectError(t, session, "UPDATE nn_test SET id = NULL WHERE id = 1;")
 
 	// Updating a nullable column to NULL should succeed
-	executeSQL(t, session, "UPDATE nn_test SET age = NULL WHERE id = 1;")
+	executor.ExecuteSQL(t, session, "UPDATE nn_test SET age = NULL WHERE id = 1;")
 
 	// Verify the update worked
-	result := executeSQL(t, session, "SELECT age FROM nn_test WHERE id = 1;")
+	result := executor.ExecuteSQL(t, session, "SELECT age FROM nn_test WHERE id = 1;")
 	if result.Rows[0][0] != "" {
 		t.Fatalf("expected NULL age, got %q", result.Rows[0][0])
 	}
 }
 
 func TestCreateTableWithDefault(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE def_test (id INT, name VARCHAR(100) DEFAULT 'unknown', score FLOAT DEFAULT 0.0, active BOOL DEFAULT TRUE);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE def_test (id INT, name VARCHAR(100) DEFAULT 'unknown', score FLOAT DEFAULT 0.0, active BOOL DEFAULT TRUE);")
 
 	// Insert without specifying columns — defaults should be applied
-	executeSQL(t, session, "INSERT INTO def_test (id) VALUES (1);")
+	executor.ExecuteSQL(t, session, "INSERT INTO def_test (id) VALUES (1);")
 
-	result := executeSQL(t, session, "SELECT name, score, active FROM def_test WHERE id = 1;")
+	result := executor.ExecuteSQL(t, session, "SELECT name, score, active FROM def_test WHERE id = 1;")
 	if len(result.Rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(result.Rows))
 	}
@@ -377,82 +329,82 @@ func TestCreateTableWithDefault(t *testing.T) {
 }
 
 func TestDefaultOnlyAppliedWhenColumnNotSpecified(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE def_test2 (id INT, label VARCHAR(100) DEFAULT 'fallback');")
+	executor.ExecuteSQL(t, session, "CREATE TABLE def_test2 (id INT, label VARCHAR(100) DEFAULT 'fallback');")
 
 	// Explicitly specify column with NULL — default should NOT replace it
-	executeSQL(t, session, "INSERT INTO def_test2 (id, label) VALUES (1, NULL);")
+	executor.ExecuteSQL(t, session, "INSERT INTO def_test2 (id, label) VALUES (1, NULL);")
 
-	result := executeSQL(t, session, "SELECT label FROM def_test2 WHERE id = 1;")
+	result := executor.ExecuteSQL(t, session, "SELECT label FROM def_test2 WHERE id = 1;")
 	if result.Rows[0][0] != "" {
 		t.Fatalf("expected NULL label (explicit NULL), got %q", result.Rows[0][0])
 	}
 
 	// Column not specified — default should apply
-	executeSQL(t, session, "INSERT INTO def_test2 (id) VALUES (2);")
+	executor.ExecuteSQL(t, session, "INSERT INTO def_test2 (id) VALUES (2);")
 
-	result = executeSQL(t, session, "SELECT label FROM def_test2 WHERE id = 2;")
+	result = executor.ExecuteSQL(t, session, "SELECT label FROM def_test2 WHERE id = 2;")
 	if result.Rows[0][0] != "fallback" {
 		t.Fatalf("expected default 'fallback', got %q", result.Rows[0][0])
 	}
 }
 
 func TestDefaultWithInt(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE def_int (id INT, counter INT DEFAULT 42);")
-	executeSQL(t, session, "INSERT INTO def_int (id) VALUES (1);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE def_int (id INT, counter INT DEFAULT 42);")
+	executor.ExecuteSQL(t, session, "INSERT INTO def_int (id) VALUES (1);")
 
-	result := executeSQL(t, session, "SELECT counter FROM def_int WHERE id = 1;")
+	result := executor.ExecuteSQL(t, session, "SELECT counter FROM def_int WHERE id = 1;")
 	if result.Rows[0][0] != "42" {
 		t.Fatalf("expected default counter '42', got %q", result.Rows[0][0])
 	}
 }
 
 func TestDefaultMultipleRows(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE def_multi (id INT, status VARCHAR(50) DEFAULT 'pending');")
-	executeSQL(t, session, "INSERT INTO def_multi (id) VALUES (1), (2), (3);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE def_multi (id INT, status VARCHAR(50) DEFAULT 'pending');")
+	executor.ExecuteSQL(t, session, "INSERT INTO def_multi (id) VALUES (1), (2), (3);")
 
-	result := executeSQL(t, session, "SELECT COUNT(*) FROM def_multi WHERE status = 'pending';")
+	result := executor.ExecuteSQL(t, session, "SELECT COUNT(*) FROM def_multi WHERE status = 'pending';")
 	if result.Rows[0][0] != "3" {
 		t.Fatalf("expected 3 rows with default, got %q", result.Rows[0][0])
 	}
 }
 
 func TestComputedColumnInt(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE calc (price INT, qty INT, total INT GENERATED ALWAYS AS (price * qty) STORED);")
-	executeSQL(t, session, "INSERT INTO calc (price, qty) VALUES (10, 3);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE calc (price INT, qty INT, total INT GENERATED ALWAYS AS (price * qty) STORED);")
+	executor.ExecuteSQL(t, session, "INSERT INTO calc (price, qty) VALUES (10, 3);")
 
-	result := executeSQL(t, session, "SELECT total FROM calc;")
+	result := executor.ExecuteSQL(t, session, "SELECT total FROM calc;")
 	if result.Rows[0][0] != "30" {
 		t.Fatalf("expected computed total '30', got %q", result.Rows[0][0])
 	}
 }
 
 func TestComputedColumnExpression(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE items (price INT, tax INT, total INT GENERATED ALWAYS AS (price + tax) STORED);")
-	executeSQL(t, session, "INSERT INTO items (price, tax) VALUES (100, 15);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE items (price INT, tax INT, total INT GENERATED ALWAYS AS (price + tax) STORED);")
+	executor.ExecuteSQL(t, session, "INSERT INTO items (price, tax) VALUES (100, 15);")
 
-	result := executeSQL(t, session, "SELECT total FROM items;")
+	result := executor.ExecuteSQL(t, session, "SELECT total FROM items;")
 	if result.Rows[0][0] != "115" {
 		t.Fatalf("expected computed total '115', got %q", result.Rows[0][0])
 	}
 }
 
 func TestComputedColumnMultipleRows(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE prices (base INT, double INT GENERATED ALWAYS AS (base * 2) STORED);")
-	executeSQL(t, session, "INSERT INTO prices (base) VALUES (5), (10), (25);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE prices (base INT, double INT GENERATED ALWAYS AS (base * 2) STORED);")
+	executor.ExecuteSQL(t, session, "INSERT INTO prices (base) VALUES (5), (10), (25);")
 
-	result := executeSQL(t, session, "SELECT double FROM prices ORDER BY double;")
+	result := executor.ExecuteSQL(t, session, "SELECT double FROM prices ORDER BY double;")
 	if len(result.Rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(result.Rows))
 	}
@@ -462,24 +414,24 @@ func TestComputedColumnMultipleRows(t *testing.T) {
 }
 
 func TestComputedColumnOverwritesInsertValue(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE t (x INT, y INT GENERATED ALWAYS AS (x + 1) STORED);")
-	executeSQL(t, session, "INSERT INTO t (x, y) VALUES (5, 999);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE t (x INT, y INT GENERATED ALWAYS AS (x + 1) STORED);")
+	executor.ExecuteSQL(t, session, "INSERT INTO t (x, y) VALUES (5, 999);")
 
-	result := executeSQL(t, session, "SELECT y FROM t;")
+	result := executor.ExecuteSQL(t, session, "SELECT y FROM t;")
 	if result.Rows[0][0] != "6" {
 		t.Fatalf("expected computed value '6' to overwrite inserted '999', got %q", result.Rows[0][0])
 	}
 }
 
 func TestComputedColumnWithVirtual(t *testing.T) {
-	session := setupSession(t)
+	session := executor.SetupSession(t)
 
-	executeSQL(t, session, "CREATE TABLE vtest (a INT, b INT GENERATED ALWAYS AS (a * 3) VIRTUAL);")
-	executeSQL(t, session, "INSERT INTO vtest (a) VALUES (7);")
+	executor.ExecuteSQL(t, session, "CREATE TABLE vtest (a INT, b INT GENERATED ALWAYS AS (a * 3) VIRTUAL);")
+	executor.ExecuteSQL(t, session, "INSERT INTO vtest (a) VALUES (7);")
 
-	result := executeSQL(t, session, "SELECT b FROM vtest;")
+	result := executor.ExecuteSQL(t, session, "SELECT b FROM vtest;")
 	if result.Rows[0][0] != "21" {
 		t.Fatalf("expected computed value '21', got %q", result.Rows[0][0])
 	}

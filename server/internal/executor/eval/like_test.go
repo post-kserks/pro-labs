@@ -1,4 +1,4 @@
-package executor
+package eval_test
 
 import (
 	"testing"
@@ -99,12 +99,12 @@ func TestEvalILikeNulls(t *testing.T) {
 
 func BenchmarkEvalLikeSimple(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_, _ = eval.EvalLike("some moderately long string value", "%long%")
+		eval.EvalLike("hello world", "hello%")
 	}
 }
 
-func BenchmarkEvalLikeComplex(b *testing.B) {
+func BenchmarkEvalILikeSimple(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_, _ = eval.EvalLike("some moderately long string value", "s_me%v_lue")
+		eval.EvalILike("hello world", "HELLO%")
 	}
 }
