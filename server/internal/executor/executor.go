@@ -10,8 +10,12 @@ import (
 
 	"vaultdb/internal/ai"
 	"vaultdb/internal/auth"
+	_ "vaultdb/internal/executor/commands/audit"
+	authcmd "vaultdb/internal/executor/commands/auth"
 	_ "vaultdb/internal/executor/commands/ddl"
 	_ "vaultdb/internal/executor/commands/dml"
+	_ "vaultdb/internal/executor/commands/sel"
+	txcmd "vaultdb/internal/executor/commands/tx"
 	"vaultdb/internal/executor/parallel"
 	"vaultdb/internal/executor/types"
 	"vaultdb/internal/metrics"
@@ -42,47 +46,14 @@ func registerCommand(stmtType reflect.Type, factory commandFactory) {
 }
 
 func init() {
-	// DDL commands registered via commands/ddl/ blank import.
-	// Non-DDL commands registered here.
-	registerCommand(reflect.TypeOf((*parser.SelectStatement)(nil)), func(s parser.Statement) Command { return &SelectCommand{stmt: s.(*parser.SelectStatement)} })
-	registerCommand(reflect.TypeOf((*parser.ExplainStatement)(nil)), func(s parser.Statement) Command { return &ExplainCommand{stmt: s.(*parser.ExplainStatement)} })
-	registerCommand(reflect.TypeOf((*parser.HistoryStatement)(nil)), func(s parser.Statement) Command { return &HistoryCommand{stmt: s.(*parser.HistoryStatement)} })
-	registerCommand(reflect.TypeOf((*parser.BeginStatement)(nil)), func(s parser.Statement) Command { return &BeginCommand{stmt: s.(*parser.BeginStatement)} })
-	registerCommand(reflect.TypeOf((*parser.CommitStatement)(nil)), func(s parser.Statement) Command { return &CommitCommand{stmt: s.(*parser.CommitStatement)} })
-	registerCommand(reflect.TypeOf((*parser.RollbackStatement)(nil)), func(s parser.Statement) Command { return &RollbackCommand{stmt: s.(*parser.RollbackStatement)} })
-	registerCommand(reflect.TypeOf((*parser.PrepareStatement)(nil)), func(s parser.Statement) Command { return &PrepareCommand{stmt: s.(*parser.PrepareStatement)} })
-	registerCommand(reflect.TypeOf((*parser.ExecuteStatement)(nil)), func(s parser.Statement) Command { return &ExecutePreparedCommand{stmt: s.(*parser.ExecuteStatement)} })
-	registerCommand(reflect.TypeOf((*parser.DeallocateStatement)(nil)), func(s parser.Statement) Command { return &DeallocateCommand{stmt: s.(*parser.DeallocateStatement)} })
-	registerCommand(reflect.TypeOf((*parser.SetOperationStatement)(nil)), func(s parser.Statement) Command { return &SetOperationCommand{stmt: s.(*parser.SetOperationStatement)} })
+	// Commands registered via subpackage blank imports (SELECT, BEGIN, COMMIT,
+	// ROLLBACK, SAVEPOINT, ROLLBACK_TO_SAVEPOINT, RELEASE_SAVEPOINT, PREPARE,
+	// EXECUTE_PREPARED, DEALLOCATE, EXPLAIN, HISTORY, SET_OPERATION,
+	// CREATE_ROLE, DROP_ROLE, GRANT, REVOKE, REVOKE_TOKEN,
+	// VERIFY_AUDIT_LOG, ARCHIVE_AUDIT_LOG).
+
+	// Commands remaining in root (not yet extracted):
 	registerCommand(reflect.TypeOf((*parser.CTEStatement)(nil)), func(s parser.Statement) Command { return &CTECommand{stmt: s.(*parser.CTEStatement)} })
-	registerCommand(reflect.TypeOf((*parser.SavepointStatement)(nil)), func(s parser.Statement) Command { return &SavepointCommand{stmt: s.(*parser.SavepointStatement)} })
-	registerCommand(reflect.TypeOf((*parser.RollbackToSavepointStatement)(nil)), func(s parser.Statement) Command {
-		return &RollbackToSavepointCommand{stmt: s.(*parser.RollbackToSavepointStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.ReleaseSavepointStatement)(nil)), func(s parser.Statement) Command {
-		return &ReleaseSavepointCommand{stmt: s.(*parser.ReleaseSavepointStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.VerifyAuditLogStatement)(nil)), func(s parser.Statement) Command {
-		return &VerifyAuditLogCommand{stmt: s.(*parser.VerifyAuditLogStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.ArchiveAuditLogStatement)(nil)), func(s parser.Statement) Command {
-		return &ArchiveAuditLogCommand{stmt: s.(*parser.ArchiveAuditLogStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.CreateRoleStatement)(nil)), func(s parser.Statement) Command {
-		return &CreateRoleCommand{stmt: s.(*parser.CreateRoleStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.DropRoleStatement)(nil)), func(s parser.Statement) Command {
-		return &DropRoleCommand{stmt: s.(*parser.DropRoleStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.GrantStatement)(nil)), func(s parser.Statement) Command {
-		return &GrantCommand{stmt: s.(*parser.GrantStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.RevokeStatement)(nil)), func(s parser.Statement) Command {
-		return &RevokeCommand{stmt: s.(*parser.RevokeStatement)}
-	})
-	registerCommand(reflect.TypeOf((*parser.RevokeTokenStatement)(nil)), func(s parser.Statement) Command {
-		return &RevokeTokenCommand{stmt: s.(*parser.RevokeTokenStatement)}
-	})
 }
 
 type Executor struct {
@@ -253,3 +224,14 @@ func CommandFactory(stmt parser.Statement) (Command, error) {
 	}
 	return nil, fmt.Errorf("unknown statement type: %T", stmt)
 }
+
+// BindParams re-exports types.BindParams for backward compatibility.
+var BindParams = types.BindParams
+
+// GetRoleGrants re-exports commands/auth.GetRoleGrants for backward compatibility.
+var GetRoleGrants = authcmd.GetRoleGrants
+
+// Undo functions re-exported for test backward compatibility.
+var undoInsert = txcmd.UndoInsert
+var undoUpdate = txcmd.UndoUpdate
+var undoDelete = txcmd.UndoDelete

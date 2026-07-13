@@ -1231,6 +1231,9 @@ var FireTriggersFn func(ctx *ExecutionContext, dbName, tableName, event string)
 // lives in the root executor package and can't be directly referenced.
 var NotifyBroadcasterFn func(ctx *ExecutionContext, dbName, tableName string)
 
+// ExecuteSelectWithCTEFn executes a SELECT with CTE clause.
+var ExecuteSelectWithCTEFn func(stmt *parser.SelectStatement, ctx *ExecutionContext) (*Result, error)
+
 // EvalOperand evaluates a parser expression against a row.
 func EvalOperand(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
 	return EvalOperandFn(expr, row, schema, ctx)
@@ -1281,6 +1284,11 @@ func NotifyBroadcaster(ctx *ExecutionContext, dbName, tableName string) {
 	if NotifyBroadcasterFn != nil {
 		NotifyBroadcasterFn(ctx, dbName, tableName)
 	}
+}
+
+// ExecuteSelectWithCTE executes a SELECT with CTE clause.
+func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (*Result, error) {
+	return ExecuteSelectWithCTEFn(stmt, ctx)
 }
 
 // ─── DML Detection in Expressions ──────────────────────────────────────────
@@ -1423,4 +1431,97 @@ func ContainsExprDML(expr parser.Expression) bool {
 	default:
 		return false
 	}
+}
+
+// ─── Prepared Statement Binding ──────────────────────────────────────────────
+
+// BindParams binds parameter values into a prepared statement, replacing
+// ParamRef nodes with concrete parser.Value literals.
+func BindParams(stmt parser.Statement, params []parser.Value) (parser.Statement, error) {
+	switch s := stmt.(type) {
+	case *parser.SelectStatement:
+		bound := *s
+		bound.Where = BindExpr(s.Where, params)
+		bound.Having = BindExpr(s.Having, params)
+		if len(s.Joins) > 0 {
+			bound.Joins = make([]parser.JoinClause, len(s.Joins))
+			for i, join := range s.Joins {
+				bound.Joins[i] = join
+				bound.Joins[i].Condition = BindExpr(join.Condition, params)
+			}
+		}
+		if s.LimitExpr != nil {
+			bound.LimitExpr = BindExpr(s.LimitExpr, params)
+		}
+		if s.OffsetExpr != nil {
+			bound.OffsetExpr = BindExpr(s.OffsetExpr, params)
+		}
+		return &bound, nil
+	case *parser.UpdateStatement:
+		bound := *s
+		bound.Assignments = make([]parser.Assignment, len(s.Assignments))
+		for i, a := range s.Assignments {
+			bound.Assignments[i] = parser.Assignment{
+				Column: a.Column,
+				Value:  BindExpr(a.Value, params),
+			}
+		}
+		bound.Where = BindExpr(s.Where, params)
+		return &bound, nil
+	case *parser.InsertStatement:
+		bound := *s
+		bound.Rows = make([][]parser.Expression, len(s.Rows))
+		for i, row := range s.Rows {
+			bound.Rows[i] = make([]parser.Expression, len(row))
+			for j, expr := range row {
+				bound.Rows[i][j] = BindExpr(expr, params)
+			}
+		}
+		return &bound, nil
+	case *parser.DeleteStatement:
+		bound := *s
+		bound.Where = BindExpr(s.Where, params)
+		return &bound, nil
+	}
+	return nil, fmt.Errorf("EXECUTE not supported for %T", stmt)
+}
+
+// BindExpr replaces ParamRef nodes in an expression with concrete values.
+func BindExpr(expr parser.Expression, params []parser.Value) parser.Expression {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *parser.ParamRef:
+		if e.Index < 1 || e.Index > len(params) {
+			return &parser.Value{Type: "null"}
+		}
+		p := params[e.Index-1]
+		return &p
+	case *parser.BinaryExpr:
+		return &parser.BinaryExpr{
+			Left:     BindExpr(e.Left, params),
+			Operator: e.Operator,
+			Right:    BindExpr(e.Right, params),
+		}
+	case *parser.AndExpr:
+		return &parser.AndExpr{
+			Left:  BindExpr(e.Left, params),
+			Right: BindExpr(e.Right, params),
+		}
+	case *parser.OrExpr:
+		return &parser.OrExpr{
+			Left:  BindExpr(e.Left, params),
+			Right: BindExpr(e.Right, params),
+		}
+	case *parser.NotExpr:
+		return &parser.NotExpr{
+			Expr: BindExpr(e.Expr, params),
+		}
+	case *parser.Value:
+		return e
+	case *parser.ColumnRef:
+		return e
+	}
+	return expr
 }

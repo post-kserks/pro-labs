@@ -1,4 +1,4 @@
-package executor
+package audit
 
 import (
 	"encoding/json"
@@ -8,34 +8,44 @@ import (
 	"time"
 
 	"vaultdb/internal/audit"
+	"vaultdb/internal/executor/types"
 	"vaultdb/internal/parser"
 )
+
+func init() {
+	types.RegisterCommand("VERIFY_AUDIT_LOG", func(stmt parser.Statement) types.Command {
+		return &VerifyAuditLogCommand{stmt: stmt.(*parser.VerifyAuditLogStatement)}
+	})
+	types.RegisterCommand("ARCHIVE_AUDIT_LOG", func(stmt parser.Statement) types.Command {
+		return &ArchiveAuditLogCommand{stmt: stmt.(*parser.ArchiveAuditLogStatement)}
+	})
+}
 
 // VerifyAuditLogCommand verifies the integrity of the audit log hash chain.
 type VerifyAuditLogCommand struct {
 	stmt *parser.VerifyAuditLogStatement
 }
 
-func (c *VerifyAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+func (c *VerifyAuditLogCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	if ctx.Session.GetAuditTable() == nil {
 		return nil, fmt.Errorf("audit logging is not enabled")
 	}
 
 	ok, count, err := ctx.Session.GetAuditTable().VerifyChain()
 	if err != nil {
-		return &Result{
+		return &types.Result{
 			Type:    "message",
 			Message: fmt.Sprintf("Audit chain BROKEN at entry: %v", err),
 		}, nil
 	}
 
 	if ok {
-		return &Result{
+		return &types.Result{
 			Type:    "message",
 			Message: fmt.Sprintf("Audit chain intact: %d entries verified, no tampering detected.", count),
 		}, nil
 	}
-	return &Result{
+	return &types.Result{
 		Type:    "message",
 		Message: "Audit chain integrity check failed.",
 	}, nil
@@ -46,7 +56,6 @@ type ArchiveAuditLogCommand struct {
 	stmt *parser.ArchiveAuditLogStatement
 }
 
-// archiveExport is the top-level JSON structure written to the archive file.
 type archiveExport struct {
 	ArchivedAt string        `json:"archived_at"`
 	EntryCount int           `json:"entry_count"`
@@ -55,7 +64,7 @@ type archiveExport struct {
 	Entries    []audit.Entry `json:"entries"`
 }
 
-func (c *ArchiveAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+func (c *ArchiveAuditLogCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	if ctx.Session.GetAuditTable() == nil {
 		return nil, fmt.Errorf("audit logging is not enabled")
 	}
@@ -66,13 +75,12 @@ func (c *ArchiveAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error)
 	}
 
 	if len(entries) == 0 {
-		return &Result{
+		return &types.Result{
 			Type:    "message",
 			Message: "Audit log is empty, nothing to archive.",
 		}, nil
 	}
 
-	// Determine output path
 	outPath := c.stmt.Path
 	if outPath == "" {
 		outPath = ctx.Session.GetArchivePath()
@@ -81,7 +89,6 @@ func (c *ArchiveAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error)
 		return nil, fmt.Errorf("archive path not specified (use TO 'path' or set audit.archive_path)")
 	}
 
-	// Get chain hash at export time
 	chainHash, err := ctx.Session.GetAuditTable().LastHash()
 	if err != nil {
 		return nil, fmt.Errorf("get chain hash: %w", err)
@@ -100,7 +107,6 @@ func (c *ArchiveAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error)
 		return nil, fmt.Errorf("marshal archive: %w", err)
 	}
 
-	// Ensure parent directory exists
 	dir := filepath.Dir(outPath)
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return nil, fmt.Errorf("create archive directory: %w", err)
@@ -110,16 +116,13 @@ func (c *ArchiveAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error)
 		return nil, fmt.Errorf("write archive file: %w", err)
 	}
 
-	// Optionally truncate old entries
 	keepCount := c.stmt.KeepCount
 	if keepCount < 0 {
 		keepCount = 0
 	}
 
 	if keepCount > 0 || c.stmt.KeepCount == 0 && len(entries) > 0 {
-		// keepCount 0 means truncate all after archive
 		if keepCount < len(entries) {
-			// Truncate table and re-insert only the kept entries
 			if err := ctx.Session.GetAuditTable().TruncateKeepLast(keepCount); err != nil {
 				return nil, fmt.Errorf("truncate audit log: %w", err)
 			}
@@ -133,7 +136,7 @@ func (c *ArchiveAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error)
 		msg += " Truncated all entries."
 	}
 
-	return &Result{
+	return &types.Result{
 		Type:    "message",
 		Message: msg,
 	}, nil

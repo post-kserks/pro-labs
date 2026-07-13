@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -297,4 +299,32 @@ func validateWASMPath(rawBody string, dataDir string) (string, error) {
 		return "", fmt.Errorf("WASM module not found: %s", absPath)
 	}
 	return absPath, nil
+}
+
+// distinctRows removes duplicate rows from the result.
+// Re-exported for test backward compatibility.
+func distinctRows(rows [][]string) [][]string {
+	seen := make(map[[32]byte]bool)
+	result := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		key := hashRow(row)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+func hashRow(row []string) [32]byte {
+	h := sha256.New()
+	for _, s := range row {
+		var lenBuf [4]byte
+		binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(s)))
+		h.Write(lenBuf[:])
+		h.Write([]byte(s))
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
 }

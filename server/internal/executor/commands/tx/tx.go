@@ -1,31 +1,62 @@
-package executor
+package tx
 
 // Transactions and prepared statements: BEGIN/COMMIT/ROLLBACK,
-// PREPARE/EXECUTE/DEALLOCATE.
+// PREPARE/EXECUTE/DEALLOCATE, SAVEPOINT.
 
 import (
 	"fmt"
 	"log/slog"
 
 	"vaultdb/internal/executor/commands/dml"
+	"vaultdb/internal/executor/types"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 	"vaultdb/internal/txmanager"
 	"vaultdb/internal/wal"
 )
 
+func init() {
+	types.RegisterCommand("BEGIN", func(stmt parser.Statement) types.Command {
+		return &BeginCommand{stmt: stmt.(*parser.BeginStatement)}
+	})
+	types.RegisterCommand("COMMIT", func(stmt parser.Statement) types.Command {
+		return &CommitCommand{stmt: stmt.(*parser.CommitStatement)}
+	})
+	types.RegisterCommand("ROLLBACK", func(stmt parser.Statement) types.Command {
+		return &RollbackCommand{stmt: stmt.(*parser.RollbackStatement)}
+	})
+	types.RegisterCommand("SAVEPOINT", func(stmt parser.Statement) types.Command {
+		return &SavepointCommand{stmt: stmt.(*parser.SavepointStatement)}
+	})
+	types.RegisterCommand("ROLLBACK_TO_SAVEPOINT", func(stmt parser.Statement) types.Command {
+		return &RollbackToSavepointCommand{stmt: stmt.(*parser.RollbackToSavepointStatement)}
+	})
+	types.RegisterCommand("RELEASE_SAVEPOINT", func(stmt parser.Statement) types.Command {
+		return &ReleaseSavepointCommand{stmt: stmt.(*parser.ReleaseSavepointStatement)}
+	})
+	types.RegisterCommand("PREPARE", func(stmt parser.Statement) types.Command {
+		return &PrepareCommand{stmt: stmt.(*parser.PrepareStatement)}
+	})
+	types.RegisterCommand("EXECUTE", func(stmt parser.Statement) types.Command {
+		return &ExecutePreparedCommand{stmt: stmt.(*parser.ExecuteStatement)}
+	})
+	types.RegisterCommand("DEALLOCATE", func(stmt parser.Statement) types.Command {
+		return &DeallocateCommand{stmt: stmt.(*parser.DeallocateStatement)}
+	})
+}
+
 type BeginCommand struct {
 	stmt *parser.BeginStatement
 }
 
-func (c *BeginCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+func (c *BeginCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	if ctx.Session.IsInTx() {
 		return nil, fmt.Errorf("transaction already active; COMMIT or ROLLBACK first")
 	}
 
 	ctx.Session.SetActiveTx(ctx.Session.GetTxManager().Begin())
 
-	return &Result{
+	return &types.Result{
 		Type:    "message",
 		Message: fmt.Sprintf("Transaction %d started.", ctx.Session.GetActiveTx().ID),
 	}, nil
@@ -35,7 +66,7 @@ type CommitCommand struct {
 	stmt *parser.CommitStatement
 }
 
-func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+func (c *CommitCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	if !ctx.Session.IsInTx() {
 		return nil, fmt.Errorf("no active transaction")
 	}
@@ -45,22 +76,15 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("no active transaction")
 	}
 
-	// Read ops (from memory or from spill file)
 	ops, err := tx.ReadOps()
 	if err != nil {
 		return nil, fmt.Errorf("read transaction ops: %w", err)
 	}
 	opsCount := len(ops)
 
-	// Conflict checking and application are performed under commit locks only
-	// for tables affected by the transaction: commits on different tables
-	// run in parallel, and conflicts are detected by table versions.
 	var applied int
 	var applyErr error
 	commitErr := ctx.Session.GetTxManager().Commit(tx, func(pendingOps []txmanager.PendingOp) error {
-		// Commit already holds commit locks for affected tables. Mark the context
-		// so that the autocommit wrapper (mutateUnderTableLock) does NOT re-acquire the
-		// same non-reentrant locks — otherwise self-deadlock (Bug #2 guard).
 		ctx.InCommitApply = true
 		defer func() { ctx.InCommitApply = false }()
 		applied, applyErr = applyOps(ctx, pendingOps)
@@ -71,7 +95,6 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, commitErr
 	}
 	if applyErr != nil {
-		// Application partially failed — roll back already applied ops
 		undoOps := ops[:applied]
 		if undoErr := undoAppliedOps(ctx, undoOps); undoErr != nil {
 			slog.Error("could not undo partial commit, data may be inconsistent",
@@ -85,10 +108,8 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("commit failed, no operations applied: %w", applyErr)
 	}
 
-	// Write COMMIT to WAL with the same txID as the transaction operations
 	if ctx.WAL != nil {
 		if _, err := ctx.WAL.AppendWithTx(tx.ID, wal.OpCommit, nil); err != nil {
-			// Could not write COMMIT — transaction is considered uncommitted
 			undoAppliedOps(ctx, ops)
 			tx.Rollback()
 			ctx.Session.ClearActiveTx()
@@ -99,7 +120,7 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	tx.Rollback()
 	ctx.Session.ClearActiveTx()
 
-	return &Result{
+	return &types.Result{
 		Type:    "message",
 		Message: fmt.Sprintf("Transaction %d committed (%d operations).", tx.ID, opsCount),
 	}, nil
@@ -109,7 +130,7 @@ type RollbackCommand struct {
 	stmt *parser.RollbackStatement
 }
 
-func (c *RollbackCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+func (c *RollbackCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	if !ctx.Session.IsInTx() {
 		return nil, fmt.Errorf("no active transaction")
 	}
@@ -131,15 +152,123 @@ func (c *RollbackCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	tx.Rollback()
 	ctx.Session.ClearActiveTx()
-	return &Result{
+	return &types.Result{
 		Type:    "message",
 		Message: fmt.Sprintf("Transaction rolled back (%d operations discarded).", opsCount),
 	}, nil
 }
 
+type SavepointCommand struct {
+	stmt *parser.SavepointStatement
+}
+
+func (c *SavepointCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	if !ctx.Session.IsInTx() {
+		return nil, fmt.Errorf("SAVEPOINT can only be used inside a transaction")
+	}
+	tx := ctx.Session.GetActiveTx()
+	if tx == nil {
+		return nil, fmt.Errorf("no active transaction")
+	}
+	tx.Savepoint(c.stmt.Name)
+	return &types.Result{
+		Type:    "message",
+		Message: fmt.Sprintf("Savepoint '%s' established.", c.stmt.Name),
+	}, nil
+}
+
+type RollbackToSavepointCommand struct {
+	stmt *parser.RollbackToSavepointStatement
+}
+
+func (c *RollbackToSavepointCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	if !ctx.Session.IsInTx() {
+		return nil, fmt.Errorf("ROLLBACK TO SAVEPOINT can only be used inside a transaction")
+	}
+	tx := ctx.Session.GetActiveTx()
+	if tx == nil {
+		return nil, fmt.Errorf("no active transaction")
+	}
+	if err := tx.RollbackToSavepoint(c.stmt.Name); err != nil {
+		return nil, err
+	}
+	return &types.Result{
+		Type:    "message",
+		Message: fmt.Sprintf("Rolled back to savepoint '%s'.", c.stmt.Name),
+	}, nil
+}
+
+type ReleaseSavepointCommand struct {
+	stmt *parser.ReleaseSavepointStatement
+}
+
+func (c *ReleaseSavepointCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	if !ctx.Session.IsInTx() {
+		return nil, fmt.Errorf("RELEASE SAVEPOINT can only be used inside a transaction")
+	}
+	tx := ctx.Session.GetActiveTx()
+	if tx == nil {
+		return nil, fmt.Errorf("no active transaction")
+	}
+	if !tx.ReleaseSavepoint(c.stmt.Name) {
+		return nil, fmt.Errorf("savepoint %q does not exist", c.stmt.Name)
+	}
+	return &types.Result{
+		Type:    "message",
+		Message: fmt.Sprintf("Savepoint '%s' released.", c.stmt.Name),
+	}, nil
+}
+
+type PrepareCommand struct {
+	stmt *parser.PrepareStatement
+}
+
+func (c *PrepareCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	if err := ctx.Session.SetPreparedStatement(c.stmt.Name, &types.PreparedStatement{
+		Name:  c.stmt.Name,
+		Query: c.stmt.Query,
+	}); err != nil {
+		return nil, err
+	}
+	return &types.Result{
+		Type:    "message",
+		Message: fmt.Sprintf("Statement '%s' prepared.", c.stmt.Name),
+	}, nil
+}
+
+type ExecutePreparedCommand struct {
+	stmt *parser.ExecuteStatement
+}
+
+func (c *ExecutePreparedCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	ps, ok := ctx.Session.GetPreparedStatement(c.stmt.Name)
+	if !ok {
+		return nil, fmt.Errorf("prepared statement '%s' not found", c.stmt.Name)
+	}
+
+	boundStmt, err := types.BindParams(ps.Query, c.stmt.Params)
+	if err != nil {
+		return nil, err
+	}
+
+	return ctx.RunSubquery.RunSubquery(ctx, boundStmt)
+}
+
+type DeallocateCommand struct {
+	stmt *parser.DeallocateStatement
+}
+
+func (c *DeallocateCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	ctx.Session.DeletePreparedStatement(c.stmt.Name)
+	return &types.Result{
+		Type:    "message",
+		Message: fmt.Sprintf("Statement '%s' deallocated.", c.stmt.Name),
+	}, nil
+}
+
 // applyOps applies buffered operations in order and reports how many were
 // applied before the first failure.
-func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) (int, error) {
+func applyOps(ctx *types.ExecutionContext, ops []txmanager.PendingOp) (int, error) {
 	for i, op := range ops {
 		switch op.Type {
 		case "insert":
@@ -190,12 +319,9 @@ func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) (int, error) {
 					return i, err
 				}
 			}
-			// Save rows for undo on rollback.
 			ops[i].Row = rows
-			notifyMutation(ctx, op.DB, op.Table)
-			if asSession(ctx).resultCache != nil {
-				func() { if rc := ctx.Session.GetResultCache(); rc != nil { rc.(*ResultCache).Invalidate(op.Table) } }()
-			}
+			types.NotifyBroadcaster(ctx, op.DB, op.Table)
+			ctx.Session.InvalidateResultCache(op.Table)
 			_ = stmt
 		}
 	}
@@ -203,23 +329,19 @@ func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) (int, error) {
 }
 
 // undoAppliedOps rolls back already applied operations in reverse order.
-func undoAppliedOps(ctx *ExecutionContext, ops []txmanager.PendingOp) error {
+func undoAppliedOps(ctx *types.ExecutionContext, ops []txmanager.PendingOp) error {
 	for i := len(ops) - 1; i >= 0; i-- {
 		op := ops[i]
 		var undoErr error
 		switch op.Type {
 		case "insert":
-			// Undo INSERT = DELETE inserted rows
-			undoErr = undoInsert(ctx, op)
+			undoErr = UndoInsert(ctx, op)
 		case "update":
-			// Undo UPDATE = restore old values
-			undoErr = undoUpdate(ctx, op)
+			undoErr = UndoUpdate(ctx, op)
 		case "delete":
-			// Undo DELETE = re-insert
-			undoErr = undoDelete(ctx, op)
+			undoErr = UndoDelete(ctx, op)
 		case "truncate":
-			// Undo TRUNCATE = re-insert saved rows
-			undoErr = undoTruncate(ctx, op)
+			undoErr = UndoTruncate(ctx, op)
 		}
 		if undoErr != nil {
 			return fmt.Errorf("undo op %d (%s): %w", i, op.Type, undoErr)
@@ -228,7 +350,7 @@ func undoAppliedOps(ctx *ExecutionContext, ops []txmanager.PendingOp) error {
 	return nil
 }
 
-func undoInsert(ctx *ExecutionContext, op txmanager.PendingOp) error {
+func UndoInsert(ctx *types.ExecutionContext, op txmanager.PendingOp) error {
 	if op.DB == "" || op.Table == "" {
 		return nil
 	}
@@ -244,8 +366,7 @@ func undoInsert(ctx *ExecutionContext, op txmanager.PendingOp) error {
 	}
 	cmd := &dml.InsertCommand{}
 	cmd.SetStmt(stmt)
-	insertCmd := &insertUndoHelper{cmd: cmd}
-	rowsToUndo, err := insertCmd.buildRows(schema, ctx)
+	rowsToUndo, err := cmd.BuildRows(schema, ctx)
 	if err != nil {
 		return err
 	}
@@ -265,7 +386,7 @@ func undoInsert(ctx *ExecutionContext, op txmanager.PendingOp) error {
 			if idxInSlice(idx, indicesToDelete) {
 				continue
 			}
-			if rowsEqual(insertedRow, currentRow) {
+			if types.RowsEqual(insertedRow, currentRow) {
 				indicesToDelete = append(indicesToDelete, idx)
 				break
 			}
@@ -281,15 +402,7 @@ func undoInsert(ctx *ExecutionContext, op txmanager.PendingOp) error {
 	return nil
 }
 
-type insertUndoHelper struct {
-	cmd *dml.InsertCommand
-}
-
-func (h *insertUndoHelper) buildRows(schema *storage.TableSchema, ctx *ExecutionContext) ([]storage.Row, error) {
-	return h.cmd.BuildRows(schema, ctx)
-}
-
-func undoUpdate(ctx *ExecutionContext, op txmanager.PendingOp) error {
+func UndoUpdate(ctx *types.ExecutionContext, op txmanager.PendingOp) error {
 	if op.DB == "" || op.Table == "" {
 		return nil
 	}
@@ -332,7 +445,7 @@ func undoUpdate(ctx *ExecutionContext, op txmanager.PendingOp) error {
 			if colIdx < len(oldRow) && colIdx < len(currentRows[origIdx]) {
 				oldVal := oldRow[colIdx]
 				newVal := currentRows[origIdx][colIdx]
-				if !valuesEqual(oldVal, newVal) {
+				if !types.ValuesEqual(oldVal, newVal) {
 					updates[col.Name] = oldVal
 				}
 			}
@@ -343,15 +456,6 @@ func undoUpdate(ctx *ExecutionContext, op txmanager.PendingOp) error {
 		}
 	}
 
-	// Restore each row with ITS OWN old values.
-	// Cannot merge per-row maps into one and apply to all indexes at once:
-	// rows have different old values, and merging would keep only the last one
-	// and overwrite the rest — data corruption on rollback.
-	//
-	// Iterate indices in reverse order: UpdateRows tombstones the old version and
-	// appends the new one at the end, which shifts positions of rows AFTER the modified
-	// one. By processing from larger to smaller index, we don't touch
-	// not-yet-restored (smaller) indexes — they remain valid.
 	for i := len(restoreIndices) - 1; i >= 0; i-- {
 		if _, err := ctx.Storage.UpdateRows(op.DB, op.Table, []int{restoreIndices[i]}, restoreUpdates[i]); err != nil {
 			return err
@@ -360,7 +464,7 @@ func undoUpdate(ctx *ExecutionContext, op txmanager.PendingOp) error {
 	return nil
 }
 
-func undoDelete(ctx *ExecutionContext, op txmanager.PendingOp) error {
+func UndoDelete(ctx *types.ExecutionContext, op txmanager.PendingOp) error {
 	if op.DB == "" || op.Table == "" {
 		return nil
 	}
@@ -377,7 +481,7 @@ func undoDelete(ctx *ExecutionContext, op txmanager.PendingOp) error {
 	return err
 }
 
-func undoTruncate(ctx *ExecutionContext, op txmanager.PendingOp) error {
+func UndoTruncate(ctx *types.ExecutionContext, op txmanager.PendingOp) error {
 	if op.DB == "" || op.Table == "" {
 		return nil
 	}
@@ -401,143 +505,4 @@ func idxInSlice(idx int, s []int) bool {
 		}
 	}
 	return false
-}
-
-type PrepareCommand struct {
-	stmt *parser.PrepareStatement
-}
-
-func (c *PrepareCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	if err := ctx.Session.SetPreparedStatement(c.stmt.Name, &PreparedStatement{
-		Name:  c.stmt.Name,
-		Query: c.stmt.Query,
-	}); err != nil {
-		return nil, err
-	}
-	return &Result{
-		Type:    "message",
-		Message: fmt.Sprintf("Statement '%s' prepared.", c.stmt.Name),
-	}, nil
-}
-
-type ExecutePreparedCommand struct {
-	stmt *parser.ExecuteStatement
-}
-
-func (c *ExecutePreparedCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	ps, ok := ctx.Session.GetPreparedStatement(c.stmt.Name)
-	if !ok {
-		return nil, fmt.Errorf("prepared statement '%s' not found", c.stmt.Name)
-	}
-
-	boundStmt, err := BindParams(ps.Query, c.stmt.Params)
-	if err != nil {
-		return nil, err
-	}
-
-	// Plan cache intentionally disabled for prepared statements. QueryHash keys
-	// on fully-bound SQL, so each parameter set produces a unique hash and the
-	// cache never hits. Enabling it requires re-keying on (stmt-name, param-types)
-	// across PlanCache.Get/Put, invalidation paths, and all callers.
-	return ctx.RunSubquery.RunSubquery(ctx, boundStmt)
-}
-
-type DeallocateCommand struct {
-	stmt *parser.DeallocateStatement
-}
-
-func (c *DeallocateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	ctx.Session.DeletePreparedStatement(c.stmt.Name)
-	return &Result{
-		Type:    "message",
-		Message: fmt.Sprintf("Statement '%s' deallocated.", c.stmt.Name),
-	}, nil
-}
-
-func BindParams(stmt parser.Statement, params []parser.Value) (parser.Statement, error) {
-	switch s := stmt.(type) {
-	case *parser.SelectStatement:
-		bound := *s
-		bound.Where = bindExpr(s.Where, params)
-		bound.Having = bindExpr(s.Having, params)
-		if len(s.Joins) > 0 {
-			bound.Joins = make([]parser.JoinClause, len(s.Joins))
-			for i, join := range s.Joins {
-				bound.Joins[i] = join
-				bound.Joins[i].Condition = bindExpr(join.Condition, params)
-			}
-		}
-		if s.LimitExpr != nil {
-			bound.LimitExpr = bindExpr(s.LimitExpr, params)
-		}
-		if s.OffsetExpr != nil {
-			bound.OffsetExpr = bindExpr(s.OffsetExpr, params)
-		}
-		return &bound, nil
-	case *parser.UpdateStatement:
-		bound := *s
-		bound.Assignments = make([]parser.Assignment, len(s.Assignments))
-		for i, a := range s.Assignments {
-			bound.Assignments[i] = parser.Assignment{
-				Column: a.Column,
-				Value:  bindExpr(a.Value, params),
-			}
-		}
-		bound.Where = bindExpr(s.Where, params)
-		return &bound, nil
-	case *parser.InsertStatement:
-		bound := *s
-		bound.Rows = make([][]parser.Expression, len(s.Rows))
-		for i, row := range s.Rows {
-			bound.Rows[i] = make([]parser.Expression, len(row))
-			for j, expr := range row {
-				bound.Rows[i][j] = bindExpr(expr, params)
-			}
-		}
-		return &bound, nil
-	case *parser.DeleteStatement:
-		bound := *s
-		bound.Where = bindExpr(s.Where, params)
-		return &bound, nil
-	}
-	return nil, fmt.Errorf("EXECUTE not supported for %T", stmt)
-}
-
-func bindExpr(expr parser.Expression, params []parser.Value) parser.Expression {
-	if expr == nil {
-		return nil
-	}
-	switch e := expr.(type) {
-	case *parser.ParamRef:
-		if e.Index < 1 || e.Index > len(params) {
-			return &parser.Value{Type: "null"}
-		}
-		p := params[e.Index-1]
-		return &p
-	case *parser.BinaryExpr:
-		return &parser.BinaryExpr{
-			Left:     bindExpr(e.Left, params),
-			Operator: e.Operator,
-			Right:    bindExpr(e.Right, params),
-		}
-	case *parser.AndExpr:
-		return &parser.AndExpr{
-			Left:  bindExpr(e.Left, params),
-			Right: bindExpr(e.Right, params),
-		}
-	case *parser.OrExpr:
-		return &parser.OrExpr{
-			Left:  bindExpr(e.Left, params),
-			Right: bindExpr(e.Right, params),
-		}
-	case *parser.NotExpr:
-		return &parser.NotExpr{
-			Expr: bindExpr(e.Expr, params),
-		}
-	case *parser.Value:
-		return e
-	case *parser.ColumnRef:
-		return e
-	}
-	return expr
 }

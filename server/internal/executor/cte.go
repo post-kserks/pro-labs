@@ -197,11 +197,17 @@ func ExecuteCTEStatement(stmt *parser.CTEStatement, ctx *ExecutionContext) (*Res
 				}
 
 				selectStmt.TableName = tempTable
-				cmd := &SelectCommand{stmt: selectStmt}
+				cmd, err := ctx.CreateCommand(selectStmt)
+				if err != nil {
+					return nil, err
+				}
 				return cmd.Execute(ctx)
 			}
 		}
-		cmd := &SelectCommand{stmt: selectStmt}
+		cmd, err := ctx.CreateCommand(selectStmt)
+		if err != nil {
+			return nil, err
+		}
 		return cmd.Execute(ctx)
 	}
 
@@ -317,7 +323,10 @@ func rowKeyStr(row []string) string {
 func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (*Result, error) {
 	if len(stmt.CTEs) == 0 {
 		// No CTE — execute regular SELECT
-		cmd := &SelectCommand{stmt: stmt}
+		cmd, err := ctx.CreateCommand(stmt)
+		if err != nil {
+			return nil, err
+		}
 		return cmd.Execute(ctx)
 	}
 
@@ -438,13 +447,19 @@ func ExecuteSelectWithCTE(stmt *parser.SelectStatement, ctx *ExecutionContext) (
 
 			// Modify outer SELECT to use temp table
 			stmt.TableName = tempTable
-			cmd := &SelectCommand{stmt: stmt}
+			cmd, err := ctx.CreateCommand(stmt)
+			if err != nil {
+				return nil, err
+			}
 			return cmd.Execute(ctx)
 		}
 	}
 
 	// Regular SELECT
-	cmd := &SelectCommand{stmt: stmt}
+	cmd, err := ctx.CreateCommand(stmt)
+	if err != nil {
+		return nil, err
+	}
 	return cmd.Execute(ctx)
 }
 

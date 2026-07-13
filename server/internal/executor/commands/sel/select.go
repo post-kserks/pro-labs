@@ -1,4 +1,4 @@
-package executor
+package sel
 
 // SELECT and related commands: JOIN, GROUP BY, window functions,
 // set operations, EXPLAIN, HISTORY.
@@ -9,16 +9,70 @@ import (
 	"fmt"
 	"strings"
 
+	"vaultdb/internal/executor/eval"
+	"vaultdb/internal/executor/optimizer"
 	"vaultdb/internal/executor/parallel"
+	"vaultdb/internal/executor/types"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
+
+// resultCache is a local interface for the result cache so we don't import root.
+type resultCache interface {
+	Get(key string) *types.Result
+	Put(key string, result *types.Result, tables map[string]bool)
+	Invalidate(tableName string)
+}
+
+func init() {
+	types.RegisterCommand("SELECT", func(stmt parser.Statement) types.Command {
+		return &SelectCommand{stmt: stmt.(*parser.SelectStatement)}
+	})
+	types.RegisterCommand("EXPLAIN", func(stmt parser.Statement) types.Command {
+		return &ExplainCommand{stmt: stmt.(*parser.ExplainStatement)}
+	})
+	types.RegisterCommand("HISTORY", func(stmt parser.Statement) types.Command {
+		return &HistoryCommand{stmt: stmt.(*parser.HistoryStatement)}
+	})
+	types.RegisterCommand("SET_OPERATION", func(stmt parser.Statement) types.Command {
+		return &SetOperationCommand{stmt: stmt.(*parser.SetOperationStatement)}
+	})
+}
+
+// selectEvaluator adapts types hooks to the parallel.Evaluator interface.
+type selectEvaluator struct{}
+
+func (e *selectEvaluator) EvalExpr(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx interface{}) (bool, error) {
+	return types.EvalExpr(expr, row, schema, ctx.(*types.ExecutionContext))
+}
+
+func (e *selectEvaluator) EvalOperand(expr parser.Expression, row storage.Row, schema *storage.TableSchema, ctx interface{}) (interface{}, error) {
+	return types.EvalOperand(expr, row, schema, ctx.(*types.ExecutionContext))
+}
+
+func (e *selectEvaluator) ValueToString(val interface{}) string {
+	return types.ValueToString(val)
+}
+
+func (e *selectEvaluator) CollectAggregates(columns []parser.SelectColumn) []*parser.AggregateExpr {
+	return collectAggregates(columns)
+}
+
+func (e *selectEvaluator) CompareValues(a, b interface{}) int {
+	return eval.CompareOrdering(a, b)
+}
+
+func (e *selectEvaluator) NewAggregator(name string, distinct bool, args ...interface{}) parallel.Aggregator {
+	return eval.NewAggregator(name, distinct, args...)
+}
+
+var sharedEvaluator parallel.Evaluator = &selectEvaluator{}
 
 type SelectCommand struct {
 	stmt *parser.SelectStatement
 }
 
-func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+func (c *SelectCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	if ctx.Ctx != nil {
 		select {
 		case <-ctx.Ctx.Done():
@@ -41,11 +95,11 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	// Check result cache (only for simple SELECT, not CTEs or subqueries).
 	// Skip cache in transactions: it doesn't account for tx-overlay (Bug #1).
-	if asSession(ctx).resultCache != nil && !ctx.Session.IsInTx() && c.stmt.TableName != "" && c.stmt.FromSubquery == nil && len(c.stmt.CTEs) == 0 {
-		dbName, err := requireCurrentDB(ctx)
+	if rc, ok := ctx.Session.GetResultCache().(resultCache); ok && !ctx.Session.IsInTx() && c.stmt.TableName != "" && c.stmt.FromSubquery == nil && len(c.stmt.CTEs) == 0 {
+		dbName, err := types.RequireCurrentDB(ctx)
 		if err == nil {
-			cacheKey := ResultCacheKey(c.stmt, dbName)
-			if cached := asSession(ctx).resultCache.Get(cacheKey); cached != nil {
+			cacheKey := types.ResultCacheKey(c.stmt, dbName)
+			if cached := rc.Get(cacheKey); cached != nil {
 				return cached, nil
 			}
 		}
@@ -59,7 +113,7 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return c.executeDerivedTable(ctx)
 	}
 
-	dbName, err := requireCurrentDB(ctx)
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -72,10 +126,12 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	// Cache the result (only successful SELECT without mutations). Don't cache
 	// results computed over tx-overlay (Bug #1).
-	if err == nil && asSession(ctx).resultCache != nil && !ctx.Session.IsInTx() && result != nil {
-		cacheKey := ResultCacheKey(c.stmt, dbName)
-		tables := map[string]bool{c.stmt.TableName: true}
-		asSession(ctx).resultCache.Put(cacheKey, result, tables)
+	if err == nil {
+		if rc, ok := ctx.Session.GetResultCache().(resultCache); ok && !ctx.Session.IsInTx() && result != nil {
+			cacheKey := types.ResultCacheKey(c.stmt, dbName)
+			tables := map[string]bool{c.stmt.TableName: true}
+			rc.Put(cacheKey, result, tables)
+		}
 	}
 
 	return result, err
@@ -101,8 +157,8 @@ func (c *SelectCommand) isSimpleSelect() bool {
 
 // fastPathSelect reads rows directly without index lookup, view resolution,
 // parallel execution, or window function handling.
-func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func (c *SelectCommand) fastPathSelect(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +201,7 @@ func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	// Build column index for O(1) lookups during expression evaluation
-	ensureColumnIndex(ctx, schema)
+	types.EnsureColumnIndex(ctx, schema)
 
 	// Extract FTS query from WHERE for 2-arg bm25_score
 	ctx.FtsQuery = ""
@@ -158,7 +214,7 @@ func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
 	if c.stmt.Where != nil {
 		filtered = make([]storage.Row, 0, len(rows))
 		for _, row := range rows {
-			ok, err := evalExpr(c.stmt.Where, row, schema, ctx)
+			ok, err := types.EvalExpr(c.stmt.Where, row, schema, ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -191,11 +247,11 @@ func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
 	for _, row := range filtered {
 		projected := make([]string, len(c.stmt.Columns))
 		for i, col := range c.stmt.Columns {
-			val, err := evalOperand(col.Expr, row, schema, ctx)
+			val, err := types.EvalOperand(col.Expr, row, schema, ctx)
 			if err != nil {
 				projected[i] = "ERR"
 			} else {
-				projected[i] = valueToString(val)
+				projected[i] = types.ValueToString(val)
 			}
 		}
 		resultRows = append(resultRows, projected)
@@ -230,14 +286,14 @@ func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
 		Columns: make([]storage.ColumnSchema, len(c.stmt.Columns)),
 	}
 	for i, col := range c.stmt.Columns {
-		colType := inferTypeFromExpr(col.Expr, schema)
+		colType := types.InferTypeFromExpr(col.Expr, schema)
 		resultSchema.Columns[i] = storage.ColumnSchema{
 			Name: projectColumns[i],
 			Type: colType,
 		}
 	}
 
-	return &Result{
+	return &types.Result{
 		Type:        "rows",
 		Columns:     projectColumns,
 		Rows:        resultRows[start:end],
@@ -246,11 +302,11 @@ func (c *SelectCommand) fastPathSelect(ctx *ExecutionContext) (*Result, error) {
 	}, nil
 }
 
-func (c *SelectCommand) executeWithCTE(ctx *ExecutionContext, dbName string) (*Result, error) {
-	return ExecuteSelectWithCTE(c.stmt, ctx)
+func (c *SelectCommand) executeWithCTE(ctx *types.ExecutionContext, dbName string) (*types.Result, error) {
+	return types.ExecuteSelectWithCTE(c.stmt, ctx)
 }
 
-func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string) (*Result, error) {
+func (c *SelectCommand) executeSimpleSelect(ctx *types.ExecutionContext, dbName string) (*types.Result, error) {
 	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
 		viewQuery, err := loadViewQueryWithCtx(ctx, dbName, c.stmt.TableName)
 		if err == nil && viewQuery != "" {
@@ -292,7 +348,7 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 
 			// Check view-level RLS before replacing columns — RLS policies may
 			// reference columns that the outer query doesn't select.
-			rlsEnabled, rlsPolicies, err := loadViewRLS(ctx, dbName, c.stmt.TableName)
+			rlsEnabled, rlsPolicies, err := types.LoadViewRLS(ctx, dbName, c.stmt.TableName)
 			if err != nil {
 				return nil, err
 			}
@@ -479,7 +535,7 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	}
 
 	// Build column index for O(1) lookups during expression evaluation.
-	ensureColumnIndex(ctx, combinedSchema)
+	types.EnsureColumnIndex(ctx, combinedSchema)
 
 	// Extract FTS query from WHERE for 2-arg bm25_score
 	ctx.FtsQuery = ""
@@ -495,7 +551,7 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	} else {
 		filtered = make([]storage.Row, 0, len(combinedRows))
 		for _, row := range combinedRows {
-			ok, err := evalExpr(c.stmt.Where, row, combinedSchema, ctx)
+			ok, err := types.EvalExpr(c.stmt.Where, row, combinedSchema, ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -506,9 +562,9 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	}
 
 	// Apply server-side max rows limit (before GROUP BY to limit aggregation input)
-	if ctx.Session != nil && asSession(ctx).executor.maxRows > 0 && !c.hasAggregates() && len(c.stmt.GroupBy) == 0 {
-		if len(filtered) > asSession(ctx).executor.maxRows {
-			filtered = filtered[:asSession(ctx).executor.maxRows]
+	if ctx.Session != nil && ctx.Session.GetMaxRows() > 0 && !c.hasAggregates() && len(c.stmt.GroupBy) == 0 {
+		if maxRows := ctx.Session.GetMaxRows(); len(filtered) > maxRows {
+			filtered = filtered[:maxRows]
 		}
 	}
 
@@ -569,11 +625,11 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 		for _, row := range filtered {
 			projected := make([]string, len(effectiveColumns))
 			for i, col := range effectiveColumns {
-				val, err := evalOperand(col.Expr, row, combinedSchema, ctx)
+				val, err := types.EvalOperand(col.Expr, row, combinedSchema, ctx)
 				if err != nil {
 					projected[i] = "ERR"
 				} else {
-					projected[i] = valueToString(val)
+					projected[i] = types.ValueToString(val)
 				}
 			}
 			resultRows = append(resultRows, projected)
@@ -612,14 +668,14 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 		Columns: make([]storage.ColumnSchema, len(effectiveColumns)),
 	}
 	for i, col := range effectiveColumns {
-		colType := inferTypeFromExpr(col.Expr, combinedSchema)
+		colType := types.InferTypeFromExpr(col.Expr, combinedSchema)
 		resultSchema.Columns[i] = storage.ColumnSchema{
 			Name: projectColumns[i],
 			Type: colType,
 		}
 	}
 
-	return &Result{
+	return &types.Result{
 		Type:        "rows",
 		Columns:     projectColumns,
 		Rows:        finalRows,
@@ -641,7 +697,7 @@ var indexOperators = map[string]bool{
 	"?":  true,
 }
 
-func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parser.Expression) ([]int, bool) {
+func tryIndexLookup(ctx *types.ExecutionContext, dbName, tableName string, where parser.Expression) ([]int, bool) {
 	// Handle both BinaryExpr and JSONAccess for index operators
 	var op string
 	var left parser.Expression
@@ -674,7 +730,7 @@ func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parse
 	// Range operators: > < >= <=
 	switch op {
 	case ">", "<", ">=", "<=":
-		val := valueToString(evalOperandRaw(right))
+		val := types.ValueToString(types.EvalOperandRaw(right))
 		if val == "" {
 			return nil, false
 		}
@@ -700,7 +756,7 @@ func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parse
 	switch op {
 	case "LIKE":
 		// LIKE '%pattern%' can use GIN index
-		val := valueToString(evalOperandRaw(right))
+		val := types.ValueToString(types.EvalOperandRaw(right))
 		if val == "" || !strings.HasPrefix(val, "%") || !strings.HasSuffix(val, "%") {
 			return nil, false
 		}
@@ -725,9 +781,9 @@ func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parse
 			default:
 				return nil, false
 			}
-			queryVal = valueToString(parserValueToRaw(val))
+			queryVal = types.ValueToString(types.ParserValueToRaw(val))
 		} else {
-			queryVal = valueToString(evalOperandRaw(right))
+			queryVal = types.ValueToString(types.EvalOperandRaw(right))
 		}
 
 		if queryVal == "" {
@@ -743,8 +799,7 @@ func tryIndexLookup(ctx *ExecutionContext, dbName, tableName string, where parse
 }
 
 // tryIndexOnlyScan attempts to retrieve stored columns from an index for index-only scan.
-// Returns the stored columns map if the index has stored data for the given positions.
-func tryIndexOnlyScan(ctx *ExecutionContext, dbName, tableName string, where parser.Expression, positions []int) (map[int]map[string]interface{}, bool) {
+func tryIndexOnlyScan(ctx *types.ExecutionContext, dbName, tableName string, where parser.Expression, positions []int) (map[int]map[string]interface{}, bool) {
 	// Handle both BinaryExpr and JSONAccess
 	var op string
 	var left parser.Expression
@@ -807,14 +862,6 @@ func buildRowsFromStoredColumns(storedCols map[int]map[string]interface{}, selec
 		colIndex[col.Name] = i
 	}
 
-	// Determine which columns we need
-	neededCols := make(map[string]bool)
-	for _, col := range selectCols {
-		if colRef, ok := col.Expr.(*parser.ColumnRef); ok {
-			neededCols[colRef.Name] = true
-		}
-	}
-
 	// Build rows
 	rows := make([]storage.Row, 0, len(storedCols))
 	for _, cols := range storedCols {
@@ -830,7 +877,7 @@ func buildRowsFromStoredColumns(storedCols map[int]map[string]interface{}, selec
 	return rows, nil
 }
 
-func (c *SelectCommand) executeDual(ctx *ExecutionContext) (*Result, error) {
+func (c *SelectCommand) executeDual(ctx *types.ExecutionContext) (*types.Result, error) {
 	effectiveColumns := c.stmt.Columns
 	if len(effectiveColumns) == 0 {
 		return nil, fmt.Errorf("SELECT without FROM must have at least one column")
@@ -849,15 +896,15 @@ func (c *SelectCommand) executeDual(ctx *ExecutionContext) (*Result, error) {
 
 	row := make([]string, len(effectiveColumns))
 	for i, col := range effectiveColumns {
-		val, err := evalOperand(col.Expr, nil, nil, ctx)
+		val, err := types.EvalOperand(col.Expr, nil, nil, ctx)
 		if err != nil {
 			row[i] = "ERR"
 		} else {
-			row[i] = valueToString(val)
+			row[i] = types.ValueToString(val)
 		}
 	}
 
-	return &Result{
+	return &types.Result{
 		Type:    "rows",
 		Columns: projectColumns,
 		Rows:    [][]string{row},
@@ -893,9 +940,7 @@ func distinctRows(rows [][]string) [][]string {
 }
 
 // distinctOnRows deduplicates projected rows by DISTINCT ON expressions.
-// It evaluates the DISTINCT ON expressions against raw rows to create a grouping key,
-// then keeps only the first projected row for each unique key.
-func distinctOnRows(projected [][]string, distinctOn []parser.Expression, columns []parser.SelectColumn, rawRows []storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) [][]string {
+func distinctOnRows(projected [][]string, distinctOn []parser.Expression, columns []parser.SelectColumn, rawRows []storage.Row, schema *storage.TableSchema, ctx *types.ExecutionContext) [][]string {
 	if len(rawRows) != len(projected) {
 		return projected
 	}
@@ -905,11 +950,11 @@ func distinctOnRows(projected [][]string, distinctOn []parser.Expression, column
 		// Build key from DISTINCT ON expression values
 		keyParts := make([]string, len(distinctOn))
 		for j, expr := range distinctOn {
-			val, err := evalOperand(expr, rawRow, schema, ctx)
+			val, err := types.EvalOperand(expr, rawRow, schema, ctx)
 			if err != nil {
 				keyParts[j] = "ERR"
 			} else {
-				keyParts[j] = valueToString(val)
+				keyParts[j] = types.ValueToString(val)
 			}
 		}
 		key := strings.Join(keyParts, "\x00")
@@ -921,8 +966,8 @@ func distinctOnRows(projected [][]string, distinctOn []parser.Expression, column
 	return result
 }
 
-func loadViewQueryWithCtx(ctx *ExecutionContext, dbName, viewName string) (string, error) {
-	def, err := loadObject(ctx, dbName, objTypeView, viewName)
+func loadViewQueryWithCtx(ctx *types.ExecutionContext, dbName, viewName string) (string, error) {
+	def, err := types.LoadObject(ctx, dbName, types.ObjTypeView, viewName)
 	if err != nil {
 		return "", err
 	}
@@ -937,7 +982,7 @@ func loadViewQueryWithCtx(ctx *ExecutionContext, dbName, viewName string) (strin
 
 // executePartitionedSelect reads rows from all partitions of a partitioned table
 // and merges them before applying WHERE, ORDER BY, etc.
-func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName string, schema *storage.TableSchema) (*Result, error) {
+func (c *SelectCommand) executePartitionedSelect(ctx *types.ExecutionContext, dbName string, schema *storage.TableSchema) (*types.Result, error) {
 	pt := storage.NewPartitionedTable(schema)
 	if pt == nil {
 		return nil, fmt.Errorf("table '%s' has partition spec but could not initialize", c.stmt.TableName)
@@ -960,8 +1005,8 @@ func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName s
 	}
 	rowsScanned := len(allRows)
 
-	// Apply tx overlay (read-your-wown-writes for transactions)
-	allRows, err := applyTxOverlay(ctx, dbName, c.stmt.TableName, allRows)
+	// Apply tx overlay (read-your-own-writes for transactions)
+	allRows, err := types.ApplyTxOverlay(ctx, dbName, c.stmt.TableName, allRows)
 	if err != nil {
 		return nil, err
 	}
@@ -972,15 +1017,14 @@ func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName s
 		return nil, err
 	}
 
-	// Apply optimizer predicate pushdown: filter rows early using per-table
-	// predicates before the full WHERE evaluation.
+	// Apply optimizer predicate pushdown
 	allRows, err = applyPushdownFilter(dbName, c.stmt, c.stmt.TableName, allRows, schema, ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// Build column index for O(1) lookups
-	ensureColumnIndex(ctx, schema)
+	types.EnsureColumnIndex(ctx, schema)
 
 	// Extract FTS query from WHERE for 2-arg bm25_score
 	ctx.FtsQuery = ""
@@ -993,7 +1037,7 @@ func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName s
 	if c.stmt.Where != nil {
 		filtered = make([]storage.Row, 0, len(allRows))
 		for _, row := range allRows {
-			ok, err := evalExpr(c.stmt.Where, row, schema, ctx)
+			ok, err := types.EvalExpr(c.stmt.Where, row, schema, ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -1015,11 +1059,11 @@ func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName s
 	for _, row := range filtered {
 		projected := make([]string, len(c.stmt.Columns))
 		for i, col := range c.stmt.Columns {
-			val, err := evalOperand(col.Expr, row, schema, ctx)
+			val, err := types.EvalOperand(col.Expr, row, schema, ctx)
 			if err != nil {
 				projected[i] = "ERR"
 			} else {
-				projected[i] = valueToString(val)
+				projected[i] = types.ValueToString(val)
 			}
 		}
 		resultRows = append(resultRows, projected)
@@ -1050,5 +1094,140 @@ func (c *SelectCommand) executePartitionedSelect(ctx *ExecutionContext, dbName s
 		}
 	}
 
-	return &Result{Type: "rows", Columns: columns, Rows: resultRows, RowsScanned: rowsScanned}, nil
+	return &types.Result{Type: "rows", Columns: columns, Rows: resultRows, RowsScanned: rowsScanned}, nil
+}
+
+// ─── Local helpers that use types hooks ──────────────────────────────────────
+
+// filterRowsWithRLS applies RLS USING policies to filter rows.
+func filterRowsWithRLS(rows []storage.Row, schema *storage.TableSchema, ctx *types.ExecutionContext, dbName, tableName string) ([]storage.Row, error) {
+	if !schema.RLSEnabled {
+		return rows, nil
+	}
+	if len(schema.Policies) == 0 {
+		return nil, fmt.Errorf("RLS is enabled on table '%s' but no policies are defined", tableName)
+	}
+
+	filtered := make([]storage.Row, 0, len(rows))
+	for _, row := range rows {
+		visible := false
+		for _, policy := range schema.Policies {
+			if policy.UsingExpr == "" {
+				visible = true
+				break
+			}
+			expr, err := parser.ParseExpression(policy.UsingExpr)
+			if err != nil {
+				return nil, fmt.Errorf("RLS policy '%s': invalid expression: %w", policy.Name, err)
+			}
+			ok, err := types.EvalOperand(expr, row, schema, ctx)
+			if err != nil {
+				continue
+			}
+			if b, ok := ok.(bool); ok && b {
+				visible = true
+				break
+			}
+		}
+		if visible {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered, nil
+}
+
+// applyPushdownFilter runs the optimizer on a cloned statement, extracts
+// TablePredicates, and filters the given rows.
+func applyPushdownFilter(dbName string, stmt *parser.SelectStatement, tableName string, rows []storage.Row, schema *storage.TableSchema, ctx *types.ExecutionContext) ([]storage.Row, error) {
+	if stmt.Where == nil || len(rows) == 0 {
+		return rows, nil
+	}
+
+	store := ctx.Storage
+	opt := optimizer.NewOptimizer(store)
+
+	clone := cloneSelectStatement(stmt)
+	plan, err := opt.OptimizePlan(dbName, clone)
+	if err != nil || plan == nil {
+		return rows, nil
+	}
+
+	pred, ok := plan.TablePredicates[tableName]
+	if !ok || pred == nil {
+		return rows, nil
+	}
+
+	types.EnsureColumnIndex(ctx, schema)
+
+	filtered := make([]storage.Row, 0, len(rows))
+	for _, row := range rows {
+		ok, err := types.EvalExpr(pred, row, schema, ctx)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered, nil
+}
+
+func cloneSelectStatement(stmt *parser.SelectStatement) *parser.SelectStatement {
+	clone := *stmt
+	if len(stmt.Joins) > 0 {
+		clone.Joins = make([]parser.JoinClause, len(stmt.Joins))
+		copy(clone.Joins, stmt.Joins)
+	}
+	if len(stmt.Columns) > 0 {
+		clone.Columns = make([]parser.SelectColumn, len(stmt.Columns))
+		copy(clone.Columns, stmt.Columns)
+	}
+	if len(stmt.GroupBy) > 0 {
+		clone.GroupBy = make([]parser.Expression, len(stmt.GroupBy))
+		copy(clone.GroupBy, stmt.GroupBy)
+	}
+	if len(stmt.OrderBy) > 0 {
+		clone.OrderBy = make([]parser.OrderItem, len(stmt.OrderBy))
+		copy(clone.OrderBy, stmt.OrderBy)
+	}
+	if len(stmt.DistinctOn) > 0 {
+		clone.DistinctOn = make([]parser.Expression, len(stmt.DistinctOn))
+		copy(clone.DistinctOn, stmt.DistinctOn)
+	}
+	return &clone
+}
+
+// extractFtsQueryFromWhere walks a WHERE clause AST and returns the search
+// query from the first FTS_MATCH or @@ predicate it finds.
+func extractFtsQueryFromWhere(where parser.Expression) string {
+	if where == nil {
+		return ""
+	}
+	switch e := where.(type) {
+	case *parser.BinaryExpr:
+		if e.Operator == "FTS_MATCH" || e.Operator == "@" || e.Operator == "MATCH" {
+			if val, ok := e.Right.(*parser.Value); ok {
+				return val.StrVal
+			}
+		}
+		if q := extractFtsQueryFromWhere(e.Left); q != "" {
+			return q
+		}
+		if q := extractFtsQueryFromWhere(e.Right); q != "" {
+			return q
+		}
+	case *parser.AndExpr:
+		if q := extractFtsQueryFromWhere(e.Left); q != "" {
+			return q
+		}
+		return extractFtsQueryFromWhere(e.Right)
+	case *parser.OrExpr:
+		if q := extractFtsQueryFromWhere(e.Left); q != "" {
+			return q
+		}
+		return extractFtsQueryFromWhere(e.Right)
+	case *parser.NotExpr:
+		return extractFtsQueryFromWhere(e.Expr)
+	}
+	return ""
 }

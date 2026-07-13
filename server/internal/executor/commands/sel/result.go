@@ -1,4 +1,4 @@
-package executor
+package sel
 
 import (
 	"fmt"
@@ -9,19 +9,19 @@ import (
 
 	"vaultdb/internal/executor/eval"
 	"vaultdb/internal/executor/optimizer"
+	"vaultdb/internal/executor/types"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
 
 // resolveLimitOffset evaluates LimitExpr/OffsetExpr (parameterised LIMIT/OFFSET)
-// and returns the resolved integer values. When the expression variants are set,
-// they take precedence over the literal Limit/Offset fields.
-func (c *SelectCommand) resolveLimitOffset(ctx *ExecutionContext) (int, bool, int, bool) {
+// and returns the resolved integer values.
+func (c *SelectCommand) resolveLimitOffset(ctx *types.ExecutionContext) (int, bool, int, bool) {
 	limit, hasLimit := c.stmt.Limit, c.stmt.HasLimit
 	offset, hasOffset := c.stmt.Offset, c.stmt.HasOffset
 
 	if c.stmt.LimitExpr != nil {
-		val, err := evalOperand(c.stmt.LimitExpr, nil, nil, ctx)
+		val, err := types.EvalOperand(c.stmt.LimitExpr, nil, nil, ctx)
 		if err == nil {
 			if v, ok := eval.ToInt64(val); ok {
 				limit = int(v)
@@ -30,7 +30,7 @@ func (c *SelectCommand) resolveLimitOffset(ctx *ExecutionContext) (int, bool, in
 		}
 	}
 	if c.stmt.OffsetExpr != nil {
-		val, err := evalOperand(c.stmt.OffsetExpr, nil, nil, ctx)
+		val, err := types.EvalOperand(c.stmt.OffsetExpr, nil, nil, ctx)
 		if err == nil {
 			if v, ok := eval.ToInt64(val); ok {
 				offset = int(v)
@@ -41,14 +41,14 @@ func (c *SelectCommand) resolveLimitOffset(ctx *ExecutionContext) (int, bool, in
 	return limit, hasLimit, offset, hasOffset
 }
 
-func (c *SelectCommand) applyOrderBy(rows []storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) {
+func (c *SelectCommand) applyOrderBy(rows []storage.Row, schema *storage.TableSchema, ctx *types.ExecutionContext) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		for _, item := range c.stmt.OrderBy {
-			vi, err := evalOperand(item.Expr, rows[i], schema, ctx)
+			vi, err := types.EvalOperand(item.Expr, rows[i], schema, ctx)
 			if err != nil {
 				continue
 			}
-			vj, err := evalOperand(item.Expr, rows[j], schema, ctx)
+			vj, err := types.EvalOperand(item.Expr, rows[j], schema, ctx)
 			if err != nil {
 				continue
 			}
@@ -67,7 +67,7 @@ func (c *SelectCommand) applyOrderBy(rows []storage.Row, schema *storage.TableSc
 	})
 }
 
-func (c *SelectCommand) resolveRows(ctx *ExecutionContext, dbName string) ([]storage.Row, string, error) {
+func (c *SelectCommand) resolveRows(ctx *types.ExecutionContext, dbName string) ([]storage.Row, string, error) {
 	if c.stmt.AsOf == nil {
 		if ctx.SnapshotTxID > 0 {
 			rows, err := ctx.Storage.ReadRowsAsOf(dbName, c.stmt.TableName, ctx.SnapshotTxID)
@@ -78,8 +78,7 @@ func (c *SelectCommand) resolveRows(ctx *ExecutionContext, dbName string) ([]sto
 			return nil, "", err
 		}
 		// read-your-own-writes: apply buffered transaction operations
-		// (Bug #1). Only for current reads, not for AS OF.
-		rows, err = applyTxOverlay(ctx, dbName, c.stmt.TableName, rows)
+		rows, err = types.ApplyTxOverlay(ctx, dbName, c.stmt.TableName, rows)
 		return rows, "", err
 	}
 
@@ -99,8 +98,8 @@ func (c *SelectCommand) resolveRows(ctx *ExecutionContext, dbName string) ([]sto
 	return rows, fmt.Sprintf("AS OF %s", c.stmt.AsOf.Timestamp), nil
 }
 
-func (c *SelectCommand) executeWithStats(ctx *ExecutionContext) (*PlanStats, *Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func (c *SelectCommand) executeWithStats(ctx *types.ExecutionContext) (*PlanStats, *types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -117,8 +116,7 @@ func (c *SelectCommand) executeWithStats(ctx *ExecutionContext) (*PlanStats, *Re
 	var asOfNote string
 	usedIndex := false
 
-	// Try index lookup. Within a transaction we skip the index: it reads only
-	// committed data and would bypass tx-overlay (Bug #1).
+	// Try index lookup. Within a transaction we skip the index.
 	if c.stmt.Where != nil && c.stmt.AsOf == nil && !ctx.Session.IsInTx() {
 		if cmp, ok := c.stmt.Where.(*parser.BinaryExpr); ok && cmp.Operator == "=" {
 			if col, ok := cmp.Left.(*parser.ColumnRef); ok {
@@ -134,7 +132,7 @@ func (c *SelectCommand) executeWithStats(ctx *ExecutionContext) (*PlanStats, *Re
 				}
 
 				if foundVal {
-					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, valueToString(parserValueToRaw(val))); ok {
+					if positions, ok := ctx.Storage.IndexLookup(dbName, c.stmt.TableName, col.Name, types.ValueToString(types.ParserValueToRaw(val))); ok {
 						rows, err = ctx.Storage.ReadRowsByPositions(dbName, c.stmt.TableName, positions)
 						if err == nil {
 							usedIndex = true
@@ -169,7 +167,7 @@ func (c *SelectCommand) executeWithStats(ctx *ExecutionContext) (*PlanStats, *Re
 		}
 	}
 
-	projectIndices, projectColumns, err := resolveProjection(schema, requestedCols)
+	projectIndices, projectColumns, err := types.ResolveProjection(schema, requestedCols)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -177,7 +175,7 @@ func (c *SelectCommand) executeWithStats(ctx *ExecutionContext) (*PlanStats, *Re
 	// Filter rows (WHERE)
 	filtered := make([]storage.Row, 0, len(rows))
 	for _, row := range rows {
-		ok, err := evalExpr(c.stmt.Where, row, schema, ctx)
+		ok, err := types.EvalExpr(c.stmt.Where, row, schema, ctx)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -218,12 +216,12 @@ func (c *SelectCommand) executeWithStats(ctx *ExecutionContext) (*PlanStats, *Re
 	for _, row := range paged {
 		projected := make([]string, len(projectIndices))
 		for i, idx := range projectIndices {
-			projected[i] = valueToString(row[idx])
+			projected[i] = types.ValueToString(row[idx])
 		}
 		resultRows = append(resultRows, projected)
 	}
 
-	return stats, &Result{
+	return stats, &types.Result{
 		Type:     "rows",
 		Columns:  projectColumns,
 		Rows:     resultRows,
@@ -231,12 +229,22 @@ func (c *SelectCommand) executeWithStats(ctx *ExecutionContext) (*PlanStats, *Re
 	}, nil
 }
 
+// PlanStats holds statistics for EXPLAIN ANALYZE.
+type PlanStats struct {
+	RowsTotal    int
+	RowsScanned  int
+	RowsMatched  int
+	RowsFiltered int
+	UsedIndex    bool
+	ExecutionMs  float64
+}
+
 type ExplainCommand struct {
 	stmt *parser.ExplainStatement
 }
 
-func (c *ExplainCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func (c *ExplainCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +257,7 @@ func (c *ExplainCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	if !c.stmt.Analyze {
-		return &Result{
+		return &types.Result{
 			Type:    "message",
 			Message: optPlan.FormatOptimizedPlan(),
 		}, nil
@@ -270,7 +278,7 @@ func (c *ExplainCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	b.WriteString(fmt.Sprintf("\nActual Execution Time: %.2f ms\n", stats.ExecutionMs))
 	b.WriteString(fmt.Sprintf("Actual Rows: %d\n", stats.RowsMatched))
 
-	return &Result{
+	return &types.Result{
 		Type:    "message",
 		Message: b.String(),
 	}, nil
@@ -280,8 +288,8 @@ type HistoryCommand struct {
 	stmt *parser.HistoryStatement
 }
 
-func (c *HistoryCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	dbName, err := requireCurrentDB(ctx)
+func (c *HistoryCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
+	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +313,7 @@ func (c *HistoryCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		default:
 			return nil, fmt.Errorf("expected literal value for key, got %T", c.stmt.Key)
 		}
-		history, err = ctx.Storage.RowHistory(dbName, c.stmt.TableName, parserValueToRaw(val))
+		history, err = ctx.Storage.RowHistory(dbName, c.stmt.TableName, types.ParserValueToRaw(val))
 	} else {
 		history, err = ctx.Storage.AllRowHistory(dbName, c.stmt.TableName)
 	}
@@ -344,7 +352,7 @@ func (c *HistoryCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 		// Apply WHERE filter.
 		if c.stmt.Where != nil {
-			ok, err := evalExpr(c.stmt.Where, evalRow, histSchema, ctx)
+			ok, err := types.EvalExpr(c.stmt.Where, evalRow, histSchema, ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -355,13 +363,13 @@ func (c *HistoryCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 		row := make([]string, 0, len(columns))
 		for _, v := range evalRow {
-			row = append(row, valueToString(v))
+			row = append(row, types.ValueToString(v))
 		}
 		filteredRows = append(filteredRows, row)
 	}
 
-	_ = colIdx // used via buildColumnIndex for resolveColumn in evalExpr
-	return &Result{
+	_ = colIdx // used via buildColumnIndex for resolveColumn in EvalExpr
+	return &types.Result{
 		Type:    "rows",
 		Columns: columns,
 		Rows:    filteredRows,
@@ -372,7 +380,7 @@ type SetOperationCommand struct {
 	stmt *parser.SetOperationStatement
 }
 
-func (c *SetOperationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
+func (c *SetOperationCommand) Execute(ctx *types.ExecutionContext) (*types.Result, error) {
 	leftRes, err := ctx.RunSubquery.RunSubquery(ctx, c.stmt.Left)
 	if err != nil {
 		return nil, err
@@ -438,14 +446,14 @@ func (c *SetOperationCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 	}
 
-	return &Result{
+	return &types.Result{
 		Type:    "rows",
 		Columns: leftRes.Columns,
 		Rows:    resultRows,
 	}, nil
 }
 
-func (c *SelectCommand) executeDerivedTable(ctx *ExecutionContext) (*Result, error) {
+func (c *SelectCommand) executeDerivedTable(ctx *types.ExecutionContext) (*types.Result, error) {
 	subResult, err := ctx.RunSubquery.RunSubquery(ctx, c.stmt.FromSubquery)
 	if err != nil {
 		return nil, fmt.Errorf("derived table: %w", err)
@@ -507,7 +515,7 @@ func (c *SelectCommand) executeDerivedTable(ctx *ExecutionContext) (*Result, err
 	var filtered []storage.Row
 	if c.stmt.Where != nil {
 		for _, row := range combinedRows {
-			match, err := evalExpr(c.stmt.Where, row, combinedSchema, ctx)
+			match, err := types.EvalExpr(c.stmt.Where, row, combinedSchema, ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -584,11 +592,11 @@ func (c *SelectCommand) executeDerivedTable(ctx *ExecutionContext) (*Result, err
 	for _, row := range paged {
 		projected := make([]string, len(effectiveColumns))
 		for i, col := range effectiveColumns {
-			val, err := evalOperand(col.Expr, row, combinedSchema, ctx)
+			val, err := types.EvalOperand(col.Expr, row, combinedSchema, ctx)
 			if err != nil {
 				projected[i] = "ERR"
 			} else {
-				projected[i] = valueToString(val)
+				projected[i] = types.ValueToString(val)
 			}
 		}
 		resultRows = append(resultRows, projected)
@@ -598,9 +606,36 @@ func (c *SelectCommand) executeDerivedTable(ctx *ExecutionContext) (*Result, err
 		resultRows = distinctRows(resultRows)
 	}
 
-	return &Result{
+	return &types.Result{
 		Type:    "rows",
 		Columns: projectColumns,
 		Rows:    resultRows,
 	}, nil
+}
+
+func convertStringToValue(s string, col storage.ColumnSchema) (storage.Value, error) {
+	switch strings.ToUpper(col.Type) {
+	case "INT":
+		val, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("cannot convert '%s' to INT", s)
+		}
+		return val, nil
+	case "FLOAT":
+		val, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return nil, fmt.Errorf("cannot convert '%s' to FLOAT", s)
+		}
+		return val, nil
+	case "BOOL":
+		val, err := strconv.ParseBool(s)
+		if err != nil {
+			return nil, fmt.Errorf("cannot convert '%s' to BOOL", s)
+		}
+		return val, nil
+	case "TEXT", "VARCHAR":
+		return s, nil
+	default:
+		return s, nil
+	}
 }

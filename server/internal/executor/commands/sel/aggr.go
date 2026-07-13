@@ -1,4 +1,4 @@
-package executor
+package sel
 
 import (
 	"fmt"
@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"vaultdb/internal/executor/eval"
+	"vaultdb/internal/executor/types"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
@@ -167,18 +168,19 @@ func (c *SelectCommand) containsAggregate(expr parser.Expression) bool {
 	}
 	return false
 }
-func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.TableSchema, asOfNote string, ctx *ExecutionContext) (*Result, error) {
+
+func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.TableSchema, asOfNote string, ctx *types.ExecutionContext) (*types.Result, error) {
 	groups := make(map[string][]storage.Row)
 	groupOrder := make([]string, 0)
 
 	for _, row := range rows {
 		keyParts := make([]string, len(c.stmt.GroupBy))
 		for i, expr := range c.stmt.GroupBy {
-			val, err := evalOperand(expr, row, schema, ctx)
+			val, err := types.EvalOperand(expr, row, schema, ctx)
 			if err != nil {
 				return nil, fmt.Errorf("eval group by key: %w", err)
 			}
-			keyParts[i] = valueToString(val)
+			keyParts[i] = types.ValueToString(val)
 		}
 		key := strings.Join(keyParts, "\x00")
 		if _, ok := groups[key]; !ok {
@@ -218,7 +220,7 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 				aggArgs := make([]interface{}, len(aggExpr.Args))
 				if len(groupRows) > 0 {
 					for j, argExpr := range aggExpr.Args {
-						argVal, err := evalOperand(argExpr, groupRows[0], schema, ctx)
+						argVal, err := types.EvalOperand(argExpr, groupRows[0], schema, ctx)
 						if err != nil {
 							argVal = nil
 						}
@@ -243,11 +245,11 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 				var key, val interface{}
 				if strings.EqualFold(aggExpr.Name, "JSON_OBJECT_AGG") && len(aggExpr.Args) >= 2 {
 					var err error
-					key, err = evalOperand(aggExpr.Args[0], row, schema, ctx)
+					key, err = types.EvalOperand(aggExpr.Args[0], row, schema, ctx)
 					if err != nil {
 						return nil, fmt.Errorf("eval JSON_OBJECT_AGG key: %w", err)
 					}
-					val, err = evalOperand(aggExpr.Args[1], row, schema, ctx)
+					val, err = types.EvalOperand(aggExpr.Args[1], row, schema, ctx)
 					if err != nil {
 						return nil, fmt.Errorf("eval JSON_OBJECT_AGG value: %w", err)
 					}
@@ -256,7 +258,7 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 						val = int64(1)
 					} else {
 						var err error
-						val, err = evalOperand(aggExpr.Args[0], row, schema, ctx)
+						val, err = types.EvalOperand(aggExpr.Args[0], row, schema, ctx)
 						if err != nil {
 							return nil, fmt.Errorf("eval aggregate argument: %w", err)
 						}
@@ -270,13 +272,12 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 
 		// Calculate result for this group
 		resultRow := make([]string, len(c.stmt.Columns))
-		// We need a virtual row for HAVING evaluation if it uses aggregates
 		virtualRow := storage.GetRowWithLen(len(c.stmt.Columns))
 
 		for i, col := range c.stmt.Columns {
 			if aggregators[i] != nil {
 				res := aggregators[i].Result()
-				resultRow[i] = valueToString(res)
+				resultRow[i] = types.ValueToString(res)
 				virtualRow[i] = res
 			} else if c.containsAggregate(col.Expr) {
 				// Expression contains aggregates nested in arithmetic (e.g., AVG(x) + 1)
@@ -284,20 +285,20 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 				if err != nil {
 					return nil, fmt.Errorf("eval column expression: %w", err)
 				}
-				val, err := evalOperand(resolved, nil, schema, ctx)
+				val, err := types.EvalOperand(resolved, nil, schema, ctx)
 				if err != nil {
 					val = nil
 				}
-				resultRow[i] = valueToString(val)
+				resultRow[i] = types.ValueToString(val)
 				virtualRow[i] = val
 			} else {
 				// Pick from first row of group for non-aggregates
 				if len(groupRows) > 0 {
-					val, err := evalOperand(col.Expr, groupRows[0], schema, ctx)
+					val, err := types.EvalOperand(col.Expr, groupRows[0], schema, ctx)
 					if err != nil {
 						return nil, fmt.Errorf("eval column expression: %w", err)
 					}
-					resultRow[i] = valueToString(val)
+					resultRow[i] = types.ValueToString(val)
 					virtualRow[i] = val
 				} else {
 					resultRow[i] = "NULL"
@@ -320,10 +321,10 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 			havingExpr := resolveAggregatesInExpr(c.stmt.Having, c.stmt.Columns, aggregators)
 
 			// Evaluate HAVING on the projected (aggregated) result row
-			ok, err := evalExpr(havingExpr, virtualRow, projectedSchema, ctx)
+			ok, err := types.EvalExpr(havingExpr, virtualRow, projectedSchema, ctx)
 			if err != nil {
 				// Fallback to original row if HAVING uses non-aggregates
-				ok, err = evalExpr(havingExpr, groupRows[0], schema, ctx)
+				ok, err = types.EvalExpr(havingExpr, groupRows[0], schema, ctx)
 				if err != nil {
 					continue
 				}
@@ -344,14 +345,14 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 		Columns: make([]storage.ColumnSchema, len(c.stmt.Columns)),
 	}
 	for i, col := range c.stmt.Columns {
-		colType := inferTypeFromExpr(col.Expr, schema)
+		colType := types.InferTypeFromExpr(col.Expr, schema)
 		resultSchema.Columns[i] = storage.ColumnSchema{
 			Name: projectColumns[i],
 			Type: colType,
 		}
 	}
 
-	return &Result{
+	return &types.Result{
 		Type:     "rows",
 		Columns:  projectColumns,
 		Rows:     resultRows,
@@ -361,8 +362,6 @@ func (c *SelectCommand) executeWithGrouping(rows []storage.Row, schema *storage.
 }
 
 // orderAndPageGrouped applies ORDER BY / OFFSET / LIMIT to grouped output.
-// Sort keys are resolved against the projected columns: by alias or column
-// name, or by 1-based position (ORDER BY 2).
 func (c *SelectCommand) orderAndPageGrouped(rows [][]string, projectColumns []string) [][]string {
 	if len(c.stmt.OrderBy) > 0 {
 		colIndexByName := make(map[string]int, len(projectColumns))
@@ -430,6 +429,3 @@ func (c *SelectCommand) orderAndPageGrouped(rows [][]string, projectColumns []st
 	}
 	return rows[start:end]
 }
-
-// compareResultCells compares rendered cells numerically when both parse as
-// numbers, lexically otherwise.

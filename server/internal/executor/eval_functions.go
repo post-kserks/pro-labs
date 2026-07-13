@@ -689,7 +689,10 @@ func executeUserDefinedFunction(dbName, funcName string, args []interface{}, ctx
 		sel.Where = boundWhere
 	}
 
-	cmd := &SelectCommand{stmt: sel}
+	cmd, err := ctx.CreateCommand(sel)
+	if err != nil {
+		return nil, fmt.Errorf("function '%s': %w", funcName, err)
+	}
 	res, err := cmd.Execute(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("function '%s': %w", funcName, err)

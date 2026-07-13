@@ -35,10 +35,12 @@ func TestArchiveAuditLogExportsData(t *testing.T) {
 		ArchivePath: outPath,
 	}
 
-	cmd := &ArchiveAuditLogCommand{
-		stmt: &parser.ArchiveAuditLogStatement{
-			Path: outPath,
-		},
+	stmt := &parser.ArchiveAuditLogStatement{
+		Path: outPath,
+	}
+	cmd, err := CommandFactory(stmt)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	ctx := &ExecutionContext{
@@ -60,7 +62,13 @@ func TestArchiveAuditLogExportsData(t *testing.T) {
 		t.Fatalf("failed to read archive file: %v", err)
 	}
 
-	var export archiveExport
+	var export struct {
+		ArchivedAt string        `json:"archived_at"`
+		EntryCount int           `json:"entry_count"`
+		ChainHash  string        `json:"chain_hash"`
+		KeepCount  int           `json:"keep_count"`
+		Entries    []audit.Entry `json:"entries"`
+	}
 	if err := json.Unmarshal(data, &export); err != nil {
 		t.Fatalf("failed to unmarshal archive: %v", err)
 	}
@@ -91,10 +99,12 @@ func TestArchiveAuditLogEmpty(t *testing.T) {
 		ArchivePath: outPath,
 	}
 
-	cmd := &ArchiveAuditLogCommand{
-		stmt: &parser.ArchiveAuditLogStatement{
-			Path: outPath,
-		},
+	stmt := &parser.ArchiveAuditLogStatement{
+		Path: outPath,
+	}
+	cmd, err := CommandFactory(stmt)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	ctx := &ExecutionContext{
@@ -130,15 +140,17 @@ func TestArchiveAuditLogNoPath(t *testing.T) {
 		AuditTable: log,
 	}
 
-	cmd := &ArchiveAuditLogCommand{
-		stmt: &parser.ArchiveAuditLogStatement{},
+	stmt := &parser.ArchiveAuditLogStatement{}
+	cmd, err := CommandFactory(stmt)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	ctx := &ExecutionContext{
 		Session: sess,
 	}
 
-	_, err := cmd.Execute(ctx)
+	_, err = cmd.Execute(ctx)
 	if err == nil {
 		t.Fatal("expected error when no path specified")
 	}
@@ -168,11 +180,13 @@ func TestArchiveAuditLogKeepLast(t *testing.T) {
 		ArchivePath: outPath,
 	}
 
-	cmd := &ArchiveAuditLogCommand{
-		stmt: &parser.ArchiveAuditLogStatement{
-			Path:      outPath,
-			KeepCount: 3,
-		},
+	stmt := &parser.ArchiveAuditLogStatement{
+		Path:      outPath,
+		KeepCount: 3,
+	}
+	cmd, err := CommandFactory(stmt)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	ctx := &ExecutionContext{
@@ -202,7 +216,13 @@ func TestArchiveAuditLogKeepLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var export archiveExport
+	var export struct {
+		ArchivedAt string        `json:"archived_at"`
+		EntryCount int           `json:"entry_count"`
+		ChainHash  string        `json:"chain_hash"`
+		KeepCount  int           `json:"keep_count"`
+		Entries    []audit.Entry `json:"entries"`
+	}
 	if err := json.Unmarshal(data, &export); err != nil {
 		t.Fatal(err)
 	}
@@ -214,17 +234,19 @@ func TestArchiveAuditLogKeepLast(t *testing.T) {
 func TestArchiveAuditLogNoAuditLog(t *testing.T) {
 	sess := &Session{}
 
-	cmd := &ArchiveAuditLogCommand{
-		stmt: &parser.ArchiveAuditLogStatement{
-			Path: "/tmp/test.json",
-		},
+	stmt := &parser.ArchiveAuditLogStatement{
+		Path: "/tmp/test.json",
+	}
+	cmd, err := CommandFactory(stmt)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	ctx := &ExecutionContext{
 		Session: sess,
 	}
 
-	_, err := cmd.Execute(ctx)
+	_, err = cmd.Execute(ctx)
 	if err == nil {
 		t.Fatal("expected error when audit logging is not enabled")
 	}

@@ -15,6 +15,7 @@ func init() {
 	types.MutateUnderTableLockFn = mutateUnderTableLock
 	types.FireTriggersFn = fireTriggers
 	types.NotifyBroadcasterFn = notifyBroadcaster
+	types.ExecuteSelectWithCTEFn = ExecuteSelectWithCTE
 }
 
 // notifyBroadcaster notifies the broadcaster about a table mutation.

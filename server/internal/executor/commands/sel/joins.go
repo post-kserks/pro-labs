@@ -1,20 +1,19 @@
-package executor
+package sel
 
 import (
 	"fmt"
 	"strconv"
 	"strings"
 
+	"vaultdb/internal/executor/types"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
 
-func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftSchema *storage.TableSchema, leftRows []storage.Row) (*storage.TableSchema, []storage.Row, error) {
+func (c *SelectCommand) executeJoins(ctx *types.ExecutionContext, dbName string, leftSchema *storage.TableSchema, leftRows []storage.Row) (*storage.TableSchema, []storage.Row, error) {
 	currentSchema := leftSchema
 	currentRows := leftRows
 	// Reusable buffer for building combined rows during join iteration.
-	// Allocated once and reset to zero-length before each cross-product pair,
-	// eliminating per-row allocation from append(append(Row{}, lrow...), rrow...).
 	var combinedBuf storage.Row
 
 	for _, join := range c.stmt.Joins {
@@ -33,7 +32,7 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 		if err != nil {
 			return nil, nil, err
 		}
-		rightRows, err = applyTxOverlay(ctx, dbName, join.TableName, rightRows)
+		rightRows, err = types.ApplyTxOverlay(ctx, dbName, join.TableName, rightRows)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -74,7 +73,7 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 			for _, lrow := range currentRows {
 				for _, rrow := range rightRows {
 					combinedBuf = append(append(combinedBuf[:0], lrow...), rrow...)
-					ok, err := evalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
+					ok, err := types.EvalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
 					if err == nil && ok {
 						newRows = append(newRows, storage.Row(append(storage.Row{}, combinedBuf...)))
 					}
@@ -93,7 +92,7 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 				matched := false
 				for _, rrow := range rightRows {
 					combinedBuf = append(append(combinedBuf[:0], lrow...), rrow...)
-					ok, err := evalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
+					ok, err := types.EvalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
 					if err == nil && ok {
 						newRows = append(newRows, storage.Row(append(storage.Row{}, combinedBuf...)))
 						matched = true
@@ -117,7 +116,7 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 				matched := false
 				for _, lrow := range currentRows {
 					combinedBuf = append(append(combinedBuf[:0], lrow...), rrow...)
-					ok, err := evalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
+					ok, err := types.EvalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
 					if err == nil && ok {
 						newRows = append(newRows, storage.Row(append(storage.Row{}, combinedBuf...)))
 						matched = true
@@ -144,7 +143,7 @@ func (c *SelectCommand) executeJoins(ctx *ExecutionContext, dbName string, leftS
 				lmatched := false
 				for ri, rrow := range rightRows {
 					combinedBuf = append(append(combinedBuf[:0], lrow...), rrow...)
-					ok, err := evalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
+					ok, err := types.EvalExpr(join.Condition, combinedBuf, combinedSchema, ctx)
 					if err == nil && ok {
 						newRows = append(newRows, storage.Row(append(storage.Row{}, combinedBuf...)))
 						lmatched = true
@@ -181,7 +180,7 @@ func tryHashJoin(result *[]storage.Row, cond parser.Expression, leftRows, rightR
 
 	hash := buildHashTable(rightRows, rightIdx)
 	for _, lrow := range leftRows {
-		key := valueToString(lrow[leftIdx])
+		key := types.ValueToString(lrow[leftIdx])
 		if buckets, ok := hash[key]; ok {
 			for _, ri := range buckets {
 				*buf = append(append((*buf)[:0], lrow...), rightRows[ri]...)
@@ -203,7 +202,7 @@ func tryHashJoinLeft(result *[]storage.Row, cond parser.Expression, leftRows, ri
 	rightNulls := storage.GetRowWithLen(len(rightSchema.Columns))
 
 	for _, lrow := range leftRows {
-		key := valueToString(lrow[leftIdx])
+		key := types.ValueToString(lrow[leftIdx])
 		if buckets, ok := hash[key]; ok {
 			for _, ri := range buckets {
 				*buf = append(append((*buf)[:0], lrow...), rightRows[ri]...)
@@ -229,7 +228,7 @@ func tryHashJoinRight(result *[]storage.Row, cond parser.Expression, leftRows, r
 	matched := make(map[int]bool)
 
 	for _, lrow := range leftRows {
-		key := valueToString(lrow[leftIdx])
+		key := types.ValueToString(lrow[leftIdx])
 		if buckets, ok := hash[key]; ok {
 			for _, ri := range buckets {
 				*buf = append(append((*buf)[:0], lrow...), rightRows[ri]...)
@@ -273,7 +272,7 @@ func extractEquiJoinCols(cond parser.Expression, leftSchema, rightSchema *storag
 		return leftIdx, rightIdx, true
 	}
 
-	// Try swapped (expression might have columns reversed)
+	// Try swapped
 	leftIdx = findColumnIndex(leftSchema, rightName)
 	rightIdx = findColumnIndex(rightSchema, leftName)
 	if leftIdx >= 0 && rightIdx >= 0 {
@@ -283,7 +282,6 @@ func extractEquiJoinCols(cond parser.Expression, leftSchema, rightSchema *storag
 }
 
 // stripTablePrefix removes the table name or alias prefix from a qualified column name.
-// "l.id" → "id", "left_table.name" → "name", "id" → "id"
 func stripTablePrefix(name string) string {
 	if idx := strings.IndexByte(name, '.'); idx >= 0 {
 		return name[idx+1:]
@@ -306,7 +304,7 @@ func buildHashTable(rows []storage.Row, colIdx int) map[string][]int {
 	hash := make(map[string][]int, len(rows))
 	for i, row := range rows {
 		if colIdx < len(row) && row[colIdx] != nil {
-			key := valueToString(row[colIdx])
+			key := types.ValueToString(row[colIdx])
 			hash[key] = append(hash[key], i)
 		}
 	}

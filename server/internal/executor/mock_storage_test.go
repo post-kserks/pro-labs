@@ -631,7 +631,10 @@ func TestSelectCommand(t *testing.T) {
 				{Expr: &parser.ColumnRef{Name: "name"}},
 			},
 		}
-		cmd := &SelectCommand{stmt: stmt}
+		cmd, err := CommandFactory(stmt)
+		if err != nil {
+			t.Fatal(err)
+		}
 		result, err := cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -657,7 +660,10 @@ func TestSelectCommand(t *testing.T) {
 				Right:    parser.Value{Type: "int", IntVal: 2},
 			},
 		}
-		cmd := &SelectCommand{stmt: stmt}
+		cmd, err := CommandFactory(stmt)
+		if err != nil {
+			t.Fatal(err)
+		}
 		result, err := cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

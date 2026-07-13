@@ -1,4 +1,4 @@
-package executor
+package sel
 
 import (
 	"fmt"
@@ -7,19 +7,17 @@ import (
 	"strings"
 
 	"vaultdb/internal/executor/eval"
+	"vaultdb/internal/executor/types"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
 
 // windowPartitionData holds pre-computed values for a partition to avoid O(n²) rescans.
 type windowPartitionData struct {
-	// Rank arrays: single-pass O(n) computation after sorting.
-	ranks      []int64 // RANK values (position of first peer group member)
-	denseRanks []int64 // DENSE_RANK values (count of distinct peer groups)
-
-	// Prefix sums for aggregates: O(n) pre-computation.
-	evaluatedArgs []interface{} // evaluated argument value per position
-	prefixSums    []float64     // running sum of numeric values
+	ranks         []int64
+	denseRanks    []int64
+	evaluatedArgs []interface{}
+	prefixSums    []float64
 }
 
 func (c *SelectCommand) extractWindowFunctions() []*parser.WindowFunctionExpr {
@@ -32,7 +30,7 @@ func (c *SelectCommand) extractWindowFunctions() []*parser.WindowFunctionExpr {
 	return funcs
 }
 
-func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage.TableSchema, funcs []*parser.WindowFunctionExpr, ctx *ExecutionContext) ([]storage.Row, *storage.TableSchema, error) {
+func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage.TableSchema, funcs []*parser.WindowFunctionExpr, ctx *types.ExecutionContext) ([]storage.Row, *storage.TableSchema, error) {
 	newSchema := &storage.TableSchema{
 		Name:    schema.Name,
 		Columns: make([]storage.ColumnSchema, len(schema.Columns)),
@@ -59,11 +57,11 @@ func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage
 			if len(wf.Over.PartitionBy) > 0 {
 				var keyParts []string
 				for _, p := range wf.Over.PartitionBy {
-					val, err := evalOperand(p, row, schema, ctx)
+					val, err := types.EvalOperand(p, row, schema, ctx)
 					if err != nil {
 						return nil, nil, fmt.Errorf("eval partition key: %w", err)
 					}
-					keyParts = append(keyParts, valueToString(val))
+					keyParts = append(keyParts, types.ValueToString(val))
 				}
 				key = strings.Join(keyParts, "\x00")
 			}
@@ -75,12 +73,12 @@ func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage
 				sort.SliceStable(indices, func(i, j int) bool {
 					rowI, rowJ := newRows[indices[i]], newRows[indices[j]]
 					for _, item := range wf.Over.OrderBy {
-						vi, err := evalOperand(item.Expr, rowI, schema, ctx)
+						vi, err := types.EvalOperand(item.Expr, rowI, schema, ctx)
 						if err != nil {
 							slog.Error("eval order by expression", "error", err)
 							return false
 						}
-						vj, err := evalOperand(item.Expr, rowJ, schema, ctx)
+						vj, err := types.EvalOperand(item.Expr, rowJ, schema, ctx)
 						if err != nil {
 							slog.Error("eval order by expression", "error", err)
 							return false
@@ -113,10 +111,7 @@ func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage
 	return newRows, newSchema, nil
 }
 
-// preComputePartition builds O(n) lookup tables for a sorted partition so that
-// per-row window function evaluation becomes O(1) for rank functions and
-// O(1) for running aggregates (SUM/COUNT/AVG).
-func (c *SelectCommand) preComputePartition(wf *parser.WindowFunctionExpr, partitionIndices []int, allRows []storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) *windowPartitionData {
+func (c *SelectCommand) preComputePartition(wf *parser.WindowFunctionExpr, partitionIndices []int, allRows []storage.Row, schema *storage.TableSchema, ctx *types.ExecutionContext) *windowPartitionData {
 	name := strings.ToUpper(wf.FuncName)
 	pd := &windowPartitionData{}
 	n := len(partitionIndices)
@@ -137,7 +132,6 @@ func (c *SelectCommand) preComputePartition(wf *parser.WindowFunctionExpr, parti
 				wf.Over.OrderBy, schema, ctx,
 			)
 			if err != nil {
-				// On error, fall back to identity ranks.
 				pd.ranks[i] = int64(i + 1)
 				pd.denseRanks[i] = pd.denseRanks[i-1] + 1
 				continue
@@ -160,7 +154,7 @@ func (c *SelectCommand) preComputePartition(wf *parser.WindowFunctionExpr, parti
 				if colRef, ok := wf.Args[0].(*parser.ColumnRef); ok && colRef.Name == "*" {
 					val = int64(1)
 				} else {
-					v, err := evalOperand(wf.Args[0], allRows[idx], schema, ctx)
+					v, err := types.EvalOperand(wf.Args[0], allRows[idx], schema, ctx)
 					if err != nil {
 						slog.Error("eval window aggregate argument", "error", err)
 						val = int64(1)
@@ -187,20 +181,15 @@ func (c *SelectCommand) preComputePartition(wf *parser.WindowFunctionExpr, parti
 	return pd
 }
 
-// isRunningFrame returns true when the frame covers exactly positions 0..currentPos
-// (i.e. UNBOUNDED PRECEDING to CURRENT ROW, with start=0). This is the common
-// case where prefix sums give O(1) aggregate per row.
 func isRunningFrame(frame *parser.FrameSpec, currentPos, partitionSize int, hasOrderBy bool) (start, end int, ok bool) {
 	if frame == nil {
 		if !hasOrderBy {
-			return 0, partitionSize, false // whole partition, not running
+			return 0, partitionSize, false
 		}
 		return 0, currentPos + 1, true
 	}
-	// Check start = 0 (UNBOUNDED PRECEDING)
 	switch frame.StartType {
 	case "UNBOUNDED PRECEDING":
-		// start = 0
 	case "CURRENT ROW":
 		if currentPos != 0 {
 			return 0, 0, false
@@ -212,10 +201,8 @@ func isRunningFrame(frame *parser.FrameSpec, currentPos, partitionSize int, hasO
 	default:
 		return 0, 0, false
 	}
-	// Check end = currentPos + 1 (CURRENT ROW)
 	switch frame.EndType {
 	case "CURRENT ROW":
-		// end = currentPos + 1
 	case "UNBOUNDED FOLLOWING":
 		if currentPos+1 != partitionSize {
 			return 0, 0, false
@@ -230,7 +217,7 @@ func isRunningFrame(frame *parser.FrameSpec, currentPos, partitionSize int, hasO
 	return 0, currentPos + 1, true
 }
 
-func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partitionIndices []int, allRows []storage.Row, currentPosInPartition int, schema *storage.TableSchema, ctx *ExecutionContext, pd *windowPartitionData) (interface{}, error) {
+func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partitionIndices []int, allRows []storage.Row, currentPosInPartition int, schema *storage.TableSchema, ctx *types.ExecutionContext, pd *windowPartitionData) (interface{}, error) {
 	name := strings.ToUpper(wf.FuncName)
 	switch name {
 	case "ROW_NUMBER":
@@ -240,7 +227,6 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 		if pd != nil && pd.ranks != nil {
 			return pd.ranks[currentPosInPartition], nil
 		}
-		// Fallback (should not happen).
 		return int64(currentPosInPartition + 1), nil
 
 	case "DENSE_RANK":
@@ -252,7 +238,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 	case "NTILE":
 		n := 1
 		if len(wf.Args) > 0 {
-			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
+			if v, err := types.EvalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
 				if i, ok := eval.ToInt64(v); ok {
 					n = int(i)
 				}
@@ -272,7 +258,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 	case "LAG":
 		offset := 1
 		if len(wf.Args) >= 2 {
-			if v, err := evalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
+			if v, err := types.EvalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
 				if i, ok := eval.ToInt64(v); ok {
 					offset = int(i)
 				}
@@ -284,14 +270,14 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 				return nil, nil
 			}
 			if len(wf.Args) >= 1 {
-				if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
+				if v, err := types.EvalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
 					return v, nil
 				}
 			}
 			return nil, nil
 		}
 		if len(wf.Args) >= 1 {
-			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[prevPos]], schema, ctx); err == nil {
+			if v, err := types.EvalOperand(wf.Args[0], allRows[partitionIndices[prevPos]], schema, ctx); err == nil {
 				return v, nil
 			}
 		}
@@ -300,7 +286,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 	case "LEAD":
 		offset := 1
 		if len(wf.Args) >= 2 {
-			if v, err := evalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
+			if v, err := types.EvalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
 				if i, ok := eval.ToInt64(v); ok {
 					offset = int(i)
 				}
@@ -312,14 +298,14 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 				return nil, nil
 			}
 			if len(wf.Args) >= 1 {
-				if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
+				if v, err := types.EvalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
 					return v, nil
 				}
 			}
 			return nil, nil
 		}
 		if len(wf.Args) >= 1 {
-			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[nextPos]], schema, ctx); err == nil {
+			if v, err := types.EvalOperand(wf.Args[0], allRows[partitionIndices[nextPos]], schema, ctx); err == nil {
 				return v, nil
 			}
 		}
@@ -330,7 +316,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 			return nil, nil
 		}
 		if len(wf.Args) >= 1 {
-			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
+			if v, err := types.EvalOperand(wf.Args[0], allRows[partitionIndices[0]], schema, ctx); err == nil {
 				return v, nil
 			}
 		}
@@ -341,7 +327,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 			return nil, nil
 		}
 		if len(wf.Args) >= 1 {
-			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[len(partitionIndices)-1]], schema, ctx); err == nil {
+			if v, err := types.EvalOperand(wf.Args[0], allRows[partitionIndices[len(partitionIndices)-1]], schema, ctx); err == nil {
 				return v, nil
 			}
 		}
@@ -350,7 +336,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 	case "NTH_VALUE":
 		n := 1
 		if len(wf.Args) >= 2 {
-			if v, err := evalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
+			if v, err := types.EvalOperand(wf.Args[1], allRows[partitionIndices[0]], schema, ctx); err == nil {
 				if i, ok := eval.ToInt64(v); ok {
 					n = int(i)
 				}
@@ -361,7 +347,7 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 			return nil, nil
 		}
 		if len(wf.Args) >= 1 {
-			if v, err := evalOperand(wf.Args[0], allRows[partitionIndices[idx]], schema, ctx); err == nil {
+			if v, err := types.EvalOperand(wf.Args[0], allRows[partitionIndices[idx]], schema, ctx); err == nil {
 				return v, nil
 			}
 		}
@@ -373,21 +359,17 @@ func (c *SelectCommand) computeWindowValue(wf *parser.WindowFunctionExpr, partit
 	return nil, nil
 }
 
-// computeWindowAggregate handles COUNT/SUM/AVG/MIN/MAX with O(1) optimization
-// for running frames and whole-partition frames when pre-computed data is available.
-func (c *SelectCommand) computeWindowAggregate(wf *parser.WindowFunctionExpr, partitionIndices []int, allRows []storage.Row, currentPosInPartition int, schema *storage.TableSchema, ctx *ExecutionContext, pd *windowPartitionData) (interface{}, error) {
+func (c *SelectCommand) computeWindowAggregate(wf *parser.WindowFunctionExpr, partitionIndices []int, allRows []storage.Row, currentPosInPartition int, schema *storage.TableSchema, ctx *types.ExecutionContext, pd *windowPartitionData) (interface{}, error) {
 	name := strings.ToUpper(wf.FuncName)
 	partitionSize := len(partitionIndices)
 	hasOrderBy := len(wf.Over.OrderBy) > 0
 
-	// Try O(1) path for running frames using prefix sums.
 	if pd != nil && pd.evaluatedArgs != nil {
 		start, end, ok := isRunningFrame(wf.Over.Frame, currentPosInPartition, partitionSize, hasOrderBy)
 		if ok {
 			return aggregateFromPrefix(name, pd, start, end), nil
 		}
 
-		// Whole-partition frame (UNBOUNDED PRECEDING to UNBOUNDED FOLLOWING).
 		if wf.Over.Frame != nil && wf.Over.Frame.StartType == "UNBOUNDED PRECEDING" && wf.Over.Frame.EndType == "UNBOUNDED FOLLOWING" {
 			return aggregateFromPrefix(name, pd, 0, partitionSize), nil
 		}
@@ -402,7 +384,7 @@ func (c *SelectCommand) computeWindowAggregate(wf *parser.WindowFunctionExpr, pa
 			if colRef, ok := wf.Args[0].(*parser.ColumnRef); ok && colRef.Name == "*" {
 				val = int64(1)
 			} else {
-				v, err := evalOperand(wf.Args[0], allRows[idx], schema, ctx)
+				v, err := types.EvalOperand(wf.Args[0], allRows[idx], schema, ctx)
 				if err != nil {
 					slog.Error("eval window aggregate argument", "error", err)
 					continue
@@ -417,8 +399,6 @@ func (c *SelectCommand) computeWindowAggregate(wf *parser.WindowFunctionExpr, pa
 	return agg.Result(), nil
 }
 
-// aggregateFromPrefix computes aggregate from pre-computed prefix sums in O(1).
-// prefixSums[i] = sum of evaluatedArgs[0..i]. sum[start..end-1] = prefix[end-1] - prefix[start-1].
 func aggregateFromPrefix(name string, pd *windowPartitionData, start, end int) interface{} {
 	if start >= end {
 		return defaultAggregateValue(name)
@@ -444,9 +424,6 @@ func aggregateFromPrefix(name string, pd *windowPartitionData, start, end int) i
 		avg := sum / float64(count)
 		return float64(int64(avg*1000)) / 1000
 	case "MIN", "MAX":
-		// For MIN/MAX with running frames, scan is unavoidable but bounded
-		// by the pre-evaluated args. We keep the simple loop here since
-		// prefix sums don't help and a deque adds complexity for marginal gain.
 		result := pd.evaluatedArgs[start]
 		cmpFn := eval.CompareOrdering
 		for i := start + 1; i < end; i++ {
@@ -470,13 +447,13 @@ func defaultAggregateValue(name string) interface{} {
 	return nil
 }
 
-func (c *SelectCommand) rowsEqualByOrderBy(r1, r2 storage.Row, orderBy []parser.OrderItem, schema *storage.TableSchema, ctx *ExecutionContext) (bool, error) {
+func (c *SelectCommand) rowsEqualByOrderBy(r1, r2 storage.Row, orderBy []parser.OrderItem, schema *storage.TableSchema, ctx *types.ExecutionContext) (bool, error) {
 	for _, item := range orderBy {
-		v1, err := evalOperand(item.Expr, r1, schema, ctx)
+		v1, err := types.EvalOperand(item.Expr, r1, schema, ctx)
 		if err != nil {
 			return false, fmt.Errorf("eval order by expression: %w", err)
 		}
-		v2, err := evalOperand(item.Expr, r2, schema, ctx)
+		v2, err := types.EvalOperand(item.Expr, r2, schema, ctx)
 		if err != nil {
 			return false, fmt.Errorf("eval order by expression: %w", err)
 		}
