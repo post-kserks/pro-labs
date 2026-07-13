@@ -17,11 +17,11 @@ type VerifyAuditLogCommand struct {
 }
 
 func (c *VerifyAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	if ctx.Session.AuditTable == nil {
+	if ctx.Session.GetAuditTable() == nil {
 		return nil, fmt.Errorf("audit logging is not enabled")
 	}
 
-	ok, count, err := ctx.Session.AuditTable.VerifyChain()
+	ok, count, err := ctx.Session.GetAuditTable().VerifyChain()
 	if err != nil {
 		return &Result{
 			Type:    "message",
@@ -56,11 +56,11 @@ type archiveExport struct {
 }
 
 func (c *ArchiveAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error) {
-	if ctx.Session.AuditTable == nil {
+	if ctx.Session.GetAuditTable() == nil {
 		return nil, fmt.Errorf("audit logging is not enabled")
 	}
 
-	entries, err := ctx.Session.AuditTable.ReadAll()
+	entries, err := ctx.Session.GetAuditTable().ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("read audit log: %w", err)
 	}
@@ -75,14 +75,14 @@ func (c *ArchiveAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error)
 	// Determine output path
 	outPath := c.stmt.Path
 	if outPath == "" {
-		outPath = ctx.Session.ArchivePath
+		outPath = ctx.Session.GetArchivePath()
 	}
 	if outPath == "" {
 		return nil, fmt.Errorf("archive path not specified (use TO 'path' or set audit.archive_path)")
 	}
 
 	// Get chain hash at export time
-	chainHash, err := ctx.Session.AuditTable.LastHash()
+	chainHash, err := ctx.Session.GetAuditTable().LastHash()
 	if err != nil {
 		return nil, fmt.Errorf("get chain hash: %w", err)
 	}
@@ -120,7 +120,7 @@ func (c *ArchiveAuditLogCommand) Execute(ctx *ExecutionContext) (*Result, error)
 		// keepCount 0 means truncate all after archive
 		if keepCount < len(entries) {
 			// Truncate table and re-insert only the kept entries
-			if err := ctx.Session.AuditTable.TruncateKeepLast(keepCount); err != nil {
+			if err := ctx.Session.GetAuditTable().TruncateKeepLast(keepCount); err != nil {
 				return nil, fmt.Errorf("truncate audit log: %w", err)
 			}
 		}

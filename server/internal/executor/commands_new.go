@@ -37,7 +37,7 @@ func (c *TruncateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	// If inside an explicit user transaction, buffer the truncate for deferred execution.
 	activeTx := ctx.Session.GetActiveTx()
 	if activeTx != nil && activeTx.State == txmanager.TxActive {
-		ctx.Session.TxManager.AddOp(activeTx, txmanager.PendingOp{
+		asSession(ctx).TxManager.AddOp(activeTx, txmanager.PendingOp{
 			Type:    "truncate",
 			DB:      dbName,
 			Table:   c.stmt.TableName,

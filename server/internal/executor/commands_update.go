@@ -49,7 +49,7 @@ func (c *UpdateCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			}
 		}
 
-		ctx.Session.TxManager.AddOp(activeTx, txmanager.PendingOp{
+		asSession(ctx).TxManager.AddOp(activeTx, txmanager.PendingOp{
 			Type:    "update",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
@@ -270,8 +270,8 @@ func (c *UpdateCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	if asSession(ctx).planCache != nil {
+		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
 	}
 
 	fireTriggers(ctx, dbName, c.stmt.TableName, "UPDATE")

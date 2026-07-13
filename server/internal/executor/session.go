@@ -19,6 +19,8 @@ import (
 
 const defaultMaxPreparedStatements = 1000
 
+// PreparedStatement is now a type alias — defined in types.PreparedStatement.
+
 type Session struct {
 	executor  *Executor
 	currentDB string
@@ -41,11 +43,6 @@ type Session struct {
 	// RBAC: token and role for permission checks.
 	token string
 	role  string
-}
-
-type PreparedStatement struct {
-	Name  string
-	Query parser.Statement
 }
 
 // SessionConfig contains all parameters for creating a session.
@@ -324,4 +321,69 @@ func (s *Session) LogAudit(actor, action, target, detail string) {
 			Detail: detail,
 		})
 	}
+}
+
+// ─── SessionInterface accessors (for types.SessionInterface) ────────────────
+
+func (s *Session) GetAuditTable() *audit.TableLog {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.AuditTable
+}
+
+func (s *Session) GetAuditLog() *logging.AuditLogger {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.AuditLog
+}
+
+func (s *Session) GetArchivePath() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ArchivePath
+}
+
+func (s *Session) GetTxManager() *txmanager.Manager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.TxManager
+}
+
+func (s *Session) GetSnapshotTxID() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.snapshotTxID
+}
+
+func (s *Session) GetMaxRows() int {
+	if s.executor == nil {
+		return 0
+	}
+	s.executor.mu.RLock()
+	defer s.executor.mu.RUnlock()
+	return s.executor.maxRows
+}
+
+func (s *Session) GetExecutorMaxRows() int {
+	return s.GetMaxRows()
+}
+
+func (s *Session) InvalidateResultCache(tableName string) {
+	if s.resultCache != nil {
+		s.resultCache.Invalidate(tableName)
+	}
+}
+
+func (s *Session) InvalidatePlanCache(tableName string) {
+	if s.planCache != nil {
+		s.planCache.Invalidate(tableName)
+	}
+}
+
+func (s *Session) GetResultCache() interface{} {
+	return s.resultCache
+}
+
+func (s *Session) GetPlanCache() interface{} {
+	return s.planCache
 }

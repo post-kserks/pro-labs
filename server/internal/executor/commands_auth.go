@@ -23,10 +23,10 @@ func (c *RevokeTokenCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	mgr.RevokeToken(c.stmt.Token)
 
-	if ctx.Session.AuditLog != nil {
-		ctx.Session.AuditLog.LogDDL("REVOKE TOKEN", "", "", fmt.Sprintf("token=%s", c.stmt.Token[:min(len(c.stmt.Token), 8)]))
+	if auditLog := ctx.Session.GetAuditLog(); auditLog != nil {
+		auditLog.LogDDL("REVOKE TOKEN", "", "", fmt.Sprintf("token=%s", c.stmt.Token[:min(len(c.stmt.Token), 8)]))
 	}
-	if ctx.Session.AuditTable != nil {
+	if ctx.Session.GetAuditTable() != nil {
 		ctx.Session.LogAudit("session", "REVOKE TOKEN", "", fmt.Sprintf("token=%s", c.stmt.Token[:min(len(c.stmt.Token), 8)]))
 	}
 	return &Result{Type: "message", Message: "Token revoked."}, nil

@@ -225,7 +225,8 @@ func (b *Broadcaster) NotifyTableChanged(dbName, tableName string, ctx *Executio
 				}
 			}()
 
-			sess := NewSession(ctx.Storage, ctx.Metrics, ctx.TxManager, ctx.Broadcaster)
+			broadcaster, _ := ctx.Broadcaster.(*Broadcaster)
+			sess := NewSession(ctx.Storage, ctx.Metrics, ctx.TxManager, broadcaster)
 			sess.SetCurrentDatabase(sub.DB)
 			if ctx.WAL != nil {
 				sess.SetWAL(ctx.WAL)

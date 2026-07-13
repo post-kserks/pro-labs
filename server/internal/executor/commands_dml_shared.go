@@ -84,14 +84,14 @@ func notifyMutation(ctx *ExecutionContext, dbName, tableName string) {
 	if ctx.Stats != nil {
 		ctx.Stats.InvalidateStats(dbName, tableName)
 	}
-	if ctx.Session != nil && ctx.Session.resultCache != nil {
-		ctx.Session.resultCache.Invalidate(tableName)
+	if ctx.Session != nil && asSession(ctx).resultCache != nil {
+		func() { if rc := ctx.Session.GetResultCache(); rc != nil { rc.(*ResultCache).Invalidate(tableName) } }()
 	}
 	if ctx.TxManager != nil {
 		ctx.TxManager.BumpTableVersion(dbName, tableName)
 	}
-	if ctx.Broadcaster != nil {
-		ctx.Broadcaster.NotifyTableChanged(dbName, tableName, ctx)
+	if b, ok := ctx.Broadcaster.(*Broadcaster); ok && b != nil {
+		b.NotifyTableChanged(dbName, tableName, ctx)
 	}
 }
 

@@ -10,8 +10,8 @@ import (
 
 	"vaultdb/internal/ai"
 	"vaultdb/internal/auth"
-	"vaultdb/internal/executor/optimizer"
 	"vaultdb/internal/executor/parallel"
+	"vaultdb/internal/executor/types"
 	"vaultdb/internal/metrics"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
@@ -19,10 +19,14 @@ import (
 	"vaultdb/internal/wal"
 )
 
-// SubqueryRunner allows subpackages to execute subqueries without importing the command layer.
-type SubqueryRunner interface {
-	RunSubquery(ctx *ExecutionContext, stmt parser.Statement) (*Result, error)
-}
+// Type aliases — concrete types now live in types/.
+type (
+	ExecutionContext    = types.ExecutionContext
+	Command            = types.Command
+	Result             = types.Result
+	SubqueryRunner     = types.SubqueryRunner
+	PreparedStatement  = types.PreparedStatement
+)
 
 // commandFactory is a function that creates a Command from a parser.Statement.
 type commandFactory func(stmt parser.Statement) Command
@@ -134,84 +138,6 @@ func init() {
 	})
 }
 
-// Command is the Command pattern abstraction.
-type Command interface {
-	Execute(ctx *ExecutionContext) (*Result, error)
-}
-
-// Result is a uniform executor output for all statements.
-type Result struct {
-	Type        string
-	Columns     []string
-	Rows        [][]string
-	Schema      *storage.TableSchema
-	Affected    int
-	Message     string
-	AsOfNote    string
-	RowsScanned int // total rows read from storage before filtering
-}
-
-// ExecutionContext carries mutable session state and dependencies.
-type ExecutionContext struct {
-	Storage     storage.StorageEngine
-	Session     *Session
-	Metrics     *metrics.Collector
-	TxManager   *txmanager.Manager
-	Broadcaster *Broadcaster
-	Embedder    ai.Embedder
-	WAL         *wal.WAL
-	Stats       *optimizer.StatisticsCollector
-	Ctx         context.Context
-
-	// ColumnIndex caches lowercased column name → position for O(1) lookups.
-	// Built once per query from the schema; used by resolveColumn.
-	ColumnIndex map[string]int
-
-	// WindowCols maps each window function expression to the synthetic result
-	// column it was materialized into, so several window functions in one
-	// query project their own values.
-	WindowCols map[*parser.WindowFunctionExpr]string
-
-	// SnapshotTxID enables snapshot isolation: when set, reads use this txID
-	// to determine visibility of rows (0 = current).
-	SnapshotTxID uint64
-
-	// OldRow/NewRow hold pre/post mutation rows for RETURNING clause
-	// with old.* / new.* syntax.
-	OldRow storage.Row
-	NewRow storage.Row
-
-	// InCommitApply true while applyOps is running inside Commit. At this point
-	// commit locks for needed tables are already held (sync.Mutex is not reentrant),
-	// so the autocommit wrapper mutateUnderTableLock must NOT acquire them again
-	// — otherwise self-deadlock (Bug #2, deadlock guard).
-	InCommitApply bool
-
-	// Parallel holds the parallel execution configuration for this query.
-	Parallel parallel.ParallelConfig
-
-	// triggerDepth tracks recursive trigger invocation depth.
-	// Incremented before executeTriggerBody, decremented after.
-	triggerDepth int
-
-	// FtsQuery holds the search query extracted from a WHERE ... FTS_MATCH/MATCH
-	// predicate. Set by the SELECT executor before column projection so that
-	// the 2-argument form bm25_score(table, col) can use it.
-	FtsQuery string
-
-	// RunSubquery allows eval/functions to execute subqueries without importing CommandFactory.
-	RunSubquery SubqueryRunner
-}
-
-// GetEmbedder implements eval.EmbedderProvider.
-func (ctx *ExecutionContext) GetEmbedder() ai.Embedder { return ctx.Embedder }
-
-// GetGoContext implements eval.EmbedderProvider.
-func (ctx *ExecutionContext) GetGoContext() context.Context { return ctx.Ctx }
-
-// SetColumnIndex implements eval.ColumnIndexProvider.
-func (ctx *ExecutionContext) SetColumnIndex(idx map[string]int) { ctx.ColumnIndex = idx }
-
 type Executor struct {
 	storage      storage.StorageEngine
 	metrics      *metrics.Collector
@@ -291,7 +217,7 @@ type subqueryRunner struct {
 }
 
 func (r *subqueryRunner) RunSubquery(ctx *ExecutionContext, stmt parser.Statement) (*Result, error) {
-	cmd, err := CommandFactory(stmt)
+	cmd, err := ctx.CreateCommand(stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -300,10 +226,6 @@ func (r *subqueryRunner) RunSubquery(ctx *ExecutionContext, stmt parser.Statemen
 
 func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	start := time.Now()
-	cmd, err := CommandFactory(stmt)
-	if err != nil {
-		return nil, err
-	}
 
 	e.mu.RLock()
 	queryTimeout := e.queryTimeout
@@ -344,6 +266,12 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 		SnapshotTxID: sess.SnapshotTxID(),
 		Parallel:     parallelCfg,
 		RunSubquery:  &subqueryRunner{executor: e},
+		CreateCommand: CommandFactory,
+	}
+
+	cmd, err := ctx.CreateCommand(stmt)
+	if err != nil {
+		return nil, err
 	}
 	result, err := cmd.Execute(ctx)
 

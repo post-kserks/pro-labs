@@ -2,10 +2,10 @@ package executor
 
 import (
 	"container/list"
-	"fmt"
 	"sync"
 	"time"
 
+	"vaultdb/internal/executor/types"
 	"vaultdb/internal/parser"
 )
 
@@ -156,124 +156,7 @@ func (rc *ResultCache) removeEntry(elem *list.Element) {
 }
 
 // ResultCacheKey builds cache key for SELECT query.
-func ResultCacheKey(stmt *parser.SelectStatement, dbName string) string {
-	key := dbName + ":"
-	if stmt.TableName != "" {
-		key += stmt.TableName
-	}
-	// Include SELECT columns in key
-	for _, col := range stmt.Columns {
-		key += ":" + formatSelectColumnForCache(col)
-	}
-	if stmt.Where != nil {
-		key += ":W:" + formatExpressionForCache(stmt.Where)
-	}
-	if len(stmt.GroupBy) > 0 {
-		key += ":GB"
-	}
-	if stmt.Having != nil {
-		key += ":H"
-	}
-	if len(stmt.OrderBy) > 0 {
-		key += ":O"
-		for _, ob := range stmt.OrderBy {
-			key += formatExpressionForCache(ob.Expr) + ob.Direction
-		}
-	}
-	if stmt.HasLimit {
-		key += fmt.Sprintf(":L%d", stmt.Limit)
-	}
-	if stmt.LimitExpr != nil {
-		key += ":LE:" + formatExpressionForCache(stmt.LimitExpr)
-	}
-	if stmt.HasOffset {
-		key += fmt.Sprintf(":OF%d", stmt.Offset)
-	}
-	if stmt.OffsetExpr != nil {
-		key += ":OE:" + formatExpressionForCache(stmt.OffsetExpr)
-	}
-	if stmt.Distinct {
-		key += ":D"
-	}
-	if stmt.AsOf != nil {
-		if stmt.AsOf.UseVersion {
-			key += fmt.Sprintf(":ASOFv%d", stmt.AsOf.Version)
-		} else {
-			key += ":ASOF:" + stmt.AsOf.Timestamp
-		}
-	}
-	return key
-}
-
-func formatSelectColumnForCache(col parser.SelectColumn) string {
-	if col.Alias != "" {
-		return "A" + col.Alias
-	}
-	return formatExpressionForCache(col.Expr)
-}
-
-func formatExpressionForCache(expr parser.Expression) string {
-	if expr == nil {
-		return ""
-	}
-	switch e := expr.(type) {
-	case *parser.BinaryExpr:
-		return formatExpressionForCache(e.Left) + e.Operator + formatExpressionForCache(e.Right)
-	case *parser.AndExpr:
-		return formatExpressionForCache(e.Left) + "AND" + formatExpressionForCache(e.Right)
-	case *parser.OrExpr:
-		return formatExpressionForCache(e.Left) + "OR" + formatExpressionForCache(e.Right)
-	case *parser.NotExpr:
-		return "NOT" + formatExpressionForCache(e.Expr)
-	case *parser.ColumnRef:
-		return e.Name
-	case *parser.FunctionCall:
-		args := ""
-		for i, arg := range e.Args {
-			if i > 0 {
-				args += ","
-			}
-			args += formatExpressionForCache(arg)
-		}
-		return e.Name + "(" + args + ")"
-	case *parser.AggregateExpr:
-		args := ""
-		for i, arg := range e.Args {
-			if i > 0 {
-				args += ","
-			}
-			args += formatExpressionForCache(arg)
-		}
-		prefix := ""
-		if e.Distinct {
-			prefix = "DISTINCT"
-		}
-		return e.Name + "(" + prefix + args + ")"
-	case *parser.WindowFunctionExpr:
-		return "WIN:" + e.FuncName
-	case parser.Value:
-		return formatValueForCache(e)
-	case *parser.Value:
-		return formatValueForCache(*e)
-	default:
-		return fmt.Sprintf("E%T", expr)
-	}
-}
-
-func formatValueForCache(v parser.Value) string {
-	switch v.Type {
-	case "int":
-		return fmt.Sprintf("%d", v.IntVal)
-	case "float":
-		return fmt.Sprintf("%g", v.FltVal)
-	case "string":
-		return v.StrVal
-	case "bool":
-		if v.BoolVal {
-			return "T"
-		}
-		return "F"
-	default:
-		return "?"
-	}
+// Delegates to types.ResultCacheKey.
+func resultCacheKey(stmt *parser.SelectStatement, dbName string) string {
+	return types.ResultCacheKey(stmt, dbName)
 }

@@ -36,7 +36,7 @@ func (c *InsertCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		ctx.Session.TxManager.AddOp(activeTx, txmanager.PendingOp{
+		asSession(ctx).TxManager.AddOp(activeTx, txmanager.PendingOp{
 			Type:    "insert",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
@@ -140,8 +140,8 @@ func (c *InsertCommand) fastPathInsert(ctx *ExecutionContext) (*Result, error) {
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	if asSession(ctx).planCache != nil {
+		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
 	}
 	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
 
@@ -278,8 +278,8 @@ func (c *InsertCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	if asSession(ctx).planCache != nil {
+		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
 	}
 	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
 
@@ -451,8 +451,8 @@ func (c *InsertCommand) executeUpsert(ctx *ExecutionContext, dbName string, sche
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	if asSession(ctx).planCache != nil {
+		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
 	}
 
 	return &Result{Type: "affected", Affected: affected}, nil
@@ -514,8 +514,8 @@ func (c *InsertCommand) executeInsertSelect(ctx *ExecutionContext, dbName string
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	if asSession(ctx).planCache != nil {
+		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
 	}
 
 	if c.stmt.Returning != nil {
@@ -616,8 +616,8 @@ func (c *InsertCommand) executePartitionedInsert(ctx *ExecutionContext, dbName s
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	if asSession(ctx).planCache != nil {
+		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
 	}
 	fireTriggers(ctx, dbName, c.stmt.TableName, "INSERT")
 

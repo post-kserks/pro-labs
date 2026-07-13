@@ -22,7 +22,7 @@ func (c *BeginCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, fmt.Errorf("transaction already active; COMMIT or ROLLBACK first")
 	}
 
-	ctx.Session.SetActiveTx(ctx.Session.TxManager.Begin())
+	ctx.Session.SetActiveTx(ctx.Session.GetTxManager().Begin())
 
 	return &Result{
 		Type:    "message",
@@ -56,7 +56,7 @@ func (c *CommitCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 	// run in parallel, and conflicts are detected by table versions.
 	var applied int
 	var applyErr error
-	commitErr := ctx.Session.TxManager.Commit(tx, func(pendingOps []txmanager.PendingOp) error {
+	commitErr := ctx.Session.GetTxManager().Commit(tx, func(pendingOps []txmanager.PendingOp) error {
 		// Commit already holds commit locks for affected tables. Mark the context
 		// so that the autocommit wrapper (mutateUnderTableLock) does NOT re-acquire the
 		// same non-reentrant locks — otherwise self-deadlock (Bug #2 guard).
@@ -189,8 +189,8 @@ func applyOps(ctx *ExecutionContext, ops []txmanager.PendingOp) (int, error) {
 			// Save rows for undo on rollback.
 			ops[i].Row = rows
 			notifyMutation(ctx, op.DB, op.Table)
-			if ctx.Session.resultCache != nil {
-				ctx.Session.resultCache.Invalidate(op.Table)
+			if asSession(ctx).resultCache != nil {
+				func() { if rc := ctx.Session.GetResultCache(); rc != nil { rc.(*ResultCache).Invalidate(op.Table) } }()
 			}
 			_ = stmt
 		}

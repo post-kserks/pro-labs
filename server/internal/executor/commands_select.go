@@ -41,11 +41,11 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	// Check result cache (only for simple SELECT, not CTEs or subqueries).
 	// Skip cache in transactions: it doesn't account for tx-overlay (Bug #1).
-	if ctx.Session.resultCache != nil && !ctx.Session.IsInTx() && c.stmt.TableName != "" && c.stmt.FromSubquery == nil && len(c.stmt.CTEs) == 0 {
+	if asSession(ctx).resultCache != nil && !ctx.Session.IsInTx() && c.stmt.TableName != "" && c.stmt.FromSubquery == nil && len(c.stmt.CTEs) == 0 {
 		dbName, err := requireCurrentDB(ctx)
 		if err == nil {
 			cacheKey := ResultCacheKey(c.stmt, dbName)
-			if cached := ctx.Session.resultCache.Get(cacheKey); cached != nil {
+			if cached := asSession(ctx).resultCache.Get(cacheKey); cached != nil {
 				return cached, nil
 			}
 		}
@@ -72,10 +72,10 @@ func (c *SelectCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 
 	// Cache the result (only successful SELECT without mutations). Don't cache
 	// results computed over tx-overlay (Bug #1).
-	if err == nil && ctx.Session.resultCache != nil && !ctx.Session.IsInTx() && result != nil {
+	if err == nil && asSession(ctx).resultCache != nil && !ctx.Session.IsInTx() && result != nil {
 		cacheKey := ResultCacheKey(c.stmt, dbName)
 		tables := map[string]bool{c.stmt.TableName: true}
-		ctx.Session.resultCache.Put(cacheKey, result, tables)
+		asSession(ctx).resultCache.Put(cacheKey, result, tables)
 	}
 
 	return result, err
@@ -506,9 +506,9 @@ func (c *SelectCommand) executeSimpleSelect(ctx *ExecutionContext, dbName string
 	}
 
 	// Apply server-side max rows limit (before GROUP BY to limit aggregation input)
-	if ctx.Session != nil && ctx.Session.executor.maxRows > 0 && !c.hasAggregates() && len(c.stmt.GroupBy) == 0 {
-		if len(filtered) > ctx.Session.executor.maxRows {
-			filtered = filtered[:ctx.Session.executor.maxRows]
+	if ctx.Session != nil && asSession(ctx).executor.maxRows > 0 && !c.hasAggregates() && len(c.stmt.GroupBy) == 0 {
+		if len(filtered) > asSession(ctx).executor.maxRows {
+			filtered = filtered[:asSession(ctx).executor.maxRows]
 		}
 	}
 

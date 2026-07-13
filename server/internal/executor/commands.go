@@ -1,295 +1,146 @@
 package executor
 
 import (
-	"fmt"
-	"strconv"
-	"strings"
-
-	"vaultdb/internal/executor/eval"
+	"vaultdb/internal/executor/types"
 	"vaultdb/internal/parser"
 	"vaultdb/internal/storage"
 )
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Delegating wrappers — canonical implementations live in types/.
+// These wrappers keep the existing unexported API stable so that the 20+
+// call-sites throughout the executor package do not need to change yet.
+// ──────────────────────────────────────────────────────────────────────────────
+
+// asSession type-asserts ctx.Session to the concrete *Session.
+// Returns nil if the assertion fails (should never happen in production).
+func asSession(ctx *ExecutionContext) *Session {
+	s, _ := ctx.Session.(*Session)
+	return s
+}
+
 func requireCurrentDB(ctx *ExecutionContext) (string, error) {
-	db := ctx.Session.CurrentDatabase()
-	if strings.TrimSpace(db) == "" {
-		return "", fmt.Errorf("no active database selected; use USE <database>; first")
-	}
-	return db, nil
+	return types.RequireCurrentDB(ctx)
 }
 
 func resolveDatabase(ctx *ExecutionContext, requested string) (string, error) {
-	if strings.TrimSpace(requested) == "" {
-		return requireCurrentDB(ctx)
-	}
-	if !ctx.Storage.DatabaseExists(requested) {
-		return "", fmt.Errorf("database '%s' does not exist", requested)
-	}
-	return requested, nil
-}
-
-func formatColumnType(column storage.ColumnSchema) string {
-	if column.Type == "VARCHAR" && column.VarcharLen > 0 {
-		return fmt.Sprintf("VARCHAR(%d)", column.VarcharLen)
-	}
-	return column.Type
+	return types.ResolveDatabase(ctx, requested)
 }
 
 func resolveProjection(schema *storage.TableSchema, requested []string) ([]int, []string, error) {
-	if len(requested) == 0 {
-		indices := make([]int, len(schema.Columns))
-		columns := make([]string, len(schema.Columns))
-		for i, col := range schema.Columns {
-			indices[i] = i
-			columns[i] = col.Name
-		}
-		return indices, columns, nil
-	}
-
-	columnIndex := make(map[string]int, len(schema.Columns))
-	for i, col := range schema.Columns {
-		columnIndex[strings.ToLower(col.Name)] = i
-	}
-
-	indices := make([]int, 0, len(requested))
-	columns := make([]string, 0, len(requested))
-	for _, name := range requested {
-		idx, ok := columnIndex[strings.ToLower(name)]
-		if !ok {
-			return nil, nil, fmt.Errorf("unknown column '%s'", name)
-		}
-		indices = append(indices, idx)
-		columns = append(columns, schema.Columns[idx].Name)
-	}
-
-	return indices, columns, nil
+	return types.ResolveProjection(schema, requested)
 }
 
-func normalizeForColumn(value storage.Value, col storage.ColumnSchema) (storage.Value, error) {
-	tmpSchema := storage.TableSchema{Columns: []storage.ColumnSchema{col}}
-	row := storage.Row{value}
-	coerced, err := coerceRowViaEval(row, &tmpSchema)
-	if err != nil {
-		return nil, err
-	}
-	return coerced[0], nil
+func ensureColumnIndex(ctx *ExecutionContext, schema *storage.TableSchema) {
+	types.EnsureColumnIndex(ctx, schema)
 }
 
-// coerceRowViaEval keeps executor independent from storage internals while sharing conversion logic.
-func coerceRowViaEval(row storage.Row, schema *storage.TableSchema) (storage.Row, error) {
-	coerced := make(storage.Row, len(row))
-	for i, raw := range row {
-		value, err := coerceToColumn(raw, schema.Columns[i])
-		if err != nil {
-			return nil, fmt.Errorf("column '%s': %w", schema.Columns[i].Name, err)
-		}
-		coerced[i] = value
-	}
-	return coerced, nil
-}
-
-func coerceToColumn(value storage.Value, column storage.ColumnSchema) (storage.Value, error) {
-	if value == nil {
-		return nil, nil
-	}
-
-	switch strings.ToUpper(column.Type) {
-	case "INT":
-		switch v := value.(type) {
-		case int64:
-			return v, nil
-		case int:
-			return int64(v), nil
-		case float64:
-			if float64(int64(v)) != v {
-				return nil, fmt.Errorf("cannot cast FLOAT to INT without precision loss")
-			}
-			return int64(v), nil
-		case string:
-			parsed, err := strconv.ParseInt(v, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("cannot parse string as INT: %q", v)
-			}
-			return parsed, nil
-		default:
-			return nil, fmt.Errorf("expected INT-compatible value, got %T", value)
-		}
-	case "FLOAT":
-		switch v := value.(type) {
-		case float64:
-			return v, nil
-		case int64:
-			return float64(v), nil
-		case int:
-			return float64(v), nil
-		case string:
-			parsed, err := strconv.ParseFloat(v, 64)
-			if err != nil {
-				return nil, fmt.Errorf("cannot parse string as FLOAT: %q", v)
-			}
-			return parsed, nil
-		default:
-			return nil, fmt.Errorf("expected FLOAT-compatible value, got %T", value)
-		}
-	case "BOOL":
-		boolValue, ok := value.(bool)
-		if !ok {
-			return nil, fmt.Errorf("expected BOOL value, got %T", value)
-		}
-		return boolValue, nil
-	case "TEXT", "VARCHAR", "BLOB":
-		stringValue, ok := value.(string)
-		if !ok {
-			return nil, fmt.Errorf("expected string value, got %T", value)
-		}
-		if column.Type == "VARCHAR" && column.VarcharLen > 0 && len([]rune(stringValue)) > column.VarcharLen {
-			return nil, fmt.Errorf("VARCHAR(%d) overflow", column.VarcharLen)
-		}
-		return stringValue, nil
-	case "VECTOR":
-		vec, err := eval.ToVector(value)
-		if err != nil {
-			return nil, err
-		}
-		if column.VarcharLen > 0 && len(vec) != column.VarcharLen {
-			return nil, fmt.Errorf("VECTOR(%d) dimension mismatch: got %d", column.VarcharLen, len(vec))
-		}
-		return vec, nil
-	case "FLEXIBLE":
-		// Can be a map or a raw JSON string
-		switch v := value.(type) {
-		case map[string]interface{}:
-			return v, nil
-		case string:
-			raw, err := storage.DecodeJSON([]byte(v))
-			if err == nil {
-				if m, ok := raw.(map[string]interface{}); ok {
-					return m, nil
-				}
-			}
-			return v, nil // fallback to string if not JSON object
-		default:
-			return valueToString(value), nil
-		}
-	case "DATE", "TIME", "TIMESTAMP", "DECIMAL":
-		// For simplicity, store these as strings for now.
-		return valueToString(value), nil
-	case "JSONB", "JSON":
-		return valueToString(value), nil
-	default:
-		return nil, fmt.Errorf("unsupported column type '%s'", column.Type)
-	}
+func formatColumnType(column storage.ColumnSchema) string {
+	return types.FormatColumnType(column)
 }
 
 func valueToString(value interface{}) string {
-	if value == nil {
-		return ""
-	}
-	switch v := value.(type) {
-	case string:
-		return v
-	case bool:
-		if v {
-			return "true"
-		}
-		return "false"
-	case int:
-		return strconv.Itoa(v)
-	case int64:
-		return strconv.FormatInt(v, 10)
-	case float64:
-		return strconv.FormatFloat(v, 'g', -1, 64)
-	default:
-		return fmt.Sprintf("%v", v)
-	}
+	return types.ValueToString(value)
+}
+
+func parserValueToRaw(value interface{}) interface{} {
+	return types.ParserValueToRaw(value)
+}
+
+func evalOperandRaw(expr interface{}) interface{} {
+	return types.EvalOperandRaw(expr)
+}
+
+func normalizeForColumn(value storage.Value, col storage.ColumnSchema) (storage.Value, error) {
+	return types.NormalizeForColumn(value, col)
+}
+
+func coerceToColumn(value storage.Value, column storage.ColumnSchema) (storage.Value, error) {
+	return types.CoerceToColumn(value, column)
+}
+
+func coerceRowViaEval(row storage.Row, schema *storage.TableSchema) (storage.Row, error) {
+	return types.CoerceRowViaEval(row, schema)
 }
 
 func inferType(val interface{}) string {
-	if val == nil {
-		return "TEXT"
-	}
-	switch v := val.(type) {
-	case int64, int:
-		return "INT"
-	case float64:
-		return "FLOAT"
-	case bool:
-		return "BOOL"
-	case []float64:
-		return "VECTOR"
-	case map[string]interface{}:
-		return "FLEXIBLE"
-	case string:
-		// Try to see if it's JSON
-		raw, err := storage.DecodeJSON([]byte(v))
-		if err == nil {
-			if _, ok := raw.(map[string]interface{}); ok {
-				return "FLEXIBLE"
-			}
-		}
-		return "TEXT"
-	default:
-		return "TEXT"
-	}
+	return types.InferType(val)
 }
 
-// ensureColumnIndex lazily builds or refreshes ctx.ColumnIndex when the schema changes.
-func ensureColumnIndex(ctx *ExecutionContext, schema *storage.TableSchema) {
-	if ctx == nil || schema == nil {
-		return
-	}
-	ctx.ColumnIndex = eval.BuildColumnIndex(schema)
-}
-
-// inferTypeFromExpr determines expression type from schema.
-func inferTypeFromExpr(expr interface{}, schema *storage.TableSchema) string {
-	return "TEXT"
-}
-
-// evalOperandRaw extracts raw value from parser expression.
-func evalOperandRaw(expr interface{}) interface{} {
-	return expr
-}
-
-// parserValueToRaw converts parser.Value to a raw Go value.
-func parserValueToRaw(value interface{}) interface{} {
-	if pv, ok := value.(parser.Value); ok {
-		return eval.ParserValueToRaw(pv)
-	}
-	return value
-}
-
-// rowsEqual compares two table rows element by element.
 func rowsEqual(a, b storage.Row) bool {
-	return eval.RowsEqual(a, b)
+	return types.RowsEqual(a, b)
 }
 
-// valuesEqual compares two storage.Value values.
 func valuesEqual(a, b storage.Value) bool {
-	return eval.ValuesEqual(a, b)
+	return types.ValuesEqual(a, b)
 }
 
-// valuesEqualCaseInsensitive compares two storage.Value values case-insensitively.
 func valuesEqualCaseInsensitive(a, b storage.Value) bool {
-	return eval.ValuesEqualCaseInsensitive(a, b)
+	return types.ValuesEqualCaseInsensitive(a, b)
 }
 
-// compareOrdered compares two ordered values.
+func inferTypeFromExpr(expr interface{}, schema *storage.TableSchema) string {
+	return types.InferTypeFromExpr(expr, schema)
+}
+
 func compareOrdered[T ~float64 | ~string](left, right T, op string) (bool, error) {
-	switch op {
-	case "=":
-		return left == right, nil
-	case "!=":
-		return left != right, nil
-	case "<":
-		return left < right, nil
-	case ">":
-		return left > right, nil
-	case "<=":
-		return left <= right, nil
-	case ">=":
-		return left >= right, nil
-	default:
-		return false, fmt.Errorf("unknown operator '%s'", op)
-	}
+	return types.CompareOrdered(left, right, op)
+}
+
+// Foreign key / DDL helpers (kept as local wrappers for backward compat).
+
+func enforceForeignKeysOnInsert(ctx *ExecutionContext, dbName string, tableName string, rows []storage.Row) error {
+	return types.EnforceForeignKeysOnInsert(ctx, dbName, tableName, rows)
+}
+
+func enforceForeignKeysOnDelete(ctx *ExecutionContext, dbName string, tableName string, indices []int) error {
+	return types.EnforceForeignKeysOnDelete(ctx, dbName, tableName, indices)
+}
+
+func enforceForeignKeysOnUpdate(ctx *ExecutionContext, dbName string, tableName string, indices []int, newValues []storage.Row) error {
+	return types.EnforceForeignKeysOnUpdate(ctx, dbName, tableName, indices, newValues)
+}
+
+func enforceCascadeDeletes(ctx *ExecutionContext, dbName string, tableName string, indices []int) error {
+	return types.EnforceCascadeDeletes(ctx, dbName, tableName, indices)
+}
+
+func fillAutoIncrementColumns(ctx *ExecutionContext, dbName, tableName string, schema *storage.TableSchema, rows []storage.Row) error {
+	return types.FillAutoIncrementColumns(ctx, dbName, tableName, schema, rows)
+}
+
+func ensureSystemTable(ctx *ExecutionContext, dbName string) error {
+	return types.EnsureSystemTable(ctx, dbName)
+}
+
+func storeObject(ctx *ExecutionContext, dbName, objType, name string, definition interface{}) error {
+	return types.StoreObject(ctx, dbName, objType, name, definition)
+}
+
+func loadObject(ctx *ExecutionContext, dbName, objType, name string) (map[string]interface{}, error) {
+	return types.LoadObject(ctx, dbName, objType, name)
+}
+
+func deleteObject(ctx *ExecutionContext, dbName, objType, name string) error {
+	return types.DeleteObject(ctx, dbName, objType, name)
+}
+
+func loadAllObjectsByType(ctx *ExecutionContext, dbName, objType string) ([]map[string]interface{}, error) {
+	return types.LoadAllObjectsByType(ctx, dbName, objType)
+}
+
+func loadViewRLS(ctx *ExecutionContext, dbName, viewName string) (bool, []storage.RLSPolicy, error) {
+	return types.LoadViewRLS(ctx, dbName, viewName)
+}
+
+func setViewRLS(ctx *ExecutionContext, dbName, viewName string, enabled bool) error {
+	return types.SetViewRLS(ctx, dbName, viewName, enabled)
+}
+
+func addViewPolicy(ctx *ExecutionContext, dbName, viewName string, policy storage.RLSPolicy) error {
+	return types.AddViewPolicy(ctx, dbName, viewName, policy)
+}
+
+func ResultCacheKey(stmt *parser.SelectStatement, dbName string) string {
+	return types.ResultCacheKey(stmt, dbName)
 }

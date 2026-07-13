@@ -44,7 +44,7 @@ func (c *DeleteCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 			}
 		}
 
-		ctx.Session.TxManager.AddOp(activeTx, txmanager.PendingOp{
+		ctx.Session.GetTxManager().AddOp(activeTx, txmanager.PendingOp{
 			Type:    "delete",
 			DB:      ctx.Session.CurrentDatabase(),
 			Table:   c.stmt.TableName,
@@ -133,8 +133,8 @@ func (c *DeleteCommand) executeImmediateInner(ctx *ExecutionContext) (*Result, e
 	}
 
 	notifyMutation(ctx, dbName, c.stmt.TableName)
-	if ctx.Session.planCache != nil {
-		ctx.Session.planCache.Invalidate(c.stmt.TableName)
+	if asSession(ctx).planCache != nil {
+		func() { if pc := ctx.Session.GetPlanCache(); pc != nil { pc.(*PlanCache).Invalidate(c.stmt.TableName) } }()
 	}
 
 	fireTriggers(ctx, dbName, c.stmt.TableName, "DELETE")

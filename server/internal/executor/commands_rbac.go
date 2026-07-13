@@ -85,10 +85,10 @@ func (c *CreateRoleCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 
-	if ctx.Session.AuditLog != nil {
-		ctx.Session.AuditLog.LogDDL("CREATE ROLE", rbacDB, c.stmt.Name, "")
+	if asSession(ctx).AuditLog != nil {
+		asSession(ctx).AuditLog.LogDDL("CREATE ROLE", rbacDB, c.stmt.Name, "")
 	}
-	if ctx.Session.AuditTable != nil {
+	if asSession(ctx).AuditTable != nil {
 		ctx.Session.LogAudit("session", "CREATE ROLE", rbacDB+"."+c.stmt.Name, "")
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Role '%s' created.", c.stmt.Name)}, nil
@@ -142,10 +142,10 @@ func (c *DropRoleCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 	}
 
-	if ctx.Session.AuditLog != nil {
-		ctx.Session.AuditLog.LogDDL("DROP ROLE", rbacDB, c.stmt.Name, "")
+	if asSession(ctx).AuditLog != nil {
+		asSession(ctx).AuditLog.LogDDL("DROP ROLE", rbacDB, c.stmt.Name, "")
 	}
-	if ctx.Session.AuditTable != nil {
+	if asSession(ctx).AuditTable != nil {
 		ctx.Session.LogAudit("session", "DROP ROLE", rbacDB+"."+c.stmt.Name, "")
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Role '%s' dropped.", c.stmt.Name)}, nil
@@ -198,10 +198,10 @@ func (c *GrantCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 	}
 
-	if ctx.Session.AuditLog != nil {
-		ctx.Session.AuditLog.LogDDL("GRANT", rbacDB, c.stmt.To, fmt.Sprintf("privileges=%s on=%s", strings.Join(c.stmt.Privileges, ","), c.stmt.On))
+	if asSession(ctx).AuditLog != nil {
+		asSession(ctx).AuditLog.LogDDL("GRANT", rbacDB, c.stmt.To, fmt.Sprintf("privileges=%s on=%s", strings.Join(c.stmt.Privileges, ","), c.stmt.On))
 	}
-	if ctx.Session.AuditTable != nil {
+	if asSession(ctx).AuditTable != nil {
 		ctx.Session.LogAudit("session", "GRANT", rbacDB+"."+c.stmt.To, fmt.Sprintf("privileges=%s on=%s", strings.Join(c.stmt.Privileges, ","), c.stmt.On))
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Granted privileges on '%s' to role '%s'.", c.stmt.On, c.stmt.To)}, nil
@@ -248,10 +248,10 @@ func (c *RevokeCommand) Execute(ctx *ExecutionContext) (*Result, error) {
 		}
 	}
 
-	if ctx.Session.AuditLog != nil {
-		ctx.Session.AuditLog.LogDDL("REVOKE", rbacDB, c.stmt.From, fmt.Sprintf("privileges=%s on=%s", strings.Join(c.stmt.Privileges, ","), c.stmt.On))
+	if asSession(ctx).AuditLog != nil {
+		asSession(ctx).AuditLog.LogDDL("REVOKE", rbacDB, c.stmt.From, fmt.Sprintf("privileges=%s on=%s", strings.Join(c.stmt.Privileges, ","), c.stmt.On))
 	}
-	if ctx.Session.AuditTable != nil {
+	if asSession(ctx).AuditTable != nil {
 		ctx.Session.LogAudit("session", "REVOKE", rbacDB+"."+c.stmt.From, fmt.Sprintf("privileges=%s on=%s", strings.Join(c.stmt.Privileges, ","), c.stmt.On))
 	}
 	return &Result{Type: "message", Message: fmt.Sprintf("Revoked privileges on '%s' from role '%s'.", c.stmt.On, c.stmt.From)}, nil

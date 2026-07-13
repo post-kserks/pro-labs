@@ -274,8 +274,8 @@ func executeRecursiveCTE(cte *parser.CTEDefinition, scope *CTEScope, ctx *Execut
 		}
 
 		// Invalidate result cache so the recursive member re-reads from storage.
-		if ctx.Session != nil && ctx.Session.resultCache != nil {
-			ctx.Session.resultCache.Invalidate(tmpTable)
+		if ctx.Session != nil && asSession(ctx).resultCache != nil {
+			func() { if rc := ctx.Session.GetResultCache(); rc != nil { rc.(*ResultCache).Invalidate(tmpTable) } }()
 		}
 
 		iterRes, err := ctx.RunSubquery.RunSubquery(ctx, setOp.Right)
