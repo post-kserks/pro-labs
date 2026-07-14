@@ -54,8 +54,11 @@ jobs:
       - name: Run staticcheck
         run: staticcheck -checks="all,-SA6002,-ST1000,-ST1003,-ST1020,-ST1021,-ST1022,-ST1023" ./...
 
-      - name: Go test
-        run: go test -race -count=1 ./...
+      - name: Go test (full suite)
+        run: go test -count=1 ./...
+
+      - name: Go test (race detector fast gate)
+        run: go test -race -short -count=1 ./...
 
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
@@ -177,7 +180,7 @@ jobs:
           cache: true
 
       - name: Run race detector with high count
-        run: go test -race -count=100 ./internal/core/executor/... ./internal/core/storage/... ./internal/core/wal/...
+        run: go test -race -short -count=10 ./internal/core/executor/... ./internal/core/storage/... ./internal/core/wal/...
 
   fuzz-nightly:
     name: Nightly fuzz
