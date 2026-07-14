@@ -6,14 +6,14 @@ import (
 	"log/slog"
 	"path/filepath"
 
-	"vaultdb/internal/ai"
-	"vaultdb/internal/audit"
-	"vaultdb/internal/executor"
-	"vaultdb/internal/metrics"
-	"vaultdb/internal/parser"
-	"vaultdb/internal/storage"
-	"vaultdb/internal/txmanager"
-	"vaultdb/internal/wal"
+	"vaultdb/internal/core/ai"
+	"vaultdb/internal/core/audit"
+	"vaultdb/internal/core/executor"
+	"vaultdb/internal/core/metrics"
+	"vaultdb/internal/core/parser"
+	"vaultdb/internal/core/storage"
+	"vaultdb/internal/core/txmanager"
+	"vaultdb/internal/core/wal"
 )
 
 // VaultDB is the high-level embedded database engine.

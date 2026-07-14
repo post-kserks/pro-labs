@@ -1,8 +1,8 @@
 package vaultdb
 
 import (
-	"vaultdb/internal/executor"
-	"vaultdb/internal/storage"
+	"vaultdb/internal/core/executor"
+	"vaultdb/internal/core/storage"
 )
 
 // Result is the public result type for query execution.

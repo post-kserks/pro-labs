@@ -21,20 +21,20 @@ import (
 	"syscall"
 	"time"
 
-	"vaultdb/internal/ai"
-	"vaultdb/internal/audit"
+	"vaultdb/internal/core/ai"
+	"vaultdb/internal/core/audit"
 	"vaultdb/internal/auth"
 	"vaultdb/internal/config"
-	"vaultdb/internal/executor"
+	"vaultdb/internal/core/executor"
 	"vaultdb/internal/httpserver"
-	"vaultdb/internal/metrics"
-	"vaultdb/internal/parser"
+	"vaultdb/internal/core/metrics"
+	"vaultdb/internal/core/parser"
 	"vaultdb/internal/pool"
 	"vaultdb/internal/protocol"
-	"vaultdb/internal/storage"
+	"vaultdb/internal/core/storage"
 	vaulttls "vaultdb/internal/tls"
-	"vaultdb/internal/txmanager"
-	"vaultdb/internal/wal"
+	"vaultdb/internal/core/txmanager"
+	"vaultdb/internal/core/wal"
 )
 
 // version and buildDate are overwritten via ldflags at build time

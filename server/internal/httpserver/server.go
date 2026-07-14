@@ -10,15 +10,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"vaultdb/internal/ai"
-	"vaultdb/internal/audit"
+	"vaultdb/internal/core/ai"
+	"vaultdb/internal/core/audit"
 	"vaultdb/internal/auth"
 	"vaultdb/internal/config"
-	"vaultdb/internal/executor"
-	"vaultdb/internal/metrics"
+	"vaultdb/internal/core/executor"
+	"vaultdb/internal/core/metrics"
 	"vaultdb/internal/pool"
-	"vaultdb/internal/storage"
-	"vaultdb/internal/txmanager"
+	"vaultdb/internal/core/storage"
+	"vaultdb/internal/core/txmanager"
 )
 
 type Config struct {

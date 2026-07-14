@@ -6,7 +6,7 @@ import (
 	"net"
 	"strings"
 
-	"vaultdb/internal/executor"
+	"vaultdb/internal/core/executor"
 	"vaultdb/internal/protocol"
 )
 

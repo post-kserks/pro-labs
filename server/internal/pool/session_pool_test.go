@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"vaultdb/internal/executor"
-	"vaultdb/internal/metrics"
-	"vaultdb/internal/txmanager"
+	"vaultdb/internal/core/executor"
+	"vaultdb/internal/core/metrics"
+	"vaultdb/internal/core/txmanager"
 )
 
 func newMockSessionFactory() func() *executor.Session {

@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"vaultdb/internal/iputil"
-	"vaultdb/internal/metrics"
-	"vaultdb/internal/storage"
-	"vaultdb/internal/txmanager"
+	"vaultdb/internal/core/metrics"
+	"vaultdb/internal/core/storage"
+	"vaultdb/internal/core/txmanager"
 )
 
 func TestHandleHealth(t *testing.T) {

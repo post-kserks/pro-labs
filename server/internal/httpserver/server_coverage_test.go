@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"vaultdb/internal/executor"
-	"vaultdb/internal/metrics"
-	"vaultdb/internal/parser"
-	"vaultdb/internal/storage"
-	"vaultdb/internal/txmanager"
+	"vaultdb/internal/core/executor"
+	"vaultdb/internal/core/metrics"
+	"vaultdb/internal/core/parser"
+	"vaultdb/internal/core/storage"
+	"vaultdb/internal/core/txmanager"
 )
 
 func TestHandleSecurityStatus(t *testing.T) {

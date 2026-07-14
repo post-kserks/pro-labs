@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"vaultdb/internal/executor"
-	"vaultdb/internal/parser"
+	"vaultdb/internal/core/executor"
+	"vaultdb/internal/core/parser"
 	"vaultdb/internal/protocol"
-	"vaultdb/internal/storage"
+	"vaultdb/internal/core/storage"
 )
 
 var validPathName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)

@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"vaultdb"
-	"vaultdb/internal/storage"
-	"vaultdb/internal/txmanager"
-	"vaultdb/internal/wal"
+	"vaultdb/internal/core/storage"
+	"vaultdb/internal/core/txmanager"
+	"vaultdb/internal/core/wal"
 )
 
 // setupDB creates a fresh database with a benchdb containing a single table.

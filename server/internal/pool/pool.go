@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"vaultdb/internal/executor"
+	"vaultdb/internal/core/executor"
 )
 
 // ConnectionLimiter tracks active connections and enforces a maximum concurrency limit.

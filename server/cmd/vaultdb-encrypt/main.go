@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"vaultdb/internal/crypto"
+	"vaultdb/internal/core/crypto"
 	"vaultdb/internal/osdisk"
 )
 
