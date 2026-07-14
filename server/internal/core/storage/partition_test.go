@@ -414,7 +414,7 @@ func TestHashPartitionPruning(t *testing.T) {
 	h := fnv.New32a()
 	fmt.Fprintf(h, "%v", 42)
 	hash := h.Sum32()
-	idx := int(hash) % 4
+	idx := int(hash % 4)
 	expected := fmt.Sprintf("sessions_p%d", idx)
 	if pruned[0].TableName != expected {
 		t.Errorf("expected partition '%s', got '%s'", expected, pruned[0].TableName)

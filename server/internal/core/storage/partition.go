@@ -112,7 +112,7 @@ func (pt *PartitionedTable) findHashPartition(row Row) (string, error) {
 	fmt.Fprintf(h, "%v", val)
 	hash := h.Sum32()
 
-	idx := int(hash) % len(pt.Partitions)
+	idx := int(hash % uint32(len(pt.Partitions)))
 	return pt.Partitions[idx].TableName, nil
 }
 
@@ -425,7 +425,7 @@ func (pt *PartitionedTable) pruneHash(where parser.Expression) []Partition {
 			h := fnv.New32a()
 			fmt.Fprintf(h, "%v", c.val)
 			hash := h.Sum32()
-			idx := int(hash) % len(pt.Partitions)
+			idx := int(hash % uint32(len(pt.Partitions)))
 			return []Partition{pt.Partitions[idx]}
 		}
 	}

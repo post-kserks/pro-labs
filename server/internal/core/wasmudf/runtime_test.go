@@ -594,8 +594,8 @@ func TestParseMemoryLimitGB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseMemoryLimit: %v", err)
 	}
-	if got != 2*1024*1024*1024 {
-		t.Errorf("got %d, want %d", got, 2*1024*1024*1024)
+	if got != uint32(2*1024*1024*1024) {
+		t.Errorf("got %d, want %d", got, uint32(2*1024*1024*1024))
 	}
 }
 
