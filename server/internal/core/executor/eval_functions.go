@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -525,41 +526,6 @@ func fnInitcapBuiltin(args []interface{}, _ *ExecutionContext) (interface{}, err
 	return eval.Initcap(eval.ValueToString(args[0])), nil
 }
 
-// extractFtsQueryFromWhere walks a WHERE clause AST and returns the search
-// query from the first FTS_MATCH or @@ predicate it finds.
-func extractFtsQueryFromWhere(where parser.Expression) string {
-	if where == nil {
-		return ""
-	}
-	switch e := where.(type) {
-	case *parser.BinaryExpr:
-		if e.Operator == "FTS_MATCH" || e.Operator == "@" || e.Operator == "MATCH" {
-			if val, ok := e.Right.(*parser.Value); ok {
-				return val.StrVal
-			}
-		}
-		if q := extractFtsQueryFromWhere(e.Left); q != "" {
-			return q
-		}
-		if q := extractFtsQueryFromWhere(e.Right); q != "" {
-			return q
-		}
-	case *parser.AndExpr:
-		if q := extractFtsQueryFromWhere(e.Left); q != "" {
-			return q
-		}
-		return extractFtsQueryFromWhere(e.Right)
-	case *parser.OrExpr:
-		if q := extractFtsQueryFromWhere(e.Left); q != "" {
-			return q
-		}
-		return extractFtsQueryFromWhere(e.Right)
-	case *parser.NotExpr:
-		return extractFtsQueryFromWhere(e.Expr)
-	}
-	return ""
-}
-
 // fnBm25Score computes BM25 relevance score.
 func fnBm25Score(args []interface{}, row storage.Row, schema *storage.TableSchema, ctx *ExecutionContext) (interface{}, error) {
 	if len(args) != 2 && len(args) != 3 {
@@ -742,5 +708,5 @@ func executeWASMFunction(wasmPath string, opts map[string]string, args []interfa
 	}
 	fn.Timeout = timeout
 
-	return fn.Call(nil, args)
+	return fn.Call(context.TODO(), args)
 }

@@ -15,7 +15,7 @@ import (
 	_ "vaultdb/internal/core/executor/commands/ddl"
 	_ "vaultdb/internal/core/executor/commands/dml"
 	_ "vaultdb/internal/core/executor/commands/sel"
-	txcmd "vaultdb/internal/core/executor/commands/tx"
+	_ "vaultdb/internal/core/executor/commands/tx"
 	"vaultdb/internal/core/executor/parallel"
 	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/metrics"
@@ -230,8 +230,3 @@ var BindParams = types.BindParams
 
 // GetRoleGrants re-exports commands/auth.GetRoleGrants for backward compatibility.
 var GetRoleGrants = authcmd.GetRoleGrants
-
-// Undo functions re-exported for test backward compatibility.
-var undoInsert = txcmd.UndoInsert
-var undoUpdate = txcmd.UndoUpdate
-var undoDelete = txcmd.UndoDelete

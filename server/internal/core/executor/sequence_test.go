@@ -5,9 +5,7 @@ import (
 )
 
 func TestAutoIncrement(t *testing.T) {
-	sequenceMu.Lock()
-	sequenceCounters = make(map[string]int64)
-	sequenceMu.Unlock()
+	resetSequenceCounters()
 
 	session := setupSession(t)
 	executeSQL(t, session, "CREATE TABLE items (id INT PRIMARY KEY AUTO_INCREMENT, name TEXT);")
@@ -32,9 +30,7 @@ func TestAutoIncrement(t *testing.T) {
 }
 
 func TestAutoIncrementExplicitValue(t *testing.T) {
-	sequenceMu.Lock()
-	sequenceCounters = make(map[string]int64)
-	sequenceMu.Unlock()
+	resetSequenceCounters()
 
 	session := setupSession(t)
 	executeSQL(t, session, "CREATE TABLE items2 (id INT PRIMARY KEY AUTO_INCREMENT, name TEXT);")

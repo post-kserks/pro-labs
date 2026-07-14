@@ -247,6 +247,13 @@ func sequenceKey(dbName, tableName, colName string) string {
 	return strings.ToLower(dbName + "." + tableName + "." + colName)
 }
 
+// ResetSequenceCounters clears all in-memory sequence state (used by tests).
+func ResetSequenceCounters() {
+	sequenceMu.Lock()
+	sequenceCounters = make(map[string]int64)
+	sequenceMu.Unlock()
+}
+
 // GetNextAutoIncrement returns the next auto-increment value for a column.
 func GetNextAutoIncrement(ctx *ExecutionContext, dbName, tableName, colName string) (int64, error) {
 	sequenceMu.Lock()

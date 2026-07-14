@@ -4,9 +4,6 @@ import (
 	"container/list"
 	"sync"
 	"time"
-
-	"vaultdb/internal/core/executor/types"
-	"vaultdb/internal/core/parser"
 )
 
 const defaultResultCacheSize = 256
@@ -153,10 +150,4 @@ func (rc *ResultCache) removeEntry(elem *list.Element) {
 	entry := elem.Value.(*resultCacheEntry)
 	delete(rc.cache, entry.key)
 	rc.lru.Remove(elem)
-}
-
-// ResultCacheKey builds cache key for SELECT query.
-// Delegates to types.ResultCacheKey.
-func resultCacheKey(stmt *parser.SelectStatement, dbName string) string {
-	return types.ResultCacheKey(stmt, dbName)
 }

@@ -1,10 +1,8 @@
 package executor
 
-import "sync"
+import "vaultdb/internal/core/executor/types"
 
-// Sequence state — canonical implementations are in types.GetNextAutoIncrement etc.
-// These unexported vars are kept so that sequence_test.go can reset state between tests.
-var (
-	sequenceMu       sync.Mutex
-	sequenceCounters = make(map[string]int64) // key: "db.table.col" -> next value
-)
+// resetSequenceCounters resets auto-increment state (used by sequence_test.go).
+func resetSequenceCounters() {
+	types.ResetSequenceCounters()
+}
