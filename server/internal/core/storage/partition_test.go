@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"vaultdb/internal/core/parser"
-	"vaultdb/internal/core/txmanager"
 	"vaultdb/internal/core/wal"
 )
 
@@ -18,7 +17,7 @@ func newTestPartitionEngine(t *testing.T) (*PageStorageEngine, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	txMgr := txmanager.NewManager()
+	txMgr := newTestTxManager()
 	e, err := NewPageStorageEngine(dir, w, txMgr)
 	if err != nil {
 		t.Fatal(err)

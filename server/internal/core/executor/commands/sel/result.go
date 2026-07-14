@@ -566,6 +566,13 @@ func (c *SelectCommand) executeDerivedTable(ctx *types.ExecutionContext) (*types
 			return nil, err
 		}
 	}
+	filtered, err = processWindowColumns(filtered, c.stmt, combinedSchema)
+	if err != nil {
+		return nil, err
+	}
+	if ctx != nil && combinedSchema != nil {
+		types.EnsureColumnIndex(ctx, combinedSchema)
+	}
 
 	if len(c.stmt.OrderBy) > 0 {
 		c.applyOrderBy(filtered, combinedSchema, ctx)

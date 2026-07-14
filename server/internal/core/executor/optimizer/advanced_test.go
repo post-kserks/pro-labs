@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"vaultdb/internal/core/parser"
+	"vaultdb/internal/core/storage"
 )
 
 func TestReorderJoins_SmallestFirst(t *testing.T) {
@@ -305,5 +306,75 @@ func TestReorderJoins_PreservesMethods(t *testing.T) {
 		if method != HashJoin && method != NestedLoopJoin && method != MergeJoin {
 			t.Errorf("unexpected join method at index %d: %v", i, method)
 		}
+	}
+}
+
+func TestChooseAccessMethods_PredicateAware(t *testing.T) {
+	store := newMockStorage()
+	store.ensureDB("testdb")
+	store.tables["testdb"]["users"] = &storage.TableSchema{
+		Name: "users",
+		Columns: []storage.ColumnSchema{
+			{Name: "id", Type: "int"},
+			{Name: "unindexed_col", Type: "int"},
+		},
+	}
+	store.rows["testdb"]["users"] = make([]storage.Row, 200) // rowCount > 100
+	store.indexes["testdb"]["users"] = map[string][]int{"id": {1}}
+
+	opt := NewOptimizer(store)
+
+	// 1. Query on unindexed column -> should pick SeqScan despite index existing on id
+	stmtUnindexed := &parser.SelectStatement{
+		TableName: "users",
+		Columns:   []parser.SelectColumn{{Expr: &parser.ColumnRef{Name: "*"}}},
+		Where: &parser.BinaryExpr{
+			Left: &parser.ColumnRef{Name: "unindexed_col"}, Operator: "=", Right: &parser.Value{Type: "int", IntVal: 5},
+		},
+	}
+	plan1, err := opt.OptimizePlan("testdb", stmtUnindexed)
+	if err != nil {
+		t.Fatalf("OptimizePlan failed: %v", err)
+	}
+	if plan1.AccessMethods["users"] != SeqScan {
+		t.Errorf("expected SeqScan for unindexed column, got %v", plan1.AccessMethods["users"])
+	}
+
+	// 2. Query on indexed column -> should pick IndexScan
+	stmtIndexed := &parser.SelectStatement{
+		TableName: "users",
+		Columns:   []parser.SelectColumn{{Expr: &parser.ColumnRef{Name: "*"}}},
+		Where: &parser.BinaryExpr{
+			Left: &parser.ColumnRef{Name: "id"}, Operator: "=", Right: &parser.Value{Type: "int", IntVal: 5},
+		},
+	}
+	plan2, err := opt.OptimizePlan("testdb", stmtIndexed)
+	if err != nil {
+		t.Fatalf("OptimizePlan failed: %v", err)
+	}
+	if plan2.AccessMethods["users"] != IndexScan && plan2.AccessMethods["users"] != IndexOnlyScan {
+		t.Errorf("expected IndexScan or IndexOnlyScan for indexed column, got %v", plan2.AccessMethods["users"])
+	}
+}
+
+func TestEstimateCost_StructuredModel(t *testing.T) {
+	store := newMockStorage()
+	store.ensureDB("testdb")
+	store.rows["testdb"]["large_table"] = make([]storage.Row, 800)
+
+	opt := NewOptimizer(store)
+	stmt := &parser.SelectStatement{
+		TableName: "large_table",
+		Columns:   []parser.SelectColumn{{Expr: &parser.ColumnRef{Name: "*"}}},
+	}
+
+	plan, err := opt.OptimizePlan("testdb", stmt)
+	if err != nil {
+		t.Fatalf("OptimizePlan failed: %v", err)
+	}
+
+	// 800 rows / 80 = 10 pages. SeqScan cost = 10 * SeqPageCost + 800 * CpuTupleCost = 10 + 8 = 18
+	if plan.Cost.Cost <= 0 || plan.Cost.EstimatedRows != 800 {
+		t.Errorf("expected accurate structured cost calculation, got cost=%v, rows=%v", plan.Cost.Cost, plan.Cost.EstimatedRows)
 	}
 }

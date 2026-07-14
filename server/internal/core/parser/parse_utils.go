@@ -611,6 +611,29 @@ func (p *sqlParser) parsePrimary() (Expression, error) {
 					return nil, err
 				}
 				p.exitDepth()
+				if nameUp == "ROW_NUMBER" || nameUp == "RANK" || nameUp == "DENSE_RANK" {
+					var orderClauses []OrderByClause
+					for _, item := range spec.OrderBy {
+						asc := true
+						if strings.ToUpper(item.Direction) == "DESC" {
+							asc = false
+						}
+						dir := strings.ToUpper(item.Direction)
+						if dir == "" {
+							dir = "ASC"
+						}
+						orderClauses = append(orderClauses, OrderByClause{
+							Expr:      item.Expr,
+							Direction: dir,
+							Asc:       asc,
+						})
+					}
+					return &WindowExpr{
+						Function:    nameUp,
+						PartitionBy: spec.PartitionBy,
+						OrderBy:     orderClauses,
+					}, nil
+				}
 				return &WindowFunctionExpr{
 					FuncName: funcExprName(funcExpr),
 					Args:     funcExprArgs(funcExpr),

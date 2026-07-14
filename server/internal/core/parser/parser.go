@@ -160,6 +160,10 @@ func FormatExpression(expr Expression) string {
 		return fmt.Sprintf("%s%s'%s'", FormatExpression(e.Left), e.Op, e.Path)
 	case *JSONAccess:
 		return fmt.Sprintf("%s %s %s", FormatExpression(e.Expr), e.Operator, FormatExpression(e.Argument))
+	case *WindowExpr:
+		return e.String()
+	case *OrderByClause:
+		return e.String()
 	case *WindowFunctionExpr:
 		args := make([]string, len(e.Args))
 		for i, a := range e.Args {

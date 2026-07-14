@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"vaultdb/internal/core/txmanager"
 	"vaultdb/internal/core/wal"
 )
 
@@ -146,7 +145,7 @@ func TestTableLifecycleAndDataOperations(t *testing.T) {
 func TestPersistenceAcrossInstances(t *testing.T) {
 	root := t.TempDir()
 
-	txm1 := txmanager.NewManager()
+	txm1 := newTestTxManager()
 	store1, err := NewPageStorageEngine(root, nil, txm1)
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +161,7 @@ func TestPersistenceAcrossInstances(t *testing.T) {
 	}
 	store1.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	store2, err := NewPageStorageEngine(root, nil, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +282,7 @@ func TestRowHistory(t *testing.T) {
 
 func TestWALRecoveryAfterRestart(t *testing.T) {
 	root := t.TempDir()
-	txm1 := txmanager.NewManager()
+	txm1 := newTestTxManager()
 	store, err := NewPageStorageEngine(root, nil, txm1)
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +303,7 @@ func TestWALRecoveryAfterRestart(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	store2, err := NewPageStorageEngine(root, nil, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +326,7 @@ func TestCatalogBatching(t *testing.T) {
 	}
 	defer w.Close()
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	store, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -393,7 +392,7 @@ func TestCatalogAutoSaveInterval(t *testing.T) {
 	}
 	defer w.Close()
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	store, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -439,7 +438,7 @@ func TestCatalogDirtyFlagResetsAfterCheckpoint(t *testing.T) {
 	}
 	defer w.Close()
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	store, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)

@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"vaultdb/internal/core/storage"
 )
 
 // TxState — transaction state.
@@ -57,6 +59,8 @@ type PendingOp struct {
 	OldRow  interface{}
 	Row     interface{}
 	Pos     int
+	RowKey  string
+	TupleID uint64
 }
 
 // Transaction — active transaction of a single session.
@@ -67,6 +71,9 @@ type Transaction struct {
 	Ops       []PendingOp
 
 	TableSnapshots map[string]uint64
+
+	HasDependentReads bool
+	ReadSet           map[string]map[int]uint64 // "db/table" -> pos -> version
 
 	// opCounter — monotonically increasing counter of added operations. Grows in AddOp regardless
 	// of whether operations are in memory or in the spill file.
@@ -88,6 +95,26 @@ type Transaction struct {
 	// ReadOps (and thus Commit) will return this error so commit fails rather than
 	// silently losing some operations (Bug #4).
 	spillErr error
+
+	mgr *Manager
+}
+
+// RecordRead records a row access in the transaction read set for granular conflict detection.
+func (tx *Transaction) RecordRead(dbName, tableName string, pos int, version uint64) {
+	if tx.ReadSet == nil {
+		tx.ReadSet = make(map[string]map[int]uint64)
+	}
+	key := dbName + "/" + tableName
+	if tx.ReadSet[key] == nil {
+		tx.ReadSet[key] = make(map[int]uint64)
+	}
+	tx.ReadSet[key][pos] = version
+}
+
+// SetHasDependentReads marks that this transaction performed conditional reads or queries whose
+// results influenced buffered writes, requiring re-execution upon OCC conflict rather than blind retry.
+func (tx *Transaction) SetHasDependentReads(val bool) {
+	tx.HasDependentReads = val
 }
 
 // Manager manages transactions across all sessions.
@@ -101,8 +128,11 @@ type Manager struct {
 
 	commitLocksMu sync.Mutex
 	commitLocks   map[string]*sync.Mutex
+	rowLocker     RowLocker
 
 	OCCConfig OCCConfig
+
+	RowLocks *storage.RowLockManager
 }
 
 func NewManager() *Manager {
@@ -111,7 +141,29 @@ func NewManager() *Manager {
 		commitLocks:    make(map[string]*sync.Mutex),
 		SpillThreshold: defaultSpillThreshold,
 		OCCConfig:      DefaultOCCConfig(),
+		RowLocks:       storage.NewRowLockManager(30 * time.Second),
 	}
+}
+
+// NewManagerWithPageEngine initializes Manager and shares RowLockManager if provided by engine.
+func NewManagerWithPageEngine(engine interface {
+	GetRowLocks() *storage.RowLockManager
+}) *Manager {
+	m := NewManager()
+	if engine != nil && engine.GetRowLocks() != nil {
+		m.RowLocks = engine.GetRowLocks()
+	}
+	return m
+}
+
+// GetRowLocks returns the RowLockManager associated with this Manager.
+func (m *Manager) GetRowLocks() *storage.RowLockManager {
+	return m.RowLocks
+}
+
+// SetRowLocks sets the RowLockManager associated with this Manager.
+func (m *Manager) SetRowLocks(rl *storage.RowLockManager) {
+	m.RowLocks = rl
 }
 
 func tableKey(db, table string) string {
@@ -152,6 +204,7 @@ func (m *Manager) Begin() *Transaction {
 		TableSnapshots: make(map[string]uint64),
 		savepoints:     make(map[string]int),
 		spillDir:       m.SpillDir,
+		mgr:            m,
 	}
 	return tx
 }
@@ -438,6 +491,9 @@ func (m *Manager) lockTables(keys []string) func() {
 
 // Commit checks conflicts and applies transaction operations.
 func (m *Manager) Commit(tx *Transaction, applyFn func([]PendingOp) error) error {
+	if tx != nil {
+		defer m.ReleaseRowLocks(tx.ID)
+	}
 	tables := make([]string, 0, len(tx.TableSnapshots))
 	for t := range tx.TableSnapshots {
 		tables = append(tables, t)
@@ -509,6 +565,9 @@ func (m *Manager) CommitWithRetry(tx *Transaction, applyFn func([]PendingOp) err
 
 		lastErr = err
 		if attempt < config.MaxRetries {
+			if tx.HasDependentReads {
+				return fmt.Errorf("%w: transaction performed conditional reads or dependent calculations; blind retry without re-executing query logic would violate serializability", ErrTxConflict)
+			}
 			m.refreshSnapshots(tx)
 			delay := config.BaseDelay * time.Duration(math.Pow(config.BackoffFactor, float64(attempt)))
 			if delay > config.MaxDelay {
@@ -532,18 +591,31 @@ func (m *Manager) refreshSnapshots(tx *Transaction) {
 	}
 }
 
-// Rollback clears the buffer and deletes the spill file.
+// Rollback clears the buffer, deletes the spill file, and releases row locks.
 func (tx *Transaction) Rollback() {
+	if tx.mgr != nil {
+		tx.mgr.ReleaseRowLocks(tx.ID)
+	}
 	tx.Ops = nil
 	tx.State = TxIdle
 	tx.opCounter = 0
 	tx.savepoints = make(map[string]int)
 	tx.savepointOrder = nil
 	tx.spillErr = nil
+	tx.ReadSet = nil
+	tx.HasDependentReads = false
 	if tx.spilled && tx.spillPath != "" {
 		os.Remove(tx.spillPath)
 		tx.spilled = false
 		tx.spillPath = ""
+	}
+}
+
+// Rollback rolls back the transaction and releases all held row locks.
+func (m *Manager) Rollback(tx *Transaction) {
+	if tx != nil {
+		m.ReleaseRowLocks(tx.ID)
+		tx.Rollback()
 	}
 }
 

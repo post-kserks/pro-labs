@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -226,6 +227,9 @@ func TestZeroizeSliceNil(t *testing.T) {
 }
 
 func TestGenerateAndStoreDEKWriteFailure(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("skipping read-only directory test when running as root or on Windows")
+	}
 	dir := t.TempDir()
 	// Make the directory read-only so writes fail
 	if err := os.Chmod(dir, 0500); err != nil {

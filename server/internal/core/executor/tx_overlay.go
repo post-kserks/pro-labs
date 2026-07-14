@@ -53,6 +53,7 @@ func applyTxOverlay(ctx *ExecutionContext, db, table string, base []storage.Row)
 	if ctx.TxManager != nil {
 		ctx.TxManager.RecordAccess(tx, db, table)
 	}
+	tx.SetHasDependentReads(true)
 
 	ops, err := tx.ReadOps()
 	if err != nil {

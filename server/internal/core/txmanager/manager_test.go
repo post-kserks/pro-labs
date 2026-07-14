@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -400,5 +401,43 @@ func TestOCCBackoffTiming(t *testing.T) {
 	minExpected := 70 * time.Millisecond
 	if elapsed < minExpected {
 		t.Fatalf("backoff too fast: elapsed %v, expected at least %v", elapsed, minExpected)
+	}
+}
+
+func TestCommitWithRetry_DependentReadsHazardPrevention(t *testing.T) {
+	m := NewManager()
+	m.OCCConfig.BaseDelay = time.Millisecond
+
+	tx := m.Begin()
+	m.AddOp(tx, PendingOp{Type: "update", DB: "db", Table: "t"})
+	tx.SetHasDependentReads(true)
+
+	// Bump version to trigger OCC conflict on attempt 0
+	m.BumpTableVersion("db", "t")
+
+	// Because HasDependentReads is true, CommitWithRetry must refuse to blindly refresh and retry applyFn
+	err := m.CommitWithRetry(tx, func(ops []PendingOp) error {
+		t.Fatal("applyFn should not run when dependent read conflict occurs")
+		return nil
+	})
+
+	if !IsConflictError(err) {
+		t.Fatalf("expected conflict error for transaction with dependent reads, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "dependent calculations") && !strings.Contains(err.Error(), "dependent reads") {
+		t.Errorf("expected error to explain dependent reads hazard, got: %v", err)
+	}
+}
+
+func TestRecordRead_GranularConflictTracking(t *testing.T) {
+	tx := &Transaction{}
+	tx.RecordRead("db", "users", 10, 5)
+	tx.RecordRead("db", "users", 20, 5)
+
+	if len(tx.ReadSet["db/users"]) != 2 {
+		t.Errorf("expected 2 read records for db/users, got %v", len(tx.ReadSet["db/users"]))
+	}
+	if tx.ReadSet["db/users"][10] != 5 || tx.ReadSet["db/users"][20] != 5 {
+		t.Errorf("incorrect version recorded in ReadSet")
 	}
 }

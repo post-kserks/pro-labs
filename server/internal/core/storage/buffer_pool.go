@@ -310,6 +310,7 @@ func (bp *BufferPool) FlushAll() error {
 			}
 			entry.dirty = false
 			entry.lastModifiedLSN = 0
+			entry.imageWritten = false
 		}
 	}
 	return nil
@@ -328,6 +329,7 @@ func (bp *BufferPool) FlushDirtyPagesUpToLSN(maxLSN uint64) error {
 			}
 			entry.dirty = false
 			entry.lastModifiedLSN = 0
+			entry.imageWritten = false
 		}
 	}
 	return nil

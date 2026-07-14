@@ -155,6 +155,20 @@ func evalOperand(expr parser.Expression, row storage.Row, schema *storage.TableS
 			}
 		}
 		return nil, nil
+	case *parser.WindowExpr:
+		if e.ColName != "" {
+			if ctx != nil && ctx.ColumnIndex != nil {
+				if val, err := eval.ResolveColumn(row, schema, e.ColName, ctx.ColumnIndex); err == nil && val != nil {
+					return val, nil
+				}
+			}
+			for idx, col := range schema.Columns {
+				if col.Name == e.ColName && idx < len(row) {
+					return row[idx], nil
+				}
+			}
+		}
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported expression type: %T", expr)
 	}

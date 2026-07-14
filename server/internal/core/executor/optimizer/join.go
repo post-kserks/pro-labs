@@ -8,7 +8,7 @@ import (
 	"vaultdb/internal/core/parser"
 )
 
-// reorderJoins reorders joins so the smallest table is processed first.
+// reorderJoins reorders joins so the smallest table (after filtering) is processed first.
 func (o *Optimizer) reorderJoins(dbName string, plan *OptimizedPlan) {
 	if len(plan.Stmt.Joins) <= 1 {
 		return
@@ -36,7 +36,13 @@ func (o *Optimizer) reorderJoins(dbName string, plan *OptimizedPlan) {
 	}
 
 	sort.SliceStable(infos, func(i, k int) bool {
-		ri, rk := o.rowCount(infos[i].stats), o.rowCount(infos[k].stats)
+		ri := o.effectiveRowCount(dbName, infos[i].join.TableName, infos[i].stats, plan)
+		rk := o.effectiveRowCount(dbName, infos[k].join.TableName, infos[k].stats, plan)
+		if infos[i].accessAfter != SeqScan && infos[k].accessAfter == SeqScan {
+			ri *= 0.5 // Prefer indexed tables earlier in join order
+		} else if infos[i].accessAfter == SeqScan && infos[k].accessAfter != SeqScan {
+			rk *= 0.5
+		}
 		return ri < rk
 	})
 
@@ -49,7 +55,21 @@ func (o *Optimizer) reorderJoins(dbName string, plan *OptimizedPlan) {
 	}
 }
 
-// chooseJoinMethods selects the best join method for JOIN.
+func (o *Optimizer) effectiveRowCount(dbName, tableName string, ts *TableStatistics, plan *OptimizedPlan) float64 {
+	rows := float64(o.rowCount(ts))
+	if rows <= 0 {
+		rows = defaultFallbackRows
+	}
+	if plan != nil && plan.TablePredicates != nil && plan.TablePredicates[tableName] != nil {
+		sel := o.stats.EstimateSelectivity(dbName, tableName, plan.TablePredicates[tableName])
+		if sel > 0 && sel <= 1.0 {
+			rows *= sel
+		}
+	}
+	return rows
+}
+
+// chooseJoinMethods selects the best join method for JOIN using statistics.
 func (o *Optimizer) chooseJoinMethods(dbName string, stmt *parser.SelectStatement) []JoinMethod {
 	methods := make([]JoinMethod, len(stmt.Joins))
 	for i, join := range stmt.Joins {

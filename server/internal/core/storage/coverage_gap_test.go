@@ -487,7 +487,7 @@ func TestRowLockActiveLockCount(t *testing.T) {
 		t.Fatalf("expected 0 active locks, got %d", mgr.ActiveLockCount())
 	}
 
-	_ = mgr.LockRow("db", "t", 1, 1, LockExclusive)
+	_ = mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive)
 	count := mgr.ActiveLockCount()
 	if count != 1 {
 		t.Fatalf("expected 1 active lock, got %d", count)
@@ -499,10 +499,10 @@ func TestRowLockActiveLockCount(t *testing.T) {
 func TestRowLockReentrantLock(t *testing.T) {
 	mgr := NewRowLockManager(30 * time.Second)
 	// Same txID acquires twice — should succeed (reentrant)
-	if err := mgr.LockRow("db", "t", 1, 1, LockExclusive); err != nil {
+	if err := mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.LockRow("db", "t", 1, 1, LockExclusive); err != nil {
+	if err := mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive); err != nil {
 		t.Fatal("reentrant lock should succeed")
 	}
 	mgr.UnlockRow("db", "t", 1, 1)
@@ -511,10 +511,10 @@ func TestRowLockReentrantLock(t *testing.T) {
 func TestRowLockSharedShared(t *testing.T) {
 	mgr := NewRowLockManager(30 * time.Second)
 	// Two shared locks on same row should succeed
-	if err := mgr.LockRow("db", "t", 1, 1, LockShared); err != nil {
+	if err := mgr.LockRowLegacy("db", "t", 1, 1, LockShared); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.LockRow("db", "t", 1, 2, LockShared); err != nil {
+	if err := mgr.LockRowLegacy("db", "t", 1, 2, LockShared); err != nil {
 		t.Fatal("shared+shared should succeed")
 	}
 	mgr.UnlockRow("db", "t", 1, 1)
@@ -523,10 +523,10 @@ func TestRowLockSharedShared(t *testing.T) {
 
 func TestRowLockTimeoutPath(t *testing.T) {
 	mgr := NewRowLockManager(10 * time.Millisecond)
-	_ = mgr.LockRow("db", "t", 1, 1, LockExclusive)
+	_ = mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive)
 
 	// Different tx trying exclusive — should timeout
-	err := mgr.LockRow("db", "t", 1, 2, LockExclusive)
+	err := mgr.LockRowLegacy("db", "t", 1, 2, LockExclusive)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -535,7 +535,7 @@ func TestRowLockTimeoutPath(t *testing.T) {
 
 func TestRowLockUnlockWrongTx(t *testing.T) {
 	mgr := NewRowLockManager(30 * time.Second)
-	_ = mgr.LockRow("db", "t", 1, 1, LockExclusive)
+	_ = mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive)
 	// Unlock with wrong txID — should be no-op
 	mgr.UnlockRow("db", "t", 1, 99)
 	count := mgr.ActiveLockCount()
@@ -547,13 +547,13 @@ func TestRowLockUnlockWrongTx(t *testing.T) {
 
 func TestRowLockUnlockRowsMultiple(t *testing.T) {
 	mgr := NewRowLockManager(30 * time.Second)
-	_ = mgr.LockRow("db", "t", 1, 1, LockExclusive)
-	_ = mgr.LockRow("db", "t", 2, 1, LockExclusive)
-	_ = mgr.LockRow("db", "t", 3, 1, LockExclusive)
+	_ = mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive)
+	_ = mgr.LockRowLegacy("db", "t", 2, 1, LockExclusive)
+	_ = mgr.LockRowLegacy("db", "t", 3, 1, LockExclusive)
 
 	mgr.UnlockRows("db", "t", []uint64{1, 2, 3}, 1)
 	// After unlock, new transactions should be able to acquire the locks
-	if err := mgr.LockRow("db", "t", 1, 2, LockExclusive); err != nil {
+	if err := mgr.LockRowLegacy("db", "t", 1, 2, LockExclusive); err != nil {
 		t.Fatal("should be able to lock after unlock")
 	}
 	mgr.UnlockRow("db", "t", 1, 2)

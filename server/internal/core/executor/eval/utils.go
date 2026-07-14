@@ -226,6 +226,8 @@ func InferTypeFromExpr(expr parser.Expression, schema *storage.TableSchema) stri
 				}
 			}
 		}
+	case *parser.WindowExpr:
+		return "INT"
 	case *parser.AggregateExpr:
 		switch strings.ToUpper(e.Name) {
 		case "COUNT":

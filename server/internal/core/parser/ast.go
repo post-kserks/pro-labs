@@ -1,5 +1,10 @@
 package parser
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Statement is the root interface for all SQL statements.
 type Statement interface {
 	statementNode()
@@ -651,6 +656,68 @@ type WindowFunctionExpr struct {
 	Over     WindowSpec
 }
 
+type OrderByClause struct {
+	Expr      Expression
+	Direction string // "ASC" or "DESC"
+	Asc       bool
+}
+
+func (o *OrderByClause) String() string {
+	dir := o.Direction
+	if dir == "" {
+		if o.Asc {
+			dir = "ASC"
+		} else {
+			dir = "DESC"
+		}
+	}
+	if dir != "" {
+		return fmt.Sprintf("%s %s", FormatExpression(o.Expr), dir)
+	}
+	return FormatExpression(o.Expr)
+}
+
+type WindowExpr struct {
+	Function    string
+	PartitionBy []Expression
+	OrderBy     []OrderByClause
+	ColName     string // synthetic column name where computed result is stored
+}
+
+func (w *WindowExpr) String() string {
+	var parts []string
+	if len(w.PartitionBy) > 0 {
+		var pStrs []string
+		for _, p := range w.PartitionBy {
+			pStrs = append(pStrs, FormatExpression(p))
+		}
+		parts = append(parts, "PARTITION BY "+strings.Join(pStrs, ", "))
+	}
+	if len(w.OrderBy) > 0 {
+		var oStrs []string
+		for _, o := range w.OrderBy {
+			dir := o.Direction
+			if dir == "" {
+				if o.Asc {
+					dir = "ASC"
+				} else {
+					dir = "DESC"
+				}
+			}
+			if dir != "" {
+				oStrs = append(oStrs, fmt.Sprintf("%s %s", FormatExpression(o.Expr), dir))
+			} else {
+				oStrs = append(oStrs, FormatExpression(o.Expr))
+			}
+		}
+		parts = append(parts, "ORDER BY "+strings.Join(oStrs, ", "))
+	}
+	if len(parts) > 0 {
+		return fmt.Sprintf("%s() OVER (%s)", strings.ToUpper(w.Function), strings.Join(parts, " "))
+	}
+	return fmt.Sprintf("%s() OVER ()", strings.ToUpper(w.Function))
+}
+
 type CastExpr struct {
 	Expr       Expression
 	TargetType string
@@ -704,6 +771,8 @@ type ComparisonSubqueryExpr struct {
 }
 
 func (*WindowFunctionExpr) expressionNode()     {}
+func (*WindowExpr) expressionNode()             {}
+func (*OrderByClause) expressionNode()          {}
 func (*CastExpr) expressionNode()               {}
 func (*CaseExpr) expressionNode()               {}
 func (*JsonPathExpr) expressionNode()           {}

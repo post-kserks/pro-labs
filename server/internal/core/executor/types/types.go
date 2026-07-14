@@ -333,6 +333,8 @@ func FormatExpressionForCache(expr parser.Expression) string {
 		return e.Name + "(" + prefix + args + ")"
 	case *parser.WindowFunctionExpr:
 		return "WIN:" + e.FuncName
+	case *parser.WindowExpr:
+		return "WIN:" + e.Function
 	case parser.Value:
 		return FormatValueForCache(e)
 	case *parser.Value:

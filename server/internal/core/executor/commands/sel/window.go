@@ -30,6 +30,15 @@ func (c *SelectCommand) extractWindowFunctions() []*parser.WindowFunctionExpr {
 	return funcs
 }
 
+func (c *SelectCommand) hasWindowExprs() bool {
+	for _, col := range c.stmt.Columns {
+		if len(extractAllWindowExprs(col.Expr)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *SelectCommand) applyWindowFunctions(rows []storage.Row, schema *storage.TableSchema, funcs []*parser.WindowFunctionExpr, ctx *types.ExecutionContext) ([]storage.Row, *storage.TableSchema, error) {
 	newSchema := &storage.TableSchema{
 		Name:    schema.Name,
@@ -502,4 +511,170 @@ func (c *SelectCommand) getFrameIndices(partitionIndices []int, currentPos int, 
 		return nil
 	}
 	return partitionIndices[start:end]
+}
+
+func extractAllWindowExprs(expr parser.Expression) []*parser.WindowExpr {
+	if expr == nil {
+		return nil
+	}
+	var res []*parser.WindowExpr
+	switch e := expr.(type) {
+	case *parser.WindowExpr:
+		res = append(res, e)
+	case *parser.CastExpr:
+		res = append(res, extractAllWindowExprs(e.Expr)...)
+	case *parser.BinaryExpr:
+		res = append(res, extractAllWindowExprs(e.Left)...)
+		res = append(res, extractAllWindowExprs(e.Right)...)
+	case *parser.CaseExpr:
+		res = append(res, extractAllWindowExprs(e.Base)...)
+		for _, w := range e.Whens {
+			res = append(res, extractAllWindowExprs(w.Condition)...)
+			res = append(res, extractAllWindowExprs(w.Result)...)
+		}
+		res = append(res, extractAllWindowExprs(e.Else)...)
+	}
+	return res
+}
+
+func processWindowColumns(rows []storage.Row, stmt *parser.SelectStatement, schema *storage.TableSchema) ([]storage.Row, error) {
+	if stmt == nil {
+		return rows, nil
+	}
+	var windowExprs []*parser.WindowExpr
+	for _, col := range stmt.Columns {
+		windowExprs = append(windowExprs, extractAllWindowExprs(col.Expr)...)
+	}
+	if len(windowExprs) == 0 {
+		return rows, nil
+	}
+
+	newRows := make([]storage.Row, len(rows))
+	for i, row := range rows {
+		newRows[i] = make(storage.Row, len(row), len(row)+len(windowExprs))
+		copy(newRows[i], row)
+	}
+
+	for wfIdx, we := range windowExprs {
+		colName := fmt.Sprintf("__window_expr_%d_%p", wfIdx, we)
+		we.ColName = colName
+		schema.Columns = append(schema.Columns, storage.ColumnSchema{
+			Name: colName,
+			Type: "INT",
+		})
+
+		partitions := make(map[string][]int)
+		for i, row := range newRows {
+			key := ""
+			if len(we.PartitionBy) > 0 {
+				var keyParts []string
+				for _, p := range we.PartitionBy {
+					val, err := types.EvalOperand(p, row, schema, nil)
+					if err != nil {
+						return nil, fmt.Errorf("eval window partition expression: %w", err)
+					}
+					keyParts = append(keyParts, types.ValueToString(val))
+				}
+				key = strings.Join(keyParts, "\x00")
+			}
+			partitions[key] = append(partitions[key], i)
+		}
+
+		// Sort partitions keys for deterministic ordering of buckets when possible
+		var partKeys []string
+		for k := range partitions {
+			partKeys = append(partKeys, k)
+		}
+		sort.Strings(partKeys)
+
+		for _, key := range partKeys {
+			indices := partitions[key]
+			if len(we.OrderBy) > 0 {
+				sort.SliceStable(indices, func(a, b int) bool {
+					rowA, rowB := newRows[indices[a]], newRows[indices[b]]
+					for _, item := range we.OrderBy {
+						va, err := types.EvalOperand(item.Expr, rowA, schema, nil)
+						if err != nil {
+							slog.Error("eval window order by expression", "error", err)
+							return false
+						}
+						vb, err := types.EvalOperand(item.Expr, rowB, schema, nil)
+						if err != nil {
+							slog.Error("eval window order by expression", "error", err)
+							return false
+						}
+						cmp := eval.CompareOrdering(va, vb)
+						if cmp == 0 {
+							continue
+						}
+						if item.Asc || strings.ToUpper(item.Direction) == "ASC" {
+							return cmp < 0
+						}
+						return cmp > 0
+					}
+					return false
+				})
+			}
+
+			funcName := strings.ToUpper(we.Function)
+			ranks := make([]int64, len(indices))
+			for pos, globalIdx := range indices {
+				if funcName == "ROW_NUMBER" {
+					ranks[pos] = int64(pos + 1)
+				} else if funcName == "RANK" {
+					if pos == 0 {
+						ranks[pos] = 1
+					} else {
+						tied, err := areRowsTiedPhase5(newRows[indices[pos]], newRows[indices[pos-1]], we.OrderBy, schema)
+						if err != nil {
+							return nil, err
+						}
+						if tied {
+							ranks[pos] = ranks[pos-1]
+						} else {
+							ranks[pos] = int64(pos + 1)
+						}
+					}
+				} else if funcName == "DENSE_RANK" {
+					if pos == 0 {
+						ranks[pos] = 1
+					} else {
+						tied, err := areRowsTiedPhase5(newRows[indices[pos]], newRows[indices[pos-1]], we.OrderBy, schema)
+						if err != nil {
+							return nil, err
+						}
+						if tied {
+							ranks[pos] = ranks[pos-1]
+						} else {
+							ranks[pos] = ranks[pos-1] + 1
+						}
+					}
+				} else {
+					ranks[pos] = int64(pos + 1)
+				}
+				newRows[globalIdx] = append(newRows[globalIdx], ranks[pos])
+			}
+		}
+	}
+	return newRows, nil
+}
+
+func areRowsTiedPhase5(r1, r2 storage.Row, orderBy []parser.OrderByClause, schema *storage.TableSchema) (bool, error) {
+	if len(orderBy) == 0 {
+		return true, nil
+	}
+	for _, item := range orderBy {
+		v1, err := types.EvalOperand(item.Expr, r1, schema, nil)
+		if err != nil {
+			return false, err
+		}
+		v2, err := types.EvalOperand(item.Expr, r2, schema, nil)
+		if err != nil {
+			return false, err
+		}
+		if eval.CompareOrdering(v1, v2) != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }

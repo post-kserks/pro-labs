@@ -11,7 +11,6 @@ import (
 	"vaultdb/internal/backup"
 	"vaultdb/internal/core/index"
 	"vaultdb/internal/core/storage/page"
-	"vaultdb/internal/core/txmanager"
 	"vaultdb/internal/core/wal"
 )
 
@@ -28,7 +27,7 @@ func TestWALRecoveryAfterCrash(t *testing.T) {
 	defer w.Close()
 
 	// Create page engine
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +69,7 @@ func TestWALRecoveryAfterCrash(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +100,7 @@ func TestWALRecoveryWithPartialWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +141,7 @@ func TestWALRecoveryWithPartialWrite(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +172,7 @@ func TestWALRecoveryWithMultipleTables(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +234,7 @@ func TestWALRecoveryWithMultipleTables(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -274,7 +273,7 @@ func TestWALRecoveryAfterDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -321,7 +320,7 @@ func TestWALRecoveryAfterDelete(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -353,7 +352,7 @@ func TestCheckpointAfterOperations(t *testing.T) {
 	}
 	defer w.Close()
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -410,7 +409,7 @@ func TestBufferPoolFlush(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create page engine with buffer pool
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, nil, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -454,7 +453,7 @@ func TestIndexPersistence(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create page engine
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, nil, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -503,7 +502,7 @@ func TestConcurrentInserts(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create page engine
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, nil, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -558,7 +557,7 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create page engine
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, nil, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -641,7 +640,7 @@ func TestTransactionRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -681,7 +680,7 @@ func TestTransactionRecovery(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -748,7 +747,7 @@ func TestAlterTableRewriteRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -816,7 +815,7 @@ func TestAlterTableRewriteRecovery(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -861,7 +860,7 @@ func TestAlterTableRewriteRecoveryNoTempDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -899,7 +898,7 @@ func TestAlterTableRewriteRecoveryNoTempDir(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -929,7 +928,7 @@ func TestVacuumRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -997,7 +996,7 @@ func TestVacuumRecovery(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -1041,7 +1040,7 @@ func TestFullPageWriteRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -1108,7 +1107,7 @@ func TestFullPageWriteRecovery(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -1145,7 +1144,7 @@ func TestCatalogRecalculationAfterWALRecovery(t *testing.T) {
 	}
 	defer w.Close()
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -1206,7 +1205,7 @@ func TestCatalogRecalculationAfterWALRecovery(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -1257,7 +1256,7 @@ func TestNoPerBatchSync(t *testing.T) {
 	}
 	defer w.Close()
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -1324,7 +1323,7 @@ func TestDurabilityAfterCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -1364,7 +1363,7 @@ func TestDurabilityAfterCrash(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -1404,7 +1403,7 @@ func TestConcurrentCrashMixedWorkload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	store, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -1459,7 +1458,7 @@ func TestConcurrentCrashMixedWorkload(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	store2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -1486,6 +1485,9 @@ func TestConcurrentCrashMixedWorkload(t *testing.T) {
 // without corrupting previously committed data.
 
 func TestDiskFullDuringWrite(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("skipping read-only directory test when running as root or on Windows (POSIX read-only mode checks bypassed)")
+	}
 	dir := t.TempDir()
 
 	walPath := dir + "/test.wal"
@@ -1494,7 +1496,7 @@ func TestDiskFullDuringWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -1558,7 +1560,7 @@ func TestDiskFullDuringWrite(t *testing.T) {
 		return
 	}
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Logf("engine reopen failed as expected on read-only dir: %v", err)
@@ -1594,7 +1596,7 @@ func verifyDataIntact(t *testing.T, dir, dbName, tableName string, expectedCount
 	}
 	defer w.Close()
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -1626,7 +1628,7 @@ func TestOOMProtectionLargeQuery(t *testing.T) {
 	}
 	defer w.Close()
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -1741,7 +1743,7 @@ func TestKillDuringBackupCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -1808,7 +1810,7 @@ func TestKillDuringBackupCreation(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)
@@ -1840,7 +1842,7 @@ func TestKillDuringBackupCreation(t *testing.T) {
 	}
 	defer w3.Close()
 
-	txm3 := txmanager.NewManager()
+	txm3 := newTestTxManager()
 	engine3, err := NewPageStorageEngine(restoreDir, w3, txm3)
 	if err != nil {
 		t.Fatal(err)
@@ -1879,7 +1881,7 @@ func TestWALRecoveryAfterDirtyPagesFlushed(t *testing.T) {
 	}
 	// Don't defer w.Close() — we simulate a crash by closing without cleanup.
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	engine, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -1925,7 +1927,7 @@ func TestWALRecoveryAfterDirtyPagesFlushed(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	engine2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)

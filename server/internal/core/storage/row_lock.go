@@ -1,154 +1,263 @@
 package storage
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 )
 
-// LockType determines the compatibility mode for row locks.
-type LockType int
+// ErrRowLocked is returned when a row lock cannot be acquired within the timeout or on immediate check.
+var ErrRowLocked = errors.New("row locked")
+
+// RowLockMode determines the compatibility mode for row locks.
+type RowLockMode int
 
 const (
 	// LockShared allows multiple readers concurrently.
-	LockShared LockType = iota
+	LockShared RowLockMode = 1
 	// LockExclusive allows a single writer, blocking all others.
-	LockExclusive
+	LockExclusive RowLockMode = 2
 )
+
+// LockType alias for backwards compatibility.
+type LockType = RowLockMode
 
 // RowLock represents the lock state for a single logical row.
 type RowLock struct {
-	txID     uint64
-	lockType LockType
-	granted  time.Time
-	mu       sync.Mutex
-	waiters  []chan struct{}
+	Key     string
+	Mode    RowLockMode
+	Holders map[uint64]bool
+	Waiters []chan struct{}
 }
 
-// RowLockManager manages row-level locks across all tables.
-// Keys are "db:table:rowID" strings. Concurrent access is safe.
+// RowLockManager manages row-level locks across tables.
+// Keys are formatted as "db/table/rowKey". Concurrent access is safe.
 type RowLockManager struct {
 	locks   map[string]*RowLock
-	mu      sync.RWMutex
+	mu      sync.Mutex
 	timeout time.Duration
 }
 
-// NewRowLockManager creates a lock manager with the given acquire timeout.
-func NewRowLockManager(timeout time.Duration) *RowLockManager {
+// NewRowLockManager creates a lock manager with an optional acquire timeout.
+// Defaults to 30 seconds if not specified.
+func NewRowLockManager(timeout ...time.Duration) *RowLockManager {
+	t := 30 * time.Second
+	if len(timeout) > 0 {
+		t = timeout[0]
+	}
 	return &RowLockManager{
 		locks:   make(map[string]*RowLock),
-		timeout: timeout,
+		timeout: t,
 	}
 }
 
-func rowLockKey(db, table string, rowID uint64) string {
-	return fmt.Sprintf("%s:%s:%d", db, table, rowID)
+func rowLockKey(db, table string, rowKey interface{}) string {
+	return fmt.Sprintf("%s/%s/%v", db, table, rowKey)
 }
 
 // LockRow acquires a lock on the specified row for the given transaction.
-// Returns nil on success, or an error if the timeout expires.
-func (rlm *RowLockManager) LockRow(db, table string, rowID uint64, txID uint64, lockType LockType) error {
-	key := rowLockKey(db, table, rowID)
+// It supports cancellation/timeout via context, as well as an internal timeout if configured.
+func (rlm *RowLockManager) LockRow(ctx context.Context, db, table, rowKey string, txID uint64, mode RowLockMode) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	key := rowLockKey(db, table, rowKey)
 
 	rlm.mu.Lock()
 	lock, exists := rlm.locks[key]
 	if !exists {
-		lock = &RowLock{}
+		lock = &RowLock{
+			Key:     key,
+			Mode:    mode,
+			Holders: make(map[uint64]bool),
+		}
+		lock.Holders[txID] = true
 		rlm.locks[key] = lock
+		rlm.mu.Unlock()
+		return nil
 	}
+
+	// Reentrant check: if txID already holds this lock
+	if lock.Holders[txID] {
+		if lock.Mode == LockExclusive || mode == LockShared {
+			rlm.mu.Unlock()
+			return nil
+		}
+		// Requesting LockExclusive while holding LockShared (lock upgrade)
+		if len(lock.Holders) == 1 {
+			lock.Mode = LockExclusive
+			rlm.mu.Unlock()
+			return nil
+		}
+		// If len(lock.Holders) > 1, other transactions hold LockShared. We must wait for them to release.
+	} else if len(lock.Holders) == 0 || (lock.Mode == LockShared && mode == LockShared) {
+		if len(lock.Holders) == 0 {
+			lock.Mode = mode
+		}
+		lock.Holders[txID] = true
+		rlm.mu.Unlock()
+		return nil
+	}
+
+	// Check if context is already canceled or timed out
+	if ctx != nil && ctx.Err() != nil {
+		rlm.mu.Unlock()
+		return ctx.Err()
+	}
+
+	// Cannot acquire immediately. If timeout == 0 and no context deadline is set, return ErrRowLocked non-blocking.
+	hasDeadline := false
+	if ctx != nil {
+		_, hasDeadline = ctx.Deadline()
+	}
+	if rlm.timeout == 0 && !hasDeadline {
+		rlm.mu.Unlock()
+		return ErrRowLocked
+	}
+
+	waiter := make(chan struct{}, 1)
+	lock.Waiters = append(lock.Waiters, waiter)
 	rlm.mu.Unlock()
 
-	return lock.acquire(txID, lockType, rlm.timeout)
-}
-
-// UnlockRow releases the lock held by the given transaction on the specified row.
-func (rlm *RowLockManager) UnlockRow(db, table string, rowID uint64, txID uint64) {
-	key := rowLockKey(db, table, rowID)
-
-	rlm.mu.RLock()
-	lock, exists := rlm.locks[key]
-	rlm.mu.RUnlock()
-
-	if exists {
-		lock.release(txID)
+	var timeoutCh <-chan time.Time
+	if rlm.timeout > 0 {
+		timer := time.NewTimer(rlm.timeout)
+		defer timer.Stop()
+		timeoutCh = timer.C
 	}
-}
-
-// UnlockRows releases locks on multiple rows for the given transaction.
-func (rlm *RowLockManager) UnlockRows(db, table string, rowIDs []uint64, txID uint64) {
-	for _, rowID := range rowIDs {
-		rlm.UnlockRow(db, table, rowID, txID)
+	var ctxDone <-chan struct{}
+	if ctx != nil {
+		ctxDone = ctx.Done()
 	}
-}
-
-// ActiveLockCount returns the number of tracked lock entries.
-// Used for diagnostics and testing.
-func (rlm *RowLockManager) ActiveLockCount() int {
-	rlm.mu.RLock()
-	defer rlm.mu.RUnlock()
-	return len(rlm.locks)
-}
-
-// acquire attempts to obtain the lock. Blocks until granted or timeout.
-func (l *RowLock) acquire(txID uint64, lockType LockType, timeout time.Duration) error {
-	l.mu.Lock()
-
-	// Reentrant: same transaction already holds this lock.
-	if l.txID == txID {
-		l.mu.Unlock()
-		return nil
-	}
-
-	// Lock is free or compatible (shared+shared).
-	if l.txID == 0 || (l.lockType == LockShared && lockType == LockShared) {
-		l.txID = txID
-		l.lockType = lockType
-		l.granted = time.Now()
-		l.mu.Unlock()
-		return nil
-	}
-
-	// Must wait — register a waiter channel, then block outside the lock.
-	waiter := make(chan struct{}, 1)
-	l.waiters = append(l.waiters, waiter)
-	l.mu.Unlock()
 
 	select {
-	case <-waiter:
-		// Signalled — retry acquisition (the releaser cleared the lock).
-		return l.acquire(txID, lockType, timeout)
-	case <-time.After(timeout):
-		// Timed out — remove ourselves from the waiter list.
-		l.mu.Lock()
-		for i, w := range l.waiters {
-			if w == waiter {
-				l.waiters = append(l.waiters[:i], l.waiters[i+1:]...)
-				break
-			}
+	case _, ok := <-waiter:
+		if !ok {
+			return rlm.LockRow(ctx, db, table, rowKey, txID, mode)
 		}
-		l.mu.Unlock()
-		return fmt.Errorf("row lock timeout after %v", timeout)
+		return rlm.LockRow(ctx, db, table, rowKey, txID, mode)
+	case <-ctxDone:
+		rlm.removeWaiter(key, waiter)
+		return ctx.Err()
+	case <-timeoutCh:
+		rlm.removeWaiter(key, waiter)
+		return ErrRowLocked
 	}
 }
 
-// release drops the lock and wakes the next waiter.
-func (l *RowLock) release(txID uint64) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+// LockRowLegacy provides compatibility for callers using uint64 rowID without context.
+func (rlm *RowLockManager) LockRowLegacy(db, table string, rowID uint64, txID uint64, mode RowLockMode) error {
+	return rlm.LockRow(context.Background(), db, table, strconv.FormatUint(rowID, 10), txID, mode)
+}
 
-	if l.txID != txID {
+// LockRowInt allows acquiring a row lock using int mode to satisfy txmanager interfaces without circular imports.
+func (rlm *RowLockManager) LockRowInt(ctx context.Context, db, table, rowKey string, txID uint64, mode int) error {
+	return rlm.LockRow(ctx, db, table, rowKey, txID, RowLockMode(mode))
+}
+
+func (rlm *RowLockManager) removeWaiter(key string, waiter chan struct{}) {
+	rlm.mu.Lock()
+	defer rlm.mu.Unlock()
+	lock, exists := rlm.locks[key]
+	if !exists {
 		return
 	}
-
-	l.txID = 0
-	l.lockType = LockShared
-
-	if len(l.waiters) > 0 {
-		waiter := l.waiters[0]
-		l.waiters = l.waiters[1:]
-		select {
-		case waiter <- struct{}{}:
-		default:
+	found := false
+	for i, w := range lock.Waiters {
+		if w == waiter {
+			lock.Waiters = append(lock.Waiters[:i], lock.Waiters[i+1:]...)
+			found = true
+			break
 		}
 	}
+	if !found {
+		// If waiter was not found, UnlockTx or UnlockRow already popped and closed it just as we timed out.
+		// If no one currently holds the lock, wake up the next waiter so the lock does not stall.
+		if len(lock.Holders) == 0 {
+			rlm.notifyNextLocked(lock, key)
+		}
+	} else if len(lock.Holders) == 0 && len(lock.Waiters) == 0 {
+		delete(rlm.locks, key)
+	}
+}
+
+func (rlm *RowLockManager) notifyNextLocked(lock *RowLock, key string) {
+	if len(lock.Waiters) > 0 {
+		w := lock.Waiters[0]
+		lock.Waiters = lock.Waiters[1:]
+		close(w)
+	}
+	if len(lock.Holders) == 0 && len(lock.Waiters) == 0 {
+		delete(rlm.locks, key)
+	}
+}
+
+// UnlockTx finds and releases all row locks held by txID, waking waiting transactions.
+func (rlm *RowLockManager) UnlockTx(txID uint64) {
+	rlm.mu.Lock()
+	defer rlm.mu.Unlock()
+
+	for key, lock := range rlm.locks {
+		if lock.Holders[txID] {
+			delete(lock.Holders, txID)
+			if len(lock.Holders) == 0 {
+				rlm.notifyNextLocked(lock, key)
+			}
+		}
+	}
+}
+
+// UnlockRow releases the lock held by txID on a specific row.
+func (rlm *RowLockManager) UnlockRow(db, table string, rowKey interface{}, txID uint64) {
+	key := rowLockKey(db, table, rowKey)
+	rlm.mu.Lock()
+	defer rlm.mu.Unlock()
+
+	lock, exists := rlm.locks[key]
+	if !exists {
+		return
+	}
+	if lock.Holders[txID] {
+		delete(lock.Holders, txID)
+		if len(lock.Holders) == 0 {
+			rlm.notifyNextLocked(lock, key)
+		}
+	}
+}
+
+// UnlockRows releases locks on multiple rows held by txID.
+func (rlm *RowLockManager) UnlockRows(db, table string, rowKeys interface{}, txID uint64) {
+	switch keys := rowKeys.(type) {
+	case []uint64:
+		for _, k := range keys {
+			rlm.UnlockRow(db, table, k, txID)
+		}
+	case []string:
+		for _, k := range keys {
+			rlm.UnlockRow(db, table, k, txID)
+		}
+	case []int:
+		for _, k := range keys {
+			rlm.UnlockRow(db, table, k, txID)
+		}
+	case []int64:
+		for _, k := range keys {
+			rlm.UnlockRow(db, table, k, txID)
+		}
+	case []interface{}:
+		for _, k := range keys {
+			rlm.UnlockRow(db, table, k, txID)
+		}
+	}
+}
+
+// ActiveLockCount returns the number of active lock entries (used for diagnostics and testing).
+func (rlm *RowLockManager) ActiveLockCount() int {
+	rlm.mu.Lock()
+	defer rlm.mu.Unlock()
+	return len(rlm.locks)
 }

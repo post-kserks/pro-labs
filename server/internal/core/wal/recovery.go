@@ -2,6 +2,7 @@ package wal
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -85,6 +86,8 @@ func (w *WAL) TruncateWAL() error {
 	return nil
 }
 
+var ErrCorruptWALMagic = errors.New("wal: corrupt record magic bytes")
+
 func (w *WAL) Recover() ([]Entry, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -95,13 +98,48 @@ func (w *WAL) Recover() ([]Entry, error) {
 
 	var entries []Entry
 	var maxTxID uint64
+	var currPos int64
 	for {
-		entry, _, err := w.readEntryFrom(w.file)
+		entry, size, err := w.readEntryFrom(w.file)
 		if err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
-			break
+			// Attempt to resync past mid-file corruptions
+			w.file.Seek(currPos+1, io.SeekStart)
+			resynced := false
+			for {
+				var b [1]byte
+				if _, readErr := w.file.Read(b[:]); readErr != nil {
+					break
+				}
+				if b[0] != recordMagic[0] {
+					continue
+				}
+				peek := make([]byte, 3)
+				if _, readErr := io.ReadFull(w.file, peek); readErr != nil {
+					break
+				}
+				if string(append(b[:], peek...)) == recordMagic {
+					newPos, _ := w.file.Seek(-4, io.SeekCurrent)
+					if testEntry, testSize, testErr := w.readEntryFrom(w.file); testErr == nil {
+						if testEntry.Encrypted && w.em == nil {
+							return nil, fmt.Errorf("wal: record at txID %d is encrypted but no EncryptionManager is set", testEntry.TxID)
+						}
+						if testEntry.TxID > maxTxID {
+							maxTxID = testEntry.TxID
+						}
+						entries = append(entries, testEntry)
+						currPos = newPos + testSize
+						resynced = true
+						break
+					}
+				}
+			}
+			if !resynced {
+				break
+			}
+			continue
 		}
 		if entry.Encrypted && w.em == nil {
 			return nil, fmt.Errorf("wal: record at txID %d is encrypted but no EncryptionManager is set", entry.TxID)
@@ -110,6 +148,7 @@ func (w *WAL) Recover() ([]Entry, error) {
 			maxTxID = entry.TxID
 		}
 		entries = append(entries, entry)
+		currPos += size
 	}
 
 	if maxTxID > w.nextTxID.Load() {
@@ -134,7 +173,7 @@ func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
 		return Entry{}, 0, err
 	}
 	if string(fixedHdr[:4]) != recordMagic {
-		return Entry{}, 0, io.EOF
+		return Entry{}, 0, ErrCorruptWALMagic
 	}
 	txID := binary.LittleEndian.Uint64(fixedHdr[4:12])
 	opType := fixedHdr[12]
@@ -208,6 +247,7 @@ func (w *WAL) scanAndTruncate() (uint64, error) {
 			slog.Warn("wal: corrupt entry, attempting resync",
 				"offset", corruptOffset, "error", err)
 
+			w.file.Seek(corruptOffset+1, io.SeekStart)
 			resynced := false
 			for {
 				// Read one byte at a time looking for 'V' (start of "VDB1")

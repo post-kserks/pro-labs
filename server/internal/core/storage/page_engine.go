@@ -17,9 +17,14 @@ import (
 	"vaultdb/internal/core/index"
 	"vaultdb/internal/core/storage/heap"
 	"vaultdb/internal/core/storage/page"
-	"vaultdb/internal/core/txmanager"
 	"vaultdb/internal/core/wal"
 )
+
+// TxManager defines the transaction manager operations needed by PageStorageEngine.
+type TxManager interface {
+	EnsureCounterAtLeast(val uint64)
+	IsCommitted(xid uint64) bool
+}
 
 // PageStorageEngine implements StorageEngine on top of binary page-based
 // storage (internal/storage/page + internal/storage/heap), enabled via
@@ -38,7 +43,7 @@ type PageStorageEngine struct {
 	catalog pageCatalog
 
 	wal      *wal.WAL
-	txMgr    *txmanager.Manager
+	txMgr    TxManager
 	bufPool  *BufferPool
 	pageLock *PageLockManager
 	rowLocks *RowLockManager
@@ -103,7 +108,7 @@ const (
 
 // NewPageStorageEngine opens (or creates) page storage in
 // <dataDir>/pagedb.
-func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager, opts ...*StorageOptions) (*PageStorageEngine, error) {
+func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr TxManager, opts ...*StorageOptions) (*PageStorageEngine, error) {
 	root := filepath.Join(dataDir, "pagedb")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
@@ -118,6 +123,25 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager, 
 		bufPool.SetWAL(w)
 	}
 
+	var rlm *RowLockManager
+	if rlProvider, ok := txMgr.(interface{ GetRowLocks() *RowLockManager }); ok && rlProvider != nil {
+		rlm = rlProvider.GetRowLocks()
+	}
+	if rlm == nil {
+		rlm = NewRowLockManager(30 * time.Second)
+	}
+	if holder, ok := txMgr.(interface{ SetRowLocks(*RowLockManager) }); ok && holder != nil {
+		holder.SetRowLocks(rlm)
+	}
+	if rlHolder, ok := txMgr.(interface {
+		SetRowLocker(interface {
+			LockRowInt(context.Context, string, string, string, uint64, int) error
+			UnlockTx(uint64)
+		})
+	}); ok && rlHolder != nil {
+		rlHolder.SetRowLocker(rlm)
+	}
+
 	e := &PageStorageEngine{
 		rootDir: root,
 		tables:  make(map[string]*pageTable),
@@ -129,7 +153,7 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr *txmanager.Manager, 
 		txMgr:    txMgr,
 		bufPool:  bufPool,
 		pageLock: NewPageLockManager(),
-		rowLocks: NewRowLockManager(30 * time.Second),
+		rowLocks: rlm,
 		indexes:  make(map[string]*index.IndexManager),
 		schemas:  make(map[string]*TableSchema),
 	}
@@ -1264,4 +1288,9 @@ func (e *PageStorageEngine) DML() *DMLExecutor {
 // DDL returns the DDL executor subsystem for CREATE/DROP TABLE operations.
 func (e *PageStorageEngine) DDL() *DDLExecutor {
 	return e.ddl
+}
+
+// GetRowLocks returns the row lock manager subsystem.
+func (e *PageStorageEngine) GetRowLocks() *RowLockManager {
+	return e.rowLocks
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -899,6 +900,9 @@ func TestWriteFullPageImageLarge(t *testing.T) {
 // ── Open error paths ──────────────────────────────────────────────────────
 
 func TestOpenNonExistentDir(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("skipping non-existent root dir test when running as root or on Windows")
+	}
 	path := "/nonexistent/dir/that/does/not/exist/wal"
 	_, err := Open(path)
 	if err == nil {

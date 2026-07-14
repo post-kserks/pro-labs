@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"vaultdb/internal/core/txmanager"
 	"vaultdb/internal/core/wal"
 )
 
@@ -312,7 +311,7 @@ func TestPageEngineSecondaryIndexes(t *testing.T) {
 }
 
 func TestMVCCVisibility(t *testing.T) {
-	mgr := txmanager.NewManager()
+	mgr := newTestTxManager()
 	dir := t.TempDir()
 	e, err := NewPageStorageEngine(dir, nil, mgr)
 	if err != nil {
@@ -693,7 +692,7 @@ func TestTruncateTableRecovery(t *testing.T) {
 	}
 	defer w.Close()
 
-	txm := txmanager.NewManager()
+	txm := newTestTxManager()
 	e, err := NewPageStorageEngine(dir, w, txm)
 	if err != nil {
 		t.Fatal(err)
@@ -727,7 +726,7 @@ func TestTruncateTableRecovery(t *testing.T) {
 	}
 	defer w2.Close()
 
-	txm2 := txmanager.NewManager()
+	txm2 := newTestTxManager()
 	e2, err := NewPageStorageEngine(dir, w2, txm2)
 	if err != nil {
 		t.Fatal(err)

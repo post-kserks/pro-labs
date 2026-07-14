@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -105,6 +106,9 @@ func TestKMSKeySourceVaultProvider(t *testing.T) {
 }
 
 func TestFileKMSClientEncryptWriteError(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("skipping write-error test when running as root or on Windows")
+	}
 	// Write to a path inside a non-existent directory
 	c := NewFileKMSClient("/nonexistent/dir/file.enc")
 	_, err := c.Encrypt(context.Background(), "key", []byte("data"))

@@ -149,7 +149,7 @@ func (c *SelectCommand) isSimpleSelect() bool {
 	if c.stmt.Distinct || c.stmt.AsOf != nil || len(c.stmt.Columns) == 0 {
 		return false
 	}
-	if c.hasAggregates() || len(c.extractWindowFunctions()) > 0 {
+	if c.hasAggregates() || len(c.extractWindowFunctions()) > 0 || c.hasWindowExprs() {
 		return false
 	}
 	return true
@@ -622,6 +622,13 @@ func (c *SelectCommand) executeSimpleSelect(ctx *types.ExecutionContext, dbName 
 			return nil, err
 		}
 	}
+	filtered, err = processWindowColumns(filtered, c.stmt, combinedSchema)
+	if err != nil {
+		return nil, err
+	}
+	if ctx != nil && combinedSchema != nil {
+		types.EnsureColumnIndex(ctx, combinedSchema)
+	}
 
 	// Sort rows (ORDER BY)
 	if len(c.stmt.OrderBy) > 0 {
@@ -738,6 +745,14 @@ func tryIndexLookup(ctx *types.ExecutionContext, dbName, tableName string, where
 	var right parser.Expression
 
 	switch e := where.(type) {
+	case *parser.AndExpr:
+		if positions, ok := tryIndexLookup(ctx, dbName, tableName, e.Left); ok {
+			return positions, true
+		}
+		if positions, ok := tryIndexLookup(ctx, dbName, tableName, e.Right); ok {
+			return positions, true
+		}
+		return nil, false
 	case *parser.BinaryExpr:
 		if !indexOperators[e.Operator] {
 			return nil, false
@@ -839,6 +854,14 @@ func tryIndexOnlyScan(ctx *types.ExecutionContext, dbName, tableName string, whe
 	var left parser.Expression
 
 	switch e := where.(type) {
+	case *parser.AndExpr:
+		if cols, ok := tryIndexOnlyScan(ctx, dbName, tableName, e.Left, positions); ok {
+			return cols, true
+		}
+		if cols, ok := tryIndexOnlyScan(ctx, dbName, tableName, e.Right, positions); ok {
+			return cols, true
+		}
+		return nil, false
 	case *parser.BinaryExpr:
 		op = e.Operator
 		left = e.Left

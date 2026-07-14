@@ -406,7 +406,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		}
 		// Acquire row-level exclusive locks on each target row.
 		for _, idx := range indices {
-			if err = e.rowLocks.LockRow(dbName, tableName, uint64(idx), txID, LockExclusive); err != nil {
+			if err = e.rowLocks.LockRowLegacy(dbName, tableName, uint64(idx), txID, LockExclusive); err != nil {
 				t.mu.RUnlock()
 				return 0, err
 			}

@@ -410,6 +410,18 @@ func ContainsExprDML(expr parser.Expression) bool {
 			}
 		}
 		return false
+	case *parser.WindowExpr:
+		for _, p := range e.PartitionBy {
+			if ContainsExprDML(p) {
+				return true
+			}
+		}
+		for _, o := range e.OrderBy {
+			if ContainsExprDML(o.Expr) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}

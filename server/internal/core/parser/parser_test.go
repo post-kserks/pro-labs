@@ -1216,6 +1216,18 @@ func TestParseExpressionWindow(t *testing.T) {
 	if len(sel.Columns) != 1 {
 		t.Fatalf("expected 1 column, got %d", len(sel.Columns))
 	}
+	if win, ok := sel.Columns[0].Expr.(*WindowExpr); ok {
+		if win.Function != "ROW_NUMBER" {
+			t.Fatalf("expected func name 'ROW_NUMBER', got %q", win.Function)
+		}
+		if len(win.OrderBy) != 1 {
+			t.Fatalf("expected 1 ORDER BY item, got %d", len(win.OrderBy))
+		}
+		if win.OrderBy[0].Direction != "ASC" {
+			t.Fatalf("expected direction 'ASC', got %q", win.OrderBy[0].Direction)
+		}
+		return
+	}
 	win, ok := sel.Columns[0].Expr.(*WindowFunctionExpr)
 	if !ok {
 		t.Fatalf("expected *WindowFunctionExpr, got %T", sel.Columns[0].Expr)
@@ -2021,6 +2033,18 @@ func TestParseWindowFunctions(t *testing.T) {
 			}
 			if len(sel.Columns) == 0 {
 				t.Fatal("expected at least 1 column")
+			}
+			if win, ok := sel.Columns[0].Expr.(*WindowExpr); ok {
+				if win.Function != tc.funcName {
+					t.Fatalf("expected func name %q, got %q", tc.funcName, win.Function)
+				}
+				if len(win.PartitionBy) != tc.partCols {
+					t.Fatalf("expected %d partition columns, got %d", tc.partCols, len(win.PartitionBy))
+				}
+				if len(win.OrderBy) != tc.orderCols {
+					t.Fatalf("expected %d order columns, got %d", tc.orderCols, len(win.OrderBy))
+				}
+				return
 			}
 			win, ok := sel.Columns[0].Expr.(*WindowFunctionExpr)
 			if !ok {

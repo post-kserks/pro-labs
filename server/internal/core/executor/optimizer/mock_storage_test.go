@@ -1,6 +1,7 @@
 package optimizer
 
 import (
+	"strings"
 	"vaultdb/internal/core/index"
 	"vaultdb/internal/core/storage"
 )
@@ -145,6 +146,14 @@ func (m *mockStorage) ListIndexes(dbName, tableName string) ([]string, error) {
 }
 
 func (m *mockStorage) FindIndexForColumn(dbName, tableName, column string) (string, bool) {
+	if m.indexes[dbName] == nil || m.indexes[dbName][tableName] == nil {
+		return "", false
+	}
+	for idxName := range m.indexes[dbName][tableName] {
+		if idxName == column || idxName == "idx_"+column || strings.Contains(idxName, column) {
+			return idxName, true
+		}
+	}
 	return "", false
 }
 
