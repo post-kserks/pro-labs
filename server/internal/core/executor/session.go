@@ -6,15 +6,15 @@ import (
 	"sync"
 	"time"
 
+	"vaultdb/internal/auth"
 	"vaultdb/internal/core/ai"
 	"vaultdb/internal/core/audit"
-	"vaultdb/internal/auth"
-	"vaultdb/internal/logging"
 	"vaultdb/internal/core/metrics"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
 	"vaultdb/internal/core/txmanager"
 	"vaultdb/internal/core/wal"
+	"vaultdb/internal/logging"
 )
 
 const defaultMaxPreparedStatements = 1000

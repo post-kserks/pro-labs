@@ -8,6 +8,8 @@ on:
     branches: [main, check]
   pull_request:
     branches: [main, check]
+  schedule:
+    - cron: "0 2 * * *"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}

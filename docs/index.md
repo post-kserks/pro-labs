@@ -43,11 +43,15 @@ VaultDB is an enterprise-first, embeddable SQL database engine with a custom pag
 - [Backup and Restore](backup.md) — Backup format, procedures, CLI tool
 - [Monitoring and Metrics](monitoring.md) — Prometheus metrics, health checks, dashboards
 - [Encryption](encryption.md) — Transparent Data Encryption, key management, SQL syntax
+- [Hardening Checklist](hardening-checklist.md) — Production security hardening steps
+- [Security Instructions](security/security-instruction.md) — Security policies and guidelines
+- [Benchmarks Summary](benchmarks/baseline-summary.md) — Performance baselines and stress testing
 
 ### Reference
 
 - [HTTP API Reference](api-reference.md) — REST endpoints, request/response formats
-- [TCP Protocol](tcp-protocol.md) — Protocol v2 wire format for native clients
+- [TCP Protocol](tcp-protocol.md) — Protocol v2 wire format overview
+- [Protocol v2 Specification](protocol/PROTOCOL_v2.md) — Detailed wire protocol v2 specification
 - [C++ Client](client.md) — Building and using the C++ client library
 - [AI and Semantic Search](ai.md) — Embedding providers, vector operations
 - [Glossary](glossary.md) — Terminology reference

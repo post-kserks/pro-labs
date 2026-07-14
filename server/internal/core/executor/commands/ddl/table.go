@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
-	"vaultdb/internal/core/executor/types"
 )
 
 type CreateTableCommand struct {

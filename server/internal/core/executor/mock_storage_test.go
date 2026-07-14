@@ -829,7 +829,7 @@ func TestUpsertTOCTOU(t *testing.T) {
 		}
 
 		cmd := &dml.InsertCommand{}
-	cmd.SetStmt(stmt)
+		cmd.SetStmt(stmt)
 		result, err := cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -879,7 +879,7 @@ func TestUpsertTOCTOU(t *testing.T) {
 		}
 
 		cmd := &dml.InsertCommand{}
-	cmd.SetStmt(stmt)
+		cmd.SetStmt(stmt)
 		result, err := cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -932,7 +932,7 @@ func TestUpsertTOCTOU(t *testing.T) {
 		}
 
 		cmd := &dml.InsertCommand{}
-	cmd.SetStmt(stmt)
+		cmd.SetStmt(stmt)
 		result, err := cmd.Execute(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

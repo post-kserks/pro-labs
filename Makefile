@@ -3,7 +3,7 @@
 IMAGE   := vaultdb/vaultdb
 VERSION := $(shell cat VERSION)
 TAG     := $(IMAGE):$(VERSION)
-LDFLAGS := -X main.version=$(VERSION) -X main.buildDate=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -trimpath -s -w -X main.version=$(VERSION) -X main.buildDate=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 build:
 	mkdir -p build

@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"strings"
 
+	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
 	"vaultdb/internal/core/txmanager"
-	"vaultdb/internal/core/executor/types"
 )
 
 type InsertCommand struct {

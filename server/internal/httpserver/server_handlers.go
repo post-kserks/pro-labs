@@ -13,8 +13,8 @@ import (
 
 	"vaultdb/internal/core/executor"
 	"vaultdb/internal/core/parser"
-	"vaultdb/internal/protocol"
 	"vaultdb/internal/core/storage"
+	"vaultdb/internal/protocol"
 )
 
 var validPathName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)

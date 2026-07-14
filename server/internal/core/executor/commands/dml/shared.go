@@ -6,9 +6,9 @@ package dml
 import (
 	"fmt"
 
+	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
-	"vaultdb/internal/core/executor/types"
 )
 
 func executeReturningGeneric(rows []storage.Row, returningCols []parser.SelectColumn, schema *storage.TableSchema, ctx *types.ExecutionContext, oldRows ...storage.Row) (*types.Result, error) {

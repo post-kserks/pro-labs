@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
-	"vaultdb/internal/core/executor/types"
 )
 
 // validateWASMPath resolves a WASM file:// URI and ensures it is contained within

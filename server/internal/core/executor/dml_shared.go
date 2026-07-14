@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
-	"vaultdb/internal/core/executor/types"
 )
 
 func exprToSQL(expr parser.Expression) string {

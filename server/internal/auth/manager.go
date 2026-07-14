@@ -61,6 +61,7 @@ type Manager struct {
 	rateLim         *authRateLimiter
 	auditFunc       AuditFunc
 	dataDir         string         // directory for persisting revoked tokens
+	fileMu          sync.Mutex     // mutex for disk writes/reads of revoked tokens
 	grantsProvider  GrantsProvider // dynamic RBAC grants from DB
 	collector       authMetricsCollector
 }
@@ -299,7 +300,13 @@ func (m *Manager) revokedTokensPath() string {
 // SaveRevoked persists the current revoked tokens map to disk as JSON.
 // Uses atomic write (temp file + rename) to prevent corruption on crash.
 // Must be called while m.mu is NOT held (it acquires its own lock).
+// SaveRevoked persists the current revoked tokens map to disk as JSON.
+// Uses atomic write (temp file + rename) to prevent corruption on crash.
+// Must be called while m.mu is NOT held (it acquires its own lock).
 func (m *Manager) SaveRevoked() {
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
+
 	m.mu.RLock()
 	entries := make([]revokedEntry, 0, len(m.revoked))
 	for hash, ts := range m.revoked {
@@ -328,7 +335,7 @@ func (m *Manager) SaveRevoked() {
 	}
 
 	path := m.revokedTokensPath()
-	tmp := path + ".tmp"
+	tmp := fmt.Sprintf("%s.%d.tmp", path, time.Now().UnixNano())
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		if m.logger != nil {
 			m.logger.Error("failed to write revoked tokens file", "error", err)
@@ -347,6 +354,9 @@ func (m *Manager) SaveRevoked() {
 // If the file does not exist (first run), it silently returns without error.
 // Must be called while m.mu is NOT held (it acquires its own lock).
 func (m *Manager) LoadRevoked() {
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
+
 	m.mu.RLock()
 	dataDir := m.dataDir
 	m.mu.RUnlock()

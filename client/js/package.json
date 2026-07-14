@@ -1,6 +1,6 @@
 {
   "name": "@vaultdb/client",
-  "version": "2.0.0",
+  "version": "1.1.1",
   "description": "VaultDB TCP client for Node.js (protocol v2)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

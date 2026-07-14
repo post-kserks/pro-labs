@@ -1,4 +1,4 @@
-package benchmark
+package benchmarks
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 	"vaultdb"
 )
 
-func setupBenchDB(b *testing.B) *vaultdb.VaultDB {
+func setupStressBenchDB(b *testing.B) *vaultdb.VaultDB {
 	b.Helper()
 	dir := b.TempDir()
 	db, err := vaultdb.Open(dir)
@@ -20,9 +20,9 @@ func setupBenchDB(b *testing.B) *vaultdb.VaultDB {
 	return db
 }
 
-func setupBenchDBWithData(b *testing.B, rows int) *vaultdb.VaultDB {
+func setupStressBenchDBWithData(b *testing.B, rows int) *vaultdb.VaultDB {
 	b.Helper()
-	db := setupBenchDB(b)
+	db := setupStressBenchDB(b)
 	for i := 0; i < rows; i++ {
 		db.Query("benchdb", fmt.Sprintf(
 			"INSERT INTO bench VALUES (%d, 'row_%d', %f);", i, i, float64(i)*1.1))
@@ -32,8 +32,8 @@ func setupBenchDBWithData(b *testing.B, rows int) *vaultdb.VaultDB {
 
 // --- INSERT benchmarks ---
 
-func BenchmarkInsertSingle(b *testing.B) {
-	db := setupBenchDB(b)
+func BenchmarkStressInsertSingle(b *testing.B) {
+	db := setupStressBenchDB(b)
 	defer db.Close()
 
 	b.ResetTimer()
@@ -46,8 +46,8 @@ func BenchmarkInsertSingle(b *testing.B) {
 	}
 }
 
-func BenchmarkInsertBatch(b *testing.B) {
-	db := setupBenchDB(b)
+func BenchmarkStressInsertBatch(b *testing.B) {
+	db := setupStressBenchDB(b)
 	defer db.Close()
 
 	b.ResetTimer()
@@ -66,8 +66,8 @@ func BenchmarkInsertBatch(b *testing.B) {
 
 // --- SELECT benchmarks ---
 
-func BenchmarkSelectFullScan(b *testing.B) {
-	db := setupBenchDBWithData(b, 10000)
+func BenchmarkStressSelectFullScan(b *testing.B) {
+	db := setupStressBenchDBWithData(b, 10000)
 	defer db.Close()
 
 	b.ResetTimer()
@@ -79,8 +79,8 @@ func BenchmarkSelectFullScan(b *testing.B) {
 	}
 }
 
-func BenchmarkSelectIndexed(b *testing.B) {
-	db := setupBenchDBWithData(b, 10000)
+func BenchmarkStressSelectIndexed(b *testing.B) {
+	db := setupStressBenchDBWithData(b, 10000)
 	db.Query("benchdb", "CREATE INDEX idx_bench_id ON bench (id);")
 	defer db.Close()
 
@@ -96,8 +96,8 @@ func BenchmarkSelectIndexed(b *testing.B) {
 
 // --- UPDATE benchmarks ---
 
-func BenchmarkUpdateSingle(b *testing.B) {
-	db := setupBenchDBWithData(b, 10000)
+func BenchmarkStressUpdateSingle(b *testing.B) {
+	db := setupStressBenchDBWithData(b, 10000)
 	defer db.Close()
 
 	b.ResetTimer()
@@ -112,8 +112,8 @@ func BenchmarkUpdateSingle(b *testing.B) {
 
 // --- Mixed workload benchmark ---
 
-func BenchmarkMixedWorkload(b *testing.B) {
-	db := setupBenchDBWithData(b, 1000)
+func BenchmarkStressMixedWorkload(b *testing.B) {
+	db := setupStressBenchDBWithData(b, 1000)
 	defer db.Close()
 
 	b.ResetTimer()
@@ -138,8 +138,8 @@ func BenchmarkMixedWorkload(b *testing.B) {
 
 // --- Transaction throughput benchmark ---
 
-func BenchmarkTransactionThroughput(b *testing.B) {
-	db := setupBenchDBWithData(b, 100)
+func BenchmarkStressTransactionThroughput(b *testing.B) {
+	db := setupStressBenchDBWithData(b, 100)
 	defer db.Close()
 
 	b.ResetTimer()
@@ -152,12 +152,9 @@ func BenchmarkTransactionThroughput(b *testing.B) {
 }
 
 // --- Concurrent read benchmark ---
-// NOTE: b.RunParallel deadlocks because the storage engine uses exclusive
-// locks (mu.Lock) even for reads. This benchmark measures sequential read
-// throughput to expose the serialization bottleneck.
 
-func BenchmarkConcurrentReads(b *testing.B) {
-	db := setupBenchDBWithData(b, 1000)
+func BenchmarkStressConcurrentReads(b *testing.B) {
+	db := setupStressBenchDBWithData(b, 1000)
 	defer db.Close()
 
 	b.ResetTimer()

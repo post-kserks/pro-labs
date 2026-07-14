@@ -27,14 +27,14 @@ type QueryRequest struct {
 
 // QueryResponse represents the response from a VaultDB query.
 type QueryResponse struct {
-	Status     string           `json:"status"`
-	Type       string           `json:"type"`
-	Columns    []string         `json:"columns"`
+	Status     string          `json:"status"`
+	Type       string          `json:"type"`
+	Columns    []string        `json:"columns"`
 	Rows       [][]interface{} `json:"rows"`
-	Affected   int              `json:"affected"`
-	DurationMs int64            `json:"duration_ms"`
-	Message    string           `json:"message,omitempty"`
-	Error      string           `json:"error,omitempty"`
+	Affected   int             `json:"affected"`
+	DurationMs int64           `json:"duration_ms"`
+	Message    string          `json:"message,omitempty"`
+	Error      string          `json:"error,omitempty"`
 }
 
 // BatchQueryItem represents a single query in a batch request.
@@ -51,14 +51,14 @@ type BatchRequest struct {
 
 // BatchResponseResult represents the result of a single query in a batch response.
 type BatchResponseResult struct {
-	Status     string           `json:"status"`
-	Type       string           `json:"type"`
-	Columns    []string         `json:"columns"`
+	Status     string          `json:"status"`
+	Type       string          `json:"type"`
+	Columns    []string        `json:"columns"`
 	Rows       [][]interface{} `json:"rows"`
-	Affected   int              `json:"affected"`
-	DurationMs int64            `json:"duration_ms"`
-	Message    string           `json:"message,omitempty"`
-	Error      string           `json:"error,omitempty"`
+	Affected   int             `json:"affected"`
+	DurationMs int64           `json:"duration_ms"`
+	Message    string          `json:"message,omitempty"`
+	Error      string          `json:"error,omitempty"`
 }
 
 // BatchResponse represents the response from a batch query.

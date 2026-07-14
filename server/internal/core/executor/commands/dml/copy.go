@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
-	"vaultdb/internal/core/executor/types"
 )
 
 // MaxCopyRows is the default maximum number of rows that COPY FROM will import.

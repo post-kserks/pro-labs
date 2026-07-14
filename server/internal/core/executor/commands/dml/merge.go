@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
 	"vaultdb/internal/core/txmanager"
-	"vaultdb/internal/core/executor/types"
 )
 
 const maxMergeRows = 1000000

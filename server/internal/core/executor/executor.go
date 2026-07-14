@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"vaultdb/internal/core/ai"
 	"vaultdb/internal/auth"
+	"vaultdb/internal/core/ai"
 	_ "vaultdb/internal/core/executor/commands/audit"
 	authcmd "vaultdb/internal/core/executor/commands/auth"
 	_ "vaultdb/internal/core/executor/commands/ddl"
@@ -27,11 +27,11 @@ import (
 
 // Type aliases — concrete types now live in types/.
 type (
-	ExecutionContext    = types.ExecutionContext
-	Command            = types.Command
-	Result             = types.Result
-	SubqueryRunner     = types.SubqueryRunner
-	PreparedStatement  = types.PreparedStatement
+	ExecutionContext  = types.ExecutionContext
+	Command           = types.Command
+	Result            = types.Result
+	SubqueryRunner    = types.SubqueryRunner
+	PreparedStatement = types.PreparedStatement
 )
 
 // commandFactory is a function that creates a Command from a parser.Statement.
@@ -173,17 +173,17 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	}
 
 	ctx := &ExecutionContext{
-		Storage:      e.storage,
-		Session:      sess,
-		Metrics:      e.metrics,
-		TxManager:    e.txm,
-		Broadcaster:  e.broadcaster,
-		Embedder:     embedder,
-		WAL:          wal,
-		Ctx:          queryCtx,
-		SnapshotTxID: sess.SnapshotTxID(),
-		Parallel:     parallelCfg,
-		RunSubquery:  &subqueryRunner{executor: e},
+		Storage:       e.storage,
+		Session:       sess,
+		Metrics:       e.metrics,
+		TxManager:     e.txm,
+		Broadcaster:   e.broadcaster,
+		Embedder:      embedder,
+		WAL:           wal,
+		Ctx:           queryCtx,
+		SnapshotTxID:  sess.SnapshotTxID(),
+		Parallel:      parallelCfg,
+		RunSubquery:   &subqueryRunner{executor: e},
 		CreateCommand: CommandFactory,
 	}
 
