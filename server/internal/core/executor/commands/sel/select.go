@@ -243,42 +243,76 @@ func (c *SelectCommand) fastPathSelect(ctx *types.ExecutionContext) (*types.Resu
 		}
 	}
 
-	resultRows := make([][]string, 0, len(filtered))
-	for _, row := range filtered {
-		projected := make([]string, len(c.stmt.Columns))
-		for i, col := range c.stmt.Columns {
-			val, err := types.EvalOperand(col.Expr, row, schema, ctx)
-			if err != nil {
-				projected[i] = "ERR"
-			} else {
-				projected[i] = types.ValueToString(val)
+	var finalRows [][]string
+	if !c.stmt.Distinct && len(c.stmt.DistinctOn) == 0 {
+		start := 0
+		limit, hasLimit, offset, hasOffset := c.resolveLimitOffset(ctx)
+		if hasOffset {
+			start = offset
+			if start > len(filtered) {
+				start = len(filtered)
 			}
 		}
-		resultRows = append(resultRows, projected)
-	}
-
-	// Apply DISTINCT ON after projection (fast path)
-	if len(c.stmt.DistinctOn) > 0 {
-		resultRows = distinctOnRows(resultRows, c.stmt.DistinctOn, c.stmt.Columns, filtered, schema, ctx)
-	} else if c.stmt.Distinct {
-		resultRows = distinctRows(resultRows)
-	}
-
-	// Pagination
-	start := 0
-	limit, hasLimit, offset, hasOffset := c.resolveLimitOffset(ctx)
-	if hasOffset {
-		start = offset
-		if start > len(resultRows) {
-			start = len(resultRows)
+		end := len(filtered)
+		if hasLimit {
+			end = start + limit
+			if end > len(filtered) {
+				end = len(filtered)
+			}
 		}
-	}
-	end := len(resultRows)
-	if hasLimit {
-		end = start + limit
-		if end > len(resultRows) {
-			end = len(resultRows)
+		pagedFiltered := filtered[start:end]
+		finalRows = make([][]string, 0, len(pagedFiltered))
+		for _, row := range pagedFiltered {
+			projected := make([]string, len(c.stmt.Columns))
+			for i, col := range c.stmt.Columns {
+				val, err := types.EvalOperand(col.Expr, row, schema, ctx)
+				if err != nil {
+					projected[i] = "ERR"
+				} else {
+					projected[i] = types.ValueToString(val)
+				}
+			}
+			finalRows = append(finalRows, projected)
 		}
+	} else {
+		resultRows := make([][]string, 0, len(filtered))
+		for _, row := range filtered {
+			projected := make([]string, len(c.stmt.Columns))
+			for i, col := range c.stmt.Columns {
+				val, err := types.EvalOperand(col.Expr, row, schema, ctx)
+				if err != nil {
+					projected[i] = "ERR"
+				} else {
+					projected[i] = types.ValueToString(val)
+				}
+			}
+			resultRows = append(resultRows, projected)
+		}
+
+		// Apply DISTINCT ON after projection (fast path)
+		if len(c.stmt.DistinctOn) > 0 {
+			resultRows = distinctOnRows(resultRows, c.stmt.DistinctOn, c.stmt.Columns, filtered, schema, ctx)
+		} else if c.stmt.Distinct {
+			resultRows = distinctRows(resultRows)
+		}
+
+		// Pagination
+		start := 0
+		limit, hasLimit, offset, hasOffset := c.resolveLimitOffset(ctx)
+		if hasOffset {
+			start = offset
+			if start > len(resultRows) {
+				start = len(resultRows)
+			}
+		}
+		end := len(resultRows)
+		if hasLimit {
+			end = start + limit
+			if end > len(resultRows) {
+				end = len(resultRows)
+			}
+		}
+		finalRows = resultRows[start:end]
 	}
 
 	resultSchema := &storage.TableSchema{
@@ -296,7 +330,7 @@ func (c *SelectCommand) fastPathSelect(ctx *types.ExecutionContext) (*types.Resu
 	return &types.Result{
 		Type:        "rows",
 		Columns:     projectColumns,
-		Rows:        resultRows[start:end],
+		Rows:        finalRows,
 		Schema:      resultSchema,
 		RowsScanned: rowsScanned,
 	}, nil

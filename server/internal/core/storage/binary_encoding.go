@@ -28,38 +28,105 @@ func encodeBinaryTuple(createdTx, deletedTx uint64, row Row) ([]byte, error) {
 		return nil, fmt.Errorf("encodeBinaryTuple: empty row")
 	}
 
-	// Phase 1: encode each column value into temporary buffers
-	colBuffers := make([][]byte, len(row))
-	for i, val := range row {
-		buf, err := encodeColumnValue(val)
-		if err != nil {
-			return nil, fmt.Errorf("column %d: %w", i, err)
-		}
-		colBuffers[i] = buf
-	}
-
-	// Phase 2: build the tuple
+	// Phase 1: calculate total required byte size in 1 pass without allocating colBuffers
 	headerSize := binTupleHeaderSize + binColCountSize + len(row)*binColOffsetSize
 	totalSize := headerSize
-	for _, buf := range colBuffers {
-		totalSize += len(buf)
+	var jsonCols map[int][]byte
+
+	for i, val := range row {
+		if val == nil {
+			totalSize += 1
+			continue
+		}
+		switch v := val.(type) {
+		case int64:
+			totalSize += 9
+		case float64:
+			totalSize += 9
+		case bool:
+			totalSize += 2
+		case string:
+			if len(v) > 65535 {
+				return nil, fmt.Errorf("column %d: %w", i, fmt.Errorf("string too long for binary encoding: %d bytes (max 65535)", len(v)))
+			}
+			totalSize += 3 + len(v)
+		case []float64:
+			totalSize += 3 + len(v)*8
+		case map[string]interface{}:
+			jsonBytes, err := json.Marshal(v)
+			if err != nil {
+				return nil, fmt.Errorf("column %d: %w", i, err)
+			}
+			if len(jsonBytes) > 65535 {
+				return nil, fmt.Errorf("column %d: %w", i, fmt.Errorf("JSONB too long for binary encoding: %d bytes (max 65535)", len(jsonBytes)))
+			}
+			if jsonCols == nil {
+				jsonCols = make(map[int][]byte)
+			}
+			jsonCols[i] = jsonBytes
+			totalSize += 3 + len(jsonBytes)
+		default:
+			return nil, fmt.Errorf("column %d: %w", i, fmt.Errorf("unsupported value type %T for binary encoding", v))
+		}
 	}
 
 	if totalSize > 65535 {
 		return nil, fmt.Errorf("tuple too large: %d bytes", totalSize)
 	}
 
+	// Phase 2: allocate once and encode headers and column values directly into slices of tuple
 	tuple := make([]byte, totalSize)
 	binary.LittleEndian.PutUint64(tuple[0:8], createdTx)
 	binary.LittleEndian.PutUint64(tuple[8:16], deletedTx)
 	binary.LittleEndian.PutUint16(tuple[16:18], uint16(len(row)))
 
 	offset := uint16(headerSize)
-	for i, buf := range colBuffers {
+	for i, val := range row {
 		offIdx := binTupleHeaderSize + binColCountSize + i*binColOffsetSize
 		binary.LittleEndian.PutUint16(tuple[offIdx:offIdx+binColOffsetSize], offset)
-		copy(tuple[offset:], buf)
-		offset += uint16(len(buf))
+
+		if val == nil {
+			tuple[offset] = binNullMarker
+			offset++
+			continue
+		}
+
+		switch v := val.(type) {
+		case int64:
+			tuple[offset] = 'i'
+			binary.LittleEndian.PutUint64(tuple[offset+1:offset+9], uint64(v))
+			offset += 9
+		case float64:
+			tuple[offset] = 'f'
+			binary.LittleEndian.PutUint64(tuple[offset+1:offset+9], math.Float64bits(v))
+			offset += 9
+		case bool:
+			tuple[offset] = 'b'
+			if v {
+				tuple[offset+1] = binTrue
+			} else {
+				tuple[offset+1] = binFalse
+			}
+			offset += 2
+		case string:
+			tuple[offset] = 's'
+			binary.LittleEndian.PutUint16(tuple[offset+1:offset+3], uint16(len(v)))
+			copy(tuple[offset+3:], v)
+			offset += uint16(3 + len(v))
+		case []float64:
+			tuple[offset] = 'v'
+			binary.LittleEndian.PutUint16(tuple[offset+1:offset+3], uint16(len(v)))
+			for j, f := range v {
+				binary.LittleEndian.PutUint64(tuple[offset+3+uint16(j)*8:offset+3+uint16(j)*8+8], math.Float64bits(f))
+			}
+			offset += uint16(3 + len(v)*8)
+		case map[string]interface{}:
+			jsonBytes := jsonCols[i]
+			tuple[offset] = 'j'
+			binary.LittleEndian.PutUint16(tuple[offset+1:offset+3], uint16(len(jsonBytes)))
+			copy(tuple[offset+3:], jsonBytes)
+			offset += uint16(3 + len(jsonBytes))
+		}
 	}
 
 	return tuple, nil
@@ -134,14 +201,13 @@ func encodeColumnValue(val interface{}) ([]byte, error) {
 
 	case string:
 		// Format: type tag + 2B length + UTF-8 bytes
-		strBytes := []byte(v)
-		if len(strBytes) > 65535 {
-			return nil, fmt.Errorf("string too long for binary encoding: %d bytes (max 65535)", len(strBytes))
+		if len(v) > 65535 {
+			return nil, fmt.Errorf("string too long for binary encoding: %d bytes (max 65535)", len(v))
 		}
-		buf := make([]byte, 3+len(strBytes))
+		buf := make([]byte, 3+len(v))
 		buf[0] = 's'
-		binary.LittleEndian.PutUint16(buf[1:3], uint16(len(strBytes)))
-		copy(buf[3:], strBytes)
+		binary.LittleEndian.PutUint16(buf[1:3], uint16(len(v)))
+		copy(buf[3:], v)
 		return buf, nil
 
 	case map[string]interface{}:

@@ -33,6 +33,7 @@ type BufferPool struct {
 	capacity      int                 // maximum number of pages in cache
 	cache         map[page.PageID]int // PageID → index in buffers
 	buffers       []*bufferEntry      // fixed-size array of buffer entries
+	freeSlots     []int               // stack of free buffer indices for O(1) allocation
 	clockHand     int                 // current clock hand position
 	count         int                 // current number of pages in cache
 	wal           *wal.WAL            // WAL for writing full page images
@@ -58,10 +59,15 @@ func NewBufferPool(capacity int) *BufferPool {
 	if capacity <= 0 {
 		capacity = defaultBufferPoolCapacity
 	}
+	freeSlots := make([]int, capacity)
+	for i := 0; i < capacity; i++ {
+		freeSlots[i] = capacity - 1 - i
+	}
 	return &BufferPool{
-		capacity: capacity,
-		cache:    make(map[page.PageID]int, capacity),
-		buffers:  make([]*bufferEntry, capacity),
+		capacity:  capacity,
+		cache:     make(map[page.PageID]int, capacity),
+		buffers:   make([]*bufferEntry, capacity),
+		freeSlots: freeSlots,
 	}
 }
 
@@ -239,6 +245,7 @@ func (bp *BufferPool) InvalidatePage(pid page.PageID) {
 		return
 	}
 	bp.buffers[idx] = nil
+	bp.freeSlots = append(bp.freeSlots, idx)
 	delete(bp.cache, pid)
 	bp.count--
 }
@@ -281,6 +288,7 @@ func (bp *BufferPool) evict() error {
 			buf.lastModifiedLSN = 0
 		}
 		bp.buffers[idx] = nil
+		bp.freeSlots = append(bp.freeSlots, idx)
 		delete(bp.cache, buf.pid)
 		bp.count--
 		return nil
@@ -337,6 +345,7 @@ func (bp *BufferPool) InvalidateTable(tableID uint32) {
 				continue
 			}
 			bp.buffers[i] = nil
+			bp.freeSlots = append(bp.freeSlots, i)
 			delete(bp.cache, entry.pid)
 			bp.count--
 		}
@@ -353,6 +362,7 @@ func (bp *BufferPool) InvalidateTableForce(tableID uint32) {
 		entry := bp.buffers[i]
 		if entry != nil && entry.pid.TableID == tableID {
 			bp.buffers[i] = nil
+			bp.freeSlots = append(bp.freeSlots, i)
 			delete(bp.cache, entry.pid)
 			bp.count--
 		}
@@ -472,10 +482,11 @@ func (bp *BufferPool) Stats() BufferPoolStats {
 
 // findEmptySlot finds the first empty slot in the buffer array.
 func (bp *BufferPool) findEmptySlot() int {
-	for i := 0; i < bp.capacity; i++ {
-		if bp.buffers[i] == nil {
-			return i
-		}
+	n := len(bp.freeSlots)
+	if n > 0 {
+		idx := bp.freeSlots[n-1]
+		bp.freeSlots = bp.freeSlots[:n-1]
+		return idx
 	}
 	// Should not happen if count < capacity
 	return bp.clockHand % bp.capacity

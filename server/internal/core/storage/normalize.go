@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var validIdentRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
@@ -68,7 +69,7 @@ func normalizeValue(value interface{}, col ColumnSchema) (Value, error) {
 			return nil, fmt.Errorf("expected %s, got %T", col.Type, value)
 		}
 		if col.Type == "VARCHAR" && col.VarcharLen > 0 {
-			if len([]rune(strVal)) > col.VarcharLen {
+			if utf8.RuneCountInString(strVal) > col.VarcharLen {
 				return nil, fmt.Errorf("VARCHAR(%d) overflow", col.VarcharLen)
 			}
 		}

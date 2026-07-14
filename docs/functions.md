@@ -236,6 +236,59 @@ All operate on JSON arrays stored as text.
 
 ---
 
+## SQL and PL/pgSQL User-Defined Functions
+
+Alongside WASM, VaultDB supports `LANGUAGE SQL` (single `SELECT` body validated during `CREATE FUNCTION`) and `LANGUAGE plpgsql` (procedural function blocks interpreted at execution time supporting `DECLARE` variables, `BEGIN/END`, `:=` assignments, `RETURN`, and `RETURN QUERY SELECT`).
+
+### LANGUAGE SQL
+
+Functions defined with `LANGUAGE SQL` contain a single `SELECT` statement in their body, which is checked and validated during `CREATE FUNCTION`.
+
+```sql
+CREATE FUNCTION get_user_email(user_id INT) RETURNS TEXT
+LANGUAGE SQL
+AS $$
+    SELECT email FROM users WHERE id = user_id;
+$$;
+
+SELECT get_user_email(1);
+```
+
+### LANGUAGE plpgsql
+
+Functions defined with `LANGUAGE plpgsql` support procedural blocks interpreted at execution time. They allow `DECLARE` for local variables, `BEGIN/END` block boundaries, `:=` assignments, `RETURN` for scalar expressions, and `RETURN QUERY SELECT` for returning sets of rows.
+
+```sql
+-- Scalar PL/pgSQL function with local variables and assignments
+CREATE FUNCTION calculate_bonus(salary FLOAT, rating FLOAT) RETURNS FLOAT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    bonus_multiplier FLOAT;
+    result FLOAT;
+BEGIN
+    bonus_multiplier := rating * 0.1;
+    result := salary * bonus_multiplier;
+    RETURN result;
+END;
+$$;
+
+SELECT calculate_bonus(50000.0, 1.5);
+
+-- PL/pgSQL function returning a query set
+CREATE FUNCTION get_top_orders(min_amount FLOAT) RETURNS TABLE(id INT, amount FLOAT)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY SELECT id, amount FROM orders WHERE amount >= min_amount ORDER BY amount DESC;
+END;
+$$;
+
+SELECT * FROM get_top_orders(100.0);
+```
+
+---
+
 ## WASM User-Defined Functions
 
 Create custom SQL functions backed by WebAssembly modules.

@@ -99,15 +99,17 @@ CREATE TABLE articles (
 
 ### Table Partitioning
 
+VaultDB supports `RANGE` partitioning (`PARTITION BY RANGE (col)` with `VALUES FROM (...) TO (...)` and `VALUES LESS THAN (...)`) and `HASH` partitioning (`PARTITION BY HASH (col)` with `PARTITIONS n`), with predicate-based partition pruning (`internal/core/storage/partition.go`).
+
 ```sql
--- RANGE partitioning
+-- RANGE partitioning with VALUES FROM (...) TO (...)
 CREATE TABLE orders (
     id INT,
     order_date DATE,
     amount FLOAT
 ) PARTITION BY RANGE (order_date) (
-    PARTITION p2023 VALUES LESS THAN ('2024-01-01'),
-    PARTITION p2024 VALUES LESS THAN ('2025-01-01')
+    PARTITION p2023 VALUES FROM ('2023-01-01') TO ('2024-01-01'),
+    PARTITION p2024 VALUES FROM ('2024-01-01') TO ('2025-01-01')
 );
 
 -- HASH partitioning

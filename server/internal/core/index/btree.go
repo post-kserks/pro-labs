@@ -246,7 +246,9 @@ func (idx *BTreeIndex) Delete(rowPos int) {
 	e := entry.(*btreeEntry)
 	for j, pos := range e.positions {
 		if pos == rowPos {
-			e.positions = append(e.positions[:j], e.positions[j+1:]...)
+			last := len(e.positions) - 1
+			e.positions[j] = e.positions[last]
+			e.positions = e.positions[:last]
 			break
 		}
 	}

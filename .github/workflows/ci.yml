@@ -175,7 +175,7 @@ jobs:
           cache: true
 
       - name: Run race detector with high count
-        run: go test -race -count=100 ./internal/executor/... ./internal/storage/... ./internal/wal/...
+        run: go test -race -count=100 ./internal/core/executor/... ./internal/core/storage/... ./internal/core/wal/...
 
   fuzz-nightly:
     name: Nightly fuzz
@@ -196,4 +196,4 @@ jobs:
           cache: true
 
       - name: Run parser fuzz
-        run: go test -fuzz=FuzzParseSQL -fuzztime=30m ./internal/parser/
+        run: go test -fuzz=FuzzParseSQL -fuzztime=30m ./internal/core/parser/

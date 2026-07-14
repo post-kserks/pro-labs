@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"vaultdb/internal/core/lexer"
 )
@@ -317,11 +318,7 @@ func FormatSelectStatement(sel *SelectStatement) string {
 }
 
 func normalizeWhitespace(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\t", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.Join(strings.Fields(s), " ")
-	return s
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func parse(sql string) (Statement, error) {
@@ -329,11 +326,10 @@ func parse(sql string) (Statement, error) {
 	if len(sql) > maxInputSize {
 		return nil, fmt.Errorf("query too large (%d bytes, max 10MB)", len(sql))
 	}
-	sql = strings.TrimSpace(sql)
-	if sql == "" {
+	if strings.TrimSpace(sql) == "" {
 		return nil, fmt.Errorf("syntax error: empty query")
 	}
-	sql = normalizeWhitespace(sql)
+	sql = strings.TrimRightFunc(sql, unicode.IsSpace)
 	if !strings.HasSuffix(sql, ";") {
 		sql = sql + ";"
 	}

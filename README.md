@@ -314,19 +314,21 @@ Client (Go/Python/JS/C++) → TCP → Protocol v2 Handshake (anti-replay nonce)
 │   ├── cmd/vaultdb-server/     # Entry point
 │   ├── cmd/vaultdb-backup/     # Backup utility
 │   ├── cmd/vaultdb-encrypt/    # Encryption utility
-│   ├── internal/               # Core (28 packages)
-│   │   ├── executor/           # Query execution + optimizer pushdown
-│   │   ├── parser/             # SQL parser
-│   │   ├── storage/            # Storage engine + buffer pool + partitioning
-│   │   ├── wal/                # Write-Ahead Log
-│   │   ├── txmanager/          # MVCC transactions
-│   │   ├── crypto/             # Encryption (AES-256-GCM) + DPAPI
+│   ├── internal/               # Server & core modules (25 packages)
+│   │   ├── core/               # Core SQL engine modules (13 packages)
+│   │   │   ├── executor/       # Query execution + optimizer pushdown
+│   │   │   ├── parser/         # SQL parser
+│   │   │   ├── storage/        # Storage engine + buffer pool + partitioning
+│   │   │   ├── wal/            # Write-Ahead Log
+│   │   │   ├── txmanager/      # MVCC transactions
+│   │   │   ├── crypto/         # Encryption (AES-256-GCM) + DPAPI
+│   │   │   ├── audit/          # Audit log with hash-chain
+│   │   │   ├── wasmudf/        # WASM UDF runtime
+│   │   │   ├── fts/            # Full-text search (BM25)
+│   │   │   └── ...             # index, metrics, ai, lexer
 │   │   ├── auth/               # Authentication + RBAC + revocation
-│   │   ├── audit/              # Audit log with hash-chain
-│   │   ├── wasmudf/            # WASM UDF runtime
-│   │   ├── fts/                # Full-text search (BM25)
 │   │   ├── iputil/             # Shared IP extraction utility
-│   │   └── ...                 # index, metrics, config, tls, etc.
+│   │   └── ...                 # config, tls, logging, httpserver, etc.
 │   ├── benchmarks/             # Regression benchmarks
 │   └── go.mod
 ├── client/                     # Official clients
@@ -363,7 +365,7 @@ go test -race ./...
 go test -bench=. -benchmem ./benchmarks/
 
 # Fuzz testing
-go test -fuzz=FuzzParseSQL -fuzztime=30s ./internal/parser/
+go test -fuzz=FuzzParseSQL -fuzztime=30s ./internal/core/parser/
 
 # Security audit
 semgrep --config .semgrep/ ./server

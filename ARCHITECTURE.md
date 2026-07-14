@@ -1,6 +1,6 @@
 # VaultDB Architecture
 
-This document describes the architecture of VaultDB — a SQL database engine with a Go server and C++ client. It reflects the modular engine design, page-based binary storage layer, and all real modules in the codebase (verified against source tree).
+This document describes the architecture of VaultDB — a SQL database engine with a Go server and multi-language client ecosystem (C++, Go, Python, TypeScript/JS). It reflects the modular engine design, page-based binary storage layer, and all real modules in the codebase (verified against source tree).
 
 ---
 
@@ -10,29 +10,43 @@ This document describes the architecture of VaultDB — a SQL database engine wi
 ├── server/                    # Go server
 │   ├── cmd/
 │   │   ├── vaultdb-server/    # Main server entry point
+│   │   ├── vaultdb-backup/    # Backup & restore CLI utility
+│   │   ├── vaultdb-encrypt/   # TDE encryption key management CLI utility
 │   │   └── check-index/       # Index diagnostic tool
 │   ├── internal/
-│   │   ├── ai/                # AI embedding provider (SEMANTIC_MATCH/AI_EMBED)
 │   │   ├── auth/              # HMAC-SHA256 token auth + rate limiter
+│   │   ├── backup/            # Backup and recovery infrastructure
 │   │   ├── config/            # YAML + env config loader
-│   │   ├── executor/          # Command-pattern execution engine
+│   │   ├── core/              # Core SQL database engine modules
+│   │   │   ├── ai/            # AI embedding provider (SEMANTIC_MATCH/AI_EMBED)
+│   │   │   ├── audit/         # Audit logging engine
+│   │   │   ├── crypto/        # Cryptographic operations and TDE primitives
+│   │   │   ├── executor/      # Command-pattern execution engine
+│   │   │   ├── fts/           # Full-text search engine
+│   │   │   ├── index/         # B-Tree, GIN, GiST, Hash indexes
+│   │   │   ├── lexer/         # Hand-written SQL lexer
+│   │   │   ├── metrics/       # Prometheus-style metrics collector
+│   │   │   ├── parser/        # Recursive-descent SQL parser
+│   │   │   ├── storage/       # Page engine + binary encoding + buffer pool
+│   │   │   ├── txmanager/     # MVCC transaction manager
+│   │   │   ├── wal/           # Write-Ahead Log with ARIES recovery
+│   │   │   └── wasmudf/       # WebAssembly user-defined functions (Wasm UDF)
 │   │   ├── httpserver/        # HTTP/REST + embedded Web UI + ratelimit
-│   │   ├── index/             # B-Tree, GIN, GiST, Hash indexes
-│   │   ├── lexer/             # Hand-written SQL lexer
-│   │   ├── logging/           # Audit log with rotation
-│   │   ├── metrics/           # Prometheus-style metrics collector
-│   │   ├── parser/            # Recursive-descent SQL parser
+│   │   ├── iputil/            # IP utility and CIDR validation
+│   │   ├── logging/           # General logging infrastructure
+│   │   ├── osdisk/            # OS-level disk monitoring and I/O utilities
 │   │   ├── pool/              # Connection pool / tracker
 │   │   ├── protocol/          # TCP request/response wire format
-│   │   ├── storage/           # Page engine + binary encoding + buffer pool
+│   │   ├── security/          # Security utilities and TLS helpers
 │   │   ├── tls/               # TLS/mTLS config loader
-│   │   ├── txmanager/         # MVCC transaction manager
-│   │   ├── wal/               # Write-Ahead Log with ARIES recovery
 │   │   └── websocket/         # WebSocket bridge for live queries
 │   ├── vaultdb.go             # Embedded engine facade
 │   ├── go.mod / go.sum
 │   └── benchmark/             # Server-side benchmark suite
-├── client/                    # C++ client
+├── client/                    # Client ecosystem (C++ & multi-language SDKs)
+│   ├── go/                    # Go client SDK
+│   ├── python/                # Python 3 client SDK
+│   ├── js/                    # TypeScript/Node.js client SDK
 │   ├── lib/                   # libvaultdb shared library
 │   │   ├── include/vaultdb/   # Public headers (connection, result, json_utils)
 │   │   └── src/               # Implementation
@@ -40,7 +54,10 @@ This document describes the architecture of VaultDB — a SQL database engine wi
 │   ├── tui/                   # Terminal UI (panel-based)
 │   └── tests/                 # Client unit tests
 ├── tools/
-│   └── benchmark/             # Go benchmark tool
+│   ├── benchmark/             # Go benchmark tool
+│   ├── sqlfuzz/               # SQL fuzzing utilities
+│   ├── security/              # Security scan scripts (tls_scan.sh, generate-sbom.sh)
+│   └── benchstat-gate.sh      # Benchmark performance regression gate script
 ├── data/                      # Runtime data directory
 ├── docs/                      # Documentation
 ├── build.sh / run.sh          # Build/run scripts
@@ -98,8 +115,8 @@ graph TB
 
       subgraph Parser_Module ["Parser"]
 
-        Lexer["Hand-written Lexer<br/>(internal/lexer)"]
-        Parser["Parser Dispatcher<br/>(internal/parser)"]
+        Lexer["Hand-written Lexer<br/>(internal/core/lexer)"]
+        Parser["Parser Dispatcher<br/>(internal/core/parser)"]
         P_Select["SELECT Parser"]
         P_DML["DML Parser<br/>(Ins/Upd/Del/Merge)"]
         P_DDL["DDL Parser<br/>(Create/Drop/Alter)"]
@@ -115,13 +132,13 @@ graph TB
 
       subgraph Executor_Module ["Executor"]
 
-        Exec["Executor Engine<br/>(internal/executor)"]
+        Exec["Executor Engine<br/>(internal/core/executor)"]
         E_Select["SELECT Command<br/>+ Join / Aggregate / Window"]
         E_DML["DML Commands<br/>(Insert/Update/Delete/Merge)"]
         E_DDL["DDL Commands<br/>(Create/Drop/Alter/Vacuum)"]
         E_Tx["Tx Commands<br/>(Begin/Commit/Rollback)"]
         E_SOp["Set Operations<br/>(Union/Intersect/Except)"]
-        E_CTE["CTE / WITH<br/>(internal/executor/cte)"]
+        E_CTE["CTE / WITH<br/>(internal/core/executor/cte)"]
         E_Prep["Prepared Stmts<br/>(Prepare/Execute)"]
 
         Exec --- E_Select
@@ -140,7 +157,7 @@ graph TB
         Ev_Func["Built-in Functions<br/>+ Math / String / Array"]
         Ev_Json["JSON / JSONB / FTS"]
         Ev_Time["DateTime Logic"]
-        Ev_Like["LIKE / Pattern Match<br/>(internal/executor/like)"]
+        Ev_Like["LIKE / Pattern Match<br/>(internal/core/executor/like)"]
         Ev_Aggr["Aggregate Functions<br/>(Welford, Count, Sum)"]
 
         Eval --- Ev_Func
@@ -151,11 +168,11 @@ graph TB
 
       end
 
-      Optimizer["Query Optimizer<br/>(internal/executor/optimizer)"]
-      Stats["Table Statistics<br/>(internal/executor/statistics)"]
-      PlanCache["Plan Cache<br/>(internal/executor/plan_cache)"]
-      ResCache["Result Cache<br/>(internal/executor/result_cache)"]
-      BR["Live Query Broadcaster<br/>(internal/executor/broadcaster)"]
+      Optimizer["Query Optimizer<br/>(internal/core/executor/optimizer)"]
+      Stats["Table Statistics<br/>(internal/core/executor/statistics)"]
+      PlanCache["Plan Cache<br/>(internal/core/executor/plan_cache)"]
+      ResCache["Result Cache<br/>(internal/core/executor/result_cache)"]
+      BR["Live Query Broadcaster<br/>(internal/core/executor/broadcaster)"]
 
       Parser --> Optimizer
       Optimizer --- Stats
@@ -168,7 +185,7 @@ graph TB
 
     subgraph Evaluator2 ["Expression Engine (cont.)"]
 
-      E_Eval["Expression Evaluator<br/>(internal/executor/eval)"]
+      E_Eval["Expression Evaluator<br/>(internal/core/executor/eval)"]
       E_Eval_Ops["Operators (=, !=, <, >, IN, IS NULL)"]
       E_Eval_Func["Functions<br/>(COALESCE, CAST, CASE)"]
       E_Eval_Json["JSON Path/Operators<br/>(@>, <@, ?, ||)"]
@@ -183,7 +200,7 @@ graph TB
 
     subgraph AI_Module ["AI & Semantic"]
 
-      AI["AI Embedder<br/>(internal/ai)"]
+      AI["AI Embedder<br/>(internal/core/ai)"]
       AI_ONNX["ONNX Runtime<br/>(optional provider)"]
       AI_HTTP["HTTP Embedding API<br/>(OpenAI-compatible)"]
 
@@ -192,20 +209,20 @@ graph TB
 
     end
 
-    TxMgr["Tx Manager<br/>(internal/txmanager)"]
+    TxMgr["Tx Manager<br/>(internal/core/txmanager)"]
     TxMgr --- Exec
 
     E_Eval --- Eval
 
     subgraph StorageLayer ["Storage & Indexing"]
 
-      subgraph PageEngine ["Page Storage Engine<br/>(internal/storage)"]
+      subgraph PageEngine ["Page Storage Engine<br/>(internal/core/storage)"]
 
         PE_Core["Engine Core<br/>(page_engine.go)"]
         PE_Tuple["Binary Tuple Encoding<br/>(binary_encoding.go)"]
-        PE_Heap["Heap File Manager<br/>(internal/storage/heap)"]
-        PE_Page["Page Data Structures<br/>(internal/storage/page)"]
-        PE_FSM["Free Space Map<br/>(internal/storage/fsm)"]
+        PE_Heap["Heap File Manager<br/>(internal/core/storage/heap)"]
+        PE_Page["Page Data Structures<br/>(internal/core/storage/page)"]
+        PE_FSM["Free Space Map<br/>(internal/core/storage/fsm)"]
         PE_IO["Low-level I/O<br/>(page_engine_io.go)"]
         PE_Index["Index Integration<br/>(page_engine_index.go)"]
         PE_Alter["Alter / Rewrite Logic<br/>(page_engine_alter.go)"]
@@ -228,13 +245,13 @@ graph TB
       JSONDec["Legacy JSON Decoder<br/>(json_decode.go)"]
       Normalize["Name Normalizer<br/>(normalize.go)"]
 
-      WAL["Write-Ahead Log<br/>(internal/wal)"]
+      WAL["Write-Ahead Log<br/>(internal/core/wal)"]
 
       PE_IO --- BufPool
       PE_IO --- JSONDec
       PE_Core --> WAL
 
-      subgraph Indexes ["Index Implementations<br/>(internal/index)"]
+      subgraph Indexes ["Index Implementations<br/>(internal/core/index)"]
 
         BTree["B-Tree Index"]
         Gin["GIN Index<br/>(JSONB / Full-text)"]
@@ -255,8 +272,9 @@ graph TB
 
     subgraph Utils ["Observability & Infrastructure"]
 
-      Audit["Audit Logger<br/>(internal/logging)"]
-      Metrics["Metrics Collector<br/>(internal/metrics)"]
+      Audit["Audit Engine<br/>(internal/core/audit)"]
+      Log["Audit Logger<br/>(internal/logging)"]
+      Metrics["Metrics Collector<br/>(internal/core/metrics)"]
       Cfg["Config Loader<br/>(internal/config)"]
 
     end
@@ -264,6 +282,7 @@ graph TB
     AI --- Exec
     HTTPSrv --- WebUI
     Exec -.-> Audit
+    Exec -.-> Log
     Exec -.-> Metrics
     PageEngine -.-> Metrics
 
@@ -298,39 +317,39 @@ graph TB
 
 | Component | Package | Responsibility |
 |-----------|---------|----------------|
-| **Lexer** | `internal/lexer` | Hand-written rune-based tokenizer. Supports single-character operators (`=`, `!=`, `<`, `>`, `->`, `->>`, `@>`, `<@`, `?`, `||`), string escape sequences, negative number literals, `$N` param references. Returns line/col positions for error reporting. |
-| **Parser** | `internal/parser` | Recursive-descent parser dispatching to modular sub-parsers (DDL, DML, SELECT, expressions). AST nodes for all statement types including CTE/WITH, MERGE, TRIGGER, VIEW, FUNCTION, PROCEDURE, WINDOW, SET operations, LAT ERAL subqueries. |
-| **Optimizer** | `internal/executor/optimizer_*` | Cost-based optimizer. Uses table statistics (`internal/executor/statistics.go`) to choose between SeqScan and IndexScan. Supports predicate pushdown (`optimizer_pushdown.go`) and join ordering (`optimizer_join.go`). |
-| **Executor** | `internal/executor` | Command-pattern execution. Each statement type maps to a `Command` via `reflect`-based registry (initialized in `init()`). Supports transactions, prepared statements, live query broadcasting, plan/result caching. |
-| **Evaluator** | `internal/executor/eval*.go` | Expression evaluation engine with recursive descent. Handles math, string ops, JSONB operators, LIKE/FTS/Full-text, CASE/COALESCE/CAST, subqueries (ALL/ANY/EXISTS), window functions, aggregate functions (Welford online algorithm). |
+| **Lexer** | `internal/core/lexer` | Hand-written rune-based tokenizer. Supports single-character operators (`=`, `!=`, `<`, `>`, `->`, `->>`, `@>`, `<@`, `?`, `||`), string escape sequences, negative number literals, `$N` param references. Returns line/col positions for error reporting. |
+| **Parser** | `internal/core/parser` | Recursive-descent parser dispatching to modular sub-parsers (DDL, DML, SELECT, expressions). AST nodes for all statement types including CTE/WITH, MERGE, TRIGGER, VIEW, FUNCTION, PROCEDURE, WINDOW, SET operations, LAT ERAL subqueries. |
+| **Optimizer** | `internal/core/executor/optimizer_*` | Cost-based optimizer. Uses table statistics (`internal/core/executor/statistics.go`) to choose between SeqScan and IndexScan. Supports predicate pushdown (`optimizer_pushdown.go`) and join ordering (`optimizer_join.go`). |
+| **Executor** | `internal/core/executor` | Command-pattern execution engine. Within `internal/core/executor`, `types/types.go` handles DDL object catalog (`_objects`), foreign keys, and sequence auto-increment, while `commands/` contains subpackages `ddl`, `dml`, `sel`, `tx`, `audit`, and `auth`. Each statement maps to a `Command` via `reflect`-based registry (initialized in `init()`). Supports transactions, prepared statements, live query broadcasting, plan/result caching. |
+| **Evaluator** | `internal/core/executor/eval*.go` | Expression evaluation engine with recursive descent. Handles math, string ops, JSONB operators, LIKE/FTS/Full-text, CASE/COALESCE/CAST, subqueries (ALL/ANY/EXISTS), window functions, aggregate functions (Welford online algorithm). |
 
 ### 3.2 Storage Layer
 
 | Component | Package | Responsibility |
 |-----------|---------|----------------|
-| **Page Engine** | `internal/storage` | Full storage engine on top of page/heap layer. 16-byte tuple header (created_tx + deleted_tx LE uint64), JSON-encoded catalog with current TxID, last-modified tracking, row counts. |
-| **Heap File** | `internal/storage/heap` | Low-level file manager: allocate/read/write 8KB pages. Pages are tracked in segments. Linked free page chain. |
-| **Page** | `internal/storage/page` | Page data structures: header with check/compression flags, tuple slot array, tuple data area. |
-| **FSM** | `internal/storage/fsm` | Free Space Map — tracks available space on pages for efficient INSERT placement. |
-| **Binary Encoding** | `internal/storage/binary_encoding.go` | Compact binary row format: header + col-count + offset array + typed values. Type tags: `i` int64, `f` float64, `b` bool, `s` string, `j` JSONB, `v` float64 vector, 0xFF null. |
-| **Buffer Pool** | `internal/storage/buffer_pool.go` | LRU-k page cache. Page pin/unpin with dirty tracking. Flush dirty pages up to a given LSN for checkpoint integration. |
-| **JSON Decoder** | `internal/storage/json_decode.go` | Legacy JSON decoder for migration from JSON-based storage. |
-| **Page Lock Manager** | `internal/storage/page_lock.go` | Per-page locking to coordinate concurrent access during DML. |
+| **Page Engine** | `internal/core/storage` | Full storage engine on top of page/heap layer. 16-byte tuple header (created_tx + deleted_tx LE uint64), JSON-encoded catalog with current TxID, last-modified tracking, row counts. |
+| **Heap File** | `internal/core/storage/heap` | Low-level file manager: allocate/read/write 8KB pages. Pages are tracked in segments. Linked free page chain. |
+| **Page** | `internal/core/storage/page` | Page data structures: header with check/compression flags, tuple slot array, tuple data area. |
+| **FSM** | `internal/core/storage/fsm` | Free Space Map — tracks available space on pages for efficient INSERT placement. |
+| **Binary Encoding** | `internal/core/storage/binary_encoding.go` | Compact binary row format: header + col-count + offset array + typed values. Type tags: `i` int64, `f` float64, `b` bool, `s` string, `j` JSONB, `v` float64 vector, 0xFF null. |
+| **Buffer Pool** | `internal/core/storage/buffer_pool.go` | LRU-k page cache. Page pin/unpin with dirty tracking. Flush dirty pages up to a given LSN for checkpoint integration. |
+| **JSON Decoder** | `internal/core/storage/json_decode.go` | Legacy JSON decoder for migration from JSON-based storage. |
+| **Page Lock Manager** | `internal/core/storage/page_lock.go` | Per-page locking to coordinate concurrent access during DML. |
 
 ### 3.3 Indexes
 
 | Type | File | Use Case |
 |------|------|----------|
-| **B-Tree** | `internal/index/btree.go` | Primary key and unique constraint indexes. Balanced tree with split/merge. |
-| **GIN** | `internal/index/gin_index.go` | Generalized Inverted Index for JSONB paths and full-text search. |
-| **GiST** | `internal/index/gist_index.go` | Generalized Search Tree for vector similarity and geospatial. |
-| **Hash** | `internal/index/hash_index.go` | Hash index for exact-match equality lookups. |
-| **Composite** | `internal/index/composite.go` | Multi-column index combining B-Tree entries. |
-| **Manager** | `internal/index/manager.go` | Central index manager per table — coordinates index creation, lookup, and lifecycle. |
+| **B-Tree** | `internal/core/index/btree.go` | Primary key and unique constraint indexes. Balanced tree with split/merge. |
+| **GIN** | `internal/core/index/gin_index.go` | Generalized Inverted Index for JSONB paths and full-text search. |
+| **GiST** | `internal/core/index/gist_index.go` | Generalized Search Tree for vector similarity and geospatial. |
+| **Hash** | `internal/core/index/hash_index.go` | Hash index for exact-match equality lookups. |
+| **Composite** | `internal/core/index/composite.go` | Multi-column index combining B-Tree entries. |
+| **Manager** | `internal/core/index/manager.go` | Central index manager per table — coordinates index creation, lookup, and lifecycle. |
 
 ### 3.4 Transaction Manager
 
-**Package**: `internal/txmanager`
+**Package**: `internal/core/txmanager`
 
 MVCC-inspired transaction system:
 - **Snapshot isolation**: each transaction records table versions at first access; Commit checks for conflicts.
@@ -341,7 +360,7 @@ MVCC-inspired transaction system:
 
 ### 3.5 Write-Ahead Log
 
-**Package**: `internal/wal`
+**Package**: `internal/core/wal`
 
 ARIES-inspired WAL with:
 - **Fixed record format**: magic(4) + txID(8) + opType(1) + payloadLen(4) + payload + CRC32(4)
@@ -351,41 +370,58 @@ ARIES-inspired WAL with:
 - **Batch fsync**: configurable `SyncBatchSize` (default 64) to amortize fsync cost
 - **Full page images**: written before page modification to protect against torn pages
 
-### 3.6 Networking & Security
+### 3.6 Networking & Server Infrastructure
 
-| Component | Details |
-|-----------|---------|
-| **TCP Server** | `cmd/vaultdb-server/main.go` — JSON-over-TCP protocol on port 5432. Per-connection goroutine with rate limiter. |
-| **HTTP Server** | `internal/httpserver` — REST API on port 8080 + health/monitor on port 5433. CORS configurable, request size limits. |
-| **Wire Protocol** | `internal/protocol` — Request/Response JSON types shared between TCP and HTTP. |
-| **Connection Pool** | `internal/pool` — Tracks active connections with max limit, idle cleanup, health-check. |
-| **TLS/mTLS** | `internal/tls` — Loads TLS config with optional mTLS (CA verification). |
-| **Auth** | `internal/auth` — HMAC-SHA256 token hashing with server secret. Per-IP rate limiter (token bucket) blocks after N failures in a window. |
-| **WebSocket** | `internal/websocket` — WebSocket bridge for live query subscriptions over HTTP. |
+Directly under `server/internal/` reside the general infrastructure, networking, and service packages:
 
-### 3.7 AI / Semantic
+| Component | Package / Path | Details |
+|-----------|----------------|---------|
+| **TCP Server** | `cmd/vaultdb-server/main.go` | JSON-over-TCP protocol on port 5432. Per-connection goroutine with rate limiter. |
+| **HTTP Server** | `internal/httpserver` | REST API on port 8080 + health/monitor on port 5433. CORS configurable, request size limits. Embedded Web UI (`web/`) and rate limiter (`ratelimit/`). |
+| **Wire Protocol** | `internal/protocol` | Request/Response JSON types shared between TCP and HTTP. |
+| **Connection Pool** | `internal/pool` | Tracks active connections with max limit, idle cleanup, health-check. |
+| **TLS/mTLS** | `internal/tls` | Loads TLS config with optional mTLS (CA verification). |
+| **Auth** | `internal/auth` | HMAC-SHA256 token hashing with server secret. Per-IP rate limiter blocks after N failures in a window. |
+| **WebSocket** | `internal/websocket` | WebSocket bridge for live query subscriptions over HTTP. |
+| **Backup Service** | `internal/backup` | Server-side backup and recovery infrastructure supporting hot backups and point-in-time restore. |
+| **Security Utils** | `internal/security` | General security utilities, TLS helpers, and cryptographic integration wrappers. |
+| **System Utilities** | `internal/osdisk`, `internal/iputil` | OS-level disk monitoring (`osdisk`) and IP/CIDR validation utilities (`iputil`). |
 
-**Package**: `internal/ai`
-
-Pluggable embedding provider for `SEMANTIC_MATCH` and `AI_EMBED` SQL operations:
-- **HTTP Embedder**: calls any OpenAI-compatible embedding API endpoint
-- **Noop fallback**: when no provider configured, operations return a descriptive error instead of silently producing wrong results
-- Injected into executor session via `SetEmbedder()`
-
-### 3.8 Observability
+### 3.7 AI, Crypto & Specialized Core Engines
 
 | Component | Package | Details |
 |-----------|---------|---------|
-| **Metrics** | `internal/metrics` | Query counters (by type/status), connection counters, active connections, storage row counts. Background updater syncs metrics every 30s. |
-| **Audit Log** | `internal/logging` | Structured audit log with file rotation. Tracks query execution and schema changes. |
-| **Config** | `internal/config` | Hierarchical YAML config with env overrides. Validates all fields including port ranges, known values, and conflict detection. |
+| **AI Embedder** | `internal/core/ai` | Pluggable embedding provider for `SEMANTIC_MATCH` and `AI_EMBED` SQL operations. Calls OpenAI-compatible embedding API endpoints or returns descriptive fallback errors when unconfigured. Injected via `SetEmbedder()`. |
+| **Crypto & TDE** | `internal/core/crypto` | Cryptographic primitives and Transparent Data Encryption (TDE) key management. |
+| **Full-Text Search** | `internal/core/fts` | Full-text search indexing and query processing engine. |
+| **Wasm UDF** | `internal/core/wasmudf` | WebAssembly execution runtime for user-defined functions. |
 
-### 3.9 Clients
+### 3.8 Observability & Logging Infrastructure
 
-- **libvaultdb** (`client/lib`): C++17 shared library. OpenSSL-based TCP/TLS socket management, JSON request/response formatting. RAII connection, cross-platform (POSIX + Win32).
-- **Shell** (`client/shell`): Interactive REPL with syntax highlighting and tab completion.
-- **TUI** (`client/tui`): Panel-based terminal UI. Screens for database browser, query editor, table viewer, settings. Built with panel-based architecture (screens, components, dialogs).
-- **Web UI** (`internal/httpserver/web`): Embedded React dashboard for real-time monitoring and query execution.
+| Component | Package | Details |
+|-----------|---------|---------|
+| **Metrics Collector** | `internal/core/metrics` | Query counters (by type/status), connection counters, active connections, storage row counts. Background updater syncs metrics every 30s. |
+| **Audit Engine** | `internal/core/audit` | Core database audit logging engine tracking execution and security-sensitive DDL/DML operations. |
+| **Logging Service** | `internal/logging` | General server logging infrastructure with structured audit log rotation (`internal/logging`). |
+| **Config Loader** | `internal/config` | Hierarchical YAML config (`internal/config`) with env overrides. Validates all fields including port ranges, known values, and conflict detection. |
+
+### 3.9 Client Ecosystem
+
+- **Go SDK** (`client/go`): Go client SDK for connecting to VaultDB servers.
+- **Python SDK** (`client/python`): Python 3 client SDK for integration with Python applications and data pipelines.
+- **TypeScript/Node.js SDK** (`client/js`): TypeScript/Node.js client SDK (`client/js`) for web and backend applications.
+- **libvaultdb** (`client/lib`): C++17 shared library (`client/lib`). OpenSSL-based TCP/TLS socket management, JSON request/response formatting. RAII connection, cross-platform (POSIX + Win32).
+- **Shell** (`client/shell`): Interactive REPL (`client/shell`) with syntax highlighting and tab completion.
+- **TUI** (`client/tui`): Panel-based terminal UI (`client/tui`). Screens for database browser, query editor, table viewer, settings. Built with panel-based architecture (screens, components, dialogs).
+- **Client Tests** (`client/tests`): Unit and integration tests for client libraries (`client/tests`).
+- **Web UI** (`internal/httpserver/web`): Embedded React dashboard (`internal/httpserver/web`) for real-time monitoring and query execution.
+
+### 3.10 Tools & Utilities
+
+- **Go Benchmark Suite** (`tools/benchmark`): Benchmark tool (`tools/benchmark/`) for stress-testing and evaluating engine throughput.
+- **SQL Fuzzing** (`tools/sqlfuzz`): Fuzz testing utilities (`tools/sqlfuzz/`) for SQL parser and query evaluation.
+- **Security Utilities** (`tools/security`): Scripts for security auditing, including `tls_scan.sh` and `generate-sbom.sh`.
+- **Benchmark Gate Script** (`tools/benchstat-gate.sh`): Performance regression gate script (`tools/benchstat-gate.sh`) for CI workflows.
 
 ---
 
@@ -394,21 +430,21 @@ Pluggable embedding provider for `SEMANTIC_MATCH` and `AI_EMBED` SQL operations:
 ```
 cmd/vaultdb-server
   ├── internal/config
-  ├── internal/storage (engine)
-  │     ├── internal/storage/heap
-  │     ├── internal/storage/page
-  │     ├── internal/storage/fsm
-  │     ├── internal/wal
-  │     ├── internal/txmanager
-  │     └── internal/index
-  ├── internal/lexer
-  ├── internal/parser
-  ├── internal/executor
-  │     ├── internal/metrics
-  │     ├── internal/ai
-  │     ├── internal/wal
-  │     ├── internal/txmanager
-  │     └── internal/storage
+  ├── internal/core/storage (engine)
+  │     ├── internal/core/storage/heap
+  │     ├── internal/core/storage/page
+  │     ├── internal/core/storage/fsm
+  │     ├── internal/core/wal
+  │     ├── internal/core/txmanager
+  │     └── internal/core/index
+  ├── internal/core/lexer
+  ├── internal/core/parser
+  ├── internal/core/executor
+  │     ├── internal/core/metrics
+  │     ├── internal/core/ai
+  │     ├── internal/core/wal
+  │     ├── internal/core/txmanager
+  │     └── internal/core/storage
   ├── internal/httpserver
   │     ├── internal/websocket
   │     └── web/ (embedded)
@@ -421,7 +457,7 @@ cmd/vaultdb-server
 
 Layer isolation (from high to low):
 ```
-Client (C++) → TCP/HTTP → Auth → Parser → Optimizer → Executor → Storage/WAL
+Client (C++, Go, Python, JS) → TCP/HTTP → Auth/Protocol → Parser → Optimizer → Executor → Storage/WAL
 ```
 
 No circular dependencies between packages.
@@ -480,7 +516,7 @@ PageStorageEngine.CheckpointLoop()
 
 | Measure | Count (approx.) |
 |---------|----------------|
-| Go packages | 18 internal + 2 cmd |
+| Go packages | 12 internal + 13 core + 4 cmd |
 | Go source files | ~90 |
 | Go test files | ~50 |
 | C++ source files | ~25 |
@@ -518,17 +554,17 @@ Identified during code audit — see `audit.md` for full details:
 ## 8. Extending VaultDB
 
 ### Adding a new statement type
-1. Define AST node in `internal/parser/ast.go`
+1. Define AST node in `internal/core/parser/ast.go`
 2. Add parsing in the appropriate `parse_*.go`
-3. Register command in `internal/executor/executor.go` `init()`
+3. Register command in `internal/core/executor/commands/` or `internal/core/executor/executor.go` `init()`
 4. Implement `Command` interface (`.Execute()`)
-5. Add tests in `internal/executor/commands_*.go` and `parser_test.go`
+5. Add tests in `internal/core/executor/commands/` (`commands_*.go`) and `parser_test.go`
 
 ### Adding a new index type
-1. Implement the index in `internal/index/<type>.go`
-2. Wire it into `internal/index/manager.go`
-3. Add WAL operation type in `internal/wal/wal.go`
-4. Integrate in `internal/storage/page_engine_index.go`
+1. Implement the index in `internal/core/index/<type>.go`
+2. Wire it into `internal/core/index/manager.go`
+3. Add WAL operation type in `internal/core/wal/wal.go`
+4. Integrate in `internal/core/storage/page_engine_index.go`
 
 ### Adding a new storage engine
 1. Implement `storage.StorageEngine` interface (composes `ReadOnlyEngine` + `WriteEngine` + `AdminEngine`)

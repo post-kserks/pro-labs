@@ -141,9 +141,19 @@ func Initcap(s string) string {
 
 // BuildColumnIndex creates a lowercased column-name → position map from the schema.
 func BuildColumnIndex(schema *storage.TableSchema) map[string]int {
-	idx := make(map[string]int, len(schema.Columns))
+	idx := make(map[string]int, len(schema.Columns)*2)
 	for i, col := range schema.Columns {
-		idx[strings.ToLower(col.Name)] = i
+		lower := strings.ToLower(col.Name)
+		idx[lower] = i
+	}
+	for i, col := range schema.Columns {
+		lower := strings.ToLower(col.Name)
+		if dot := strings.IndexByte(lower, '.'); dot >= 0 && dot < len(lower)-1 {
+			short := lower[dot+1:]
+			if _, exists := idx[short]; !exists {
+				idx[short] = i
+			}
+		}
 	}
 	return idx
 }
@@ -153,7 +163,7 @@ func ResolveColumn(row storage.Row, schema *storage.TableSchema, name string, co
 	if schema == nil {
 		return nil, fmt.Errorf("column %q: no schema available", name)
 	}
-	if columnIndex != nil && !strings.Contains(name, ".") {
+	if columnIndex != nil {
 		if idx, ok := columnIndex[strings.ToLower(name)]; ok && idx < len(row) {
 			return row[idx], nil
 		}
@@ -166,10 +176,11 @@ func ResolveColumn(row storage.Row, schema *storage.TableSchema, name string, co
 			}
 		}
 		if !strings.Contains(name, ".") {
-			parts := strings.Split(column.Name, ".")
-			if len(parts) == 2 && strings.EqualFold(parts[1], name) {
-				if i < len(row) {
-					return row[i], nil
+			if dot := strings.IndexByte(column.Name, '.'); dot >= 0 && dot < len(column.Name)-1 {
+				if strings.EqualFold(column.Name[dot+1:], name) {
+					if i < len(row) {
+						return row[i], nil
+					}
 				}
 			}
 		}

@@ -125,7 +125,7 @@ When AI is not configured, `AI_EMBED()` and `SEMANTIC_MATCH()` return a descript
 ## Programmatic Usage
 
 ```go
-import "vaultdb/internal/ai"
+import "vaultdb/internal/core/ai"
 
 // Create embedder
 embedder := ai.NewHTTPEmbedder("https://api.openai.com/v1", "text-embedding-3-small", "sk-...")

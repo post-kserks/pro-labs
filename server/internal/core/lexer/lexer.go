@@ -2,6 +2,7 @@ package lexer
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -233,11 +234,7 @@ type Lexer struct {
 	position     int
 	readPosition int
 	ch           rune
-	lineColCache []lineCol
-}
-
-type lineCol struct {
-	line, col int
+	newlines     []int
 }
 
 func New(input string) *Lexer {
@@ -248,18 +245,12 @@ func New(input string) *Lexer {
 }
 
 func (l *Lexer) buildLineColCache() {
-	l.lineColCache = make([]lineCol, len(l.input)+1)
-	line, col := 1, 1
-	for i := 0; i < len(l.input); i++ {
-		l.lineColCache[i] = lineCol{line, col}
-		if l.input[i] == '\n' {
-			line++
-			col = 1
-		} else {
-			col++
+	l.newlines = make([]int, 0, 16)
+	for i, ch := range l.input {
+		if ch == '\n' {
+			l.newlines = append(l.newlines, i)
 		}
 	}
-	l.lineColCache[len(l.input)] = lineCol{line, col}
 }
 
 func (l *Lexer) NextToken() Token {
@@ -534,11 +525,18 @@ func (l *Lexer) newToken(tokenType TokenType, lit string, position int) Token {
 	if position < 0 {
 		position = 0
 	}
-	if position >= len(l.lineColCache) {
-		position = len(l.lineColCache) - 1
+	if position > len(l.input) {
+		position = len(l.input)
 	}
-	lc := l.lineColCache[position]
-	return Token{Type: tokenType, Literal: lit, Line: lc.line, Col: lc.col}
+	idx := sort.SearchInts(l.newlines, position)
+	line := idx + 1
+	var col int
+	if idx == 0 {
+		col = position + 1
+	} else {
+		col = position - l.newlines[idx-1]
+	}
+	return Token{Type: tokenType, Literal: lit, Line: line, Col: col}
 }
 
 func isLetter(ch rune) bool {

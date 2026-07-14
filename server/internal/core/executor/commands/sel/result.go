@@ -42,22 +42,43 @@ func (c *SelectCommand) resolveLimitOffset(ctx *types.ExecutionContext) (int, bo
 }
 
 func (c *SelectCommand) applyOrderBy(rows []storage.Row, schema *storage.TableSchema, ctx *types.ExecutionContext) {
-	sort.SliceStable(rows, func(i, j int) bool {
-		for _, item := range c.stmt.OrderBy {
-			vi, err := types.EvalOperand(item.Expr, rows[i], schema, ctx)
-			if err != nil {
-				continue
-			}
-			vj, err := types.EvalOperand(item.Expr, rows[j], schema, ctx)
-			if err != nil {
-				continue
-			}
+	if len(rows) <= 1 || len(c.stmt.OrderBy) == 0 {
+		return
+	}
 
-			cmp := eval.CompareOrdering(vi, vj)
+	type sortRow struct {
+		row  storage.Row
+		keys []interface{}
+	}
+
+	numCols := len(c.stmt.OrderBy)
+	allKeys := make([]interface{}, len(rows)*numCols)
+	wrapped := make([]sortRow, len(rows))
+	var evalErrSentinel = new(int)
+
+	for i, row := range rows {
+		keys := allKeys[i*numCols : (i+1)*numCols]
+		for k, item := range c.stmt.OrderBy {
+			val, err := types.EvalOperand(item.Expr, row, schema, ctx)
+			if err != nil {
+				keys[k] = evalErrSentinel
+			} else {
+				keys[k] = val
+			}
+		}
+		wrapped[i] = sortRow{row: row, keys: keys}
+	}
+
+	sort.SliceStable(wrapped, func(i, j int) bool {
+		wi, wj := &wrapped[i], &wrapped[j]
+		for k, item := range c.stmt.OrderBy {
+			if wi.keys[k] == evalErrSentinel || wj.keys[k] == evalErrSentinel {
+				continue
+			}
+			cmp := eval.CompareOrdering(wi.keys[k], wj.keys[k])
 			if cmp == 0 {
 				continue
 			}
-
 			if item.Direction == "DESC" {
 				return cmp > 0
 			}
@@ -65,6 +86,10 @@ func (c *SelectCommand) applyOrderBy(rows []storage.Row, schema *storage.TableSc
 		}
 		return false
 	})
+
+	for i := range wrapped {
+		rows[i] = wrapped[i].row
+	}
 }
 
 func (c *SelectCommand) resolveRows(ctx *types.ExecutionContext, dbName string) ([]storage.Row, string, error) {

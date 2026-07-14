@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -240,30 +241,63 @@ func (g *GINIndex) SearchJSONBContains(query string) []int {
 		return nil
 	}
 
-	result := make(map[int]bool)
-	for rowID, storedValue := range g.jsonValues {
-		storedTokens := tokenizeJSONB(strings.ToLower(storedValue))
-		storedSet := make(map[string]bool)
-		for _, t := range storedTokens {
-			storedSet[t] = true
-		}
-		allFound := true
-		for _, qt := range queryTokens {
-			if !storedSet[qt] {
-				allFound = false
-				break
-			}
-		}
-		if allFound {
-			result[rowID] = true
+	for _, token := range queryTokens {
+		if len(g.data[token]) == 0 {
+			return nil
 		}
 	}
 
-	ids := make([]int, 0, len(result))
-	for id := range result {
-		ids = append(ids, id)
+	firstList := g.data[queryTokens[0]]
+	candidates := make([]int, len(firstList))
+	copy(candidates, firstList)
+	sort.Ints(candidates)
+	candidates = deduplicateSorted(candidates)
+
+	for i := 1; i < len(queryTokens); i++ {
+		if len(candidates) == 0 {
+			break
+		}
+		list := g.data[queryTokens[i]]
+		sortedList := make([]int, len(list))
+		copy(sortedList, list)
+		sort.Ints(sortedList)
+		sortedList = deduplicateSorted(sortedList)
+
+		candidates = intersectSorted(candidates, sortedList)
 	}
-	return ids
+
+	return candidates
+}
+
+func deduplicateSorted(a []int) []int {
+	if len(a) <= 1 {
+		return a
+	}
+	n := 1
+	for i := 1; i < len(a); i++ {
+		if a[i] != a[n-1] {
+			a[n] = a[i]
+			n++
+		}
+	}
+	return a[:n]
+}
+
+func intersectSorted(a, b []int) []int {
+	i, j := 0, 0
+	res := make([]int, 0, len(a))
+	for i < len(a) && j < len(b) {
+		if a[i] == b[j] {
+			res = append(res, a[i])
+			i++
+			j++
+		} else if a[i] < b[j] {
+			i++
+		} else {
+			j++
+		}
+	}
+	return res
 }
 
 func (g *GINIndex) SearchJSONBHasKey(key string) []int {

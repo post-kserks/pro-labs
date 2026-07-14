@@ -5,6 +5,23 @@ import (
 	"math"
 )
 
+// toFloatFast converts int, int64, float64 to float64 without string parsing or allocations.
+func toFloatFast(value interface{}) (float64, bool) {
+	switch v := value.(type) {
+	case int64:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case float64:
+		if math.IsNaN(v) {
+			return 0, false
+		}
+		return v, true
+	default:
+		return 0, false
+	}
+}
+
 // CompareValues compares two values using an operator.
 func CompareValues(left, right interface{}, op string) (bool, error) {
 	if left == nil || right == nil {
@@ -15,6 +32,13 @@ func CompareValues(left, right interface{}, op string) (bool, error) {
 			return !(left == nil && right == nil), nil
 		default:
 			return false, nil
+		}
+	}
+
+	// Numeric Fast-Path
+	if lf, lok := toFloatFast(left); lok {
+		if rf, rok := toFloatFast(right); rok {
+			return compareOrdered(lf, rf, op)
 		}
 	}
 
@@ -61,6 +85,107 @@ func CompareOrdering(a, b interface{}) int {
 	}
 	if b == nil {
 		return 1
+	}
+
+	// Numeric Fast-Path
+	switch av := a.(type) {
+	case int64:
+		switch bv := b.(type) {
+		case int64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		case int:
+			b64 := int64(bv)
+			if av < b64 {
+				return -1
+			}
+			if av > b64 {
+				return 1
+			}
+			return 0
+		case float64:
+			if math.IsNaN(bv) {
+				break
+			}
+			af := float64(av)
+			if af < bv {
+				return -1
+			}
+			if af > bv {
+				return 1
+			}
+			return 0
+		}
+	case int:
+		switch bv := b.(type) {
+		case int:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		case int64:
+			a64 := int64(av)
+			if a64 < bv {
+				return -1
+			}
+			if a64 > bv {
+				return 1
+			}
+			return 0
+		case float64:
+			if math.IsNaN(bv) {
+				break
+			}
+			af := float64(av)
+			if af < bv {
+				return -1
+			}
+			if af > bv {
+				return 1
+			}
+			return 0
+		}
+	case float64:
+		if !math.IsNaN(av) {
+			switch bv := b.(type) {
+			case float64:
+				if !math.IsNaN(bv) {
+					if av < bv {
+						return -1
+					}
+					if av > bv {
+						return 1
+					}
+					return 0
+				}
+			case int64:
+				bf := float64(bv)
+				if av < bf {
+					return -1
+				}
+				if av > bf {
+					return 1
+				}
+				return 0
+			case int:
+				bf := float64(bv)
+				if av < bf {
+					return -1
+				}
+				if av > bf {
+					return 1
+				}
+				return 0
+			}
+		}
 	}
 
 	if af, aok := ToFloat(a); aok {
@@ -124,6 +249,46 @@ func compareOrdered[T ~float64 | ~string](left, right T, op string) (bool, error
 func EvalArithmetic(left, right interface{}, op string) (interface{}, error) {
 	if left == nil || right == nil {
 		return nil, nil
+	}
+
+	// Numeric Fast-Path
+	if lf, lok := toFloatFast(left); lok {
+		if rf, rok := toFloatFast(right); rok {
+			var res float64
+			switch op {
+			case "+":
+				res = lf + rf
+			case "-":
+				res = lf - rf
+			case "*":
+				res = lf * rf
+			case "/":
+				if rf == 0 {
+					return nil, fmt.Errorf("division by zero")
+				}
+				res = lf / rf
+			default:
+				return nil, fmt.Errorf("unknown operator '%s'", op)
+			}
+
+			_, lint := left.(int64)
+			if !lint {
+				_, lint = left.(int)
+			}
+			_, rint := right.(int64)
+			if !rint {
+				_, rint = right.(int)
+			}
+
+			if lint && rint && op != "/" {
+				if res > float64(math.MaxInt64) || res < float64(math.MinInt64) {
+					return nil, fmt.Errorf("value out of int64 range")
+				}
+				return int64(res), nil
+			}
+
+			return res, nil
+		}
 	}
 
 	leftStr := ValueToString(left)

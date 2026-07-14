@@ -86,29 +86,34 @@ Each TCP connection or HTTP request creates a **Session** with:
 
 ### Execution Engine
 
-The executor uses the **Command Pattern** — each SQL statement type is a `Command` with an `Execute()` method. Commands are registered via a reflect-based factory map.
+The executor (`internal/core/executor/`) uses the **Command Pattern** — each SQL statement type is a `Command` with an `Execute()` method. Commands are registered via a reflect-based factory map.
+
+The executor is organized into specialized subsystems:
+- **`internal/core/executor/types/types.go`**: Manages DDL objects (`_objects`), foreign key enforcement, and sequences (`_sequences`), along with uniform command execution results (`Result`).
+- **`internal/core/executor/commands/`**: Contains subpackages for domain-specific statement execution (`ddl`, `dml`, `sel`, `tx`, `audit`, `auth`).
 
 **Query pipeline**:
-1. **Parse**: SQL text → AST (via Lexer + Parser)
+1. **Parse**: SQL text → AST via Lexer (`internal/core/lexer`) and Parser (`internal/core/parser`)
 2. **Optimize**: Cost-based optimization (access method selection, join reordering, predicate pushdown)
 3. **Execute**: Command.Execute() with ExecutionContext
 4. **Return**: Uniform Result type
 
 ### Storage Layer
 
-The storage layer is composed of several decomposed subsystems:
+The storage layer (`internal/core/storage/`) is composed of several decomposed subsystems:
 
-- **Page Storage Engine**: Manages 8KB pages with PostgreSQL-style slotted layout
-- **Buffer Pool**: Clock-Sweep page cache (PostgreSQL-style) with dirty-page tracking and LSN-aware flushing
-- **WAL**: Write-ahead log with ARIES-style three-phase recovery
-- **Partition Manager**: Table partitioning (range, hash, list) with transparent query routing
-- **Free Space Map**: Tracks available space across heap pages for efficient allocation
+- **Page Storage Engine (`internal/core/storage/page/`)**: Manages 8KB pages with PostgreSQL-style slotted layout (subdirectory under `internal/core/storage/`).
+- **Buffer Pool (`internal/core/storage/`)**: Clock-Sweep page cache (PostgreSQL-style) with dirty-page tracking and LSN-aware flushing.
+- **Heap File Management (`internal/core/storage/heap/`)**: Handles segment-based heap file management across disk pages (subdirectory under `internal/core/storage/`).
+- **Free Space Map (`internal/core/storage/fsm/`)**: Tracks available space across heap pages for efficient allocation (subdirectory under `internal/core/storage/`).
+- **Partition Manager (`internal/core/storage/partition.go`)**: Implements table partitioning (range, hash, list) directly under `internal/core/storage/` with transparent query routing.
+- **WAL (`internal/core/wal/`)**: Write-ahead log with ARIES-style three-phase recovery.
 
 ### Disk Layer
 
-- **Heap Files**: Segment-based page storage (each segment = 65,536 pages)
-- **Index Files**: B-tree, Hash, GIN, GiST, Composite (stored as JSON)
-- **Catalog**: JSON file tracking databases, tables, row counts, and transaction timestamps
+- **Heap Files**: Segment-based page storage (`internal/core/storage/heap/`, each segment = 65,536 pages)
+- **Index Files**: B-tree, Hash, GIN, GiST, Composite (`internal/core/index/`, stored as JSON)
+- **Catalog**: JSON file tracking databases, tables, row counts, and transaction timestamps (`internal/core/storage/catalog.go`)
 
 ## Data Flow: SELECT Query
 
@@ -166,32 +171,52 @@ Level 3: pageLock (per-page) — Individual page modifications
 
 ## Package Structure
 
+### Server Binaries (`cmd/`)
+
 | Package | Purpose |
 |---------|---------|
 | `cmd/vaultdb-server` | Server binary entry point |
 | `cmd/vaultdb-backup` | Backup/restore CLI tool |
-| `cmd/check-index` | Index integrity checker |
-| `internal/executor` | SQL execution engine (36 statement types) |
-| `internal/parser` | SQL lexer and parser |
-| `internal/storage` | Page storage engine, buffer pool, catalog |
-| `internal/storage/heap` | Heap file management |
-| `internal/storage/page` | Page layout (headers, tuples, item pointers) |
-| `internal/storage/fsm` | Free Space Map |
-| `internal/storage/partition` | Table partitioning (range, hash, list) |
-| `internal/wal` | Write-ahead log with ARIES recovery |
-| `internal/txmanager` | Transaction manager with OCC |
-| `internal/index` | B-tree, Hash, GIN, GiST, Composite indexes |
-| `internal/httpserver` | HTTP API server |
-| `internal/websocket` | WebSocket support |
+| `cmd/vaultdb-encrypt` | Database encryption management utility (init, status, key generation, migration, rotation) |
+| `cmd/check-index` | Index integrity checker utility |
+
+### Core Database Modules (`internal/core/`)
+
+| Package / Path | Purpose |
+|----------------|---------|
+| `internal/core/executor` | SQL execution engine |
+| `internal/core/executor/types/types.go` | Manages DDL objects (`_objects`), foreign key enforcement, sequences (`_sequences`), and `Result` types |
+| `internal/core/executor/commands/` | Domain-specific statement execution (`ddl`, `dml`, `sel`, `tx`, `audit`, `auth` subpackages) |
+| `internal/core/parser` | SQL lexer and parser for AST generation |
+| `internal/core/lexer` | SQL lexical analyzer and tokenizer |
+| `internal/core/storage` | Page storage engine, buffer pool, and catalog management |
+| `internal/core/storage/fsm` | Free Space Map subdirectory tracking available space across heap pages |
+| `internal/core/storage/heap` | Heap file management subdirectory (segment-based storage) |
+| `internal/core/storage/page` | Page layout subdirectory (headers, tuples, item pointers) |
+| `internal/core/storage/partition.go` | Table partitioning (range, hash, list) directly under `internal/core/storage/` |
+| `internal/core/wal` | Write-ahead log with ARIES-style three-phase recovery |
+| `internal/core/txmanager` | Transaction manager with Optimistic Concurrency Control (OCC) |
+| `internal/core/index` | B-tree, Hash, GIN, GiST, and Composite indexes |
+| `internal/core/ai` | AI embedding providers and vector operations |
+| `internal/core/audit` | Audit log with hash-chain integrity verification |
+| `internal/core/crypto` | Cryptographic utilities and page-level encryption support |
+| `internal/core/fts` | Enterprise full-text search engine |
+| `internal/core/metrics` | Prometheus metrics collector |
+| `internal/core/wasmudf` | WASM UDF runtime for user-defined functions |
+
+### Server Infrastructure (`internal/`)
+
+| Package | Purpose |
+|---------|---------|
 | `internal/auth` | HMAC token authentication |
+| `internal/backup` | Backup/restore implementation |
 | `internal/config` | YAML configuration loader |
-| `internal/tls` | TLS/mTLS support |
-| `internal/ai` | AI embedding providers |
-| `internal/audit` | Audit log with hash-chain integrity |
-| `internal/wasmudf` | WASM UDF runtime for user-defined functions |
-| `internal/fts` | Enterprise full-text search |
-| `internal/metrics` | Prometheus metrics collector |
+| `internal/httpserver` | HTTP API server |
+| `internal/iputil` | IP address utilities, client IP extraction, and trusted proxy handling |
 | `internal/logging` | Log rotation and audit logging |
+| `internal/osdisk` | OS-level disk encryption detection (LUKS, FileVault, BitLocker) |
 | `internal/pool` | TCP connection pool |
 | `internal/protocol` | Wire protocol definitions (v1 + v2 with handshake) |
-| `internal/backup` | Backup/restore implementation |
+| `internal/security` | Security hardening tests and verification |
+| `internal/tls` | TLS/mTLS support |
+| `internal/websocket` | WebSocket support |

@@ -134,21 +134,9 @@ func formatAnyRaw(v interface{}) string {
 	case string:
 		return val
 	case int:
-		if val == 0 {
-			return "0"
-		}
-		if val < 0 {
-			return "-" + formatAnyRaw(-val)
-		}
-		return formatAnyRaw(val/10) + string(rune('0'+val%10))
+		return strconv.Itoa(val)
 	case int64:
-		if val == 0 {
-			return "0"
-		}
-		if val < 0 {
-			return "-" + formatAnyRaw(-val)
-		}
-		return formatAnyRaw(val/10) + string(rune('0'+val%10))
+		return strconv.FormatInt(val, 10)
 	case float64:
 		return strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(formatAny(val)), "-"))
 	case bool:
@@ -227,12 +215,39 @@ func (idx *CompositeIndex) Rebuild(rows []IndexableRow) {
 	idx.values = idx.values[:0]
 	idx.reverse = make(map[int]string)
 
+	type entry struct {
+		key string
+		pos int
+	}
+
+	entries := make([]entry, 0, len(rows))
 	for i, row := range rows {
 		if row.DeletedTx != 0 {
 			continue
 		}
 		key := idx.compositeKey(row.Data)
-		idx.insertLocked(key, i)
+		entries = append(entries, entry{key: key, pos: i})
+		idx.reverse[i] = key
+	}
+
+	if len(entries) == 0 {
+		return
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].key < entries[j].key
+	})
+
+	var lastKey string
+	for i, e := range entries {
+		if i == 0 || e.key != lastKey {
+			idx.keys = append(idx.keys, e.key)
+			idx.values = append(idx.values, []int{e.pos})
+			lastKey = e.key
+		} else {
+			lastIdx := len(idx.values) - 1
+			idx.values[lastIdx] = append(idx.values[lastIdx], e.pos)
+		}
 	}
 }
 

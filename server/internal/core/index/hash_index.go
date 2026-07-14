@@ -97,7 +97,9 @@ func (idx *HashIndex) Delete(rowPos int) {
 	positions := idx.data[key]
 	for i, p := range positions {
 		if p == rowPos {
-			idx.data[key] = append(positions[:i], positions[i+1:]...)
+			last := len(positions) - 1
+			positions[i] = positions[last]
+			idx.data[key] = positions[:last]
 			break
 		}
 	}
