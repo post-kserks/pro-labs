@@ -470,6 +470,10 @@ type RevokeTokenStatement struct {
 	Token string
 }
 
+type KillStatement struct {
+	SessionID uint64
+}
+
 func (*CreateDatabaseStatement) statementNode()       {}
 func (*DropDatabaseStatement) statementNode()         {}
 func (*UseDatabaseStatement) statementNode()          {}
@@ -518,6 +522,7 @@ func (*DropFunctionStatement) statementNode()         {}
 func (*CreateProcedureStatement) statementNode()      {}
 func (*DropProcedureStatement) statementNode()        {}
 func (*CallProcedureStatement) statementNode()        {}
+func (*KillStatement) statementNode()                 {}
 
 func (*CreateDatabaseStatement) StatementType() string { return "CREATE_DATABASE" }
 
@@ -558,6 +563,7 @@ func (*DropRoleStatement) StatementType() string             { return "DROP_ROLE
 func (*GrantStatement) StatementType() string                { return "GRANT" }
 func (*RevokeStatement) StatementType() string               { return "REVOKE" }
 func (*RevokeTokenStatement) StatementType() string          { return "REVOKE_TOKEN" }
+func (*KillStatement) StatementType() string                 { return "KILL" }
 func (*CTEStatement) StatementType() string                  { return "CTE" }
 func (*CreateViewStatement) StatementType() string           { return "CREATE_VIEW" }
 func (*DropViewStatement) StatementType() string             { return "DROP_VIEW" }

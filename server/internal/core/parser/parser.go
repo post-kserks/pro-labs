@@ -321,6 +321,17 @@ func FormatSelectStatement(sel *SelectStatement) string {
 	return sb.String()
 }
 
+// FormatStatement converts any Statement back to a string representation if possible.
+func FormatStatement(stmt Statement) string {
+	if stmt == nil {
+		return ""
+	}
+	if sel, ok := stmt.(*SelectStatement); ok {
+		return FormatSelectStatement(sel)
+	}
+	return fmt.Sprintf("%v", stmt)
+}
+
 func normalizeWhitespace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
@@ -481,8 +492,10 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 		stmt, err = p.parseMigration("PREVIEW")
 	default:
 		// Handle non-keyword statements that start with identifiers
-		if p.current().Type == lexer.TOKEN_IDENT && p.current().Literal == "ARCHIVE" {
+		if p.current().Type == lexer.TOKEN_IDENT && strings.EqualFold(p.current().Literal, "ARCHIVE") {
 			stmt, err = p.parseArchiveAuditLog()
+		} else if p.current().Type == lexer.TOKEN_IDENT && strings.EqualFold(p.current().Literal, "KILL") {
+			stmt, err = p.parseKill()
 		} else {
 			return nil, p.expectedError("a statement", p.current())
 		}

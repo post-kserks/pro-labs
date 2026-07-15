@@ -1,0 +1,7 @@
+go 1.25.12
+
+use (
+	./server
+	./tools/benchmark
+	./tools/sqlfuzz
+)

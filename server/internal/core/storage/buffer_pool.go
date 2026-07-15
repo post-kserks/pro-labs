@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -505,4 +506,65 @@ type BufferPoolStats struct {
 // passed from config.StorageConfig to avoid circular imports.
 type StorageOptions struct {
 	BufferPoolPages int
+}
+
+// PageKey identifies a page descriptor in the buffer pool with its database and table context.
+type PageKey struct {
+	DB     string
+	Table  string
+	PageID page.PageID
+}
+
+var (
+	ErrPagePinned   = errors.New("buffer_pool: page is pinned")
+	ErrPageNotDirty = errors.New("buffer_pool: page is not dirty")
+)
+
+// CollectDirtyPages collects up to batchSize dirty, unpinned page descriptors.
+func (bp *BufferPool) CollectDirtyPages(batchSize int) []PageKey {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+
+	var keys []PageKey
+	for i := 0; i < bp.capacity; i++ {
+		entry := bp.buffers[i]
+		if entry != nil && entry.dirty && entry.pinCnt == 0 {
+			keys = append(keys, PageKey{
+				DB:     entry.db,
+				Table:  entry.table,
+				PageID: entry.pid,
+			})
+			if len(keys) >= batchSize {
+				break
+			}
+		}
+	}
+	return keys
+}
+
+// FlushPage flushes a single page identified by PageID to disk if it is dirty and unpinned.
+func (bp *BufferPool) FlushPage(db, table string, pid page.PageID) error {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+
+	idx, ok := bp.cache[pid]
+	if !ok {
+		return ErrPageNotDirty
+	}
+	entry := bp.buffers[idx]
+	if entry == nil || !entry.dirty {
+		return ErrPageNotDirty
+	}
+	if entry.pinCnt > 0 {
+		return ErrPagePinned
+	}
+	if entry.hf != nil {
+		if err := entry.hf.WritePage(entry.pid, entry.page); err != nil {
+			return fmt.Errorf("FlushPage: %w", err)
+		}
+	}
+	entry.dirty = false
+	entry.lastModifiedLSN = 0
+	entry.imageWritten = false
+	return nil
 }

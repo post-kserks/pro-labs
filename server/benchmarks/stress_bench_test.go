@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"vaultdb"
 )
@@ -84,14 +85,19 @@ func BenchmarkStressSelectIndexed(b *testing.B) {
 	db.Query("benchdb", "CREATE INDEX idx_bench_id ON bench (id);")
 	defer db.Close()
 
+	lt := NewLatencyTracker()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		start := time.Now()
 		_, err := db.Query("benchdb", fmt.Sprintf(
 			"SELECT * FROM bench WHERE id = %d;", i%10000))
 		if err != nil {
 			b.Fatal(err)
 		}
+		lt.Record(time.Since(start))
 	}
+	b.StopTimer()
+	b.Logf("\n%s", lt.Calculate().String())
 }
 
 // --- UPDATE benchmarks ---
@@ -100,14 +106,19 @@ func BenchmarkStressUpdateSingle(b *testing.B) {
 	db := setupStressBenchDBWithData(b, 10000)
 	defer db.Close()
 
+	lt := NewLatencyTracker()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		start := time.Now()
 		_, err := db.Query("benchdb", fmt.Sprintf(
 			"UPDATE bench SET value = 'updated_%d' WHERE id = %d;", i, i%10000))
 		if err != nil {
 			b.Fatal(err)
 		}
+		lt.Record(time.Since(start))
 	}
+	b.StopTimer()
+	b.Logf("\n%s", lt.Calculate().String())
 }
 
 // --- Mixed workload benchmark ---

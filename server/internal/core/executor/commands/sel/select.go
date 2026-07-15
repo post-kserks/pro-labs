@@ -140,6 +140,9 @@ func (c *SelectCommand) Execute(ctx *types.ExecutionContext) (*types.Result, err
 // isSimpleSelect returns true when the query can use the fast path:
 // single table, no joins, no aggregation, no CTEs, no subqueries, no window functions.
 func (c *SelectCommand) isSimpleSelect() bool {
+	if c.stmt.Where != nil {
+		return false
+	}
 	if c.stmt.TableName == "" || c.stmt.FromSubquery != nil || len(c.stmt.CTEs) > 0 {
 		return false
 	}
@@ -161,6 +164,10 @@ func (c *SelectCommand) fastPathSelect(ctx *types.ExecutionContext) (*types.Resu
 	dbName, err := types.RequireCurrentDB(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	if strings.EqualFold(dbName, "system") || strings.HasPrefix(strings.ToLower(c.stmt.TableName), "system.") {
+		return c.executeSimpleSelect(ctx, dbName)
 	}
 
 	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
@@ -340,7 +347,112 @@ func (c *SelectCommand) executeWithCTE(ctx *types.ExecutionContext, dbName strin
 	return types.ExecuteSelectWithCTE(c.stmt, ctx)
 }
 
+func (c *SelectCommand) executeSystemViewResult(ctx *types.ExecutionContext, tableName string, rows []storage.Row, cols []string) (*types.Result, error) {
+	schema := &storage.TableSchema{
+		Name:    tableName,
+		Columns: make([]storage.ColumnSchema, len(cols)),
+	}
+	for i, colName := range cols {
+		schema.Columns[i] = storage.ColumnSchema{Name: colName, Type: "TEXT"}
+	}
+
+	filtered := rows
+	if c.stmt.Where != nil {
+		filtered = make([]storage.Row, 0, len(rows))
+		for _, row := range rows {
+			match, err := types.EvalExpr(c.stmt.Where, row, schema, ctx)
+			if err == nil && match {
+				filtered = append(filtered, row)
+			}
+		}
+	}
+
+	projectCols := cols
+	if len(c.stmt.Columns) > 0 {
+		var customCols []string
+		for _, col := range c.stmt.Columns {
+			if colRef, ok := col.Expr.(*parser.ColumnRef); ok && colRef.Name == "*" {
+				customCols = cols
+				break
+			}
+			if col.Alias != "" {
+				customCols = append(customCols, col.Alias)
+			} else if colRef, ok := col.Expr.(*parser.ColumnRef); ok {
+				customCols = append(customCols, colRef.Name)
+			} else {
+				customCols = append(customCols, parser.FormatExpression(col.Expr))
+			}
+		}
+		if len(customCols) > 0 {
+			projectCols = customCols
+		}
+	}
+
+	resultRows := make([][]string, len(filtered))
+	for i, r := range filtered {
+		rowStr := make([]string, len(projectCols))
+		for j, colName := range projectCols {
+			idx := -1
+			for k, col := range cols {
+				if strings.EqualFold(col, colName) {
+					idx = k
+					break
+				}
+			}
+			if idx >= 0 && idx < len(r) {
+				rowStr[j] = types.ValueToString(r[idx])
+			} else if j < len(c.stmt.Columns) {
+				val, err := types.EvalOperand(c.stmt.Columns[j].Expr, r, schema, ctx)
+				if err == nil {
+					rowStr[j] = types.ValueToString(val)
+				}
+			}
+		}
+		resultRows[i] = rowStr
+	}
+
+	resultSchema := &storage.TableSchema{
+		Name:    tableName,
+		Columns: make([]storage.ColumnSchema, len(projectCols)),
+	}
+	for i, colName := range projectCols {
+		resultSchema.Columns[i] = storage.ColumnSchema{Name: colName, Type: "TEXT"}
+	}
+
+	return &types.Result{
+		Type:        "rows",
+		Columns:     projectCols,
+		Rows:        resultRows,
+		Schema:      resultSchema,
+		RowsScanned: len(rows),
+	}, nil
+}
+
 func (c *SelectCommand) executeSimpleSelect(ctx *types.ExecutionContext, dbName string) (*types.Result, error) {
+	if strings.EqualFold(dbName, "system") || strings.HasPrefix(strings.ToLower(c.stmt.TableName), "system.") {
+		tblName := c.stmt.TableName
+		if strings.HasPrefix(strings.ToLower(tblName), "system.") {
+			tblName = tblName[7:]
+		}
+		if strings.EqualFold(tblName, "pg_stat_activity") || strings.EqualFold(tblName, "active_queries") {
+			if types.GetPGStatActivityRowsFunc != nil {
+				rows := types.GetPGStatActivityRowsFunc()
+				cols := []string{"id", "user", "db", "state", "query", "duration_ms", "tx_id"}
+				return c.executeSystemViewResult(ctx, "pg_stat_activity", rows, cols)
+			}
+		}
+		if strings.EqualFold(tblName, "pg_locks") {
+			if types.GetPGLocksRowsFunc != nil {
+				var rlm *storage.RowLockManager
+				if ctx.TxManager != nil {
+					rlm = ctx.TxManager.RowLocks
+				}
+				rows := types.GetPGLocksRowsFunc(rlm)
+				cols := []string{"key", "mode", "holders", "waiters"}
+				return c.executeSystemViewResult(ctx, "pg_locks", rows, cols)
+			}
+		}
+	}
 	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
 		viewQuery, err := loadViewQueryWithCtx(ctx, dbName, c.stmt.TableName)
 		if err == nil && viewQuery != "" {
@@ -515,7 +627,7 @@ func (c *SelectCommand) executeSimpleSelect(ctx *types.ExecutionContext, dbName 
 	// Within a transaction we skip the index — it would bypass tx-overlay (Bug #1).
 	usedIndex := false
 	indexOnlyResult := false
-	if len(c.stmt.Joins) == 0 && c.stmt.Where != nil && c.stmt.AsOf == nil && !ctx.Session.IsInTx() {
+	if len(c.stmt.Joins) == 0 && c.stmt.Where != nil && c.stmt.AsOf == nil && !ctx.Session.IsInTx() && ctx.SnapshotTxID == 0 {
 		if positions, ok := tryIndexLookup(ctx, dbName, c.stmt.TableName, c.stmt.Where); ok {
 			// Check if we can use index-only scan
 			if storedCols, ok := tryIndexOnlyScan(ctx, dbName, c.stmt.TableName, c.stmt.Where, positions); ok {

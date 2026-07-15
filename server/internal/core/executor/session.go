@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vaultdb/internal/auth"
@@ -19,12 +20,19 @@ import (
 
 const defaultMaxPreparedStatements = 1000
 
-// PreparedStatement is now a type alias — defined in types.PreparedStatement.
+var sessionIDCounter uint64
+
+func nextSessionID() uint64 {
+	return atomic.AddUint64(&sessionIDCounter, 1)
+}
 
 type Session struct {
 	executor  *Executor
 	currentDB string
 	mu        sync.RWMutex
+
+	id   uint64
+	user string
 
 	ActiveTx    *txmanager.Transaction
 	TxManager   *txmanager.Manager
@@ -72,6 +80,7 @@ func NewSession(store storage.StorageEngine, m *metrics.Collector, txm *txmanage
 
 // NewSessionWithConfig creates a session with full configuration.
 func NewSessionWithConfig(cfg SessionConfig) *Session {
+	id := nextSessionID()
 	s := &Session{
 		executor:           New(cfg.Store, cfg.Metrics, cfg.TxManager, cfg.Broadcaster),
 		TxManager:          cfg.TxManager,
@@ -80,7 +89,10 @@ func NewSessionWithConfig(cfg SessionConfig) *Session {
 		planCache:          NewPlanCache(defaultPlanCacheSize),
 		resultCache:        NewResultCache(defaultResultCacheSize, defaultResultCacheTTL),
 		maxPreparedStmts:   defaultMaxPreparedStatements,
+		id:                 id,
 	}
+	GlobalRegistry.RegisterSession(id, "", "", "", 0, nil)
+	GlobalRegistry.UpdateQuery(id, "", StateIdle, 0)
 	if cfg.Embedder != nil {
 		s.SetEmbedder(cfg.Embedder)
 	}
@@ -110,6 +122,46 @@ func (s *Session) SetMaxPreparedStatements(n int) {
 	if n > 0 {
 		s.maxPreparedStmts = n
 	}
+}
+
+// ID returns the session's unique ID.
+func (s *Session) ID() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.id
+}
+
+// SetID sets the session's unique ID and updates the registry.
+func (s *Session) SetID(id uint64) {
+	s.mu.Lock()
+	oldID := s.id
+	s.id = id
+	user := s.user
+	db := s.currentDB
+	s.mu.Unlock()
+	if oldID != id {
+		GlobalRegistry.UnregisterSession(oldID)
+		GlobalRegistry.RegisterSession(id, user, db, "", 0, nil)
+		GlobalRegistry.UpdateQuery(id, "", StateIdle, 0)
+	}
+}
+
+// User returns the session's username.
+func (s *Session) User() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.user
+}
+
+// SetUser sets the session's username and updates the registry.
+func (s *Session) SetUser(user string) {
+	s.mu.Lock()
+	s.user = user
+	id := s.id
+	db := s.currentDB
+	s.mu.Unlock()
+	GlobalRegistry.RegisterSession(id, user, db, "", 0, nil)
+	GlobalRegistry.UpdateQuery(id, "", StateIdle, 0)
 }
 
 // SetResultCacheConfig configures result cache size and TTL.
@@ -294,12 +346,14 @@ func (s *Session) GetRole() string {
 // and resource leaks (spill files, etc.).
 func (s *Session) Close() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	id := s.id
 	if s.ActiveTx != nil && s.ActiveTx.State == txmanager.TxActive {
 		s.ActiveTx.Rollback()
 	}
 	s.PreparedStatements = make(map[string]*PreparedStatement)
 	s.ActiveTx = nil
+	s.mu.Unlock()
+	GlobalRegistry.UnregisterSession(id)
 }
 
 // Reset resets session state for reuse in the pool.

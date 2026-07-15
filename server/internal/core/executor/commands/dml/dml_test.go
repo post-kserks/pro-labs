@@ -436,3 +436,43 @@ func TestComputedColumnWithVirtual(t *testing.T) {
 		t.Fatalf("expected computed value '21', got %q", result.Rows[0][0])
 	}
 }
+
+func TestUpdateIndexRouting(t *testing.T) {
+	session := executor.SetupSession(t)
+	executor.SeedHeroes(t, session)
+
+	executor.ExecuteSQL(t, session, "CREATE INDEX idx_name ON heroes (name);")
+
+	result := executor.ExecuteSQL(t, session, "UPDATE heroes SET level = 100 WHERE name = 'Legolas' RETURNING name, level;")
+	if result.Type != "rows" || len(result.Rows) != 1 {
+		t.Fatalf("expected 1 returned row, got %+v", result)
+	}
+	if result.Rows[0][1] != "100" {
+		t.Fatalf("expected level '100', got %q", result.Rows[0][1])
+	}
+
+	selRes := executor.ExecuteSQL(t, session, "SELECT level FROM heroes WHERE name = 'Legolas';")
+	if len(selRes.Rows) != 1 || selRes.Rows[0][0] != "100" {
+		t.Fatalf("expected persisted level '100', got %+v", selRes)
+	}
+}
+
+func TestDeleteIndexRouting(t *testing.T) {
+	session := executor.SetupSession(t)
+	executor.SeedHeroes(t, session)
+
+	executor.ExecuteSQL(t, session, "CREATE INDEX idx_name ON heroes (name);")
+
+	result := executor.ExecuteSQL(t, session, "DELETE FROM heroes WHERE name = 'Legolas' RETURNING name;")
+	if result.Type != "rows" || len(result.Rows) != 1 {
+		t.Fatalf("expected 1 returned row, got %+v", result)
+	}
+	if result.Rows[0][0] != "Legolas" {
+		t.Fatalf("expected deleted name 'Legolas', got %q", result.Rows[0][0])
+	}
+
+	selRes := executor.ExecuteSQL(t, session, "SELECT * FROM heroes WHERE name = 'Legolas';")
+	if len(selRes.Rows) != 0 {
+		t.Fatalf("expected 0 rows after delete, got %d", len(selRes.Rows))
+	}
+}

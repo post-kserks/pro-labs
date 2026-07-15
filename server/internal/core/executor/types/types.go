@@ -161,6 +161,13 @@ func RegisterCommand(name string, factory CommandFactory) {
 	commandRegistry[name] = factory
 }
 
+// System view function hooks to avoid circular imports between executor and subpackages.
+var (
+	GetPGStatActivityRowsFunc func() []storage.Row
+	GetPGLocksRowsFunc        func(rowLocks *storage.RowLockManager) []storage.Row
+	KillSessionFunc           func(id uint64) bool
+)
+
 // GetCommandFactory returns a factory that looks up commands by statement name.
 // The returned function takes a parser.Statement and a name; it delegates to the
 // registered factory for that name. If no factory is registered, returns nil.

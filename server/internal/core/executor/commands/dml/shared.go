@@ -5,11 +5,212 @@ package dml
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
 )
+
+var dmlIndexOperators = map[string]bool{
+	"=":    true,
+	">":    true,
+	"<":    true,
+	">=":   true,
+	"<=":   true,
+	"LIKE": true,
+	"->":   true,
+	"->>":  true,
+}
+
+func tryIndexLookup(ctx *types.ExecutionContext, dbName, tableName string, where parser.Expression) ([]int, bool) {
+	var op string
+	var left parser.Expression
+	var right parser.Expression
+
+	switch e := where.(type) {
+	case *parser.AndExpr:
+		if positions, ok := tryIndexLookup(ctx, dbName, tableName, e.Left); ok {
+			return positions, true
+		}
+		if positions, ok := tryIndexLookup(ctx, dbName, tableName, e.Right); ok {
+			return positions, true
+		}
+		return nil, false
+	case *parser.BinaryExpr:
+		if !dmlIndexOperators[e.Operator] {
+			return nil, false
+		}
+		op = e.Operator
+		left = e.Left
+		right = e.Right
+	case *parser.JSONAccess:
+		if !dmlIndexOperators[e.Operator] {
+			return nil, false
+		}
+		op = e.Operator
+		left = e.Expr
+		right = e.Argument
+	default:
+		return nil, false
+	}
+
+	col, ok := left.(*parser.ColumnRef)
+	if !ok {
+		return nil, false
+	}
+
+	// Range operators: > < >= <=
+	switch op {
+	case ">", "<", ">=", "<=":
+		val := types.ValueToString(types.EvalOperandRaw(right))
+		if val == "" {
+			return nil, false
+		}
+		var low, high string
+		switch op {
+		case ">":
+			low = val
+		case ">=":
+			low = val
+		case "<":
+			high = val
+		case "<=":
+			high = val
+		}
+		positions, ok := ctx.Storage.IndexRangeLookup(dbName, tableName, col.Name, low, high)
+		if !ok || len(positions) == 0 {
+			return nil, false
+		}
+		return positions, true
+	}
+
+	// Equality and other operators
+	switch op {
+	case "LIKE":
+		val := types.ValueToString(types.EvalOperandRaw(right))
+		if val == "" || !strings.HasPrefix(val, "%") || !strings.HasSuffix(val, "%") {
+			return nil, false
+		}
+		pattern := val[1 : len(val)-1]
+		if pattern == "" {
+			return nil, false
+		}
+		positions, ok := ctx.Storage.IndexFTSLookup(dbName, tableName, col.Name, pattern)
+		if !ok || len(positions) == 0 {
+			return nil, false
+		}
+		return positions, true
+	default:
+		var queryVal string
+		if op == "=" {
+			var val parser.Value
+			switch v := right.(type) {
+			case parser.Value:
+				val = v
+			case *parser.Value:
+				val = *v
+			default:
+				return nil, false
+			}
+			queryVal = types.ValueToString(types.ParserValueToRaw(val))
+		} else {
+			queryVal = types.ValueToString(types.EvalOperandRaw(right))
+		}
+
+		if queryVal == "" {
+			return nil, false
+		}
+
+		positions, ok := ctx.Storage.IndexLookup(dbName, tableName, col.Name, queryVal)
+		if !ok || len(positions) == 0 {
+			return nil, false
+		}
+		return positions, true
+	}
+}
+
+// readRowsForDML attempts index lookup when applicable or falls back to ReadCurrentRows.
+func readRowsForDML(ctx *types.ExecutionContext, dbName, tableName string, where parser.Expression, allowIndex bool) ([]storage.Row, []int, bool, error) {
+	var rows []storage.Row
+	var rowPositions []int
+	usedIndex := false
+
+	if where != nil && allowIndex && !ctx.Session.IsInTx() {
+		if positions, ok := tryIndexLookup(ctx, dbName, tableName, where); ok && len(positions) > 0 {
+			sort.Ints(positions)
+			deduped := make([]int, 0, len(positions))
+			for i, p := range positions {
+				if i == 0 || p != positions[i-1] {
+					deduped = append(deduped, p)
+				}
+			}
+			positions = deduped
+			idxRows, err := ctx.Storage.ReadRowsByPositions(dbName, tableName, positions)
+			if err == nil && len(idxRows) == len(positions) {
+				rows = idxRows
+				rowPositions = positions
+				usedIndex = true
+			}
+		}
+	}
+
+	if !usedIndex {
+		var err error
+		rows, err = ctx.Storage.ReadCurrentRows(dbName, tableName)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		rowPositions = make([]int, len(rows))
+		for i := range rows {
+			rowPositions[i] = i
+		}
+	}
+
+	return rows, rowPositions, usedIndex, nil
+}
+
+// filterRowsAndPositionsWithRLS applies RLS USING policies to filter rows and their logical positions.
+func filterRowsAndPositionsWithRLS(rows []storage.Row, positions []int, schema *storage.TableSchema, ctx *types.ExecutionContext, dbName, tableName string) ([]storage.Row, []int, error) {
+	if !schema.RLSEnabled {
+		return rows, positions, nil
+	}
+	if len(schema.Policies) == 0 {
+		return nil, nil, fmt.Errorf("RLS is enabled on table '%s' but no policies are defined", tableName)
+	}
+
+	filteredRows := make([]storage.Row, 0, len(rows))
+	filteredPos := make([]int, 0, len(positions))
+	for i, row := range rows {
+		visible := false
+		for _, policy := range schema.Policies {
+			if policy.UsingExpr == "" {
+				visible = true
+				break
+			}
+			expr, err := parser.ParseExpression(policy.UsingExpr)
+			if err != nil {
+				return nil, nil, fmt.Errorf("RLS policy '%s': invalid expression: %w", policy.Name, err)
+			}
+			ok, err := types.EvalOperand(expr, row, schema, ctx)
+			if err != nil {
+				continue
+			}
+			if b, ok := ok.(bool); ok && b {
+				visible = true
+				break
+			}
+		}
+		if visible {
+			filteredRows = append(filteredRows, row)
+			if i < len(positions) {
+				filteredPos = append(filteredPos, positions[i])
+			}
+		}
+	}
+	return filteredRows, filteredPos, nil
+}
 
 func executeReturningGeneric(rows []storage.Row, returningCols []parser.SelectColumn, schema *storage.TableSchema, ctx *types.ExecutionContext, oldRows ...storage.Row) (*types.Result, error) {
 	resultRows := make([][]string, 0, len(rows))

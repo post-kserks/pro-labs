@@ -35,6 +35,17 @@ func CompareValues(left, right interface{}, op string) (bool, error) {
 		}
 	}
 
+	if l, ok := left.(int64); ok {
+		if r, ok := right.(int64); ok {
+			return compareInt64(l, r, op), nil
+		}
+	}
+	if l, ok := left.(string); ok {
+		if r, ok := right.(string); ok {
+			return compareString(l, r, op), nil
+		}
+	}
+
 	// Numeric Fast-Path
 	if lf, lok := toFloatFast(left); lok {
 		if rf, rok := toFloatFast(right); rok {
@@ -224,6 +235,44 @@ func CompareOrdering(a, b interface{}) int {
 	}
 
 	return 0
+}
+
+func compareInt64(l, r int64, op string) bool {
+	switch op {
+	case "=":
+		return l == r
+	case "!=":
+		return l != r
+	case "<":
+		return l < r
+	case ">":
+		return l > r
+	case "<=":
+		return l <= r
+	case ">=":
+		return l >= r
+	default:
+		return false
+	}
+}
+
+func compareString(l, r string, op string) bool {
+	switch op {
+	case "=":
+		return l == r
+	case "!=":
+		return l != r
+	case "<":
+		return l < r
+	case ">":
+		return l > r
+	case "<=":
+		return l <= r
+	case ">=":
+		return l >= r
+	default:
+		return false
+	}
 }
 
 func compareOrdered[T ~float64 | ~string](left, right T, op string) (bool, error) {

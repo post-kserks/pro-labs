@@ -166,11 +166,21 @@ func (e *Executor) Run(stmt parser.Statement, sess *Session) (*Result, error) {
 	}
 
 	queryCtx := sess.ServerContext()
+	var cancel context.CancelFunc
 	if queryTimeout > 0 {
-		var cancel context.CancelFunc
 		queryCtx, cancel = context.WithTimeout(queryCtx, queryTimeout)
-		defer cancel()
+	} else {
+		queryCtx, cancel = context.WithCancel(queryCtx)
 	}
+	defer cancel()
+
+	var txID uint64
+	if sess.IsInTx() && sess.ActiveTx != nil {
+		txID = sess.ActiveTx.ID
+	}
+	queryStr := parser.FormatStatement(stmt)
+	GlobalRegistry.RegisterSession(sess.ID(), sess.User(), sess.CurrentDatabase(), queryStr, txID, cancel)
+	defer GlobalRegistry.UpdateQuery(sess.ID(), "", StateIdle, txID)
 
 	ctx := &ExecutionContext{
 		Storage:       e.storage,

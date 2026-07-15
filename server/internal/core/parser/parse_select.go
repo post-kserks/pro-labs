@@ -110,6 +110,14 @@ func (p *sqlParser) parseTruncate() (Statement, error) {
 	if err != nil {
 		return nil, err
 	}
+	if p.current().Type == lexer.TOKEN_DOT {
+		p.advance()
+		subName, err := p.consumeIdent("table name after '.'")
+		if err != nil {
+			return nil, err
+		}
+		tableName = tableName + "." + subName
+	}
 
 	return &TruncateStatement{TableName: tableName}, nil
 }
@@ -280,6 +288,14 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 			if err != nil {
 				return nil, err
 			}
+			if p.current().Type == lexer.TOKEN_DOT {
+				p.advance()
+				subName, err := p.consumeIdent("table name after '.'")
+				if err != nil {
+					return nil, err
+				}
+				tableName = tableName + "." + subName
+			}
 
 			if p.current().Type == lexer.TOKEN_AS && p.peek().Type != lexer.TOKEN_OF {
 				p.advance()
@@ -359,6 +375,14 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 		joinTable, err := p.consumeIdent("join table name")
 		if err != nil {
 			return nil, err
+		}
+		if p.current().Type == lexer.TOKEN_DOT {
+			p.advance()
+			subName, err := p.consumeIdent("table name after '.'")
+			if err != nil {
+				return nil, err
+			}
+			joinTable = joinTable + "." + subName
 		}
 
 		joinAlias := ""

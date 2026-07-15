@@ -110,24 +110,26 @@ func (c *DeleteCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 	// Build column index for O(1) lookups during WHERE evaluation.
 	types.EnsureColumnIndex(ctx, schema)
 
-	rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+	rows, rowPositions, _, err := readRowsForDML(ctx, dbName, c.stmt.TableName, c.stmt.Where, true)
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err = filterRowsWithRLS(rows, schema, ctx, dbName, c.stmt.TableName)
+	rows, rowPositions, err = filterRowsAndPositionsWithRLS(rows, rowPositions, schema, ctx, dbName, c.stmt.TableName)
 	if err != nil {
 		return nil, err
 	}
 
 	indices := make([]int, 0, len(rows))
+	var matchedRows []storage.Row
 	for idx, row := range rows {
 		match, err := types.EvalExpr(c.stmt.Where, row, schema, ctx)
 		if err != nil {
 			return nil, err
 		}
 		if match {
-			indices = append(indices, idx)
+			indices = append(indices, rowPositions[idx])
+			matchedRows = append(matchedRows, row)
 		}
 	}
 
@@ -149,18 +151,12 @@ func (c *DeleteCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 	types.FireTriggers(ctx, dbName, c.stmt.TableName, "DELETE")
 
 	if c.stmt.Returning != nil {
-		return c.executeReturningDelete(ctx, dbName, schema, indices, rows)
+		return c.executeReturningDelete(ctx, dbName, schema, indices, matchedRows)
 	}
 
 	return &types.Result{Type: "affected", Affected: affected}, nil
 }
 
-func (c *DeleteCommand) executeReturningDelete(ctx *types.ExecutionContext, dbName string, schema *storage.TableSchema, indices []int, preDeleteRows []storage.Row) (*types.Result, error) {
-	var deletedRows []storage.Row
-	for _, idx := range indices {
-		if idx < len(preDeleteRows) {
-			deletedRows = append(deletedRows, preDeleteRows[idx])
-		}
-	}
+func (c *DeleteCommand) executeReturningDelete(ctx *types.ExecutionContext, dbName string, schema *storage.TableSchema, indices []int, deletedRows []storage.Row) (*types.Result, error) {
 	return executeReturningGeneric(deletedRows, c.stmt.Returning, schema, ctx)
 }

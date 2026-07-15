@@ -1,7 +1,9 @@
 package parser
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 
 	"vaultdb/internal/core/lexer"
 )
@@ -62,4 +64,21 @@ func (p *sqlParser) parseArchiveAuditLog() (Statement, error) {
 	}
 
 	return stmt, nil
+}
+
+func (p *sqlParser) parseKill() (Statement, error) {
+	p.advance() // KILL
+	if p.current().Type != lexer.TOKEN_IDENT || !strings.EqualFold(p.current().Literal, "QUERY") {
+		return nil, p.expectedError("QUERY", p.current())
+	}
+	p.advance()
+	if p.current().Type != lexer.TOKEN_INT_LIT {
+		return nil, p.expectedError("session ID (integer)", p.current())
+	}
+	val, err := strconv.ParseUint(p.current().Literal, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid session ID: %w", err)
+	}
+	p.advance()
+	return &KillStatement{SessionID: val}, nil
 }

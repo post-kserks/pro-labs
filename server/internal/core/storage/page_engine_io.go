@@ -632,85 +632,69 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	affected := 0
 	pos := 0
 
-	var dirtyPid page.PageID
-	dirty := false
-	flushDirty := func() error {
-		if dirty {
-			e.bufPool.UnpinPage(dirtyPid, true)
-			dirty = false
+	type locatedTuple struct {
+		pid    page.PageID
+		slot   uint16
+		rowIdx int
+	}
+	var located []locatedTuple
+
+	// Single scan: collect physical slots AND logical row indices simultaneously.
+	if err := e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
+		if deletedTx != 0 {
+			return false, nil
 		}
-		return nil
+		matched := wanted[pos]
+		rowIdx := pos
+		pos++
+		if matched {
+			located = append(located, locatedTuple{
+				pid:    pid,
+				slot:   slot,
+				rowIdx: rowIdx,
+			})
+		}
+		return false, nil
+	}); err != nil {
+		return 0, err
 	}
 
 	if e.wal != nil {
-		var physicalSlots []struct {
-			pid  page.PageID
-			slot uint16
-		}
-		e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
-			if deletedTx != 0 {
-				return false, nil
-			}
-			matched := wanted[pos]
-			pos++
-			if matched {
-				physicalSlots = append(physicalSlots, struct {
-					pid  page.PageID
-					slot uint16
-				}{pid, slot})
-			}
-			return false, nil
-		})
-		for _, ps := range physicalSlots {
+		for _, loc := range located {
 			payload := wal.WALPageDeletePayload{
 				DB:        dbName,
 				Table:     tableName,
-				SegmentNo: ps.pid.SegmentNo,
-				PageNo:    ps.pid.PageNo,
-				SlotNo:    ps.slot,
+				SegmentNo: loc.pid.SegmentNo,
+				PageNo:    loc.pid.PageNo,
+				SlotNo:    loc.slot,
 				XMax:      txID,
 			}
 			if _, err := e.wal.AppendWithTx(txID, wal.OpPageDelete, payload); err != nil {
 				return 0, fmt.Errorf("wal delete: %w", err)
 			}
 		}
-		pos = 0
 	}
 
-	err = e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
-		if deletedTx != 0 {
-			return false, nil
+	for _, loc := range located {
+		pg, err := e.getPage(loc.pid, t.heap, dbName, tableName)
+		if err != nil {
+			return 0, err
 		}
-		matched := wanted[pos]
-		pos++
-		if !matched {
-			return false, nil
-		}
-		if dirty && dirtyPid != pid {
-			if err := flushDirty(); err != nil {
-				return true, err
-			}
-		}
-		tuple := pg.GetTuple(slot)
-		binary.LittleEndian.PutUint64(tuple[8:16], txID)
-		dirtyPid, dirty = pid, true
 
-		if nv, ok := newByIndex[pos-1]; ok {
+		tuple := pg.GetTuple(loc.slot)
+		binary.LittleEndian.PutUint64(tuple[8:16], txID)
+
+		if nv, ok := newByIndex[loc.rowIdx]; ok {
 			encoded, err := encodePageTuple(txID, 0, nv)
 			if err != nil {
-				return true, err
+				e.bufPool.UnpinPageDirty(loc.pid, 0)
+				return 0, err
 			}
 			newVersions = append(newVersions, encoded)
 			newRows = append(newRows, nv)
 		}
 		affected++
-		return false, nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	if err := flushDirty(); err != nil {
-		return 0, err
+		e.bufPool.UnpinPageDirty(loc.pid, 0)
 	}
 	if len(newVersions) > 0 {
 		if err := e.appendTuplesLocked(t, newVersions); err != nil {

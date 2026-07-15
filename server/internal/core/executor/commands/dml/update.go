@@ -162,12 +162,12 @@ func (c *UpdateCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 		}
 	}
 
-	rows, err := ctx.Storage.ReadCurrentRows(dbName, c.stmt.TableName)
+	rows, rowPositions, _, err := readRowsForDML(ctx, dbName, c.stmt.TableName, c.stmt.Where, c.stmt.FromTable == "" && c.stmt.FromSubquery == nil)
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err = filterRowsWithRLS(rows, schema, ctx, dbName, c.stmt.TableName)
+	rows, rowPositions, err = filterRowsAndPositionsWithRLS(rows, rowPositions, schema, ctx, dbName, c.stmt.TableName)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +218,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 				targetIdx := idx / len(fromRows)
 				if !seenTarget[targetIdx] {
 					seenTarget[targetIdx] = true
-					indices = append(indices, targetIdx)
+					indices = append(indices, rowPositions[targetIdx])
 					matchedRows = append(matchedRows, rows[targetIdx])
 					matchedEvalRows = append(matchedEvalRows, row)
 				}
@@ -231,7 +231,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 				return nil, err
 			}
 			if match {
-				indices = append(indices, idx)
+				indices = append(indices, rowPositions[idx])
 				matchedRows = append(matchedRows, row)
 				matchedEvalRows = append(matchedEvalRows, row)
 			}

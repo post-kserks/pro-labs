@@ -261,3 +261,29 @@ func (rlm *RowLockManager) ActiveLockCount() int {
 	defer rlm.mu.Unlock()
 	return len(rlm.locks)
 }
+
+// GetActiveLocks returns a snapshot copy of current active row locks.
+func (rlm *RowLockManager) GetActiveLocks() []*RowLock {
+	if rlm == nil {
+		return nil
+	}
+	rlm.mu.Lock()
+	defer rlm.mu.Unlock()
+	list := make([]*RowLock, 0, len(rlm.locks))
+	for _, l := range rlm.locks {
+		if l == nil {
+			continue
+		}
+		holders := make(map[uint64]bool, len(l.Holders))
+		for k, v := range l.Holders {
+			holders[k] = v
+		}
+		list = append(list, &RowLock{
+			Key:     l.Key,
+			Mode:    l.Mode,
+			Holders: holders,
+			Waiters: make([]chan struct{}, len(l.Waiters)),
+		})
+	}
+	return list
+}
