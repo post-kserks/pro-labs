@@ -10,10 +10,12 @@ import (
 	"strings"
 
 	"vaultdb/internal/core/executor/eval"
+	"vaultdb/internal/core/executor/eval/vm"
 	"vaultdb/internal/core/executor/optimizer"
 	"vaultdb/internal/core/executor/parallel"
 	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/parser"
+	"vaultdb/internal/core/security"
 	"vaultdb/internal/core/storage"
 )
 
@@ -216,12 +218,34 @@ func (c *SelectCommand) fastPathSelect(ctx *types.ExecutionContext) (*types.Resu
 		ctx.FtsQuery = extractFtsQueryFromWhere(c.stmt.Where)
 	}
 
+	// Try to compile WHERE to VM
+	var compiledWhere []vm.OpCode
+	if c.stmt.Where != nil {
+		compiledWhere, _ = vm.Compile(c.stmt.Where, schema)
+	}
+
 	// Filter with WHERE
 	var filtered []storage.Row
 	if c.stmt.Where != nil {
 		filtered = make([]storage.Row, 0, len(rows))
 		for _, row := range rows {
-			ok, err := types.EvalExpr(c.stmt.Where, row, schema, ctx)
+			var ok bool
+			var err error
+			if compiledWhere != nil {
+				res, errVM := vm.ExecuteVM(compiledWhere, row)
+				if errVM == nil {
+					if b, isBool := res.(bool); isBool {
+						ok = b
+					} else {
+						ok, err = types.EvalExpr(c.stmt.Where, row, schema, ctx)
+					}
+				} else {
+					ok, err = types.EvalExpr(c.stmt.Where, row, schema, ctx)
+				}
+			} else {
+				ok, err = types.EvalExpr(c.stmt.Where, row, schema, ctx)
+			}
+
 			if err != nil {
 				return nil, err
 			}
@@ -321,6 +345,8 @@ func (c *SelectCommand) fastPathSelect(ctx *types.ExecutionContext) (*types.Resu
 		}
 		finalRows = resultRows[start:end]
 	}
+
+	c.applyMasking(ctx, schema, dbName, c.stmt.Columns, finalRows)
 
 	resultSchema := &storage.TableSchema{
 		Name:    c.stmt.TableName,
@@ -443,11 +469,7 @@ func (c *SelectCommand) executeSimpleSelect(ctx *types.ExecutionContext, dbName 
 		}
 		if strings.EqualFold(tblName, "pg_locks") {
 			if types.GetPGLocksRowsFunc != nil {
-				var rlm *storage.RowLockManager
-				if ctx.TxManager != nil {
-					rlm = ctx.TxManager.RowLocks
-				}
-				rows := types.GetPGLocksRowsFunc(rlm)
+				rows := types.GetPGLocksRowsFunc(nil)
 				cols := []string{"key", "mode", "holders", "waiters"}
 				return c.executeSystemViewResult(ctx, "pg_locks", rows, cols)
 			}
@@ -689,6 +711,11 @@ func (c *SelectCommand) executeSimpleSelect(ctx *types.ExecutionContext, dbName 
 		ctx.FtsQuery = extractFtsQueryFromWhere(c.stmt.Where)
 	}
 
+	var compiledWhere []vm.OpCode
+	if c.stmt.Where != nil {
+		compiledWhere, _ = vm.Compile(c.stmt.Where, combinedSchema)
+	}
+
 	// Filter rows (WHERE) — use parallel execution for large tables
 	var filtered []storage.Row
 	if parallel.ShouldUseParallel(ctx.Parallel, len(combinedRows), len(c.stmt.Joins) > 0, len(c.stmt.OrderBy) > 0) && c.stmt.Where != nil {
@@ -697,7 +724,23 @@ func (c *SelectCommand) executeSimpleSelect(ctx *types.ExecutionContext, dbName 
 	} else {
 		filtered = make([]storage.Row, 0, len(combinedRows))
 		for _, row := range combinedRows {
-			ok, err := types.EvalExpr(c.stmt.Where, row, combinedSchema, ctx)
+			var ok bool
+			var err error
+			if compiledWhere != nil {
+				res, errVM := vm.ExecuteVM(compiledWhere, row)
+				if errVM == nil {
+					if b, isBool := res.(bool); isBool {
+						ok = b
+					} else {
+						ok, err = types.EvalExpr(c.stmt.Where, row, combinedSchema, ctx)
+					}
+				} else {
+					ok, err = types.EvalExpr(c.stmt.Where, row, combinedSchema, ctx)
+				}
+			} else {
+				ok, err = types.EvalExpr(c.stmt.Where, row, combinedSchema, ctx)
+			}
+
 			if err != nil {
 				return nil, err
 			}
@@ -816,6 +859,8 @@ func (c *SelectCommand) executeSimpleSelect(ctx *types.ExecutionContext, dbName 
 
 	finalRows := resultRows[start:end]
 
+	c.applyMasking(ctx, combinedSchema, dbName, effectiveColumns, finalRows)
+
 	resultSchema := &storage.TableSchema{
 		Name:    c.stmt.TableName,
 		Columns: make([]storage.ColumnSchema, len(effectiveColumns)),
@@ -931,21 +976,7 @@ func tryIndexLookup(ctx *types.ExecutionContext, dbName, tableName string, where
 		}
 		return positions, true
 	default:
-		var queryVal string
-		if op == "=" {
-			var val parser.Value
-			switch v := right.(type) {
-			case parser.Value:
-				val = v
-			case *parser.Value:
-				val = *v
-			default:
-				return nil, false
-			}
-			queryVal = types.ValueToString(types.ParserValueToRaw(val))
-		} else {
-			queryVal = types.ValueToString(types.EvalOperandRaw(right))
-		}
+		queryVal := types.ValueToString(types.ParserValueToRaw(right))
 
 		if queryVal == "" {
 			return nil, false
@@ -1399,4 +1430,39 @@ func extractFtsQueryFromWhere(where parser.Expression) string {
 		return extractFtsQueryFromWhere(e.Expr)
 	}
 	return ""
+}
+
+func (c *SelectCommand) applyMasking(ctx *types.ExecutionContext, schema *storage.TableSchema, dbName string, cols []parser.SelectColumn, rows [][]string) {
+	if len(rows) == 0 {
+		return
+	}
+	hasUnmask := true
+	if s, ok := ctx.Session.(interface{ GetToken() string }); ok {
+		if am := ctx.Session.GetAuthManager(); am != nil {
+			hasUnmask = am.CheckPermission(s.GetToken(), "UNMASK")
+		}
+	}
+	if hasUnmask {
+		return
+	}
+
+	for i, col := range cols {
+		colRef, ok := col.Expr.(*parser.ColumnRef)
+		if !ok {
+			continue
+		}
+
+		tableName := schema.Name
+		if colRef.Table != "" {
+			tableName = colRef.Table
+		}
+
+		p, exists := security.GetPolicy(dbName, tableName, colRef.Name)
+		if !exists {
+			continue
+		}
+		for _, row := range rows {
+			row[i] = security.MaskString(row[i], p)
+		}
+	}
 }

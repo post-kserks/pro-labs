@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"vaultdb/internal/core/crypto"
 	"vaultdb/internal/core/index"
 	"vaultdb/internal/core/storage/heap"
 	"vaultdb/internal/core/storage/page"
@@ -24,6 +25,8 @@ import (
 type TxManager interface {
 	EnsureCounterAtLeast(val uint64)
 	IsCommitted(xid uint64) bool
+	IsAborted(xid uint64) bool
+	GetSnapshot(txID uint64) map[uint64]bool
 }
 
 // PageStorageEngine implements StorageEngine on top of binary page-based
@@ -46,7 +49,6 @@ type PageStorageEngine struct {
 	txMgr    TxManager
 	bufPool  *BufferPool
 	pageLock *PageLockManager
-	rowLocks *RowLockManager
 
 	indexes   map[string]*index.IndexManager // "db/table" → index manager
 	indexesMu sync.RWMutex
@@ -72,6 +74,13 @@ type PageStorageEngine struct {
 	catalogMgr *CatalogManager
 	dml        *DMLExecutor
 	ddl        *DDLExecutor
+
+	tde *crypto.TDEEngine
+}
+
+type PageSlot struct {
+	PID  page.PageID
+	Slot uint16
 }
 
 type pageTable struct {
@@ -80,10 +89,20 @@ type pageTable struct {
 	tableID uint32
 	mu      sync.RWMutex // per-table lock
 
+	posMu             sync.RWMutex
+	posDirectory      []PageSlot
+	posDirectoryValid bool
+
 	// Per-table atomic counters. Updated by DML operations without e.mu,
 	// then synced to the catalog under e.mu for persistence.
 	rowCount atomic.Int64  // replaces catalog.RowCounts[key]
 	lastTxID atomic.Uint64 // replaces catalog.LastModified[key]
+}
+
+func (t *pageTable) invalidatePosDirectory() {
+	t.posMu.Lock()
+	t.posDirectoryValid = false
+	t.posMu.Unlock()
 }
 
 type pageTxStamp struct {
@@ -123,25 +142,6 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr TxManager, opts ...*
 		bufPool.SetWAL(w)
 	}
 
-	var rlm *RowLockManager
-	if rlProvider, ok := txMgr.(interface{ GetRowLocks() *RowLockManager }); ok && rlProvider != nil {
-		rlm = rlProvider.GetRowLocks()
-	}
-	if rlm == nil {
-		rlm = NewRowLockManager(30 * time.Second)
-	}
-	if holder, ok := txMgr.(interface{ SetRowLocks(*RowLockManager) }); ok && holder != nil {
-		holder.SetRowLocks(rlm)
-	}
-	if rlHolder, ok := txMgr.(interface {
-		SetRowLocker(interface {
-			LockRowInt(context.Context, string, string, string, uint64, int) error
-			UnlockTx(uint64)
-		})
-	}); ok && rlHolder != nil {
-		rlHolder.SetRowLocker(rlm)
-	}
-
 	e := &PageStorageEngine{
 		rootDir: root,
 		tables:  make(map[string]*pageTable),
@@ -153,7 +153,6 @@ func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr TxManager, opts ...*
 		txMgr:    txMgr,
 		bufPool:  bufPool,
 		pageLock: NewPageLockManager(),
-		rowLocks: rlm,
 		indexes:  make(map[string]*index.IndexManager),
 		schemas:  make(map[string]*TableSchema),
 	}
@@ -222,14 +221,14 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 	// recalculateCatalog can identify live tuples. Without this, fresh txMgr
 	// instances would skip tuples whose createdTx exceeds the stale catalog
 	// CurrentTxID (which may not have been saved if catalog saves are deferred).
-	if e.txMgr != nil && len(committed) > 0 {
+	if len(committed) > 0 {
 		var maxCommitted uint64
 		for xid := range committed {
 			if xid > maxCommitted {
 				maxCommitted = xid
 			}
 		}
-		e.txMgr.EnsureCounterAtLeast(maxCommitted + 1)
+		e.ensureNextTxIDAtLeast(maxCommitted + 1)
 	}
 
 	slog.Info("WAL recovery: analysis complete",
@@ -437,6 +436,9 @@ func (e *PageStorageEngine) undoPhase(inProgress map[uint64]bool) error {
 }
 
 func (e *PageStorageEngine) redoInsert(p wal.WALPageInsertPayload) error {
+	if p.XID > 0 {
+		e.ensureNextTxIDAtLeast(p.XID + 1)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -497,6 +499,9 @@ func (e *PageStorageEngine) redoInsert(p wal.WALPageInsertPayload) error {
 }
 
 func (e *PageStorageEngine) redoDelete(p wal.WALPageDeletePayload) error {
+	if p.XMax > 0 {
+		e.ensureNextTxIDAtLeast(p.XMax + 1)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -872,6 +877,21 @@ func (e *PageStorageEngine) markCatalogDirty() {
 	}
 }
 
+func (e *PageStorageEngine) ensureNextTxIDAtLeast(val uint64) {
+	for {
+		cur := e.txCounter.Load()
+		if cur >= val {
+			break
+		}
+		if e.txCounter.CompareAndSwap(cur, val) {
+			break
+		}
+	}
+	if e.txMgr != nil {
+		e.txMgr.EnsureCounterAtLeast(val)
+	}
+}
+
 // nextTxID atomically allocates a new transaction ID without holding e.mu.
 // This replaces the mu-protected path for DML hot paths.
 func (e *PageStorageEngine) nextTxID() uint64 {
@@ -902,11 +922,11 @@ func (e *PageStorageEngine) nextTxLocked() uint64 {
 // ── Tuple encoding ──────────────────────────────────────────────────────────
 
 func encodePageTuple(createdTx, deletedTx uint64, row Row) ([]byte, error) {
-	return encodeBinaryTuple(createdTx, deletedTx, row)
+	return EncodeRow(createdTx, deletedTx, row)
 }
 
 func decodePageTuple(tuple []byte, schema *TableSchema) (createdTx, deletedTx uint64, row Row, err error) {
-	return decodeBinaryTuple(tuple, schema)
+	return DecodeRow(tuple, schema)
 }
 
 // ── Databases ───────────────────────────────────────────────────────────────
@@ -1184,7 +1204,22 @@ func (e *PageStorageEngine) getTableLocked(db, table string, cache bool) (*pageT
 		e.tables[key] = t
 		e.schemas[key] = t.schema
 	}
+	if e.tde != nil {
+		hf.SetTDEEngine(e.tde)
+	}
 	return t, nil
+}
+
+// SetTDEEngine sets the Transparent Data Encryption engine.
+func (e *PageStorageEngine) SetTDEEngine(tde *crypto.TDEEngine) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.tde = tde
+	for _, t := range e.tables {
+		if t.heap != nil {
+			t.heap.SetTDEEngine(tde)
+		}
+	}
 }
 
 func (e *PageStorageEngine) DropTable(dbName, tableName string) error {
@@ -1291,6 +1326,6 @@ func (e *PageStorageEngine) DDL() *DDLExecutor {
 }
 
 // GetRowLocks returns the row lock manager subsystem.
-func (e *PageStorageEngine) GetRowLocks() *RowLockManager {
-	return e.rowLocks
+func (e *PageStorageEngine) GetRowLocks() interface{} {
+	return nil
 }

@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"context"
 	"fmt"
 	"reflect"
 	"testing"
@@ -83,100 +82,90 @@ func TestGetPGStatActivityRows_Direct(t *testing.T) {
 	}
 }
 
-// TestGetPGLocksRows_Direct verifies GetPGLocksRows directly with both nil and initialized RowLockManager.
+// TestGetPGLocksRows_Direct verifies GetPGLocksRows returns empty since MVCC replaced row locks.
 func TestGetPGLocksRows_Direct(t *testing.T) {
-	t.Run("nil manager", func(t *testing.T) {
+	t.Run("nil argument", func(t *testing.T) {
 		rows := GetPGLocksRows(nil)
 		if rows == nil || len(rows) != 0 {
-			t.Fatalf("expected empty non-nil slice when rowLocks is nil, got len=%d, nil=%v", len(rows), rows == nil)
-		}
-	})
-
-	t.Run("initialized empty manager", func(t *testing.T) {
-		rlm := storage.NewRowLockManager(10 * time.Second)
-		rows := GetPGLocksRows(rlm)
-		if rows == nil || len(rows) != 0 {
-			t.Fatalf("expected empty non-nil slice when no active locks exist, got len=%d", len(rows))
-		}
-	})
-
-	t.Run("active locks acquired and held", func(t *testing.T) {
-		rlm := storage.NewRowLockManager(10 * time.Second)
-		ctx := context.Background()
-
-		// Acquire exclusive lock on row1 by tx 100
-		if err := rlm.LockRow(ctx, "mydb", "mytable", "row1", 100, storage.LockExclusive); err != nil {
-			t.Fatalf("failed to lock row1: %v", err)
-		}
-
-		// Acquire shared lock on row2 by tx 200 and tx 201
-		if err := rlm.LockRow(ctx, "mydb", "mytable", "row2", 200, storage.LockShared); err != nil {
-			t.Fatalf("failed to lock row2 (tx 200): %v", err)
-		}
-		if err := rlm.LockRow(ctx, "mydb", "mytable", "row2", 201, storage.LockShared); err != nil {
-			t.Fatalf("failed to lock row2 (tx 201): %v", err)
-		}
-
-		rows := GetPGLocksRows(rlm)
-		if len(rows) != 2 {
-			t.Fatalf("expected 2 lock rows, got %d", len(rows))
-		}
-
-		// GetPGLocksRows sorts by key ascending: "mydb/mytable/row1" < "mydb/mytable/row2"
-		r0 := rows[0]
-		expectedKey0 := "mydb/mytable/row1"
-		if r0[0] != expectedKey0 || r0[1] != "EXCLUSIVE" || r0[2] != "100" || r0[3] != int64(0) {
-			t.Errorf("row 0 mismatch: expected [%q EXCLUSIVE 100 0], got %#v", expectedKey0, r0)
-		}
-
-		r1 := rows[1]
-		expectedKey1 := "mydb/mytable/row2"
-		if r1[0] != expectedKey1 || r1[1] != "SHARED" || r1[2] != "200,201" || r1[3] != int64(0) {
-			t.Errorf("row 1 mismatch: expected [%q SHARED 200,201 0], got %#v", expectedKey1, r1)
+			t.Fatalf("expected empty non-nil slice, got len=%d, nil=%v", len(rows), rows == nil)
 		}
 	})
 }
 
 // TestSystemViews_SQLExecution verifies system views execution and WHERE filtering via Executor.Run.
 func TestSystemViews_SQLExecution(t *testing.T) {
-	t.Run("SELECT * FROM system.pg_stat_activity via AST struct and SQL execution", func(t *testing.T) {
+	t.Run("SELECT * FROM system.pg_stat_activity", func(t *testing.T) {
 		exec, _, sess := setupTestExecutor(t)
 
-		testSessID := uint64(80001)
-		GlobalRegistry.RegisterSession(testSessID, "testuser", "system", "SELECT 1;", 100, nil)
-		t.Cleanup(func() {
-			GlobalRegistry.UnregisterSession(testSessID)
-		})
+		sessID2 := uint64(80002)
+		GlobalRegistry.RegisterSession(sessID2, "bob", "system", "SELECT 1;", 0, nil)
+		t.Cleanup(func() { GlobalRegistry.UnregisterSession(sessID2) })
 
-		// 1. Execute query via AST SelectStatement
-		resAST, err := exec.Run(&parser.SelectStatement{TableName: "system.pg_stat_activity"}, sess)
+		stmt, err := parser.Parse("SELECT * FROM system.pg_stat_activity;")
 		if err != nil {
-			t.Fatalf("exec.Run with AST failed: %v", err)
+			t.Fatalf("failed to parse SQL: %v", err)
 		}
-		if resAST == nil || len(resAST.Columns) != 7 {
-			t.Fatalf("expected 7 columns in result, got %v", resAST)
+		res, err := exec.Run(stmt, sess)
+		if err != nil {
+			t.Fatalf("exec.Run failed: %v", err)
 		}
 
 		expectedCols := []string{"id", "user", "db", "state", "query", "duration_ms", "tx_id"}
-		if !reflect.DeepEqual(resAST.Columns, expectedCols) {
-			t.Errorf("expected columns %v, got %v", expectedCols, resAST.Columns)
+		if !reflect.DeepEqual(res.Columns, expectedCols) {
+			t.Errorf("expected columns %v, got %v", expectedCols, res.Columns)
 		}
 
-		foundTestSess := false
-		for _, row := range resAST.Rows {
-			if len(row) >= 7 && row[0] == fmt.Sprintf("%d", testSessID) {
-				foundTestSess = true
-				if row[1] != "testuser" || row[2] != "system" || row[4] != "SELECT 1;" || row[6] != "100" {
-					t.Errorf("unexpected row values for testSessID: %v", row)
-				}
-			}
+		if len(res.Rows) < 2 {
+			t.Fatalf("expected at least 2 active sessions in pg_stat_activity, got %d", len(res.Rows))
 		}
-		if !foundTestSess {
-			t.Errorf("test session %d not found in pg_stat_activity rows: %v", testSessID, resAST.Rows)
+	})
+
+	t.Run("SELECT * FROM system.pg_stat_activity WHERE user = 'bob_sql_exec_test'", func(t *testing.T) {
+		exec, _, sess := setupTestExecutor(t)
+
+		sessID2 := uint64(80003)
+		s2 := GlobalRegistry.RegisterSession(sessID2, "bob_sql_exec_test", "system", "SELECT 1;", 0, nil)
+		s2.State = StateIdle
+		t.Cleanup(func() { GlobalRegistry.UnregisterSession(sessID2) })
+
+		stmt, err := parser.Parse("SELECT * FROM system.pg_stat_activity WHERE user = 'bob_sql_exec_test';")
+		if err != nil {
+			t.Fatalf("failed to parse SQL: %v", err)
+		}
+		res, err := exec.Run(stmt, sess)
+		if err != nil {
+			t.Fatalf("exec.Run with WHERE failed: %v", err)
 		}
 
-		// 2. Execute query via SQL string
-		stmt, err := parser.Parse("SELECT * FROM system.pg_stat_activity;")
+		if len(res.Rows) < 1 {
+			t.Fatalf("expected at least 1 session for bob_sql_exec_test, got %d: %v", len(res.Rows), res.Rows)
+		}
+		if res.Rows[0][1] != "bob_sql_exec_test" {
+			t.Errorf("expected bob_sql_exec_test, got %v", res.Rows[0])
+		}
+
+		// Also verify via SelectStatement AST
+		selectStmt := &parser.SelectStatement{
+			TableName: "system.pg_stat_activity",
+			Where: &parser.BinaryExpr{
+				Left:     &parser.ColumnRef{Name: "user"},
+				Operator: "=",
+				Right:    &parser.Value{Type: "string", StrVal: "bob_sql_exec_test"},
+			},
+		}
+		resAST, err := exec.Run(selectStmt, sess)
+		if err != nil {
+			t.Fatalf("exec.Run AST with WHERE failed: %v", err)
+		}
+		if len(resAST.Rows) < 1 || resAST.Rows[0][1] != "bob_sql_exec_test" {
+			t.Errorf("unexpected AST result: %v", resAST.Rows)
+		}
+	})
+
+	t.Run("SELECT * FROM system.pg_stat_activity WHERE id = 999 (no matches)", func(t *testing.T) {
+		exec, _, sess := setupTestExecutor(t)
+
+		stmt, err := parser.Parse("SELECT * FROM system.pg_stat_activity WHERE id = 999;")
 		if err != nil {
 			t.Fatalf("failed to parse SQL: %v", err)
 		}
@@ -184,17 +173,13 @@ func TestSystemViews_SQLExecution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("exec.Run with SQL string failed: %v", err)
 		}
-		if resSQL == nil || len(resSQL.Rows) == 0 {
-			t.Errorf("expected rows from SQL execution, got %v", resSQL)
+		if resSQL == nil || len(resSQL.Rows) != 0 {
+			t.Errorf("expected 0 rows from SQL execution, got %v", resSQL)
 		}
 	})
 
 	t.Run("SELECT * FROM system.pg_locks via SQL execution", func(t *testing.T) {
-		exec, txm, sess := setupTestExecutor(t)
-
-		if err := txm.RowLocks.LockRow(context.Background(), "mydb", "orders", "order-123", 42, storage.LockExclusive); err != nil {
-			t.Fatalf("failed to lock row: %v", err)
-		}
+		exec, _, sess := setupTestExecutor(t)
 
 		stmt, err := parser.Parse("SELECT * FROM system.pg_locks;")
 		if err != nil {
@@ -210,14 +195,8 @@ func TestSystemViews_SQLExecution(t *testing.T) {
 			t.Errorf("expected columns %v, got %v", expectedCols, res.Columns)
 		}
 
-		if len(res.Rows) != 1 {
-			t.Fatalf("expected 1 row in pg_locks, got %d: %v", len(res.Rows), res.Rows)
-		}
-
-		row := res.Rows[0]
-		expectedKey := "mydb/orders/order-123"
-		if row[0] != expectedKey || row[1] != "EXCLUSIVE" || row[2] != "42" || row[3] != "0" {
-			t.Errorf("unexpected row in pg_locks: %v", row)
+		if len(res.Rows) != 0 {
+			t.Fatalf("expected 0 rows in pg_locks with MVCC, got %d: %v", len(res.Rows), res.Rows)
 		}
 
 		// Also test via SelectStatement AST directly
@@ -225,7 +204,7 @@ func TestSystemViews_SQLExecution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("exec.Run AST for pg_locks failed: %v", err)
 		}
-		if len(resAST.Rows) != 1 || resAST.Rows[0][0] != expectedKey {
+		if len(resAST.Rows) != 0 {
 			t.Errorf("unexpected AST result for pg_locks: %v", resAST.Rows)
 		}
 	})

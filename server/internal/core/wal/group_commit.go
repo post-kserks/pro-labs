@@ -64,7 +64,7 @@ func (w *WAL) AppendWithWriteBehind(xid uint64, opType byte, payload interface{}
 		return 0, fmt.Errorf("wal: marshal payload: %w", err)
 	}
 
-	data, err := buildRecord(xid, opType, payloadBytes, w.em)
+	data, err := buildRecord(xid, opType, payloadBytes, w.em, w.tde)
 	if err != nil {
 		return 0, err
 	}

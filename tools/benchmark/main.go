@@ -1,51 +1,46 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"math/rand"
-	"net"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"vaultdb/benchmarks"
 )
 
-type Request struct {
-	ID    string `json:"id"`
-	Query string `json:"query"`
-}
-
-type Response struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-}
-
 func main() {
 	host := flag.String("host", "127.0.0.1", "VaultDB host")
-	port := flag.Int("port", 5432, "VaultDB port")
-	rows := flag.Int("rows", 1000, "Number of rows to insert")
+	port := flag.Int("port", 5433, "VaultDB port")
+	rows := flag.Int("rows", 1000, "Number of rows/ops")
 	conns := flag.Int("conns", 10, "Number of concurrent connections")
+	workload := flag.String("workload", "tpcc_lite", "Workload type: tpcc_lite or olap_join")
 	flag.Parse()
 
-	fmt.Printf("Starting benchmark: %d rows, %d connections\n", *rows, *conns)
+	fmt.Printf("Starting benchmark: %s workload, %d ops, %d connections\n", *workload, *rows, *conns)
 
-	// Setup: create database and table
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", *host, *port))
+	ctx := context.Background()
+	connString := fmt.Sprintf("postgres://vaultdb:bench_token@%s:%d/bench_db", *host, *port)
+
+	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
 		log.Fatalf("failed to connect: %v", err)
 	}
-	executeIgnoreError(conn, "CREATE DATABASE bench_db;")
-	executeIgnoreError(conn, "USE bench_db;")
-	executeIgnoreError(conn, "CREATE TABLE users (id INT, name TEXT, age INT);")
-	executeIgnoreError(conn, "CREATE INDEX idx_id ON users(id);")
-	conn.Close()
+	defer pool.Close()
+
+	// Setup: attempt to create tables/indices, ignore errors if already exists
+	_, _ = pool.Exec(ctx, "CREATE TABLE users (id INT, name TEXT, age INT, balance DECIMAL);")
+	_, _ = pool.Exec(ctx, "CREATE INDEX idx_id ON users(id);")
+	_, _ = pool.Exec(ctx, "CREATE TABLE orders (id INT, user_id INT, amount DECIMAL);")
 
 	start := time.Now()
 	var wg sync.WaitGroup
-	rowsPerConn := *rows / *conns
+	opsPerConn := *rows / *conns
 	globalTracker := benchmarks.NewLatencyTracker()
 
 	for i := 0; i < *conns; i++ {
@@ -53,19 +48,48 @@ func main() {
 		go func(connIdx int) {
 			defer wg.Done()
 			workerTracker := benchmarks.NewLatencyTracker()
-			c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", *host, *port))
-			if err != nil {
-				log.Printf("worker %d failed to connect: %v", connIdx, err)
-				return
-			}
-			defer c.Close()
-			mustExecute(c, "USE bench_db;")
 
-			for j := 0; j < rowsPerConn; j++ {
-				id := connIdx*rowsPerConn + j
-				query := fmt.Sprintf("INSERT INTO users VALUES (%d, 'user_%d', %d);", id, id, rand.Intn(100))
+			for j := 0; j < opsPerConn; j++ {
 				startOp := time.Now()
-				mustExecute(c, query)
+				
+				if *workload == "tpcc_lite" {
+					tx, err := pool.Begin(ctx)
+					if err == nil {
+						id := connIdx*opsPerConn + j
+						opType := rand.Intn(4)
+						if opType == 0 {
+							// INSERT user
+							_, _ = tx.Exec(ctx, "INSERT INTO users VALUES ($1, $2, $3, $4)", id, fmt.Sprintf("user_%d", id), rand.Intn(100), rand.Float64()*1000)
+						} else if opType == 1 {
+							// UPDATE
+							updateID := rand.Intn(id + 1)
+							_, _ = tx.Exec(ctx, "UPDATE users SET balance = balance + 10 WHERE id = $1", updateID)
+						} else if opType == 2 {
+							// SELECT
+							selectID := rand.Intn(id + 1)
+							rows, err := tx.Query(ctx, "SELECT * FROM users WHERE id = $1", selectID)
+							if err == nil {
+								rows.Close()
+							}
+						} else {
+							// INSERT order
+							_, _ = tx.Exec(ctx, "INSERT INTO orders VALUES ($1, $2, $3)", id, id, rand.Float64()*100)
+						}
+						_ = tx.Commit(ctx)
+					}
+				} else if *workload == "olap_join" {
+					query := `
+						SELECT u.age, SUM(o.amount), COUNT(o.id)
+						FROM users u
+						JOIN orders o ON u.id = o.user_id
+						WHERE u.age > 20 AND u.balance * 1.5 < 5000 AND (o.amount + 10) / 2 > 50
+						GROUP BY u.age
+					`
+					rows, err := pool.Query(ctx, query)
+					if err == nil {
+						rows.Close()
+					}
+				}
 				workerTracker.Record(time.Since(startOp))
 			}
 			globalTracker.Merge(workerTracker)
@@ -76,77 +100,10 @@ func main() {
 	duration := time.Since(start)
 
 	fmt.Printf("\n--- Benchmark Results ---\n")
-	fmt.Printf("Total Rows:    %d\n", *rows)
+	fmt.Printf("Workload:      %s\n", *workload)
+	fmt.Printf("Total Ops:     %d\n", *rows)
 	fmt.Printf("Connections:   %d\n", *conns)
 	fmt.Printf("Total Time:    %v\n", duration)
-	fmt.Printf("Throughput:    %.2f rows/sec\n", float64(*rows)/duration.Seconds())
+	fmt.Printf("Throughput:    %.2f ops/sec\n", float64(*rows)/duration.Seconds())
 	fmt.Printf("%s\n", globalTracker.Calculate().String())
-
-	// Test Index performance
-	conn, _ = net.Dial("tcp", fmt.Sprintf("%s:%d", *host, *port))
-	mustExecute(conn, "USE bench_db;")
-
-	fmt.Printf("\nTesting Index Speedup...\n")
-	idxTracker := benchmarks.NewLatencyTracker()
-	start = time.Now()
-	for k := 0; k < 10; k++ {
-		searchID := rand.Intn(*rows)
-		startOp := time.Now()
-		mustExecute(conn, fmt.Sprintf("SELECT * FROM users WHERE id = %d;", searchID))
-		idxTracker.Record(time.Since(startOp))
-	}
-	indexDuration := time.Since(start) / 10
-	fmt.Printf("Index Lookup:  %v (%d ns avg)\n", indexDuration, idxTracker.Calculate().Avg)
-	idxSummary := idxTracker.Calculate()
-	fmt.Printf("  Index Lookup Percentiles - p50: %d ns, p95: %d ns, p99: %d ns, p99.9: %d ns\n",
-		idxSummary.P50, idxSummary.P95, idxSummary.P99, idxSummary.P999)
-
-	// Without Index (full scan)
-	// We don't have a way to force no index yet, but we can search by non-indexed column
-	scanTracker := benchmarks.NewLatencyTracker()
-	start = time.Now()
-	for k := 0; k < 10; k++ {
-		startOp := time.Now()
-		mustExecute(conn, "SELECT * FROM users WHERE age = -1;") // Force full scan
-		scanTracker.Record(time.Since(startOp))
-	}
-	fullScanDuration := time.Since(start) / 10
-	fmt.Printf("Full Scan:     %v (%d ns avg)\n", fullScanDuration, scanTracker.Calculate().Avg)
-	scanSummary := scanTracker.Calculate()
-	fmt.Printf("  Full Scan Percentiles    - p50: %d ns, p95: %d ns, p99: %d ns, p99.9: %d ns\n",
-		scanSummary.P50, scanSummary.P95, scanSummary.P99, scanSummary.P999)
-
-	if indexDuration > 0 {
-		fmt.Printf("Speedup:       %.1fx\n", float64(fullScanDuration)/float64(indexDuration))
-	}
-}
-
-func mustExecute(conn net.Conn, query string) {
-	req := Request{ID: "bench", Query: query}
-	bytes, _ := json.Marshal(req)
-	conn.Write(append(bytes, '\n'))
-
-	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
-	if err != nil {
-		log.Fatalf("read failed: %v", err)
-	}
-
-	var resp Response
-	if err := json.Unmarshal(buf[:n], &resp); err != nil {
-		// NDJSON might have multiple lines, but for bench we assume one
-	}
-	if resp.Status == "error" {
-		log.Printf("query failed: %s", query)
-	}
-}
-
-func executeIgnoreError(conn net.Conn, query string) {
-	req := Request{ID: "bench-setup", Query: query}
-	bytes, _ := json.Marshal(req)
-	conn.Write(append(bytes, '\n'))
-
-	buf := make([]byte, 4096)
-	_, _ = conn.Read(buf)
-	// We don't care if it fails (e.g. database already exists)
 }

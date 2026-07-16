@@ -164,7 +164,7 @@ func RegisterCommand(name string, factory CommandFactory) {
 // System view function hooks to avoid circular imports between executor and subpackages.
 var (
 	GetPGStatActivityRowsFunc func() []storage.Row
-	GetPGLocksRowsFunc        func(rowLocks *storage.RowLockManager) []storage.Row
+	GetPGLocksRowsFunc        func(rowLocks interface{}) []storage.Row
 	KillSessionFunc           func(id uint64) bool
 )
 

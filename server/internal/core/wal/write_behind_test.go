@@ -24,7 +24,7 @@ func TestWriteBehindBatching(t *testing.T) {
 		payload, _ := json.Marshal(map[string]interface{}{"i": i})
 		txID := w.nextTxID.Add(1)
 		rec := &WALRecord{TxID: txID}
-		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 		wbb.Append(rec)
 	}
 
@@ -55,7 +55,7 @@ func TestWriteBehindFlush(t *testing.T) {
 		payload, _ := json.Marshal(map[string]interface{}{"i": i})
 		txID := w.nextTxID.Add(1)
 		rec := &WALRecord{TxID: txID}
-		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 		wbb.Append(rec)
 	}
 
@@ -85,7 +85,7 @@ func TestWriteBehindCloseDrainsPending(t *testing.T) {
 		payload, _ := json.Marshal(map[string]interface{}{"i": i})
 		txID := w.nextTxID.Add(1)
 		rec := &WALRecord{TxID: txID}
-		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 		wbb.Append(rec)
 	}
 
@@ -117,7 +117,7 @@ func TestWriteBehindTimeout(t *testing.T) {
 		payload, _ := json.Marshal(map[string]interface{}{"i": i})
 		txID := w.nextTxID.Add(1)
 		rec := &WALRecord{TxID: txID}
-		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 		wbb.Append(rec)
 	}
 
@@ -157,7 +157,7 @@ func TestWriteBehindConcurrent(t *testing.T) {
 				payload, _ := json.Marshal(map[string]interface{}{"g": g, "i": i})
 				txID := w.nextTxID.Add(1)
 				rec := &WALRecord{TxID: txID}
-				rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+				rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 				wbb.Append(rec)
 				count.Add(1)
 			}
@@ -284,7 +284,7 @@ func BenchmarkWriteBehindAppend_100(b *testing.B) {
 			payload, _ := json.Marshal(map[string]interface{}{"i": j})
 			txID := w.nextTxID.Add(1)
 			rec := &WALRecord{TxID: txID}
-			rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+			rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 			wbb.Append(rec)
 		}
 		wbb.Close()
@@ -304,7 +304,7 @@ func BenchmarkWriteBehindAppend_1K(b *testing.B) {
 			payload, _ := json.Marshal(map[string]interface{}{"i": j})
 			txID := w.nextTxID.Add(1)
 			rec := &WALRecord{TxID: txID}
-			rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+			rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 			wbb.Append(rec)
 		}
 		wbb.Close()

@@ -268,7 +268,7 @@ func TestDecodeColumnValueJSONBNonMapJSON(t *testing.T) {
 }
 
 func TestEncodeBinaryTupleEmptyRow(t *testing.T) {
-	_, err := encodeBinaryTuple(1, 0, Row{})
+	_, err := EncodeRow(1, 0, Row{})
 	if err == nil {
 		t.Fatal("expected error for empty row")
 	}
@@ -280,14 +280,14 @@ func TestEncodeBinaryTupleTooLarge(t *testing.T) {
 	for i := range bigString {
 		bigString[i] = 'x'
 	}
-	_, err := encodeBinaryTuple(1, 0, Row{string(bigString), string(bigString)})
+	_, err := EncodeRow(1, 0, Row{string(bigString), string(bigString)})
 	if err == nil {
 		t.Fatal("expected error for oversized tuple")
 	}
 }
 
 func TestDecodeBinaryTupleTruncatedHeader(t *testing.T) {
-	_, _, _, err := decodeBinaryTuple([]byte{0, 1, 2}, nil)
+	_, _, _, err := DecodeRow([]byte{0, 1, 2}, nil)
 	if err == nil {
 		t.Fatal("expected error for truncated header")
 	}
@@ -296,7 +296,7 @@ func TestDecodeBinaryTupleTruncatedHeader(t *testing.T) {
 func TestDecodeBinaryTupleTruncatedColCount(t *testing.T) {
 	// Enough for txIDs but not for colCount
 	data := make([]byte, 16)
-	_, _, _, err := decodeBinaryTuple(data, nil)
+	_, _, _, err := DecodeRow(data, nil)
 	if err == nil {
 		t.Fatal("expected error for truncated col count")
 	}
@@ -310,7 +310,7 @@ func TestDecodeBinaryTupleTruncatedTupleHeader(t *testing.T) {
 	// Actually test with colCount=5 but insufficient header
 	data2 := make([]byte, 20)
 	data2[16] = 5 // colCount = 5 → needs 16 + 2 + 5*2 = 28 bytes
-	_, _, _, err := decodeBinaryTuple(data2, nil)
+	_, _, _, err := DecodeRow(data2, nil)
 	if err == nil {
 		t.Fatal("expected error for truncated tuple header")
 	}
@@ -481,83 +481,7 @@ func TestPageLockUnlockWithoutEntry(t *testing.T) {
 
 // ── Row lock operations ───────────────────────────────────────────────────
 
-func TestRowLockActiveLockCount(t *testing.T) {
-	mgr := NewRowLockManager(30 * time.Second)
-	if mgr.ActiveLockCount() != 0 {
-		t.Fatalf("expected 0 active locks, got %d", mgr.ActiveLockCount())
-	}
 
-	_ = mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive)
-	count := mgr.ActiveLockCount()
-	if count != 1 {
-		t.Fatalf("expected 1 active lock, got %d", count)
-	}
-
-	mgr.UnlockRow("db", "t", 1, 1)
-}
-
-func TestRowLockReentrantLock(t *testing.T) {
-	mgr := NewRowLockManager(30 * time.Second)
-	// Same txID acquires twice — should succeed (reentrant)
-	if err := mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive); err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive); err != nil {
-		t.Fatal("reentrant lock should succeed")
-	}
-	mgr.UnlockRow("db", "t", 1, 1)
-}
-
-func TestRowLockSharedShared(t *testing.T) {
-	mgr := NewRowLockManager(30 * time.Second)
-	// Two shared locks on same row should succeed
-	if err := mgr.LockRowLegacy("db", "t", 1, 1, LockShared); err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.LockRowLegacy("db", "t", 1, 2, LockShared); err != nil {
-		t.Fatal("shared+shared should succeed")
-	}
-	mgr.UnlockRow("db", "t", 1, 1)
-	mgr.UnlockRow("db", "t", 1, 2)
-}
-
-func TestRowLockTimeoutPath(t *testing.T) {
-	mgr := NewRowLockManager(10 * time.Millisecond)
-	_ = mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive)
-
-	// Different tx trying exclusive — should timeout
-	err := mgr.LockRowLegacy("db", "t", 1, 2, LockExclusive)
-	if err == nil {
-		t.Fatal("expected timeout error")
-	}
-	mgr.UnlockRow("db", "t", 1, 1)
-}
-
-func TestRowLockUnlockWrongTx(t *testing.T) {
-	mgr := NewRowLockManager(30 * time.Second)
-	_ = mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive)
-	// Unlock with wrong txID — should be no-op
-	mgr.UnlockRow("db", "t", 1, 99)
-	count := mgr.ActiveLockCount()
-	if count != 1 {
-		t.Fatalf("expected 1 (wrong tx unlock should be no-op), got %d", count)
-	}
-	mgr.UnlockRow("db", "t", 1, 1)
-}
-
-func TestRowLockUnlockRowsMultiple(t *testing.T) {
-	mgr := NewRowLockManager(30 * time.Second)
-	_ = mgr.LockRowLegacy("db", "t", 1, 1, LockExclusive)
-	_ = mgr.LockRowLegacy("db", "t", 2, 1, LockExclusive)
-	_ = mgr.LockRowLegacy("db", "t", 3, 1, LockExclusive)
-
-	mgr.UnlockRows("db", "t", []uint64{1, 2, 3}, 1)
-	// After unlock, new transactions should be able to acquire the locks
-	if err := mgr.LockRowLegacy("db", "t", 1, 2, LockExclusive); err != nil {
-		t.Fatal("should be able to lock after unlock")
-	}
-	mgr.UnlockRow("db", "t", 1, 2)
-}
 
 // ── Row pool ──────────────────────────────────────────────────────────────
 

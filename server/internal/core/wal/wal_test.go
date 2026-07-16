@@ -69,7 +69,7 @@ func TestReplayAfterCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 3; i < 6; i++ {
-		payload, _ := buildRecord(uint64(i+1), OpInsert, mustMarshal(t, map[string]interface{}{"i": i}), nil)
+		payload, _ := buildRecord(uint64(i+1), OpInsert, mustMarshal(t, map[string]interface{}{"i": i}), nil, nil)
 		f.Write(payload)
 	}
 	f.Close()
@@ -389,8 +389,8 @@ func TestScanAndTruncateResyncAfterCorrupt(t *testing.T) {
 	w.Close()
 
 	// Build corrupt entry: valid magic but bad CRC → triggers resync path
-	entry1, _ := buildRecord(1, OpInsert, mustMarshal(t, map[string]interface{}{"v": 1}), nil)
-	entry2, _ := buildRecord(2, OpInsert, mustMarshal(t, map[string]interface{}{"v": 2}), nil)
+	entry1, _ := buildRecord(1, OpInsert, mustMarshal(t, map[string]interface{}{"v": 1}), nil, nil)
+	entry2, _ := buildRecord(2, OpInsert, mustMarshal(t, map[string]interface{}{"v": 2}), nil, nil)
 
 	// Create a corrupt entry with valid magic "VDB1" but wrong CRC
 	corruptEntry := make([]byte, len(entry1))

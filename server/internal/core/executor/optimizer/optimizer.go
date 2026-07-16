@@ -97,7 +97,11 @@ func (o *Optimizer) OptimizePlan(dbName string, stmt *parser.SelectStatement) (*
 	plan.AccessMethods = o.chooseAccessMethods(dbName, stmt, tableStats, plan)
 	plan.JoinMethods = o.chooseJoinMethods(dbName, stmt)
 
-	o.reorderJoins(dbName, plan)
+	if len(stmt.Joins) > 0 {
+		plan.PhysicalJoinTree = o.BuildPhysicalJoinTree(dbName, plan)
+	} else {
+		o.reorderJoins(dbName, plan)
+	}
 	plan.Cost = o.estimateCost(dbName, plan)
 
 	return plan, nil
@@ -121,6 +125,7 @@ type OptimizedPlan struct {
 	TablePredicates   map[string]parser.Expression
 	RequiredColumns   map[string]map[string]bool
 	DecorrelatedJoins []parser.JoinClause
+	PhysicalJoinTree  *JoinTree
 }
 
 // chooseAccessMethods chooses the best access method for each table.

@@ -2,13 +2,15 @@ package executor
 
 import (
 	"fmt"
+	"strings"
 	"testing"
+	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
 	"vaultdb/internal/core/txmanager"
 )
 
-// BenchmarkResultCache10K tests cache performance with 100K rows on disk.
-func BenchmarkResultCache10K(b *testing.B) {
+// BenchmarkResultCache100K tests cache performance with 100K rows on disk.
+func BenchmarkResultCache100K(b *testing.B) {
 	dir := b.TempDir()
 	txm := txmanager.NewManager()
 	store, err := storage.NewPageStorageEngine(dir, nil, txm)
@@ -22,18 +24,26 @@ func BenchmarkResultCache10K(b *testing.B) {
 	execSQL(b, session, "USE bench100k;")
 	execSQL(b, session, "CREATE TABLE records (id INT, name TEXT, value FLOAT, status TEXT, region TEXT);")
 
-	b.Logf("Populating 10K rows...")
+	b.Logf("Populating 100K rows...")
 	cities := []string{"Moscow", "SPB", "Kazan", "Novosibirsk", "Ekaterinburg", "Nizhny", "Samara", "Omsk", "Rostov", "Ufa"}
 	statuses := []string{"active", "pending", "closed", "archived"}
-	for i := 0; i < 10000; i++ {
-		execSQL(b, session, fmt.Sprintf(
-			"INSERT INTO records VALUES (%d, 'rec_%d', %.2f, '%s', '%s');",
-			i, i, float64(i)*0.01, statuses[i%4], cities[i%10]))
-		if i%1000 == 0 {
+	for i := 0; i < 100000; {
+		batchSize := 1000
+		if 100000-i < batchSize {
+			batchSize = 100000 - i
+		}
+		vals := make([]string, batchSize)
+		for j := 0; j < batchSize; j++ {
+			idx := i + j
+			vals[j] = fmt.Sprintf("(%d, 'rec_%d', %.2f, '%s', '%s')", idx, idx, float64(idx)*0.01, statuses[idx%4], cities[idx%10])
+		}
+		execSQL(b, session, fmt.Sprintf("INSERT INTO records VALUES %s;", strings.Join(vals, ",")))
+		i += batchSize
+		if i%20000 == 0 {
 			b.Logf("  ...%d rows", i)
 		}
 	}
-	b.Logf("10K rows populated")
+	b.Logf("100K rows populated")
 
 	b.Run("EqualityScan", func(b *testing.B) {
 		session.resultCache.InvalidateAll()
@@ -45,10 +55,11 @@ func BenchmarkResultCache10K(b *testing.B) {
 
 	b.Run("EqualityScan_Cached", func(b *testing.B) {
 		session.resultCache.InvalidateAll()
-		execSQL(b, session, "SELECT * FROM records WHERE id = 50000;")
+		stmt, _ := parser.Parse("SELECT * FROM records WHERE id = 50000;")
+		execStmt(b, session, stmt)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			execSQL(b, session, "SELECT * FROM records WHERE id = 50000;")
+			execStmt(b, session, stmt)
 		}
 	})
 
@@ -62,10 +73,11 @@ func BenchmarkResultCache10K(b *testing.B) {
 
 	b.Run("FullTableScan_Cached", func(b *testing.B) {
 		session.resultCache.InvalidateAll()
-		execSQL(b, session, "SELECT COUNT(*) FROM records;")
+		stmt, _ := parser.Parse("SELECT COUNT(*) FROM records;")
+		execStmt(b, session, stmt)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			execSQL(b, session, "SELECT COUNT(*) FROM records;")
+			execStmt(b, session, stmt)
 		}
 	})
 
@@ -79,10 +91,11 @@ func BenchmarkResultCache10K(b *testing.B) {
 
 	b.Run("FilteredScan_Cached", func(b *testing.B) {
 		session.resultCache.InvalidateAll()
-		execSQL(b, session, "SELECT * FROM records WHERE status = 'active' AND region = 'Moscow';")
+		stmt, _ := parser.Parse("SELECT * FROM records WHERE status = 'active' AND region = 'Moscow';")
+		execStmt(b, session, stmt)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			execSQL(b, session, "SELECT * FROM records WHERE status = 'active' AND region = 'Moscow';")
+			execStmt(b, session, stmt)
 		}
 	})
 
@@ -96,14 +109,15 @@ func BenchmarkResultCache10K(b *testing.B) {
 
 	b.Run("AggregationGroupBy_Cached", func(b *testing.B) {
 		session.resultCache.InvalidateAll()
-		execSQL(b, session, "SELECT status, COUNT(*) FROM records GROUP BY status;")
+		stmt, _ := parser.Parse("SELECT status, COUNT(*) FROM records GROUP BY status;")
+		execStmt(b, session, stmt)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			execSQL(b, session, "SELECT status, COUNT(*) FROM records GROUP BY status;")
+			execStmt(b, session, stmt)
 		}
 	})
 
-	b.Run("StringFunction10K", func(b *testing.B) {
+	b.Run("StringFunction100K", func(b *testing.B) {
 		session.resultCache.InvalidateAll()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -111,12 +125,13 @@ func BenchmarkResultCache10K(b *testing.B) {
 		}
 	})
 
-	b.Run("StringFunction10K_Cached", func(b *testing.B) {
+	b.Run("StringFunction100K_Cached", func(b *testing.B) {
 		session.resultCache.InvalidateAll()
-		execSQL(b, session, "SELECT UPPER(name) FROM records WHERE id = 99999;")
+		stmt, _ := parser.Parse("SELECT UPPER(name) FROM records WHERE id = 99999;")
+		execStmt(b, session, stmt)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			execSQL(b, session, "SELECT UPPER(name) FROM records WHERE id = 99999;")
+			execStmt(b, session, stmt)
 		}
 	})
 }

@@ -16,8 +16,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"vaultdb/internal/core/storage"
 )
 
 // TxState — transaction state.
@@ -71,6 +69,8 @@ type Transaction struct {
 	Ops       []PendingOp
 
 	TableSnapshots map[string]uint64
+
+	Snapshot       map[uint64]bool
 
 	HasDependentReads bool
 	ReadSet           map[string]map[int]uint64 // "db/table" -> pos -> version
@@ -128,11 +128,11 @@ type Manager struct {
 
 	commitLocksMu sync.Mutex
 	commitLocks   map[string]*sync.Mutex
-	rowLocker     RowLocker
 
 	OCCConfig OCCConfig
 
-	RowLocks *storage.RowLockManager
+	activeMu  sync.RWMutex
+	ActiveTxs map[uint64]*Transaction
 }
 
 func NewManager() *Manager {
@@ -141,29 +141,15 @@ func NewManager() *Manager {
 		commitLocks:    make(map[string]*sync.Mutex),
 		SpillThreshold: defaultSpillThreshold,
 		OCCConfig:      DefaultOCCConfig(),
-		RowLocks:       storage.NewRowLockManager(30 * time.Second),
+		ActiveTxs:      make(map[uint64]*Transaction),
 	}
 }
 
 // NewManagerWithPageEngine initializes Manager and shares RowLockManager if provided by engine.
 func NewManagerWithPageEngine(engine interface {
-	GetRowLocks() *storage.RowLockManager
 }) *Manager {
 	m := NewManager()
-	if engine != nil && engine.GetRowLocks() != nil {
-		m.RowLocks = engine.GetRowLocks()
-	}
 	return m
-}
-
-// GetRowLocks returns the RowLockManager associated with this Manager.
-func (m *Manager) GetRowLocks() *storage.RowLockManager {
-	return m.RowLocks
-}
-
-// SetRowLocks sets the RowLockManager associated with this Manager.
-func (m *Manager) SetRowLocks(rl *storage.RowLockManager) {
-	m.RowLocks = rl
 }
 
 func tableKey(db, table string) string {
@@ -197,15 +183,26 @@ func (m *Manager) BumpTableVersion(db, table string) {
 }
 
 func (m *Manager) Begin() *Transaction {
+	m.activeMu.Lock()
+	defer m.activeMu.Unlock()
+
+	snap := make(map[uint64]bool)
+	for id := range m.ActiveTxs {
+		snap[id] = true
+	}
+
 	tx := &Transaction{
 		ID:             m.counter.Add(1),
 		StartedAt:      time.Now(),
 		State:          TxActive,
 		TableSnapshots: make(map[string]uint64),
+		Snapshot:       snap,
 		savepoints:     make(map[string]int),
 		spillDir:       m.SpillDir,
 		mgr:            m,
 	}
+
+	m.ActiveTxs[tx.ID] = tx
 	return tx
 }
 
@@ -491,9 +488,13 @@ func (m *Manager) lockTables(keys []string) func() {
 
 // Commit checks conflicts and applies transaction operations.
 func (m *Manager) Commit(tx *Transaction, applyFn func([]PendingOp) error) error {
-	if tx != nil {
-		defer m.ReleaseRowLocks(tx.ID)
-	}
+	defer func() {
+		if tx != nil {
+			m.activeMu.Lock()
+			delete(m.ActiveTxs, tx.ID)
+			m.activeMu.Unlock()
+		}
+	}()
 	tables := make([]string, 0, len(tx.TableSnapshots))
 	for t := range tx.TableSnapshots {
 		tables = append(tables, t)
@@ -593,9 +594,6 @@ func (m *Manager) refreshSnapshots(tx *Transaction) {
 
 // Rollback clears the buffer, deletes the spill file, and releases row locks.
 func (tx *Transaction) Rollback() {
-	if tx.mgr != nil {
-		tx.mgr.ReleaseRowLocks(tx.ID)
-	}
 	tx.Ops = nil
 	tx.State = TxIdle
 	tx.opCounter = 0
@@ -614,7 +612,9 @@ func (tx *Transaction) Rollback() {
 // Rollback rolls back the transaction and releases all held row locks.
 func (m *Manager) Rollback(tx *Transaction) {
 	if tx != nil {
-		m.ReleaseRowLocks(tx.ID)
+		m.activeMu.Lock()
+		delete(m.ActiveTxs, tx.ID)
+		m.activeMu.Unlock()
 		tx.Rollback()
 	}
 }
@@ -623,6 +623,20 @@ func (m *Manager) Rollback(tx *Transaction) {
 // Simplification: all xid < current counter are considered committed.
 func (m *Manager) IsCommitted(xid uint64) bool {
 	return xid < m.counter.Load()
+}
+
+func (m *Manager) IsAborted(xid uint64) bool {
+	// A simple mock for IsAborted since we don't track aborted explicitly in Manager yet.
+	return false
+}
+
+func (m *Manager) GetSnapshot(txID uint64) map[uint64]bool {
+	m.activeMu.RLock()
+	defer m.activeMu.RUnlock()
+	if tx, ok := m.ActiveTxs[txID]; ok {
+		return tx.Snapshot
+	}
+	return nil
 }
 
 // EnsureCounterAtLeast guarantees the txid counter is at least n.

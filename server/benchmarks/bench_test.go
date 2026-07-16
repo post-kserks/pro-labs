@@ -35,12 +35,21 @@ func setupDB(b *testing.B) *vaultdb.VaultDB {
 func setupDBWithData(b *testing.B, n int) *vaultdb.VaultDB {
 	b.Helper()
 	db := setupDB(b)
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; {
+		batchSize := 1000
+		if n-i < batchSize {
+			batchSize = n - i
+		}
+		vals := make([]string, batchSize)
+		for j := 0; j < batchSize; j++ {
+			vals[j] = fmt.Sprintf("(%d, 'row_%d', %f)", i+j, i+j, float64(i+j)*1.1)
+		}
 		_, err := db.Query("benchdb", fmt.Sprintf(
-			"INSERT INTO bench VALUES (%d, 'row_%d', %f);", i, i, float64(i)*1.1))
+			"INSERT INTO bench VALUES %s;", strings.Join(vals, ",")))
 		if err != nil {
 			b.Fatal(err)
 		}
+		i += batchSize
 	}
 	return db
 }
@@ -129,6 +138,19 @@ func BenchmarkSelectWhere(b *testing.B) {
 	}
 }
 
+func BenchmarkSelectWhere100K(b *testing.B) {
+	db := setupDBWithIndex(b, 100000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := db.Query("benchdb", fmt.Sprintf(
+			"SELECT * FROM bench WHERE id = %d;", i%100000))
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkSelectJoin(b *testing.B) {
 	db := setupDB(b)
 	// Create a second table and populate both for the join.
@@ -163,6 +185,19 @@ func BenchmarkUpdateSingle(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, err := db.Query("benchdb", fmt.Sprintf(
 			"UPDATE bench SET value = 'updated_%d' WHERE id = %d;", i, i%1000))
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkUpdateSingle100K(b *testing.B) {
+	db := setupDBWithIndex(b, 100000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := db.Query("benchdb", fmt.Sprintf(
+			"UPDATE bench SET value = 'updated_%d' WHERE id = %d;", i, i%100000))
 		if err != nil {
 			b.Fatal(err)
 		}

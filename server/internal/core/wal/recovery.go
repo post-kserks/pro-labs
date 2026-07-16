@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -25,7 +26,7 @@ func (w *WAL) Checkpoint() error {
 	if err != nil {
 		return fmt.Errorf("wal: marshal checkpoint payload: %w", err)
 	}
-	record, err := buildRecord(w.nextTxID.Add(1), OpCheckpoint, payload, nil)
+	record, err := buildRecord(w.nextTxID.Add(1), OpCheckpoint, payload, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -57,7 +58,7 @@ func (w *WAL) WriteCheckpointRecord() (uint64, error) {
 		return 0, fmt.Errorf("wal: marshal checkpoint payload: %w", err)
 	}
 	txID := w.nextTxID.Add(1)
-	record, err := buildRecord(txID, OpCheckpoint, payload, nil)
+	record, err := buildRecord(txID, OpCheckpoint, payload, nil, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -89,6 +90,10 @@ func (w *WAL) TruncateWAL() error {
 var ErrCorruptWALMagic = errors.New("wal: corrupt record magic bytes")
 
 func (w *WAL) Recover() ([]Entry, error) {
+	if w.PITRTarget != nil {
+		return w.RestoreAsOf(w.PITRArchiveDir, filepath.Dir(w.path), *w.PITRTarget)
+	}
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -123,8 +128,8 @@ func (w *WAL) Recover() ([]Entry, error) {
 				if string(append(b[:], peek...)) == recordMagic {
 					newPos, _ := w.file.Seek(-4, io.SeekCurrent)
 					if testEntry, testSize, testErr := w.readEntryFrom(w.file); testErr == nil {
-						if testEntry.Encrypted && w.em == nil {
-							return nil, fmt.Errorf("wal: record at txID %d is encrypted but no EncryptionManager is set", testEntry.TxID)
+						if testEntry.Encrypted && w.em == nil && w.tde == nil {
+							return nil, fmt.Errorf("wal: record at txID %d is encrypted but no EncryptionManager or TDEEngine is set", testEntry.TxID)
 						}
 						if testEntry.TxID > maxTxID {
 							maxTxID = testEntry.TxID
@@ -141,8 +146,8 @@ func (w *WAL) Recover() ([]Entry, error) {
 			}
 			continue
 		}
-		if entry.Encrypted && w.em == nil {
-			return nil, fmt.Errorf("wal: record at txID %d is encrypted but no EncryptionManager is set", entry.TxID)
+		if entry.Encrypted && w.em == nil && w.tde == nil {
+			return nil, fmt.Errorf("wal: record at txID %d is encrypted but no EncryptionManager or TDEEngine is set", entry.TxID)
 		}
 		if entry.TxID > maxTxID {
 			maxTxID = entry.TxID
@@ -167,39 +172,37 @@ func (w *WAL) Recover() ([]Entry, error) {
 // Returns io.EOF when no more entries.
 // Uses a single read for the fixed header to minimize I/O syscalls.
 // Layout: magic(4) + txID(8) + opType(1) + encrypted(1) + keyVersion(4) + nonce(12) + payloadLen(4) + payload + crc(4)
-func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
-	fixedHdr := make([]byte, 34) // magic(4) + txID(8) + opType(1) + encrypted(1) + keyVersion(4) + nonce(12) + payloadLen(4)
-	if _, err := io.ReadFull(f, fixedHdr); err != nil {
+func (w *WAL) readEntryFrom(r io.Reader) (Entry, int64, error) {
+	if _, err := io.ReadFull(r, w.readHdrBuf[:]); err != nil {
 		return Entry{}, 0, err
 	}
-	if string(fixedHdr[:4]) != recordMagic {
+	if w.readHdrBuf[0] != recordMagic[0] || w.readHdrBuf[1] != recordMagic[1] || w.readHdrBuf[2] != recordMagic[2] || w.readHdrBuf[3] != recordMagic[3] {
 		return Entry{}, 0, ErrCorruptWALMagic
 	}
-	txID := binary.LittleEndian.Uint64(fixedHdr[4:12])
-	opType := fixedHdr[12]
-	isEncrypted := fixedHdr[13] != 0
-	keyVersion := binary.LittleEndian.Uint32(fixedHdr[14:18])
-	var nonce [12]byte
-	copy(nonce[:], fixedHdr[18:30])
-	payloadLen := binary.LittleEndian.Uint32(fixedHdr[30:34])
+	txID := binary.LittleEndian.Uint64(w.readHdrBuf[4:12])
+	opType := w.readHdrBuf[12]
+	isEncrypted := w.readHdrBuf[13] == 1
+	isTDE := w.readHdrBuf[13] == 2
+	keyVersion := binary.LittleEndian.Uint32(w.readHdrBuf[14:18])
+	copy(w.readNonceBuf[:], w.readHdrBuf[18:30])
+	payloadLen := binary.LittleEndian.Uint32(w.readHdrBuf[30:34])
 
 	if payloadLen > maxPayloadSize {
 		return Entry{}, 0, fmt.Errorf("wal: payload too large (%d bytes)", payloadLen)
 	}
 
 	payload := make([]byte, payloadLen)
-	if _, err := io.ReadFull(f, payload); err != nil {
+	if _, err := io.ReadFull(r, payload); err != nil {
 		return Entry{}, 0, io.ErrUnexpectedEOF
 	}
 
-	crcBuf := make([]byte, 4)
-	if _, err := io.ReadFull(f, crcBuf); err != nil {
+	if _, err := io.ReadFull(r, w.readCrcBuf[:]); err != nil {
 		return Entry{}, 0, io.ErrUnexpectedEOF
 	}
-	storedCRC := binary.LittleEndian.Uint32(crcBuf)
+	storedCRC := binary.LittleEndian.Uint32(w.readCrcBuf[:])
 
 	// Verify checksum incrementally: fixedHdr(34) + payload
-	calculated := crc32.ChecksumIEEE(fixedHdr)
+	calculated := crc32.ChecksumIEEE(w.readHdrBuf[:])
 	calculated = crc32.Update(calculated, crc32.IEEETable, payload)
 	if storedCRC != calculated {
 		return Entry{}, 0, fmt.Errorf("wal: checksum mismatch")
@@ -211,9 +214,19 @@ func (w *WAL) readEntryFrom(f *os.File) (Entry, int64, error) {
 		if w.em != nil {
 			aad := make([]byte, 8)
 			binary.LittleEndian.PutUint64(aad, txID)
-			plaintext, err := w.em.DecryptPage(nonce[:], payload, aad, keyVersion)
+			plaintext, err := w.em.DecryptPage(w.readNonceBuf[:], payload, aad, keyVersion)
 			if err != nil {
 				return Entry{}, 0, fmt.Errorf("wal: decrypt payload: %w", err)
+			}
+			payload = plaintext
+		} else {
+			stillEncrypted = true
+		}
+	} else if isTDE {
+		if w.tde != nil {
+			plaintext, err := w.tde.DecryptWAL(payload, txID)
+			if err != nil {
+				return Entry{}, 0, fmt.Errorf("wal: tde decrypt payload: %w", err)
 			}
 			payload = plaintext
 		} else {

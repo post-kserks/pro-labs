@@ -1,9 +1,6 @@
 package executor
 
 import (
-	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"vaultdb/internal/core/executor/types"
@@ -40,52 +37,7 @@ func GetPGStatActivityRows() []storage.Row {
 }
 
 // GetPGLocksRows returns active row locks as system view rows.
-// Schema: [key, mode, holders, waiters]
-func GetPGLocksRows(rowLocks *storage.RowLockManager) []storage.Row {
-	if rowLocks == nil {
-		return []storage.Row{}
-	}
-	locks := rowLocks.GetActiveLocks()
-	if len(locks) == 0 {
-		return []storage.Row{}
-	}
-
-	sort.Slice(locks, func(i, j int) bool {
-		return locks[i].Key < locks[j].Key
-	})
-
-	rows := make([]storage.Row, len(locks))
-	for i, l := range locks {
-		if l == nil {
-			continue
-		}
-		modeStr := "UNKNOWN"
-		if l.Mode == storage.LockShared {
-			modeStr = "SHARED"
-		} else if l.Mode == storage.LockExclusive {
-			modeStr = "EXCLUSIVE"
-		}
-
-		holderIDs := make([]uint64, 0, len(l.Holders))
-		for id, held := range l.Holders {
-			if held {
-				holderIDs = append(holderIDs, id)
-			}
-		}
-		sort.Slice(holderIDs, func(a, b int) bool { return holderIDs[a] < holderIDs[b] })
-
-		holderStrs := make([]string, len(holderIDs))
-		for j, id := range holderIDs {
-			holderStrs[j] = fmt.Sprintf("%d", id)
-		}
-		holdersStr := strings.Join(holderStrs, ",")
-
-		rows[i] = storage.Row{
-			l.Key,
-			modeStr,
-			holdersStr,
-			int64(len(l.Waiters)),
-		}
-	}
-	return rows
+// With MVCC, row-level locks are no longer used; this returns an empty result.
+func GetPGLocksRows(_ interface{}) []storage.Row {
+	return []storage.Row{}
 }

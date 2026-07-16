@@ -29,6 +29,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 	// Per-table lock for the duration of vacuum — does not block other tables.
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.invalidatePosDirectory()
 
 	start := time.Now()
 

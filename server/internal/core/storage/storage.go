@@ -115,6 +115,7 @@ type ReadOnlyEngine interface {
 	ListTables(dbName string) ([]TableInfo, error)
 	GetTableSchema(dbName, tableName string) (*TableSchema, error)
 	SelectRows(dbName, tableName string) ([]Row, error)
+	SelectRowsVM(dbName, tableName string, predicate func(rawTuple []byte) (bool, error)) ([]Row, error)
 	ReadCurrentRows(dbName, tableName string) ([]Row, error)
 	ReadRowsAsOf(dbName, tableName string, txID uint64) ([]Row, error)
 	ReadRowsByPositions(dbName, tableName string, positions []int) ([]Row, error)

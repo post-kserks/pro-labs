@@ -131,6 +131,10 @@ func (m *MockStorage) SelectRows(dbName, tableName string) ([]storage.Row, error
 	return m.rows[dbName][tableName], nil
 }
 
+func (m *MockStorage) SelectRowsVM(dbName, tableName string, predicate func(rawTuple []byte) (bool, error)) ([]storage.Row, error) {
+	return m.SelectRows(dbName, tableName)
+}
+
 func (m *MockStorage) ReadCurrentRows(dbName, tableName string) ([]storage.Row, error) {
 	if m.selectErr != nil {
 		return nil, m.selectErr

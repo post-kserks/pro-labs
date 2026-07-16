@@ -23,12 +23,33 @@ var ErrChecksumMismatch = errors.New("page checksum mismatch")
 type HeapFile struct {
 	dir      string
 	mu       sync.RWMutex
-	segments []*os.File
+	segments []*mmapFile
 	closed   bool
 
 	// Cached page count — avoids repeated Stat() calls on every segment.
 	cachedPageCount uint32
 	pageCountValid  bool
+
+	tde *crypto.TDEEngine
+}
+
+func (hf *HeapFile) SetTDEEngine(tde *crypto.TDEEngine) {
+	hf.mu.Lock()
+	defer hf.mu.Unlock()
+	hf.tde = tde
+}
+
+func (hf *HeapFile) onDiskPageSizeLocked() int64 {
+	if hf.tde != nil {
+		return page.PageSize + 16
+	}
+	return page.PageSize
+}
+
+func (hf *HeapFile) onDiskPageSize() int64 {
+	hf.mu.RLock()
+	defer hf.mu.RUnlock()
+	return hf.onDiskPageSizeLocked()
 }
 
 func segmentName(segNo uint16) string {
@@ -41,11 +62,11 @@ func CreateHeapFile(dir string) (*HeapFile, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, segmentName(0)), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := openMmapFile(filepath.Join(dir, segmentName(0)), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return nil, err
 	}
-	return &HeapFile{dir: dir, segments: []*os.File{f}, cachedPageCount: 0, pageCountValid: true}, nil
+	return &HeapFile{dir: dir, segments: []*mmapFile{f}, cachedPageCount: 0, pageCountValid: true}, nil
 }
 
 // OpenHeapFile opens an existing heap file (all consecutive segments).
@@ -61,7 +82,7 @@ func OpenHeapFile(dir string) (*HeapFile, error) {
 
 	hf := &HeapFile{dir: dir}
 	for segNo := uint16(0); names[segmentName(segNo)]; segNo++ {
-		f, err := os.OpenFile(filepath.Join(dir, segmentName(segNo)), os.O_RDWR, 0o644)
+		f, err := openMmapFile(filepath.Join(dir, segmentName(segNo)), os.O_RDWR, 0o644)
 		if err != nil {
 			hf.Close()
 			return nil, err
@@ -150,10 +171,25 @@ func (hf *HeapFile) ReadPage(pid page.PageID, buf *page.Page) error {
 		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
 	}
 	seg := hf.segments[pid.SegmentNo]
+	tde := hf.tde
 	hf.mu.RUnlock()
 
-	if _, err := seg.ReadAt(buf[:], pid.FileOffset()); err != nil {
-		return fmt.Errorf("readpage %v: %w", pid, err)
+	offset := int64(pid.PageNo) * hf.onDiskPageSize()
+
+	if tde != nil {
+		raw := make([]byte, page.PageSize+16)
+		if _, err := seg.ReadAt(raw, offset); err != nil {
+			return fmt.Errorf("readpage %v: %w", pid, err)
+		}
+		plaintext, err := tde.DecryptPage(raw, uint64(pid.TableID)<<32|uint64(pid.PageNo))
+		if err != nil {
+			return fmt.Errorf("decrypt page %v: %w", pid, err)
+		}
+		copy(buf[:], plaintext)
+	} else {
+		if _, err := seg.ReadAt(buf[:], offset); err != nil {
+			return fmt.Errorf("readpage %v: %w", pid, err)
+		}
 	}
 
 	if !buf.VerifyChecksum() {
@@ -229,10 +265,22 @@ func (hf *HeapFile) WritePage(pid page.PageID, buf *page.Page) error {
 		return fmt.Errorf("segment %d does not exist", pid.SegmentNo)
 	}
 	seg := hf.segments[pid.SegmentNo]
+	tde := hf.tde
 	hf.mu.RUnlock()
 
 	buf.SetChecksum()
-	_, err := seg.WriteAt(buf[:], pid.FileOffset())
+	offset := int64(pid.PageNo) * hf.onDiskPageSize()
+
+	if tde != nil {
+		ciphertext, err := tde.EncryptPage(buf[:], uint64(pid.TableID)<<32|uint64(pid.PageNo))
+		if err != nil {
+			return err
+		}
+		_, err = seg.WriteAt(ciphertext, offset)
+		return err
+	}
+
+	_, err := seg.WriteAt(buf[:], offset)
 	return err
 }
 
@@ -294,7 +342,7 @@ func (hf *HeapFile) AllocatePage(pageType uint8) (page.PageID, *page.Page, error
 	if err != nil {
 		return page.PageID{}, nil, err
 	}
-	pagesInSeg := info.Size() / page.PageSize
+	pagesInSeg := info.Size() / hf.onDiskPageSizeLocked()
 	if pagesInSeg < 0 || pagesInSeg > 0xFFFFFFFF {
 		return page.PageID{}, nil, fmt.Errorf("page count out of range for segment %d", segNo)
 	}
@@ -302,7 +350,7 @@ func (hf *HeapFile) AllocatePage(pageType uint8) (page.PageID, *page.Page, error
 
 	if pageNo >= page.PagesPerSegment {
 		segNo++
-		seg, err = os.OpenFile(filepath.Join(hf.dir, segmentName(segNo)), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+		seg, err = openMmapFile(filepath.Join(hf.dir, segmentName(segNo)), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
 		if err != nil {
 			return page.PageID{}, nil, err
 		}
@@ -315,8 +363,24 @@ func (hf *HeapFile) AllocatePage(pageType uint8) (page.PageID, *page.Page, error
 	buf.Init(pageType)
 	buf.SetChecksum()
 
-	if _, err := seg.WriteAt(buf[:], pid.FileOffset()); err != nil {
-		return page.PageID{}, nil, err
+	offset := int64(pageNo) * hf.onDiskPageSizeLocked()
+
+	if hf.tde != nil {
+		// Wait, pid.TableID might be 0 here since it's not set yet by caller,
+		// but caller sets it right after returning. For TDE nonce to be stable,
+		// we must use the 0 tableID here. This implies AllocatePage writes the initialized
+		// page with TableID=0, which is later overwritten by caller's WritePage with proper TableID!
+		ciphertext, err := hf.tde.EncryptPage(buf[:], uint64(pid.TableID)<<32|uint64(pid.PageNo))
+		if err != nil {
+			return page.PageID{}, nil, err
+		}
+		if _, err := seg.WriteAt(ciphertext, offset); err != nil {
+			return page.PageID{}, nil, err
+		}
+	} else {
+		if _, err := seg.WriteAt(buf[:], offset); err != nil {
+			return page.PageID{}, nil, err
+		}
 	}
 
 	// Invalidate cached page count since we just added a page.
@@ -351,7 +415,7 @@ func (hf *HeapFile) PageCount() (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		total += uint64(info.Size() / page.PageSize) //nolint:gosec // single segment page count fits in uint64
+		total += uint64(info.Size() / hf.onDiskPageSizeLocked()) //nolint:gosec // single segment page count fits in uint64
 	}
 	if total > 0xFFFFFFFF {
 		return 0, fmt.Errorf("total page count exceeds uint32 range: %d", total)
@@ -383,7 +447,7 @@ func (hf *HeapFile) SegmentCount() int {
 // Sync fsyncs all segments (used by checkpoint / graceful shutdown).
 func (hf *HeapFile) Sync() error {
 	hf.mu.RLock()
-	segs := make([]*os.File, len(hf.segments))
+	segs := make([]*mmapFile, len(hf.segments))
 	copy(segs, hf.segments)
 	hf.mu.RUnlock()
 

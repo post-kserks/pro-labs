@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"vaultdb/internal/core/executor/eval/vm"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
 )
@@ -82,6 +83,9 @@ func (pc *ParallelCoordinator) ParallelFilter(
 		return nil
 	}
 
+	insts, err := vm.Compile(where, schema)
+	useVM := err == nil && len(insts) > 0
+
 	chunks := pc.splitRows(rows)
 	results := make([][]storage.Row, len(chunks))
 
@@ -90,10 +94,19 @@ func (pc *ParallelCoordinator) ParallelFilter(
 		go func(idx int, r []storage.Row) {
 			defer pc.wg.Done()
 			filtered := make([]storage.Row, 0, len(r)/2)
-			for _, row := range r {
-				ok, err := pc.eval.EvalExpr(where, row, schema, ctx)
-				if err == nil && ok {
-					filtered = append(filtered, row)
+			if useVM {
+				for _, row := range r {
+					ok, err := vm.ExecuteVMBool(insts, row)
+					if err == nil && ok {
+						filtered = append(filtered, row)
+					}
+				}
+			} else {
+				for _, row := range r {
+					ok, err := pc.eval.EvalExpr(where, row, schema, ctx)
+					if err == nil && ok {
+						filtered = append(filtered, row)
+					}
 				}
 			}
 			results[idx] = filtered

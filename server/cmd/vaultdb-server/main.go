@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -32,9 +31,8 @@ import (
 	"vaultdb/internal/core/txmanager"
 	"vaultdb/internal/core/wal"
 	"vaultdb/internal/httpserver"
-	"vaultdb/internal/pool"
 	"vaultdb/internal/protocol"
-	vaulttls "vaultdb/internal/tls"
+	"vaultdb/internal/protocol/pgwire"
 )
 
 // version and buildDate are overwritten via ldflags at build time
@@ -346,7 +344,7 @@ func main() {
 	healthCheck := flag.Bool("health-check", false, "Run one health check against monitor port and exit")
 	tlsCert := flag.String("tls-cert", "", "Path to TLS certificate file")
 	tlsKey := flag.String("tls-key", "", "Path to TLS private key file")
-	tlsCA := flag.String("tls-ca", "", "Path to CA file for mTLS client verification")
+	// tlsCA removed
 	flag.Parse()
 
 	if *healthCheck {
@@ -512,98 +510,14 @@ func main() {
 		return activeConnections.Load()
 	}, logger, *tlsCert, *tlsKey, auditLog)
 
-	maxRequestSize := cfg.Server.MaxRequestSizeBytes
-	if maxRequestSize <= 0 {
-		maxRequestSize = config.DefaultMaxRequestSize
-	}
-
 	addr := fmt.Sprintf("%s:%d", *host, *port)
-	var listener net.Listener
-	if *tlsCert != "" && *tlsKey != "" {
-		// TLS mode
-		var tlsCfg *tls.Config
-		var err error
-		if *tlsCA != "" {
-			tlsCfg, err = vaulttls.LoadMTLSConfig(*tlsCert, *tlsKey, *tlsCA)
-		} else {
-			tlsCfg, err = vaulttls.LoadTLSConfig(*tlsCert, *tlsKey)
-		}
-		if err != nil {
-			logger.Error("failed to load TLS config", "error", err)
-			os.Exit(1)
-		}
-		plainListener, err := net.Listen("tcp", addr)
-		if err != nil {
-			logger.Error("tcp listen failed", "error", err)
-			os.Exit(1)
-		}
-		listener = vaulttls.WrapListener(plainListener, tlsCfg)
-		if *tlsCA != "" {
-			logger.Info("tcp server started with mTLS", "addr", addr, "ca_file", *tlsCA)
-		} else {
-			logger.Info("tcp server started with TLS", "addr", addr)
-		}
-	} else {
-		// Plain TCP mode
-		var err error
-		listener, err = net.Listen("tcp", addr)
-		if err != nil {
-			logger.Error("tcp listen failed", "error", err)
-			os.Exit(1)
-		}
-		logger.Info("tcp server started", "addr", addr)
-	}
-
-	// Connection pool
-	maxConns := cfg.Server.MaxConnections
-	connPool := pool.NewConnectionLimiter(poolInitialCapacity, maxConns, poolIdleTimeout, nil)
-
-	go func() {
-		<-ctx.Done()
-		if err := listener.Close(); err != nil {
-			logger.Warn("listener close failed", "error", err)
-		}
-		connPool.Close()
-	}()
-
+	pgServer := pgwire.NewServer(addr, store, metricsCollector, txm, br, serverWAL, authManager, logger)
 	var wg sync.WaitGroup
-	acceptDone := make(chan struct{})
+	wg.Add(1)
 	go func() {
-		defer close(acceptDone)
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					logger.Warn("accept failed", "error", err)
-					continue
-				}
-			}
-
-			// Acquire connection from pool (non-blocking)
-			connObj, err := connPool.AcquireConn(conn)
-			if connObj == nil {
-				// Pool is full — reject connection
-				logger.Warn("connection pool full, rejecting connection",
-					"remote", conn.RemoteAddr(),
-					"max_connections", maxConns,
-					"error", err)
-				conn.Close()
-				continue
-			}
-
-			activeConnections.Add(1)
-			metricsCollector.IncConnections()
-			wg.Add(1)
-			go func(c net.Conn, connInfo *pool.Connection) {
-				defer wg.Done()
-				defer activeConnections.Add(-1)
-				defer metricsCollector.DecConnections()
-				defer connPool.Release(connInfo) // Release back to pool
-				handleConnection(ctx, c, store, metricsCollector, txm, br, authManager, embedder, serverWAL, logger, maxRequestSize, cfg.Server.QueryTimeoutSec, cfg.Server.MaxRows, cfg.Server.TCPKeepAliveSec, cfg.Server.TCPIdleTimeoutSec, cfg.Server.MaxPreparedStmts, cfg.Server.RateLimitRPS, cfg.Server.RateLimitBurst, auditLog)
-			}(conn, connObj)
+		defer wg.Done()
+		if err := pgServer.Start(ctx); err != nil {
+			logger.Error("PGWire server failed", "error", err)
 		}
 	}()
 
@@ -615,8 +529,7 @@ func main() {
 		stop()
 	}
 
-	// Stop accepting new connections
-	<-acceptDone
+	pgServer.Stop()
 
 	// Wait for active connections with timeout
 	logger.Info("waiting for active connections to finish", "active", activeConnections.Load())
@@ -632,8 +545,6 @@ func main() {
 	case <-time.After(time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second):
 		logger.Warn("shutdown timeout reached, forcing close of remaining connections")
 	}
-
-	connPool.Close()
 
 	// Final checkpoint
 	logger.Info("writing final WAL checkpoint")

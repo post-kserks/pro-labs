@@ -23,7 +23,9 @@ const (
 	binFalse           = 0x00
 )
 
-func encodeBinaryTuple(createdTx, deletedTx uint64, row Row) ([]byte, error) {
+var TuplePool = NewMemoryPool()
+
+func EncodeRow(createdTx, deletedTx uint64, row Row) ([]byte, error) {
 	if len(row) == 0 {
 		return nil, fmt.Errorf("encodeBinaryTuple: empty row")
 	}
@@ -75,7 +77,7 @@ func encodeBinaryTuple(createdTx, deletedTx uint64, row Row) ([]byte, error) {
 	}
 
 	// Phase 2: allocate once and encode headers and column values directly into slices of tuple
-	tuple := make([]byte, totalSize)
+	tuple := TuplePool.Get(totalSize)
 	binary.LittleEndian.PutUint64(tuple[0:8], createdTx)
 	binary.LittleEndian.PutUint64(tuple[8:16], deletedTx)
 	binary.LittleEndian.PutUint16(tuple[16:18], uint16(len(row)))
@@ -132,7 +134,7 @@ func encodeBinaryTuple(createdTx, deletedTx uint64, row Row) ([]byte, error) {
 	return tuple, nil
 }
 
-func decodeBinaryTuple(tuple []byte, schema *TableSchema) (createdTx, deletedTx uint64, row Row, err error) {
+func DecodeRow(tuple []byte, schema *TableSchema) (createdTx, deletedTx uint64, row Row, err error) {
 	if len(tuple) < binTupleHeaderSize+binColCountSize {
 		return 0, 0, nil, fmt.Errorf("tuple too short")
 	}

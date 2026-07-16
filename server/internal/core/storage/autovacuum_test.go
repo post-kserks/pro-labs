@@ -14,42 +14,47 @@ type mockStorageEngine struct {
 	listTablesFunc        func(db string) ([]TableInfo, error)
 	vacuumFunc            func(db, table string) (*VacuumStats, error)
 	tableVersionStatsFunc func(db, table string) (*TableVersionStats, error)
+	tableModifiedFunc     func(db, table string, txID uint64) (bool, error)
+	lastTxID              uint64
 }
 
+func (m *mockStorageEngine) CreateDatabase(name string) error { return nil }
+func (m *mockStorageEngine) DropDatabase(name string) error   { return nil }
 func (m *mockStorageEngine) ListDatabases() ([]string, error) {
 	if m.listDatabasesFunc != nil {
 		return m.listDatabasesFunc()
 	}
 	return nil, nil
 }
-
-func (m *mockStorageEngine) ListTables(db string) ([]TableInfo, error) {
+func (m *mockStorageEngine) CreateTable(dbName string, schema *TableSchema) error { return nil }
+func (m *mockStorageEngine) DropTable(dbName, tableName string) error             { return nil }
+func (m *mockStorageEngine) ListTables(dbName string) ([]TableInfo, error) {
 	if m.listTablesFunc != nil {
-		return m.listTablesFunc(db)
+		return m.listTablesFunc(dbName)
 	}
 	return nil, nil
 }
-
+func (m *mockStorageEngine) GetTableSchema(dbName, tableName string) (*TableSchema, error) {
+	return nil, nil
+}
 func (m *mockStorageEngine) Vacuum(db, table string) (*VacuumStats, error) {
 	if m.vacuumFunc != nil {
 		return m.vacuumFunc(db, table)
 	}
 	return nil, nil
 }
-
 func (m *mockStorageEngine) TableVersionStats(db, table string) (*TableVersionStats, error) {
 	if m.tableVersionStatsFunc != nil {
 		return m.tableVersionStatsFunc(db, table)
 	}
 	return &TableVersionStats{}, nil
 }
-
 func (m *mockStorageEngine) DatabaseExists(name string) bool           { return false }
 func (m *mockStorageEngine) TableExists(dbName, tableName string) bool { return false }
-func (m *mockStorageEngine) GetTableSchema(dbName, tableName string) (*TableSchema, error) {
+func (m *mockStorageEngine) SelectRows(dbName, tableName string) ([]Row, error) {
 	return nil, nil
 }
-func (m *mockStorageEngine) SelectRows(dbName, tableName string) ([]Row, error) {
+func (m *mockStorageEngine) SelectRowsVM(dbName, tableName string, predicate func(rawTuple []byte) (bool, error)) ([]Row, error) {
 	return nil, nil
 }
 func (m *mockStorageEngine) ReadCurrentRows(dbName, tableName string) ([]Row, error) {

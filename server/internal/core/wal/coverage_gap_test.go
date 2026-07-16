@@ -593,8 +593,8 @@ func TestCorruptionRecoveryResync(t *testing.T) {
 	w.Close()
 
 	// Build valid entries
-	entry1, _ := buildRecord(1, OpInsert, mustMarshal(t, map[string]interface{}{"v": 1}), nil)
-	entry2, _ := buildRecord(2, OpInsert, mustMarshal(t, map[string]interface{}{"v": 2}), nil)
+	entry1, _ := buildRecord(1, OpInsert, mustMarshal(t, map[string]interface{}{"v": 1}), nil, nil)
+	entry2, _ := buildRecord(2, OpInsert, mustMarshal(t, map[string]interface{}{"v": 2}), nil, nil)
 
 	// Create corrupt data: valid entry + garbage + valid entry
 	corruptData := make([]byte, 100) // 100 bytes of garbage

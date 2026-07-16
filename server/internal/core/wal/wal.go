@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"vaultdb/internal/core/crypto"
 )
@@ -59,7 +60,7 @@ type Entry struct {
 	TxID      uint64
 	OpType    byte
 	Payload   []byte
-	Encrypted bool // true if payload is still ciphertext (EM was nil during read)
+	Encrypted bool // true if payload is still ciphertext (EM/TDE was nil during read)
 }
 
 // WALPageInsertPayload — payload for OpPageInsert
@@ -114,6 +115,11 @@ type CheckpointPayload struct {
 	LSN uint64
 }
 
+// CommitPayload — payload for OpCommit with timestamp
+type CommitPayload struct {
+	Timestamp int64 // unix nanoseconds
+}
+
 // FullPageImagePayload — payload for OpFullPageImage (torn page protection)
 type FullPageImagePayload struct {
 	DB        string
@@ -155,6 +161,8 @@ func EncodeWALPayloadBinary(payload interface{}) ([]byte, error) {
 		return encodeTruncateTableBinary(p)
 	case CheckpointPayload:
 		return encodeCheckpointBinary(p)
+	case CommitPayload:
+		return encodeCommitBinary(p)
 	case FullPageImagePayload:
 		return encodeFullPageImageBinary(p)
 	default:
@@ -217,6 +225,12 @@ func decodeLegacyJSONPayload(data []byte, opType byte) (interface{}, error) {
 			return nil, err
 		}
 		return p, nil
+	case OpCommit:
+		var p CommitPayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, err
+		}
+		return p, nil
 	case OpFullPageImage:
 		var p FullPageImagePayload
 		if err := json.Unmarshal(data, &p); err != nil {
@@ -249,6 +263,8 @@ func decodeBinaryPayload(data []byte, opType byte) (interface{}, error) {
 		return decodeTruncateTableBinary(data)
 	case OpCheckpoint:
 		return decodeCheckpointBinary(data)
+	case OpCommit:
+		return decodeCommitBinary(data)
 	case OpFullPageImage:
 		return decodeFullPageImageBinary(data)
 	default:
@@ -408,6 +424,22 @@ func decodeCheckpointBinary(data []byte) (CheckpointPayload, error) {
 	return p, nil
 }
 
+// --- Commit ---
+
+func encodeCommitBinary(p CommitPayload) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte(binaryPayloadMarker)
+	binary.Write(&buf, binary.LittleEndian, p.Timestamp)
+	return buf.Bytes(), nil
+}
+
+func decodeCommitBinary(data []byte) (CommitPayload, error) {
+	var p CommitPayload
+	r := bytes.NewReader(data)
+	binary.Read(r, binary.LittleEndian, &p.Timestamp)
+	return p, nil
+}
+
 // --- Full Page Image ---
 
 func encodeFullPageImageBinary(p FullPageImagePayload) ([]byte, error) {
@@ -465,8 +497,19 @@ type WAL struct {
 	SyncBatchSize int                       // number of writes between fsyncs (0 = sync every write)
 	OnAppend      func()                    // called after each successful WAL append (for metrics)
 	em            *crypto.EncryptionManager // nil = no encryption
-	groupCommit   *GroupCommit              // nil = no grouping
-	writeBehind   *WriteBehindBuffer        // nil = no write-behind batching
+	tde           *crypto.TDEEngine
+	groupCommit   *GroupCommit       // nil = no grouping
+	writeBehind   *WriteBehindBuffer // nil = no write-behind batching
+
+	// PITR config
+	PITRTarget     *time.Time
+	PITRArchiveDir string
+
+	// Scratch buffers for readEntryFrom to achieve Zero-Allocation stream reading
+	readHdrBuf   [34]byte
+	readCrcBuf   [4]byte
+	readNonceBuf [12]byte
+	readPayload  []byte
 }
 
 func Open(path string) (*WAL, error) {
@@ -543,6 +586,13 @@ func (w *WAL) SetEncryptionManager(em *crypto.EncryptionManager) {
 	w.em = em
 }
 
+// SetTDEEngine enables WAL encryption via TDE.
+func (w *WAL) SetTDEEngine(tde *crypto.TDEEngine) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.tde = tde
+}
+
 // AppendWithTx writes a WAL entry with the given txID (does not auto-increment).
 func (w *WAL) AppendWithTx(txID uint64, opType byte, payload interface{}) (uint64, error) {
 	w.mu.Lock()
@@ -577,7 +627,7 @@ func (w *WAL) WriteFullPageImage(txID uint64, db, table string, segmentNo uint16
 }
 
 func (w *WAL) appendBytesLockedWithTx(txID uint64, opType byte, payload []byte) (uint64, error) {
-	record, err := buildRecord(txID, opType, payload, w.em)
+	record, err := buildRecord(txID, opType, payload, w.em, w.tde)
 	if err != nil {
 		return 0, err
 	}
@@ -615,7 +665,7 @@ func (w *WAL) appendBytesLockedWithTx(txID uint64, opType byte, payload []byte) 
 func (w *WAL) appendBytesLocked(opType byte, payload []byte) (uint64, error) {
 	txID := w.nextTxID.Add(1)
 
-	record, err := buildRecord(txID, opType, payload, w.em)
+	record, err := buildRecord(txID, opType, payload, w.em, w.tde)
 	if err != nil {
 		return 0, err
 	}
@@ -666,7 +716,7 @@ func (w *WAL) writeRecordRaw(rec WALRecord) error {
 // BuildRecord serializes a WAL entry without writing it. Useful for pre-building
 // records that will be fed into GroupCommit.AppendBatch.
 func BuildRecord(txID uint64, opType byte, payload []byte, em *crypto.EncryptionManager) ([]byte, error) {
-	return buildRecord(txID, opType, payload, em)
+	return buildRecord(txID, opType, payload, em, nil)
 }
 
 // NextTxID returns the next txID that will be assigned.
@@ -677,12 +727,13 @@ func (w *WAL) NextTxID() uint64 {
 // buildRecord creates a WAL record.
 // Layout: magic(4) + txID(8) + opType(1) + encrypted(1) + keyVersion(4) + nonce(12) + payloadLen(4) + payload + crc(4)
 // When not encrypted, keyVersion=0, nonce=12 zero bytes.
-func buildRecord(txID uint64, opType byte, payload []byte, enc *crypto.EncryptionManager) ([]byte, error) {
+func buildRecord(txID uint64, opType byte, payload []byte, enc *crypto.EncryptionManager, tde *crypto.TDEEngine) ([]byte, error) {
 	if len(payload) > maxPayloadSize {
 		return nil, fmt.Errorf("wal: payload too large (%d bytes)", len(payload))
 	}
 
 	isEncrypted := enc != nil
+	isTDE := tde != nil
 	var nonce [12]byte
 	var keyVersion uint32
 
@@ -699,6 +750,12 @@ func buildRecord(txID uint64, opType byte, payload []byte, enc *crypto.Encryptio
 		copy(nonce[:], n)
 		keyVersion = enc.KeyVersion()
 		payload = ciphertext
+	} else if isTDE {
+		ciphertext, err := tde.EncryptWAL(payload, txID)
+		if err != nil {
+			return nil, fmt.Errorf("wal: tde encrypt payload: %w", err)
+		}
+		payload = ciphertext
 	}
 
 	// Fixed layout: magic(4) + txID(8) + opType(1) + encrypted(1) + keyVersion(4) + nonce(12) + payloadLen(4) + payload + crc(4)
@@ -711,6 +768,8 @@ func buildRecord(txID uint64, opType byte, payload []byte, enc *crypto.Encryptio
 	record[12] = opType
 	if isEncrypted {
 		record[13] = 1
+	} else if isTDE {
+		record[13] = 2
 	} else {
 		record[13] = 0
 	}

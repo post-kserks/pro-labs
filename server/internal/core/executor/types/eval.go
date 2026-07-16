@@ -88,12 +88,15 @@ func ParserValueToRaw(value interface{}) interface{} {
 	if pv, ok := value.(parser.Value); ok {
 		return eval.ParserValueToRaw(pv)
 	}
+	if pv, ok := value.(*parser.Value); ok && pv != nil {
+		return eval.ParserValueToRaw(*pv)
+	}
 	return value
 }
 
 // EvalOperandRaw extracts raw value from parser expression.
 func EvalOperandRaw(expr interface{}) interface{} {
-	return expr
+	return ParserValueToRaw(expr)
 }
 
 // RowsEqual compares two table rows element by element.

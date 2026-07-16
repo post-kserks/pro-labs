@@ -43,10 +43,11 @@ func BenchmarkResultCache(b *testing.B) {
 
 	b.Run("EqualityLookup_Cached", func(b *testing.B) {
 		session.resultCache.InvalidateAll()
-		execSQL(b, session, "SELECT * FROM users WHERE id = 5000;") // warm up
+		stmt, _ := parser.Parse("SELECT * FROM users WHERE id = 5000;")
+		execStmt(b, session, stmt) // warm up
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			execSQL(b, session, "SELECT * FROM users WHERE id = 5000;")
+			execStmt(b, session, stmt)
 		}
 	})
 
@@ -60,10 +61,11 @@ func BenchmarkResultCache(b *testing.B) {
 
 	b.Run("AggregateCOUNT_Cached", func(b *testing.B) {
 		session.resultCache.InvalidateAll()
-		execSQL(b, session, "SELECT COUNT(*) FROM users;") // warm up
+		stmt, _ := parser.Parse("SELECT COUNT(*) FROM users;")
+		execStmt(b, session, stmt) // warm up
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			execSQL(b, session, "SELECT COUNT(*) FROM users;")
+			execStmt(b, session, stmt)
 		}
 	})
 
@@ -77,10 +79,11 @@ func BenchmarkResultCache(b *testing.B) {
 
 	b.Run("FilterMultiple_Cached", func(b *testing.B) {
 		session.resultCache.InvalidateAll()
-		execSQL(b, session, "SELECT * FROM users WHERE city = 'Moscow' AND age > 30;") // warm up
+		stmt, _ := parser.Parse("SELECT * FROM users WHERE city = 'Moscow' AND age > 30;")
+		execStmt(b, session, stmt) // warm up
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			execSQL(b, session, "SELECT * FROM users WHERE city = 'Moscow' AND age > 30;")
+			execStmt(b, session, stmt)
 		}
 	})
 
@@ -94,10 +97,11 @@ func BenchmarkResultCache(b *testing.B) {
 
 	b.Run("StringFunction_Cached", func(b *testing.B) {
 		session.resultCache.InvalidateAll()
-		execSQL(b, session, "SELECT UPPER(name) FROM users WHERE id = 100;") // warm up
+		stmt, _ := parser.Parse("SELECT UPPER(name) FROM users WHERE id = 100;")
+		execStmt(b, session, stmt) // warm up
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			execSQL(b, session, "SELECT UPPER(name) FROM users WHERE id = 100;")
+			execStmt(b, session, stmt)
 		}
 	})
 }
@@ -230,6 +234,13 @@ func execSQL(b testing.TB, session *Session, sql string) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	if _, err := session.Execute(stmt); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func execStmt(b testing.TB, session *Session, stmt parser.Statement) {
+	b.Helper()
 	if _, err := session.Execute(stmt); err != nil {
 		b.Fatal(err)
 	}

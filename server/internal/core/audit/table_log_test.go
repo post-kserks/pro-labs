@@ -29,11 +29,28 @@ func newMockStorage() *mockStorage {
 	}
 }
 
+func (m *mockStorage) CreateDatabase(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.databases[name]; exists {
+		return fmt.Errorf("database %q already exists", name)
+	}
+	m.databases[name] = make(map[string]*mockTable)
+	return nil
+}
+
+func (m *mockStorage) DropDatabase(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.databases, name)
+	return nil
+}
+
 func (m *mockStorage) DatabaseExists(name string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, ok := m.databases[name]
-	return ok
+	_, exists := m.databases[name]
+	return exists
 }
 
 func (m *mockStorage) ListDatabases() ([]string, error) {
@@ -46,6 +63,32 @@ func (m *mockStorage) ListDatabases() ([]string, error) {
 	return dbs, nil
 }
 
+func (m *mockStorage) CreateTable(dbName string, schema *storage.TableSchema) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	db, ok := m.databases[dbName]
+	if !ok {
+		return fmt.Errorf("database %q not found", dbName)
+	}
+	db[schema.Name] = &mockTable{schema: *schema}
+	return nil
+}
+
+func (m *mockStorage) CreateTableDirect(dbName string, schema *storage.TableSchema) error {
+	return m.CreateTable(dbName, schema)
+}
+
+func (m *mockStorage) DropTable(dbName, tableName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	db, ok := m.databases[dbName]
+	if !ok {
+		return fmt.Errorf("database %q not found", dbName)
+	}
+	delete(db, tableName)
+	return nil
+}
+
 func (m *mockStorage) TableExists(dbName, tableName string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -53,12 +96,25 @@ func (m *mockStorage) TableExists(dbName, tableName string) bool {
 	if !ok {
 		return false
 	}
-	_, ok = db[tableName]
-	return ok
+	_, exists := db[tableName]
+	return exists
 }
 
 func (m *mockStorage) ListTables(dbName string) ([]storage.TableInfo, error) {
-	return nil, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	db, ok := m.databases[dbName]
+	if !ok {
+		return nil, fmt.Errorf("database %q not found", dbName)
+	}
+	var tables []storage.TableInfo
+	for name, t := range db {
+		tables = append(tables, storage.TableInfo{
+			Name:        name,
+			ColumnCount: len(t.schema.Columns),
+		})
+	}
+	return tables, nil
 }
 
 func (m *mockStorage) GetTableSchema(dbName, tableName string) (*storage.TableSchema, error) {
@@ -78,6 +134,10 @@ func (m *mockStorage) GetTableSchema(dbName, tableName string) (*storage.TableSc
 
 func (m *mockStorage) SelectRows(dbName, tableName string) ([]storage.Row, error) {
 	return m.ReadCurrentRows(dbName, tableName)
+}
+
+func (m *mockStorage) SelectRowsVM(dbName, tableName string, predicate func(rawTuple []byte) (bool, error)) ([]storage.Row, error) {
+	return m.SelectRows(dbName, tableName)
 }
 
 func (m *mockStorage) ReadCurrentRows(dbName, tableName string) ([]storage.Row, error) {

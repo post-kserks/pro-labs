@@ -36,6 +36,14 @@ func (m *testTxManager) IsCommitted(xid uint64) bool {
 	return m.committed[xid] || xid < m.counter.Load()
 }
 
+func (m *testTxManager) IsAborted(xid uint64) bool {
+	return false
+}
+
+func (m *testTxManager) GetSnapshot(txID uint64) map[uint64]bool {
+	return nil
+}
+
 func (m *testTxManager) Begin() interface{} {
 	m.counter.Add(1)
 	return nil

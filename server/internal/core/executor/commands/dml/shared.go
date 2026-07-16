@@ -103,21 +103,7 @@ func tryIndexLookup(ctx *types.ExecutionContext, dbName, tableName string, where
 		}
 		return positions, true
 	default:
-		var queryVal string
-		if op == "=" {
-			var val parser.Value
-			switch v := right.(type) {
-			case parser.Value:
-				val = v
-			case *parser.Value:
-				val = *v
-			default:
-				return nil, false
-			}
-			queryVal = types.ValueToString(types.ParserValueToRaw(val))
-		} else {
-			queryVal = types.ValueToString(types.EvalOperandRaw(right))
-		}
+		queryVal := types.ValueToString(types.ParserValueToRaw(right))
 
 		if queryVal == "" {
 			return nil, false
@@ -362,42 +348,124 @@ func enforceCheckConstraints(schema *storage.TableSchema, row storage.Row) error
 
 // enforceUniqueConstraints checks UNIQUE column constraints against existing rows.
 func enforceUniqueConstraints(dbName, tableName string, schema *storage.TableSchema, rows []storage.Row, ctx *types.ExecutionContext) error {
-	existingRows, err := ctx.Storage.ReadCurrentRows(dbName, tableName)
-	if err != nil {
-		return err
+	hasUniqueCol := false
+	for _, col := range schema.Columns {
+		if col.Unique {
+			hasUniqueCol = true
+			break
+		}
 	}
+	if hasUniqueCol {
+		existingRows, err := ctx.Storage.ReadCurrentRows(dbName, tableName)
+		if err != nil {
+			return err
+		}
 
-	for i, col := range schema.Columns {
-		if !col.Unique {
-			continue
-		}
-		existing := make(map[interface{}]bool, len(existingRows))
-		for _, row := range existingRows {
-			if i < len(row) && row[i] != nil {
-				existing[row[i]] = true
+		for i, col := range schema.Columns {
+			if !col.Unique {
+				continue
 			}
-		}
-		for _, row := range rows {
-			if i < len(row) && row[i] != nil {
-				if existing[row[i]] {
-					return fmt.Errorf("duplicate value %v for unique column '%s'", row[i], col.Name)
+			existing := make(map[interface{}]bool, len(existingRows))
+			for _, row := range existingRows {
+				if i < len(row) && row[i] != nil {
+					existing[row[i]] = true
 				}
-				existing[row[i]] = true
+			}
+			for _, row := range rows {
+				if i < len(row) && row[i] != nil {
+					if existing[row[i]] {
+						return fmt.Errorf("duplicate value %v for unique column '%s'", row[i], col.Name)
+					}
+					existing[row[i]] = true
+				}
 			}
 		}
 	}
 
 	// Also check unique index constraints
-	if err := enforceUniqueIndexConstraints(dbName, tableName, rows, ctx); err != nil {
+	return enforceUniqueIndexConstraints(dbName, tableName, rows, ctx)
+}
+
+// enforceUniqueConstraintsOnUpdate checks UNIQUE constraints for UPDATE operations.
+func enforceUniqueConstraintsOnUpdate(dbName, tableName string, schema *storage.TableSchema, indices []int, newValues []storage.Row, ctx *types.ExecutionContext) error {
+	hasUniqueCol := false
+	for _, col := range schema.Columns {
+		if col.Unique {
+			hasUniqueCol = true
+			break
+		}
+	}
+	if hasUniqueCol {
+		existingRows, err := ctx.Storage.ReadCurrentRows(dbName, tableName)
+		if err != nil {
+			return err
+		}
+
+		updatedPositions := make(map[int]bool, len(indices))
+		for _, idx := range indices {
+			updatedPositions[idx] = true
+		}
+
+		for i, col := range schema.Columns {
+			if !col.Unique {
+				continue
+			}
+			existing := make(map[interface{}]bool, len(existingRows))
+			for pos, row := range existingRows {
+				if updatedPositions[pos] {
+					continue
+				}
+				if i < len(row) && row[i] != nil {
+					existing[row[i]] = true
+				}
+			}
+			for _, row := range newValues {
+				if i < len(row) && row[i] != nil {
+					if existing[row[i]] {
+						return fmt.Errorf("duplicate value %v for unique column '%s'", row[i], col.Name)
+					}
+					existing[row[i]] = true
+				}
+			}
+		}
+	}
+
+	return enforceUniqueIndexConstraintsOnUpdate(dbName, tableName, indices, newValues, ctx)
+}
+
+// enforceUniqueIndexConstraints checks UNIQUE index constraints against existing rows using O(1) IndexLookup.
+func enforceUniqueIndexConstraints(dbName, tableName string, rows []storage.Row, ctx *types.ExecutionContext) error {
+	indexNames, err := ctx.Storage.ListIndexes(dbName, tableName)
+	if err != nil {
 		return err
+	}
+
+	for _, idxName := range indexNames {
+		idx, ok := ctx.Storage.GetIndex(dbName, tableName, idxName)
+		if !ok || !idx.IsUnique() {
+			continue
+		}
+
+		colName := idx.Column()
+		colIdx := idx.ColIndex()
+
+		for _, row := range rows {
+			if colIdx < len(row) && row[colIdx] != nil {
+				key := fmt.Sprintf("%v", row[colIdx])
+				positions, ok := ctx.Storage.IndexLookup(dbName, tableName, colName, key)
+				if ok && len(positions) > 0 {
+					return fmt.Errorf("duplicate value %v for unique index '%s' on column '%s'", row[colIdx], idxName, colName)
+				}
+			}
+		}
 	}
 
 	return nil
 }
 
-// enforceUniqueConstraintsOnUpdate checks UNIQUE constraints for UPDATE operations.
-func enforceUniqueConstraintsOnUpdate(dbName, tableName string, schema *storage.TableSchema, indices []int, newValues []storage.Row, ctx *types.ExecutionContext) error {
-	existingRows, err := ctx.Storage.ReadCurrentRows(dbName, tableName)
+// enforceUniqueIndexConstraintsOnUpdate checks UNIQUE index constraints on UPDATE using O(1) IndexLookup.
+func enforceUniqueIndexConstraintsOnUpdate(dbName, tableName string, indices []int, newValues []storage.Row, ctx *types.ExecutionContext) error {
+	indexNames, err := ctx.Storage.ListIndexes(dbName, tableName)
 	if err != nil {
 		return err
 	}
@@ -407,71 +475,26 @@ func enforceUniqueConstraintsOnUpdate(dbName, tableName string, schema *storage.
 		updatedPositions[idx] = true
 	}
 
-	for i, col := range schema.Columns {
-		if !col.Unique {
-			continue
-		}
-		existing := make(map[interface{}]bool, len(existingRows))
-		for pos, row := range existingRows {
-			if updatedPositions[pos] {
-				continue
-			}
-			if i < len(row) && row[i] != nil {
-				existing[row[i]] = true
-			}
-		}
-		for _, row := range newValues {
-			if i < len(row) && row[i] != nil {
-				if existing[row[i]] {
-					return fmt.Errorf("duplicate value %v for unique column '%s'", row[i], col.Name)
-				}
-				existing[row[i]] = true
-			}
-		}
-	}
-
-	return nil
-}
-
-// enforceUniqueIndexConstraints checks UNIQUE index constraints against existing rows.
-func enforceUniqueIndexConstraints(dbName, tableName string, rows []storage.Row, ctx *types.ExecutionContext) error {
-	indexNames, err := ctx.Storage.ListIndexes(dbName, tableName)
-	if err != nil {
-		return err
-	}
-
 	for _, idxName := range indexNames {
 		idx, ok := ctx.Storage.GetIndex(dbName, tableName, idxName)
-		if !ok {
-			continue
-		}
-		if !idx.IsUnique() {
+		if !ok || !idx.IsUnique() {
 			continue
 		}
 
 		colName := idx.Column()
 		colIdx := idx.ColIndex()
 
-		existingRows, err := ctx.Storage.ReadCurrentRows(dbName, tableName)
-		if err != nil {
-			return err
-		}
-
-		existingKeys := make(map[string]bool, len(existingRows))
-		for _, row := range existingRows {
+		for _, row := range newValues {
 			if colIdx < len(row) && row[colIdx] != nil {
 				key := fmt.Sprintf("%v", row[colIdx])
-				existingKeys[key] = true
-			}
-		}
-
-		for _, row := range rows {
-			if colIdx < len(row) && row[colIdx] != nil {
-				key := fmt.Sprintf("%v", row[colIdx])
-				if existingKeys[key] {
-					return fmt.Errorf("duplicate value %v for unique index '%s' on column '%s'", row[colIdx], idxName, colName)
+				positions, ok := ctx.Storage.IndexLookup(dbName, tableName, colName, key)
+				if ok && len(positions) > 0 {
+					for _, pos := range positions {
+						if !updatedPositions[pos] {
+							return fmt.Errorf("duplicate value %v for unique index '%s' on column '%s'", row[colIdx], idxName, colName)
+						}
+					}
 				}
-				existingKeys[key] = true
 			}
 		}
 	}

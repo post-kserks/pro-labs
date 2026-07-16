@@ -131,7 +131,7 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 
 	// Create a temporary pageTable for writing
 	tmpTable := &pageTable{heap: hf, schema: newSchema, tableID: t.tableID}
-	if err := e.appendTuplesLocked(tmpTable, tuples); err != nil {
+	if _, err := e.appendTuplesLocked(tmpTable, tuples, e.nextTxID()); err != nil {
 		hf.Close()
 		os.RemoveAll(tmpPath)
 		return err
@@ -197,6 +197,7 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 	}
 	t.heap = hf
 	t.schema = newSchema
+	t.invalidatePosDirectory()
 
 	e.catalog.LastModified[db+"/"+table] = txID
 	return e.saveCatalogLocked()

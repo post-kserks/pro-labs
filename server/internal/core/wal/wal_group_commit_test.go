@@ -25,7 +25,7 @@ func TestGroupCommitBatching(t *testing.T) {
 		payload, _ := json.Marshal(map[string]interface{}{"i": i})
 		txID := w.nextTxID.Add(1)
 		rec := &WALRecord{TxID: txID}
-		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 		gc.AppendBatch(rec)
 	}
 
@@ -57,7 +57,7 @@ func TestGroupCommitTimeout(t *testing.T) {
 		payload, _ := json.Marshal(map[string]interface{}{"i": i})
 		txID := w.nextTxID.Add(1)
 		rec := &WALRecord{TxID: txID}
-		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 		gc.AppendBatch(rec)
 	}
 
@@ -97,7 +97,7 @@ func TestGroupCommitDataLoss(t *testing.T) {
 				payload, _ := json.Marshal(map[string]interface{}{"g": g, "i": i})
 				txID := w.nextTxID.Add(1)
 				rec := &WALRecord{TxID: txID}
-				rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+				rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 				gc.AppendBatch(rec)
 				count.Add(1)
 			}
@@ -134,7 +134,7 @@ func TestGroupCommitCloseFlushesPending(t *testing.T) {
 		payload, _ := json.Marshal(map[string]interface{}{"i": i})
 		txID := w.nextTxID.Add(1)
 		rec := &WALRecord{TxID: txID}
-		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+		rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 		gc.AppendBatch(rec)
 	}
 
@@ -165,7 +165,7 @@ func TestGroupCommitEnableDisable(t *testing.T) {
 	payload, _ := json.Marshal(map[string]interface{}{"key": "val"})
 	txID := w.nextTxID.Add(1)
 	rec := &WALRecord{TxID: txID}
-	rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+	rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 	w.groupCommit.AppendBatch(rec)
 
 	time.Sleep(100 * time.Millisecond)
@@ -210,7 +210,7 @@ func BenchmarkGroupCommitAppend_100(b *testing.B) {
 			payload, _ := json.Marshal(map[string]interface{}{"i": j})
 			txID := w.nextTxID.Add(1)
 			rec := &WALRecord{TxID: txID}
-			rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+			rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 			gc.AppendBatch(rec)
 		}
 		gc.Close()
@@ -244,7 +244,7 @@ func BenchmarkGroupCommitAppend_1K(b *testing.B) {
 			payload, _ := json.Marshal(map[string]interface{}{"i": j})
 			txID := w.nextTxID.Add(1)
 			rec := &WALRecord{TxID: txID}
-			rec.Data, _ = buildRecord(txID, OpInsert, payload, nil)
+			rec.Data, _ = buildRecord(txID, OpInsert, payload, nil, nil)
 			gc.AppendBatch(rec)
 		}
 		gc.Close()
