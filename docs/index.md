@@ -1,8 +1,8 @@
 # VaultDB Documentation
 
-**Version 1.1.1**
+**Version 1.2.0**
 
-VaultDB is an enterprise-first, embeddable SQL database engine with a custom page-based storage engine, WAL-based crash recovery, MVCC transactions, multiple index types, full-text search, table partitioning, audit logging, and Protocol v2 clients for Go, Python, and JS.
+VaultDB is an enterprise-first, embeddable SQL database engine featuring PostgreSQL Wire Protocol (`pgwire`) and native JSON v2 protocol support, HOT (Heap-Only Tuples), Cost-Based Optimization (`ANALYZE` & `system.pg_statistic`), Raft Consensus HA, Bytecode VM / JIT compilation, Transparent Data Encryption (TDE), Dynamic Data Masking, AutoVacuum & Checkpointer background workers, System Views (`pg_stat_activity`, `pg_locks`), and `KILL QUERY` controls.
 
 ---
 

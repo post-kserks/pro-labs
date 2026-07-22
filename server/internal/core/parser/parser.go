@@ -434,6 +434,10 @@ func (p *sqlParser) parseStatement() (Statement, error) {
 		stmt, err = p.parseDescribe()
 	case lexer.TOKEN_EXPLAIN:
 		stmt, err = p.parseExplain()
+	case lexer.TOKEN_ANALYZE:
+		stmt, err = p.parseAnalyze()
+	case lexer.TOKEN_SET:
+		stmt, err = p.parseSet()
 	case lexer.TOKEN_HISTORY:
 		stmt, err = p.parseHistory()
 	case lexer.TOKEN_SELECT:

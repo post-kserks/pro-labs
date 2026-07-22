@@ -294,7 +294,7 @@ func (s *PGWireServer) handleSimpleQuery(conn net.Conn, session *executor.Sessio
 		return
 	}
 
-	stmt, err := parser.Parse(query)
+	stmt, err := session.Parse(query)
 	if err != nil {
 		_ = sendErrorResponse(conn, err)
 		_ = WriteMessage(conn, 'Z', []byte{getTxStatusChar(session)})

@@ -143,7 +143,10 @@ type WriteEngine interface {
 	InsertRows(dbName, tableName string, rows []Row) (int, error)
 	UpdateRows(dbName, tableName string, indices []int, updates map[string]Value) (int, error)
 	UpdateRowsDirect(dbName, tableName string, indices []int, newValues []Row) (int, error)
+	UpdateRowsVM(dbName, tableName string, positions []int, matchFn func(rawTuple []byte) (bool, error), updateFn func(Row) (Row, error), validateFn func(indices []int, newRows []Row) error) (int, error)
 	DeleteRows(dbName, tableName string, indices []int) (int, error)
+	DeleteRowsVM(dbName, tableName string, positions []int, predicate func(rawTuple []byte) (bool, error), preDelete func(indices []int, rows []Row) error) (int, error)
+
 	TruncateTable(dbName, tableName string) error
 	Vacuum(dbName, tableName string) (*VacuumStats, error)
 	AlterTableAddColumn(dbName, tableName string, col ColumnSchema, defaultVal Value) error

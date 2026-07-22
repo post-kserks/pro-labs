@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -69,7 +70,7 @@ func (e *PageStorageEngine) scanSlots(t *pageTable, visit slotVisitor) error {
 			if tuple == nil || len(tuple) < 16 {
 				continue
 			}
-			createdTx := binary.LittleEndian.Uint64(tuple[0:8])
+			createdTx := binary.LittleEndian.Uint64(tuple[0:8]) & TxIDMask
 			deletedTx := binary.LittleEndian.Uint64(tuple[8:16])
 			stop, err := visit(pid, pg, slot, createdTx, deletedTx, tuple)
 			if err != nil {
@@ -233,7 +234,7 @@ func (e *PageStorageEngine) scanTuplesRaw(t *pageTable, visit rawTupleVisitor) e
 			if tuple == nil || len(tuple) < 16 {
 				continue
 			}
-			createdTx := binary.LittleEndian.Uint64(tuple[0:8])
+			createdTx := binary.LittleEndian.Uint64(tuple[0:8]) & TxIDMask
 			deletedTx := binary.LittleEndian.Uint64(tuple[8:16])
 			stop, err := visit(pid, pg, slot, createdTx, deletedTx, tuple)
 			if err != nil {
@@ -512,6 +513,12 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 					}
 				}
 
+				t.posMu.Lock()
+				if t.posDirectoryValid && t.posDirectory != nil {
+					t.posDirectory = append(t.posDirectory, PageSlot{PID: pid, Slot: slot})
+				}
+				t.posMu.Unlock()
+
 				e.bufPool.UnpinPageDirty(pid, lsn)
 				e.pageLock.UnlockPageWrite(pid)
 				pageLocked = false
@@ -629,7 +636,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 				if errPg == nil {
 					tuple := pg.GetTuple(locSlot.Slot)
 					if tuple != nil && len(tuple) >= 16 {
-						createdTx := binary.LittleEndian.Uint64(tuple[0:8])
+						createdTx := binary.LittleEndian.Uint64(tuple[0:8]) & TxIDMask
 						_, _, row, errRow := DecodeRow(tuple, t.schema)
 						if errRow == nil {
 							located = append(located, locatedTuple{
@@ -728,12 +735,40 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		e.bufPool.UnpinPageDirty(loc.pid, 0)
 	}
 
-	var newSlots []PageSlot
-	if len(newVersions) > 0 {
-		var err error
-		newSlots, err = e.appendTuplesLocked(t, newVersions, txID)
-		if err != nil {
-			return 0, err
+	newSlots := make([]PageSlot, len(located))
+	var hotIndices []int
+	var nonHotVersions [][]byte
+	var nonHotLocations []int
+
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+
+	for i, loc := range located {
+		if isDelete {
+			continue
+		}
+		nv := newRows[i]
+		encoded := newVersions[i]
+		idx := indices[i]
+		
+		newSlot, ok := e.tryHOTInsert(dbName, tableName, t, PageSlot{PID: loc.pid, Slot: loc.slot}, loc.row, nv, encoded, txID, mgr)
+		if ok {
+			hotIndices = append(hotIndices, idx)
+			newSlots[i] = PageSlot{PID: loc.pid, Slot: newSlot}
+		} else {
+			nonHotVersions = append(nonHotVersions, encoded)
+			nonHotLocations = append(nonHotLocations, i)
+		}
+	}
+
+	if !isDelete && len(nonHotVersions) > 0 {
+		var errApp error
+		appSlots, errApp := e.appendTuplesLocked(t, nonHotVersions, txID)
+		if errApp != nil {
+			return 0, errApp
+		}
+		for k, slot := range appSlots {
+			origIdx := nonHotLocations[k]
+			newSlots[origIdx] = slot
 		}
 	}
 
@@ -747,11 +782,28 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	}
 	t.posMu.Unlock()
 
+	hotMap := make(map[int]bool, len(hotIndices))
+	for _, h := range hotIndices {
+		hotMap[h] = true
+	}
+	var nonHotIndices []int
+	var nonHotRows []Row
+	for i, idx := range indices {
+		if !hotMap[idx] {
+			nonHotIndices = append(nonHotIndices, idx)
+			if !isDelete && i < len(newRows) {
+				nonHotRows = append(nonHotRows, newRows[i])
+			}
+		}
+	}
+
 	// Update indexes before releasing t.mu (they don't need e.mu)
 	if affected > 0 {
-		e.updateIndexesOnDelete(dbName, tableName, indices)
-		if !isDelete && len(newRows) > 0 {
-			e.updateIndexesOnInsert(dbName, tableName, newRows, int(t.rowCount.Load())-affected)
+		if len(nonHotIndices) > 0 {
+			e.updateIndexesOnDelete(dbName, tableName, nonHotIndices)
+			if !isDelete && len(nonHotRows) > 0 {
+				e.updateIndexesOnInsert(dbName, tableName, nonHotRows, int(t.rowCount.Load())-affected)
+			}
 		}
 	}
 
@@ -840,6 +892,7 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 		pid    page.PageID
 		slot   uint16
 		rowIdx int
+		row    Row
 	}
 	var located []locatedTuple
 
@@ -903,13 +956,19 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 		}
 	}
 
-	for _, loc := range located {
+	for i, loc := range located {
 		pg, err := e.getPage(loc.pid, t.heap, dbName, tableName)
 		if err != nil {
 			return 0, err
 		}
 
 		tuple := pg.GetTuple(loc.slot)
+		if tuple != nil {
+			_, _, oldRow, errDec := DecodeRow(tuple, t.schema)
+			if errDec == nil {
+				located[i].row = oldRow
+			}
+		}
 		binary.LittleEndian.PutUint64(tuple[8:16], txID)
 
 		if nv, ok := newByIndex[loc.rowIdx]; ok {
@@ -924,12 +983,37 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 		affected++
 		e.bufPool.UnpinPageDirty(loc.pid, 0)
 	}
-	var newSlots []PageSlot
-	if len(newVersions) > 0 {
-		var err error
-		newSlots, err = e.appendTuplesLocked(t, newVersions, txID)
-		if err != nil {
-			return 0, err
+
+	newSlots := make([]PageSlot, len(located))
+	var hotIndices []int
+	var nonHotVersions [][]byte
+	var nonHotLocations []int
+
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+
+	for i, loc := range located {
+		nv := newRows[i]
+		encoded := newVersions[i]
+		
+		newSlot, ok := e.tryHOTInsert(dbName, tableName, t, PageSlot{PID: loc.pid, Slot: loc.slot}, loc.row, nv, encoded, txID, mgr)
+		if ok {
+			hotIndices = append(hotIndices, loc.rowIdx)
+			newSlots[i] = PageSlot{PID: loc.pid, Slot: newSlot}
+		} else {
+			nonHotVersions = append(nonHotVersions, encoded)
+			nonHotLocations = append(nonHotLocations, i)
+		}
+	}
+
+	if len(nonHotVersions) > 0 {
+		var errApp error
+		appSlots, errApp := e.appendTuplesLocked(t, nonHotVersions, txID)
+		if errApp != nil {
+			return 0, errApp
+		}
+		for k, slot := range appSlots {
+			origIdx := nonHotLocations[k]
+			newSlots[origIdx] = slot
 		}
 	}
 
@@ -943,11 +1027,23 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	}
 	t.posMu.Unlock()
 
-	// Update indexes before releasing t.mu (they don't need e.mu)
+	hotMap := make(map[int]bool, len(hotIndices))
+	for _, h := range hotIndices {
+		hotMap[h] = true
+	}
+	var nonHotIndices []int
+	var nonHotRows []Row
+	for i, idx := range indices {
+		if !hotMap[idx] {
+			nonHotIndices = append(nonHotIndices, idx)
+			nonHotRows = append(nonHotRows, newRows[i])
+		}
+	}
+
 	if affected > 0 {
-		e.updateIndexesOnDelete(dbName, tableName, indices)
-		if len(newRows) > 0 {
-			e.updateIndexesOnInsert(dbName, tableName, newRows, int(t.rowCount.Load())-affected)
+		if len(nonHotIndices) > 0 {
+			e.updateIndexesOnDelete(dbName, tableName, nonHotIndices)
+			e.updateIndexesOnInsert(dbName, tableName, nonHotRows, int(t.rowCount.Load())-affected)
 		}
 	}
 
@@ -1178,7 +1274,11 @@ func (e *PageStorageEngine) readRowsVM(dbName, tableName string, asOf uint64, pr
 				txID = e.txCounter.Load()
 			} else {
 				if deletedTx == 0 {
-					ok, errPred := predicate(rawTuple)
+					ok := true
+					var errPred error
+					if predicate != nil {
+						ok, errPred = predicate(rawTuple)
+					}
 					if errPred == nil && ok {
 						_, _, row, errRow := DecodeRow(rawTuple, t.schema)
 						if errRow == nil {
@@ -1441,3 +1541,570 @@ func (e *PageStorageEngine) AllRowHistory(dbName, tableName string) ([]Versioned
 	}
 	return history, nil
 }
+func (e *PageStorageEngine) UpdateRowsVM(dbName, tableName string, positions []int, matchFn func(rawTuple []byte) (bool, error), updateFn func(Row) (Row, error), validateFn func([]int, []Row) error) (int, error) {
+	txID := e.nextTxID()
+
+	t, err := e.getTableForWrite(dbName, tableName)
+	if err != nil {
+		return 0, err
+	}
+	mutateLockReleased := false
+	defer func() {
+		if !mutateLockReleased {
+			mutateLockReleased = true
+			t.mu.Unlock()
+		}
+	}()
+
+	dir, errDir := e.ensurePosDirectory(t)
+	if errDir != nil {
+		return 0, errDir
+	}
+
+	type locatedTuple struct {
+		pid    page.PageID
+		slot   uint16
+		rowIdx int
+		row    Row
+	}
+	var located []locatedTuple
+
+	var currentTxID uint64
+	if e.txMgr != nil {
+		currentTxID = e.txCounter.Load()
+	}
+
+	
+	type iteratorItem struct {
+		idx int
+		loc PageSlot
+	}
+	var iterator []iteratorItem
+	if positions != nil {
+		iterator = make([]iteratorItem, 0, len(positions))
+		for _, p := range positions {
+			if p >= 0 && p < len(dir) {
+				iterator = append(iterator, iteratorItem{idx: p, loc: dir[p]})
+			}
+		}
+	} else {
+		iterator = make([]iteratorItem, 0, len(dir))
+		for i, s := range dir {
+			iterator = append(iterator, iteratorItem{idx: i, loc: s})
+		}
+	}
+	for _, item := range iterator {
+		idx := item.idx
+		loc := item.loc
+		pg, errPg := e.getPage(loc.PID, t.heap, dbName, tableName)
+		if errPg != nil {
+			return 0, errPg
+		}
+		rawTuple := pg.GetTuple(loc.Slot)
+		if rawTuple != nil && len(rawTuple) >= 16 {
+			createdTx := binary.LittleEndian.Uint64(rawTuple[0:8]) & TxIDMask
+			deletedTx := binary.LittleEndian.Uint64(rawTuple[8:16])
+
+			// Apply MVCC
+			var snapshot map[uint64]bool
+			isAborted := false
+			if e.txMgr != nil {
+				snapshot = e.txMgr.GetSnapshot(currentTxID)
+				if deletedTx > 0 {
+					isAborted = e.txMgr.IsAborted(deletedTx)
+				}
+			}
+
+			xminVisible := (createdTx == currentTxID)
+			if !xminVisible && createdTx <= currentTxID && e.txMgr != nil && e.txMgr.IsCommitted(createdTx) {
+				if snapshot == nil || !snapshot[createdTx] {
+					xminVisible = true
+				}
+			}
+
+			if xminVisible {
+				xmaxVisible := (deletedTx == 0) || isAborted || (deletedTx > currentTxID)
+				if !xmaxVisible && snapshot != nil && snapshot[deletedTx] {
+					xmaxVisible = true
+				}
+				if xmaxVisible {
+					ok := true
+					var errPred error
+					if matchFn != nil {
+						ok, errPred = matchFn(rawTuple)
+					}
+					if errPred != nil {
+						e.unpinPage(loc.PID, false)
+						return 0, errPred
+					}
+					if ok {
+						_, _, row, errRow := DecodeRow(rawTuple, t.schema)
+						if errRow == nil {
+							located = append(located, locatedTuple{
+								pid:    loc.PID,
+								slot:   loc.Slot,
+								rowIdx: idx,
+								row:    row,
+							})
+						}
+					}
+				}
+			}
+		}
+		e.unpinPage(loc.PID, false)
+	}
+
+	if len(located) == 0 {
+		return 0, nil
+	}
+
+	if e.wal != nil {
+		for _, loc := range located {
+			payload := wal.WALPageDeletePayload{
+				DB:        dbName,
+				Table:     tableName,
+				SegmentNo: loc.pid.SegmentNo,
+				PageNo:    loc.pid.PageNo,
+				SlotNo:    loc.slot,
+				XMax:      txID,
+			}
+			if _, err := e.wal.AppendWithTx(txID, wal.OpPageDelete, payload); err != nil {
+				return 0, fmt.Errorf("wal delete: %w", err)
+			}
+		}
+	}
+
+	var newVersions [][]byte
+	var newRows []Row
+	var indices []int
+	affected := 0
+
+	for _, loc := range located {
+		nv, errUpd := updateFn(loc.row)
+		if errUpd != nil {
+			return 0, errUpd
+		}
+		encoded, errEnc := encodePageTuple(txID, 0, nv)
+		if errEnc != nil {
+			return 0, errEnc
+		}
+		newVersions = append(newVersions, encoded)
+		newRows = append(newRows, nv)
+		indices = append(indices, loc.rowIdx)
+	}
+
+	for _, loc := range located {
+		pg, errPg := e.getPage(loc.pid, t.heap, dbName, tableName)
+		if errPg != nil {
+			return 0, errPg
+		}
+
+		tuple := pg.GetTuple(loc.slot)
+		binary.LittleEndian.PutUint64(tuple[8:16], txID)
+		e.bufPool.UnpinPageDirty(loc.pid, 0)
+	}
+
+	mutateLockReleased = true
+	t.mu.Unlock()
+
+	if validateFn != nil {
+		if errVal := validateFn(indices, newRows); errVal != nil {
+			t.mu.Lock()
+			// Revert the row deletions
+			for _, loc := range located {
+				if pg, errPg := e.getPage(loc.pid, t.heap, dbName, tableName); errPg == nil {
+					tuple := pg.GetTuple(loc.slot)
+					binary.LittleEndian.PutUint64(tuple[8:16], 0)
+					e.bufPool.UnpinPageDirty(loc.pid, 0)
+				}
+			}
+			t.mu.Unlock()
+			return 0, errVal
+		}
+	}
+
+	t.mu.Lock()
+	mutateLockReleased = false
+
+	for range located {
+		affected++
+	}
+
+	newSlots := make([]PageSlot, len(located))
+	var hotIndices []int
+	var nonHotVersions [][]byte
+	var nonHotLocations []int
+
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+
+	for i, loc := range located {
+		nv := newRows[i]
+		encoded := newVersions[i]
+		idx := indices[i]
+		
+		newSlot, ok := e.tryHOTInsert(dbName, tableName, t, PageSlot{PID: loc.pid, Slot: loc.slot}, loc.row, nv, encoded, txID, mgr)
+		if ok {
+			hotIndices = append(hotIndices, idx)
+			newSlots[i] = PageSlot{PID: loc.pid, Slot: newSlot}
+		} else {
+			nonHotVersions = append(nonHotVersions, encoded)
+			nonHotLocations = append(nonHotLocations, i)
+		}
+	}
+
+	if len(nonHotVersions) > 0 {
+		appSlots, errApp := e.appendTuplesLocked(t, nonHotVersions, txID)
+		if errApp != nil {
+			return 0, errApp
+		}
+		for k, slot := range appSlots {
+			origIdx := nonHotLocations[k]
+			newSlots[origIdx] = slot
+		}
+	}
+
+	t.posMu.Lock()
+	if t.posDirectoryValid && t.posDirectory != nil {
+		for i, idx := range indices {
+			if i < len(newSlots) && idx >= 0 && idx < len(t.posDirectory) {
+				t.posDirectory[idx] = newSlots[i]
+			}
+		}
+	}
+	t.posMu.Unlock()
+
+	hotMap := make(map[int]bool, len(hotIndices))
+	for _, h := range hotIndices {
+		hotMap[h] = true
+	}
+	var nonHotIndices []int
+	var nonHotRows []Row
+	for i, idx := range indices {
+		if !hotMap[idx] {
+			nonHotIndices = append(nonHotIndices, idx)
+			nonHotRows = append(nonHotRows, newRows[i])
+		}
+	}
+
+	if affected > 0 {
+		if len(nonHotIndices) > 0 {
+			e.updateIndexesOnDelete(dbName, tableName, nonHotIndices)
+			e.updateIndexesOnUpdate(dbName, tableName, nonHotIndices, nonHotRows)
+		}
+	}
+
+
+	mutateLockReleased = true
+	t.mu.Unlock()
+
+	key := dbName + "/" + tableName
+	t.lastTxID.Store(txID)
+
+	e.mu.Lock()
+	e.catalog.CurrentTxID = txID
+	e.catalog.LastModified[key] = txID
+	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
+		TxID:      txID,
+		Timestamp: time.Now(),
+	})
+	if len(e.catalog.TxTimes) > maxTxTimesEntries {
+		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
+	}
+	e.markCatalogDirty()
+	e.mu.Unlock()
+
+	if e.wal != nil {
+		if _, err := e.wal.AppendWithTx(txID, wal.OpCommit, nil); err != nil {
+			return 0, fmt.Errorf("wal commit: %w", err)
+		}
+	}
+
+	return affected, nil
+}
+func (e *PageStorageEngine) DeleteRowsVM(dbName, tableName string, positions []int, predicate func(rawTuple []byte) (bool, error), preDelete func(indices []int, rows []Row) error) (int, error) {
+	txID := e.nextTxID()
+
+	t, err := e.getTableForWrite(dbName, tableName)
+	if err != nil {
+		return 0, err
+	}
+	mutateLockReleased := false
+	defer func() {
+		if !mutateLockReleased {
+			mutateLockReleased = true
+			t.mu.Unlock()
+		}
+	}()
+
+	dir, errDir := e.ensurePosDirectory(t)
+	if errDir != nil {
+		return 0, errDir
+	}
+
+	type locatedTuple struct {
+		pid    page.PageID
+		slot   uint16
+		rowIdx int
+		row    Row
+	}
+	var located []locatedTuple
+
+	var currentTxID uint64
+	if e.txMgr != nil {
+		currentTxID = e.txCounter.Load()
+	}
+
+	
+	type iteratorItem struct {
+		idx int
+		loc PageSlot
+	}
+	var iterator []iteratorItem
+	if positions != nil {
+		iterator = make([]iteratorItem, 0, len(positions))
+		for _, p := range positions {
+			if p >= 0 && p < len(dir) {
+				iterator = append(iterator, iteratorItem{idx: p, loc: dir[p]})
+			}
+		}
+	} else {
+		iterator = make([]iteratorItem, 0, len(dir))
+		for i, s := range dir {
+			iterator = append(iterator, iteratorItem{idx: i, loc: s})
+		}
+	}
+	for _, item := range iterator {
+		idx := item.idx
+		loc := item.loc
+		pg, errPg := e.getPage(loc.PID, t.heap, dbName, tableName)
+		if errPg != nil {
+			return 0, errPg
+		}
+		rawTuple := pg.GetTuple(loc.Slot)
+		if rawTuple != nil && len(rawTuple) >= 16 {
+			createdTx := binary.LittleEndian.Uint64(rawTuple[0:8]) & TxIDMask
+			deletedTx := binary.LittleEndian.Uint64(rawTuple[8:16])
+
+			var snapshot map[uint64]bool
+			isAborted := false
+			if e.txMgr != nil {
+				snapshot = e.txMgr.GetSnapshot(currentTxID)
+				if deletedTx > 0 {
+					isAborted = e.txMgr.IsAborted(deletedTx)
+				}
+			}
+
+			xminVisible := (createdTx == currentTxID)
+			if !xminVisible && createdTx <= currentTxID && e.txMgr != nil && e.txMgr.IsCommitted(createdTx) {
+				if snapshot == nil || !snapshot[createdTx] {
+					xminVisible = true
+				}
+			}
+
+			if xminVisible {
+				xmaxVisible := (deletedTx == 0) || isAborted || (deletedTx > currentTxID)
+				if !xmaxVisible && snapshot != nil && snapshot[deletedTx] {
+					xmaxVisible = true
+				}
+				if xmaxVisible {
+					ok, errPred := predicate(rawTuple)
+					if errPred != nil {
+						e.unpinPage(loc.PID, false)
+						return 0, errPred
+					}
+					if ok {
+						_, _, row, errRow := DecodeRow(rawTuple, t.schema)
+						if errRow == nil {
+							located = append(located, locatedTuple{
+								pid:    loc.PID,
+								slot:   loc.Slot,
+								rowIdx: idx,
+								row:    row,
+							})
+						}
+					}
+				}
+			}
+		}
+		e.unpinPage(loc.PID, false)
+	}
+
+	if len(located) == 0 {
+		return 0, nil
+	}
+
+	if e.wal != nil {
+		for _, loc := range located {
+			payload := wal.WALPageDeletePayload{
+				DB:        dbName,
+				Table:     tableName,
+				SegmentNo: loc.pid.SegmentNo,
+				PageNo:    loc.pid.PageNo,
+				SlotNo:    loc.slot,
+				XMax:      txID,
+			}
+			if _, err := e.wal.AppendWithTx(txID, wal.OpPageDelete, payload); err != nil {
+				return 0, fmt.Errorf("wal delete: %w", err)
+			}
+		}
+	}
+
+	var indices []int
+	var rows []Row
+	affected := 0
+
+	for _, loc := range located {
+		indices = append(indices, loc.rowIdx)
+		rows = append(rows, loc.row)
+	}
+
+	if preDelete != nil {
+		if err := preDelete(indices, rows); err != nil {
+			return 0, err
+		}
+	}
+
+	for _, loc := range located {
+		pg, errPg := e.getPage(loc.pid, t.heap, dbName, tableName)
+		if errPg != nil {
+			return 0, errPg
+		}
+
+		tuple := pg.GetTuple(loc.slot)
+		binary.LittleEndian.PutUint64(tuple[8:16], txID)
+
+		affected++
+		e.bufPool.UnpinPageDirty(loc.pid, 0)
+	}
+
+	t.posMu.Lock()
+	if t.posDirectoryValid && t.posDirectory != nil {
+		var newPos []PageSlot
+		toRemove := make(map[int]bool, len(indices))
+		for _, idx := range indices {
+			toRemove[idx] = true
+		}
+		for i, p := range t.posDirectory {
+			if !toRemove[i] {
+				newPos = append(newPos, p)
+			}
+		}
+		t.posDirectory = newPos
+		t.rowCount.Add(int64(-len(indices)))
+	}
+	t.posMu.Unlock()
+
+	if affected > 0 {
+		e.updateIndexesOnDelete(dbName, tableName, indices)
+	}
+
+	mutateLockReleased = true
+	t.mu.Unlock()
+
+	key := dbName + "/" + tableName
+	t.lastTxID.Store(txID)
+
+	e.mu.Lock()
+	e.catalog.CurrentTxID = txID
+	e.catalog.LastModified[key] = txID
+	e.catalog.TxTimes = append(e.catalog.TxTimes, pageTxStamp{
+		TxID:      txID,
+		Timestamp: time.Now(),
+	})
+	if len(e.catalog.TxTimes) > maxTxTimesEntries {
+		e.catalog.TxTimes = e.catalog.TxTimes[len(e.catalog.TxTimes)-keepTxTimesEntries:]
+	}
+	e.markCatalogDirty()
+	e.mu.Unlock()
+
+	if e.wal != nil {
+		if _, err := e.wal.AppendWithTx(txID, wal.OpCommit, nil); err != nil {
+			return 0, fmt.Errorf("wal commit: %w", err)
+		}
+	}
+
+	return affected, nil
+}
+
+func (e *PageStorageEngine) tryHOTInsert(
+	dbName, tableName string,
+	t *pageTable,
+	loc PageSlot,
+	oldRow Row,
+	newRow Row,
+	encoded []byte,
+	txID uint64,
+	mgr *index.IndexManager,
+) (uint16, bool) {
+	changedCols := make(map[string]bool)
+	for colIdx, col := range t.schema.Columns {
+		if colIdx < len(oldRow) && colIdx < len(newRow) {
+			if !reflect.DeepEqual(oldRow[colIdx], newRow[colIdx]) {
+				changedCols[strings.ToLower(col.Name)] = true
+			}
+		}
+	}
+
+	isIndexedColumnUpdated := false
+	for _, idxObj := range mgr.All() {
+		if changedCols[strings.ToLower(idxObj.Column())] {
+			isIndexedColumnUpdated = true
+			break
+		}
+		for _, c := range idxObj.Columns() {
+			if changedCols[strings.ToLower(c)] {
+				isIndexedColumnUpdated = true
+				break
+			}
+		}
+	}
+
+	if isIndexedColumnUpdated {
+		return 0, false
+	}
+
+	e.pageLock.LockPage(loc.PID)
+	defer e.pageLock.UnlockPageWrite(loc.PID)
+
+	pg, errPg := e.getPage(loc.PID, t.heap, dbName, tableName)
+	if errPg != nil {
+		return 0, false
+	}
+
+	needed := uint16(len(encoded)) + page.ItemPointerSize
+	if pg.FreeSpace() < needed {
+		e.unpinPage(loc.PID, false)
+		return 0, false
+	}
+
+	SetHOTHeapTuple(encoded)
+
+	newSlot, errIns := pg.InsertTuple(encoded)
+	if errIns != nil {
+		e.unpinPage(loc.PID, false)
+		return 0, false
+	}
+
+	oldTuple := pg.GetTuple(loc.Slot)
+	if oldTuple != nil {
+		SetHOTUpdated(oldTuple, newSlot)
+	}
+
+	var lsn uint64
+	if e.wal != nil {
+		payload := wal.WALPageInsertPayload{
+			DB:        dbName,
+			Table:     tableName,
+			SegmentNo: loc.PID.SegmentNo,
+			PageNo:    loc.PID.PageNo,
+			SlotNo:    newSlot,
+			XID:       txID,
+			TupleData: encoded,
+		}
+		lsn, _ = e.wal.AppendWithTx(txID, wal.OpPageInsert, payload)
+	}
+
+	e.bufPool.UnpinPageDirty(loc.PID, lsn)
+	return newSlot, true
+}
+

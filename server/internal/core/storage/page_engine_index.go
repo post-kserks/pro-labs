@@ -337,3 +337,17 @@ func (e *PageStorageEngine) updateIndexesOnDelete(dbName, tableName string, rowP
 		}
 	}
 }
+
+func (e *PageStorageEngine) updateIndexesOnUpdate(dbName, tableName string, indices []int, newRows []Row) {
+	mgr := e.getOrCreateIndexManager(dbName, tableName)
+	for _, idx := range mgr.All() {
+		colIdx := idx.ColIndex()
+		for i, row := range newRows {
+			if i < len(indices) && colIdx < len(row) {
+				pos := indices[i]
+				key := fmt.Sprintf("%v", row[colIdx])
+				idx.Insert(key, pos)
+			}
+		}
+	}
+}

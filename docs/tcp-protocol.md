@@ -1,8 +1,39 @@
-# TCP Protocol
+# Wire Protocols
 
-VaultDB uses a native JSON-over-TCP wire protocol on port 5432 for client connections.
+VaultDB supports dual network protocols for client connections:
 
-## Connection
+1. **PostgreSQL Wire Protocol (`pgwire`)** (port 5432 / 5433): Implemented in `internal/protocol/pgwire`, offering native wire compatibility with standard PostgreSQL drivers (`pgx`, `lib/pq`, `psql`, JDBC, etc.).
+2. **Native JSON-over-TCP Protocol (Protocol v2)** (port 5432): High-performance newline-delimited JSON wire protocol for official VaultDB client SDKs (Go, Python, JavaScript/TypeScript, C++).
+
+---
+
+## 1. PostgreSQL Wire Protocol (`pgwire`)
+
+VaultDB's `pgwire` protocol engine (`internal/protocol/pgwire`) accepts standard PostgreSQL frontend connections.
+
+### Connection Details
+
+```bash
+# Connect using psql
+psql -h localhost -p 5432 -U postgres -d demo
+
+# Connect using pgx or lib/pq connection string
+postgres://postgres:secret@localhost:5432/demo?sslmode=disable
+```
+
+### Protocol Features
+
+- **Authentication**: Cleartext / MD5 / SCRAM-SHA-256 handshake compatibility.
+- **Query Execution**: Simple Query (`Q`) and Extended Query (`P`/`B`/`E`/`S`/`D`/`C`/`H`) protocols.
+- **Prepared Statements**: Full support for `Parse`, `Bind`, `Execute`, and `Describe`.
+- **System Catalogs**: Native response formatting for `pg_catalog` metadata queries.
+- **Driver Compatibility**: Tested against `psql`, Go `pgx` / `lib/pq`, Python `psycopg2` / `asyncpg`, Node.js `pg`, and Java JDBC.
+
+---
+
+## 2. Native JSON-over-TCP Protocol (Protocol v2)
+
+### Connection
 
 ```
 TCP connect to localhost:5432
@@ -157,7 +188,47 @@ curl -X POST http://localhost:8080/admin/revoke-token \
 
 ## Client Examples
 
-### Go (Official Client)
+### PostgreSQL Client Drivers (pgwire)
+
+#### psql CLI
+```bash
+psql "postgres://postgres:secret@localhost:5432/demo?sslmode=disable"
+```
+
+#### Go (pgx)
+```go
+import (
+    "context"
+    "fmt"
+    "github.com/jackc/pgx/v5"
+)
+
+conn, err := pgx.Connect(context.Background(), "postgres://postgres:secret@localhost:5432/demo?sslmode=disable")
+if err != nil {
+    log.Fatal(err)
+}
+defer conn.Close(context.Background())
+
+var id int
+var name string
+err = conn.QueryRow(context.Background(), "SELECT id, name FROM users WHERE id = $1", 42).Scan(&id, &name)
+```
+
+#### Go (database/sql + lib/pq)
+```go
+import (
+    "database/sql"
+    _ "github.com/lib/pq"
+)
+
+db, err := sql.Open("postgres", "postgres://postgres:secret@localhost:5432/demo?sslmode=disable")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+```
+
+### Go (Native VaultDB Client)
 
 ```go
 import vaultdb "github.com/post-kserks/vaultdb/client/go"

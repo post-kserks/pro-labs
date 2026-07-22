@@ -41,17 +41,22 @@ No tuple is physically removed during DELETE. The tuple is simply marked as dead
 
 ### UPDATE
 
-UPDATE = DELETE old version + INSERT new version:
+When updating a row, VaultDB uses Heap-Only Tuples (HOT) if possible:
 
 ```
 1. Allocate new txID
 2. Set deletedTx = txID on old tuple (in-place)
-3. Create new tuple with createdTx = txID, deletedTx = 0
-4. Write new tuple to heap page
-5. Write WAL entries for both operations
+3. If non-indexed columns updated AND same page has space:
+   a. Create new tuple on SAME page with createdTx = txID, deletedTx = 0
+   b. Set item pointer flag to ItemFlagRedirect (HOT chain created)
+   c. Skip updating secondary indexes (index pointers remain unchanged)
+4. Else (standard UPDATE):
+   a. Create new tuple with createdTx = txID, deletedTx = 0 on heap target page
+   b. Update secondary index entries to point to new tuple location
+5. Write WAL entries for operations
 ```
 
-The old version remains on disk until vacuum reclaims the space.
+The old tuple version remains on disk until vacuum reclaims the space.
 
 ## Read Visibility Rules
 
@@ -188,16 +193,27 @@ The spill file uses a custom wire format encoding `parser.Expression` types as t
 
 Cascading rollback: rolling back to a savepoint also undoes all savepoints created after it.
 
-## Vacuum and MVCC
+## Background Storage Maintenance & MVCC
 
-Vacuum reclaims space occupied by dead tuples (those with `deletedTx != 0`):
+### AutoVacuum Worker (`AutoVacuumWorker`)
+
+The `AutoVacuumWorker` (`internal/core/storage/vacuum.go`) runs periodically in the background to reclaim space occupied by dead tuples (`deletedTx != 0` where `deletedTx < MinActiveTxID`):
 
 ```
-1. Create shadow directory
-2. Scan all pages, collect live tuples (deletedTx == 0)
-3. Rebuild pages with only live tuples
-4. Atomically replace original with shadow
-5. Update catalog row counts
+1. Periodically triggers RunVacuumAll() based on configured ticker interval
+2. Creates shadow directory for safe atomic rebuilds
+3. Scans heap pages and collects live tuples (deletedTx == 0 or active in transaction)
+4. Compacts pages and resolves HOT redirect chains
+5. Atomically replaces original table files with shadow tables
+6. Updates catalog row counts and updates Free Space Map (FSM)
 ```
 
-The shadow file approach ensures crash safety: if a crash occurs before atomic replacement, the original table is still intact.
+The shadow file approach ensures crash safety: if a crash occurs before atomic replacement, the original table remains intact.
+
+### Checkpointer Worker (`CheckpointerWorker`)
+
+The `CheckpointerWorker` (`internal/core/storage/checkpointer.go`) operates alongside MVCC and the WAL to ensure dirty pages in the Buffer Pool are written to disk:
+
+- **Periodic Dirty Page Flushing**: Scans unpinned pages in the buffer pool at configured intervals (`interval`, default 30s) and flushes them in batches (`batchSize`, default 64 pages).
+- **LSN Ordering**: Ensures Write-Ahead Log (WAL) records are written before corresponding page dirty flushes (Write-Ahead Logging protocol).
+- **Checkpoint Records**: Writes checkpoint LSNs into the catalog (`_catalog.json`) to truncate WAL replay logs during crash recovery.

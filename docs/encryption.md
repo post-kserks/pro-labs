@@ -170,16 +170,13 @@ encryption:
 - KEK is stored alongside encrypted data
 - No external key management or audit trail
 
-## Encryption Levels
+## Engine Architecture (`internal/core/crypto/tde.go`)
 
-| Object | Encrypted | Notes |
-|--------|-----------|-------|
-| Data pages (heap) | Yes | |
-| Indexes (B-Tree) | Yes | Index values reveal data |
-| WAL | Yes | Contains same data as heap before apply |
-| TOAST (large values) | Yes | |
-| Catalog (table/column names) | Optional | Default: not encrypted. Set `encrypt_catalog: true` for maximum protection |
-| Metrics / logs | No | Should not contain sensitive data by design |
+VaultDB's `TDEEngine` implements page and WAL encryption using Go's `crypto/aes` and `crypto/cipher` (AES-256-GCM):
+
+- **256-Bit Key Validation**: Requires exactly 32-byte keys for AES-256 (`ErrInvalidKeyLength`).
+- **Page Encryption (`EncryptPage` / `DecryptPage`)**: Construct a 12-byte GCM nonce derived from the 64-bit `pageID` (`binary.LittleEndian.PutUint64(nonce, pageID)`).
+- **WAL Record Encryption (`EncryptWAL` / `DecryptWAL`)**: Construct a 12-byte GCM nonce derived from the 64-bit Log Sequence Number `lsn` (`binary.LittleEndian.PutUint64(nonce, lsn)`).
 
 ## Encrypted Page Format
 
@@ -194,10 +191,10 @@ Each encrypted page on disk:
 
 ## Security Properties
 
-- AES-256-GCM provides authenticated encryption (confidentiality + integrity)
-- Unique nonce per page prevents replay attacks
-- PageID bound as AAD prevents page swap attacks
-- WAL is encrypted to prevent data leakage through journal
+- **AES-256-GCM** provides authenticated encryption (confidentiality + integrity)
+- **Per-Page Nonce (`pageID`)**: Prevents cross-page substitution and replay attacks
+- **Per-Record Nonce (`LSN`)**: Protects WAL records against journal modification or replay
+- **WAL Encryption**: Prevents unencrypted data leakage via transaction logs
 
 ## Performance
 

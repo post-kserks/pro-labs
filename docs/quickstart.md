@@ -91,9 +91,18 @@ curl -s -X POST http://localhost:8080/api/query \
   -d '{"database": "demo", "query": "CREATE INDEX idx_users_email ON users (email);"}'
 ```
 
-## 7. Use Transactions (TCP Protocol v2)
+## 7. Connect via PostgreSQL Wire Protocol (`psql` or `pgx`)
 
-Protocol v2 uses a JSON-based handshake on connect:
+VaultDB supports native PostgreSQL wire protocol (`pgwire`):
+
+```bash
+# Connect using standard psql CLI
+psql "postgres://postgres:secret@localhost:5432/demo?sslmode=disable"
+```
+
+## 8. Use Transactions & Session Options
+
+Protocol v2 uses a JSON-based handshake on connect, or standard `BEGIN`/`COMMIT` over `pgwire`:
 
 ```bash
 # Connect via TCP
@@ -102,10 +111,11 @@ nc localhost 5432
 # Step 1: Perform handshake
 {"type":"handshake","protocol_version":"2.0","client_name":"manual"}
 
-# Step 2: Execute queries (newline-delimited JSON)
-{"id":"1","query":"BEGIN;"}
-{"id":"2","query":"UPDATE users SET age = 31 WHERE name = '"'"'Alice'"'"';"}
-{"id":"3","query":"COMMIT;"}
+# Step 2: Execute queries with synchronous_commit tuning
+{"id":"1","query":"SET synchronous_commit = 'off';"}
+{"id":"2","query":"BEGIN;"}
+{"id":"3","query":"UPDATE users SET age = 31 WHERE name = 'Alice';"}
+{"id":"4","query":"COMMIT;"}
 ```
 
 ## 8. Full-Text Search (BM25)
@@ -211,13 +221,49 @@ curl -s -X POST http://localhost:8080/api/query \
   }'
 ```
 
-## 13. Check Health
+## 13. CBO Optimizer Statistics (`ANALYZE`)
+
+Gather table statistics for cost-based optimization:
+
+```bash
+curl -s -X POST http://localhost:8080/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"database": "demo", "query": "ANALYZE users;"}'
+
+# Inspect system statistics
+curl -s -X POST http://localhost:8080/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"database": "demo", "query": "SELECT * FROM system.pg_statistic;"}'
+```
+
+## 14. System Views & Query Control (`KILL QUERY`)
+
+Inspect running sessions and locks, or terminate a long-running query:
+
+```bash
+# View active sessions
+curl -s -X POST http://localhost:8080/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"database": "demo", "query": "SELECT * FROM system.pg_stat_activity;"}'
+
+# View lock table
+curl -s -X POST http://localhost:8080/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"database": "demo", "query": "SELECT * FROM system.pg_locks;"}'
+
+# Terminate query by session/request ID
+curl -s -X POST http://localhost:8080/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"database": "demo", "query": "KILL QUERY 12345;"}'
+```
+
+## 15. Check Health
 
 ```bash
 curl http://localhost:5433/health
 ```
 
-## 14. Use as Go Library (Embedded Mode)
+## 16. Use as Go Library (Embedded Mode)
 
 VaultDB can be embedded directly in your Go application without running a separate server:
 
@@ -262,7 +308,7 @@ func main() {
 }
 ```
 
-## 15. Use as Python Client
+## 18. Use as Python Client
 
 ```python
 from vaultdb import Client
@@ -281,7 +327,7 @@ conn.close()
 
 Install: `pip install vaultdb-client`
 
-## 16. Use as JS/TS Client
+## 19. Use as JS/TS Client
 
 ```typescript
 import { Client } from "@vaultdb/client";

@@ -134,6 +134,8 @@ func BenchmarkStressUpdateSingle(b *testing.B) {
 	db := setupStressBenchDBWithData(b, 10000)
 	defer db.Close()
 
+	db.Query("", "SET synchronous_commit = 'off';")
+	
 	lt := NewLatencyTracker()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

@@ -4,7 +4,6 @@ package dml
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"vaultdb/internal/core/executor/types"
@@ -112,141 +111,68 @@ func (c *UpdateCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 	if err != nil {
 		return nil, err
 	}
+	types.EnsureColumnIndex(ctx, schema)
 
-	var fromRows []storage.Row
-	var fromSchema *storage.TableSchema
-	if c.stmt.FromSubquery != nil {
-		// FROM (SELECT ...) AS alias — execute the subquery
-		subResult, err := ctx.RunSubquery.RunSubquery(ctx, c.stmt.FromSubquery)
-		if err != nil {
-			return nil, fmt.Errorf("FROM subquery: %w", err)
+	if c.stmt.FromSubquery != nil || c.stmt.FromTable != "" {
+		return nil, fmt.Errorf("UPDATE FROM is not supported with VM engine yet")
+	}
+
+		var positions []int
+	if c.stmt.Where != nil {
+		pos, ok := tryIndexLookup(ctx, dbName, c.stmt.TableName, c.stmt.Where)
+		if ok && pos != nil {
+			positions = pos
 		}
-		fromSchema = &storage.TableSchema{
-			Name:    "FROM_SUBQUERY",
-			Columns: make([]storage.ColumnSchema, len(subResult.Columns)),
+	}
+	var matchedRows []storage.Row
+	var newValues []storage.Row
+
+	affected, err := ctx.Storage.UpdateRowsVM(dbName, c.stmt.TableName, positions, func(rawTuple []byte) (bool, error) {
+		if c.stmt.Where == nil {
+			return true, nil
 		}
-		for i, col := range subResult.Columns {
-			colType := "TEXT"
-			for _, row := range subResult.Rows {
-				if i < len(row) && row[i] != "" {
-					if _, err := strconv.ParseInt(row[i], 10, 64); err == nil {
-						colType = "INT"
-					} else if _, err := strconv.ParseFloat(row[i], 64); err == nil {
-						colType = "FLOAT"
-					} else if row[i] == "true" || row[i] == "false" {
-						colType = "BOOL"
-					}
+		_, _, row, errRow := storage.DecodeRow(rawTuple, schema)
+		if errRow != nil {
+			return false, errRow
+		}
+		if schema.RLSEnabled && len(schema.Policies) > 0 {
+			visible := false
+			for _, policy := range schema.Policies {
+				if policy.UsingExpr == "" {
+					visible = true
+					break
+				}
+				expr, errExpr := parser.ParseExpression(policy.UsingExpr)
+				if errExpr != nil {
+					return false, fmt.Errorf("RLS policy '%s': invalid expression: %w", policy.Name, errExpr)
+				}
+				ok, errEval := types.EvalOperand(expr, row, schema, ctx)
+				if errEval != nil {
+					continue
+				}
+				if b, ok := ok.(bool); ok && b {
+					visible = true
 					break
 				}
 			}
-			fromSchema.Columns[i] = storage.ColumnSchema{Name: col, Type: colType}
-		}
-		fromRows = make([]storage.Row, len(subResult.Rows))
-		for i, row := range subResult.Rows {
-			fromRows[i] = make(storage.Row, len(row))
-			for j, val := range row {
-				fromRows[i][j] = val
+			if !visible {
+				return false, nil
 			}
 		}
-	} else if c.stmt.FromTable != "" {
-		if !ctx.Storage.TableExists(dbName, c.stmt.FromTable) {
-			return nil, fmt.Errorf("FROM table '%s' does not exist", c.stmt.FromTable)
-		}
-		fromRows, err = ctx.Storage.ReadCurrentRows(dbName, c.stmt.FromTable)
-		if err != nil {
-			return nil, err
-		}
-		fromSchema, err = ctx.Storage.GetTableSchema(dbName, c.stmt.FromTable)
-		if err != nil {
-			return nil, err
-		}
-	}
 
-	rows, rowPositions, _, err := readRowsForDML(ctx, dbName, c.stmt.TableName, c.stmt.Where, c.stmt.FromTable == "" && c.stmt.FromSubquery == nil)
-	if err != nil {
-		return nil, err
-	}
-
-	rows, rowPositions, err = filterRowsAndPositionsWithRLS(rows, rowPositions, schema, ctx, dbName, c.stmt.TableName)
-	if err != nil {
-		return nil, err
-	}
-
-	var evalRows []storage.Row
-	var evalSchema *storage.TableSchema
-	if fromRows != nil {
-		evalRows = make([]storage.Row, 0)
-		for _, targetRow := range rows {
-			for _, sourceRow := range fromRows {
-				combinedRow := append(append(storage.Row{}, targetRow...), sourceRow...)
-				evalRows = append(evalRows, combinedRow)
-			}
+		match, errEval := types.EvalExpr(c.stmt.Where, row, schema, ctx)
+		if errEval != nil {
+			return false, errEval
 		}
-		evalSchema = &storage.TableSchema{
-			Name:    "UPDATE_JOIN",
-			Columns: make([]storage.ColumnSchema, 0, len(schema.Columns)+len(fromSchema.Columns)),
-		}
-		evalSchema.Columns = append(evalSchema.Columns, schema.Columns...)
-		fromCols := fromSchema.Columns
-		if c.stmt.FromAlias != "" {
-			fromCols = make([]storage.ColumnSchema, len(fromSchema.Columns))
-			for i, col := range fromSchema.Columns {
-				fromCols[i] = col
-				fromCols[i].Name = c.stmt.FromAlias + "." + col.Name
-			}
-		}
-		evalSchema.Columns = append(evalSchema.Columns, fromCols...)
-	} else {
-		evalRows = rows
-		evalSchema = schema
-	}
+		return match, nil
+	}, func(oldRow storage.Row) (storage.Row, error) {
+		newRow := make(storage.Row, len(oldRow))
+		copy(newRow, oldRow)
 
-	// Build column index for O(1) lookups during WHERE evaluation.
-	types.EnsureColumnIndex(ctx, evalSchema)
-
-	indices := make([]int, 0)
-	var matchedRows []storage.Row
-	var matchedEvalRows []storage.Row
-	if fromRows != nil {
-		seenTarget := make(map[int]bool)
-		for idx, row := range evalRows {
-			match, err := types.EvalExpr(c.stmt.Where, row, evalSchema, ctx)
-			if err != nil {
-				return nil, err
-			}
-			if match {
-				targetIdx := idx / len(fromRows)
-				if !seenTarget[targetIdx] {
-					seenTarget[targetIdx] = true
-					indices = append(indices, rowPositions[targetIdx])
-					matchedRows = append(matchedRows, rows[targetIdx])
-					matchedEvalRows = append(matchedEvalRows, row)
-				}
-			}
-		}
-	} else {
-		for idx, row := range evalRows {
-			match, err := types.EvalExpr(c.stmt.Where, row, evalSchema, ctx)
-			if err != nil {
-				return nil, err
-			}
-			if match {
-				indices = append(indices, rowPositions[idx])
-				matchedRows = append(matchedRows, row)
-				matchedEvalRows = append(matchedEvalRows, row)
-			}
-		}
-	}
-
-	// Compute new rows per matched row
-	newValues := make([]storage.Row, len(matchedRows))
-	for i, row := range matchedRows {
-		newRow := make(storage.Row, len(row))
-		copy(newRow, row)
 		for _, assign := range c.stmt.Assignments {
-			val, err := types.EvalOperand(assign.Value, matchedEvalRows[i], evalSchema, ctx)
-			if err != nil {
-				return nil, fmt.Errorf("column '%s': %w", assign.Column, err)
+			val, errEval := types.EvalOperand(assign.Value, oldRow, schema, ctx)
+			if errEval != nil {
+				return nil, fmt.Errorf("column '%s': %w", assign.Column, errEval)
 			}
 			for ci, col := range schema.Columns {
 				if strings.EqualFold(col.Name, assign.Column) && ci < len(newRow) {
@@ -255,27 +181,31 @@ func (c *UpdateCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 				}
 			}
 		}
+
 		for ci, col := range schema.Columns {
 			if col.NotNull && ci < len(newRow) && newRow[ci] == nil {
 				return nil, fmt.Errorf("NOT NULL constraint failed for column '%s'", col.Name)
 			}
 		}
-		if err := enforceCheckConstraints(schema, newRow); err != nil {
-			return nil, fmt.Errorf("row %d: %w", indices[i], err)
+
+		if errCheck := enforceCheckConstraints(schema, newRow); errCheck != nil {
+			return nil, errCheck
 		}
-		newValues[i] = newRow
-	}
 
-	if err := types.EnforceForeignKeysOnUpdate(ctx, dbName, c.stmt.TableName, indices, newValues); err != nil {
-		return nil, err
-	}
+		matchedRows = append(matchedRows, oldRow)
 
-	// Validate UNIQUE constraints on updated rows
-	if err := enforceUniqueConstraintsOnUpdate(dbName, c.stmt.TableName, schema, indices, newValues, ctx); err != nil {
-		return nil, err
-	}
+		return newRow, nil
+	}, func(indices []int, newRows []storage.Row) error {
+		if errFK := types.EnforceForeignKeysOnUpdate(ctx, dbName, c.stmt.TableName, indices, newRows); errFK != nil {
+			return errFK
+		}
+		if errUQ := enforceUniqueConstraintsOnUpdate(dbName, c.stmt.TableName, schema, indices, newRows, ctx); errUQ != nil {
+			return errUQ
+		}
+		newValues = append(newValues, newRows...)
+		return nil
+	})
 
-	affected, err := ctx.Storage.UpdateRowsDirect(dbName, c.stmt.TableName, indices, newValues)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +216,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 	types.FireTriggers(ctx, dbName, c.stmt.TableName, "UPDATE")
 
 	if c.stmt.Returning != nil {
-		return c.executeReturningUpdate(ctx, dbName, schema, indices, newValues, matchedRows)
+		return executeReturningGeneric(newValues, c.stmt.Returning, schema, ctx, matchedRows...)
 	}
 
 	return &types.Result{Type: "affected", Affected: affected}, nil

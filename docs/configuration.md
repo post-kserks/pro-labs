@@ -37,6 +37,23 @@ storage:
   # For large deployments:
   # buffer_pool_pages: 65536  # 512 MB
 
+autovacuum:
+  enabled: true
+  vacuum_threshold: 50       # Min dead tuples before vacuuming
+  nap_time_sec: 60           # Sleep interval between vacuum runs
+
+checkpointer:
+  enabled: true
+  interval_sec: 300          # Checkpoint interval (5 minutes)
+  wal_threshold_mb: 64       # Checkpoint if WAL exceeds 64 MB
+
+raft:
+  enabled: false
+  node_id: "node-1"
+  cluster_peers: []          # List of peer nodes e.g. ["node-2@192.168.1.12:7000"]
+  election_timeout_ms: 1000
+  heartbeat_timeout_ms: 200
+
 tls:
   enabled: false
   cert_file: ""
@@ -323,6 +340,93 @@ ai:
 - **Default**: `true`
 - **Description**: Whether to encrypt WAL records. Should be `true` when `encryption.enabled` is `true`.
 
+## AutoVacuum Options
+
+### `autovacuum.enabled`
+
+- **Type**: boolean
+- **Default**: `true`
+- **Description**: Enables the background AutoVacuum worker for reclaiming dead tuple space and page defragmentation.
+
+### `autovacuum.vacuum_threshold`
+
+- **Type**: integer
+- **Default**: `50`
+- **Description**: Minimum dead tuple count required in a table before triggering background vacuum.
+
+### `autovacuum.nap_time_sec`
+
+- **Type**: integer
+- **Default**: `60`
+- **Description**: Sleep duration in seconds between AutoVacuum scan cycles.
+
+## Checkpointer Options
+
+### `checkpointer.enabled`
+
+- **Type**: boolean
+- **Default**: `true`
+- **Description**: Enables the periodic Checkpointer background process for flushing dirty buffer pages and updating LSN checkpoints.
+
+### `checkpointer.interval_sec`
+
+- **Type**: integer
+- **Default**: `300`
+- **Description**: Maximum interval in seconds between automatic checkpoints.
+
+### `checkpointer.wal_threshold_mb`
+
+- **Type**: integer
+- **Default**: `64`
+- **Description**: Triggers an automatic checkpoint if un-checkpointed WAL volume exceeds this limit in MB.
+
+## Raft High Availability Options
+
+### `raft.enabled`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enables Raft consensus cluster mode for high availability.
+
+### `raft.node_id`
+
+- **Type**: string
+- **Default**: `"node-1"`
+- **Description**: Unique identifier for this cluster node.
+
+### `raft.cluster_peers`
+
+- **Type**: array of strings
+- **Default**: `[]`
+- **Description**: List of peer node endpoints (e.g. `["node-2@192.168.1.12:7000", "node-3@192.168.1.13:7000"]`).
+
+### `raft.election_timeout_ms`
+
+- **Type**: integer
+- **Default**: `1000`
+- **Description**: Election timeout in milliseconds before a follower initiates leader election.
+
+### `raft.heartbeat_timeout_ms`
+
+- **Type**: integer
+- **Default**: `200`
+- **Description**: Heartbeat ping interval sent by the Raft leader in milliseconds.
+
+## Session Durability (`synchronous_commit`)
+
+VaultDB supports tuning transaction commit durability via the `synchronous_commit` session variable:
+
+- **Options**: `'on'`, `'off'`
+- **Default**: `'on'`
+- **Behavior**:
+  - `synchronous_commit = 'on'`: Transactions wait for synchronous WAL `fsync` before returning success.
+  - `synchronous_commit = 'off'`: Transactions return success immediately after WAL buffer append (asynchronous commit for higher throughput).
+
+Usage:
+```sql
+SET synchronous_commit = 'off';
+```
+
 ## RBAC Roles
 
 VaultDB includes built-in role-based access control. Tokens are assigned roles at registration time.
@@ -414,6 +518,10 @@ export VAULTDB_API_TOKENS="token1:label1:admin,token2:label2:writer,token3:label
 | `VAULTDB_MTLS_CA_FILE` | `auth.mtls_ca_file` | CA file for mTLS |
 | `VAULTDB_AI_API_KEY` | `ai.api_key` | AI embedding API key |
 | `VAULTDB_ENCRYPTION_PASSPHRASE` | `encryption.key_source` | Passphrase for TDE encryption (when using `passphrase` key source) |
+| `VAULTDB_RAFT_ENABLED` | `raft.enabled` | Enable Raft consensus clustering |
+| `VAULTDB_RAFT_NODE_ID` | `raft.node_id` | Raft cluster node identifier |
+| `VAULTDB_AUTOVACUUM_ENABLED` | `autovacuum.enabled` | Enable background AutoVacuum worker |
+| `VAULTDB_CHECKPOINTER_ENABLED` | `checkpointer.enabled` | Enable background Checkpointer process |
 
 ## Hard Limits (Not Configurable)
 

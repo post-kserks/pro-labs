@@ -35,8 +35,13 @@ Each page is 8KB (8192 bytes) with the following layout:
 │  - PageID (tableID, segmentNo, pageNo)      │
 ├─────────────────────────────────────────────┤
 │          Item Pointers (growing →)           │
-│  Each pointer: {offset uint16, length uint16│
-│                 flag uint16}                │
+│  Packed uint32:                              │
+│  - 15-bit offset (0-32767)                  │
+│  - 14-bit length (0-16383)                  │
+│  - 3-bit flags:                             │
+│    * ItemFlagNormal   (0): Live tuple       │
+│    * ItemFlagDead     (1): Reclaimable slot │
+│    * ItemFlagRedirect (2): HOT chain redirect│
 ├─────────────────────────────────────────────┤
 │              Free Space                     │
 ├─────────────────────────────────────────────┤
@@ -44,6 +49,18 @@ Each page is 8KB (8192 bytes) with the following layout:
 │  [createdTx | deletedTx | colCount | data]  │
 └─────────────────────────────────────────────┘
 ```
+
+### Heap-Only Tuples (HOT)
+
+VaultDB implements Heap-Only Tuples (HOT) to eliminate Write Amplification and index bloat:
+- **HOT Chains**: When an `UPDATE` operation modifies only non-indexed columns and the target page has sufficient free space, the new tuple version is inserted directly onto the same page.
+- **Index Pointer Preservation**: B-Tree indexes continue pointing to the root tuple. Index lookups follow the in-page HOT pointer chain to locate the latest active tuple version without updating index pointers.
+
+### Background Storage Maintenance Workers
+
+VaultDB includes autonomous background workers for memory and storage maintenance:
+- **AutoVacuumWorker (`internal/core/storage/vacuum.go`)**: Periodically scans heap pages for dead tuples (`deletedTx < MinActiveTxID`) and reclaims physical slot space into the Free Space Map (FSM).
+- **CheckpointerWorker (`internal/core/storage/checkpointer.go`)**: Scans the Buffer Pool for unpinned dirty pages and asynchronously flushes them to disk in batches (`FlushBatch`), maintaining smooth I/O throughput.
 
 ### Tuple Header
 

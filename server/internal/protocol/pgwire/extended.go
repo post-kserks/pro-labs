@@ -24,7 +24,7 @@ func (s *PGWireServer) handleParse(conn net.Conn, session *executor.Session, pay
 		paramOIDs[i] = uint32(readInt32(r))
 	}
 
-	stmt, err := parser.Parse(query)
+	stmt, err := session.Parse(query)
 	if err != nil {
 		_ = sendErrorResponse(conn, err)
 		return

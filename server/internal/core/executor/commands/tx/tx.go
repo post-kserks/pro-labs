@@ -109,7 +109,13 @@ func (c *CommitCommand) Execute(ctx *types.ExecutionContext) (*types.Result, err
 	}
 
 	if ctx.WAL != nil {
-		if _, err := ctx.WAL.AppendWithTx(tx.ID, wal.OpCommit, nil); err != nil {
+		var err error
+		if ctx.Session.GetVariable("synchronous_commit") == "off" {
+			_, err = ctx.WAL.AppendWithWriteBehind(tx.ID, wal.OpCommit, nil)
+		} else {
+			_, err = ctx.WAL.AppendWithTx(tx.ID, wal.OpCommit, nil)
+		}
+		if err != nil {
 			undoAppliedOps(ctx, ops)
 			tx.Rollback()
 			ctx.Session.ClearActiveTx()

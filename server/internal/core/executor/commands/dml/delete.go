@@ -110,37 +110,65 @@ func (c *DeleteCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 	// Build column index for O(1) lookups during WHERE evaluation.
 	types.EnsureColumnIndex(ctx, schema)
 
-	rows, rowPositions, _, err := readRowsForDML(ctx, dbName, c.stmt.TableName, c.stmt.Where, true)
-	if err != nil {
-		return nil, err
-	}
-
-	rows, rowPositions, err = filterRowsAndPositionsWithRLS(rows, rowPositions, schema, ctx, dbName, c.stmt.TableName)
-	if err != nil {
-		return nil, err
-	}
-
-	indices := make([]int, 0, len(rows))
-	var matchedRows []storage.Row
-	for idx, row := range rows {
-		match, err := types.EvalExpr(c.stmt.Where, row, schema, ctx)
-		if err != nil {
-			return nil, err
-		}
-		if match {
-			indices = append(indices, rowPositions[idx])
-			matchedRows = append(matchedRows, row)
+	var positions []int
+	if c.stmt.Where != nil {
+		pos, ok := tryIndexLookup(ctx, dbName, c.stmt.TableName, c.stmt.Where)
+		if ok && pos != nil {
+			positions = pos
 		}
 	}
 
-	if err := types.EnforceForeignKeysOnDelete(ctx, dbName, c.stmt.TableName, indices); err != nil {
-		return nil, err
-	}
-	if err := types.EnforceCascadeDeletes(ctx, dbName, c.stmt.TableName, indices); err != nil {
-		return nil, err
-	}
+	var deletedRows []storage.Row
 
-	affected, err := ctx.Storage.DeleteRows(dbName, c.stmt.TableName, indices)
+	affected, err := ctx.Storage.DeleteRowsVM(dbName, c.stmt.TableName, positions, func(rawTuple []byte) (bool, error) {
+		if c.stmt.Where == nil {
+			return true, nil
+		}
+		_, _, row, errRow := storage.DecodeRow(rawTuple, schema)
+		if errRow != nil {
+			return false, errRow
+		}
+		if schema.RLSEnabled && len(schema.Policies) > 0 {
+			visible := false
+			for _, policy := range schema.Policies {
+				if policy.UsingExpr == "" {
+					visible = true
+					break
+				}
+				expr, errExpr := parser.ParseExpression(policy.UsingExpr)
+				if errExpr != nil {
+					return false, fmt.Errorf("RLS policy '%s': invalid expression: %w", policy.Name, errExpr)
+				}
+				ok, errEval := types.EvalOperand(expr, row, schema, ctx)
+				if errEval != nil {
+					continue
+				}
+				if b, ok := ok.(bool); ok && b {
+					visible = true
+					break
+				}
+			}
+			if !visible {
+				return false, nil
+			}
+		}
+
+		match, errEval := types.EvalExpr(c.stmt.Where, row, schema, ctx)
+		if errEval != nil {
+			return false, errEval
+		}
+		return match, nil
+	}, func(indices []int, rows []storage.Row) error {
+		if errFK := types.EnforceForeignKeysOnDelete(ctx, dbName, c.stmt.TableName, indices); errFK != nil {
+			return errFK
+		}
+		if errCas := types.EnforceCascadeDeletes(ctx, dbName, c.stmt.TableName, indices); errCas != nil {
+			return errCas
+		}
+		deletedRows = append(deletedRows, rows...)
+		return nil
+	})
+
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +179,7 @@ func (c *DeleteCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 	types.FireTriggers(ctx, dbName, c.stmt.TableName, "DELETE")
 
 	if c.stmt.Returning != nil {
-		return c.executeReturningDelete(ctx, dbName, schema, indices, matchedRows)
+		return c.executeReturningDelete(ctx, dbName, schema, nil, deletedRows)
 	}
 
 	return &types.Result{Type: "affected", Affected: affected}, nil

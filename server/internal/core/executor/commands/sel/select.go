@@ -474,6 +474,30 @@ func (c *SelectCommand) executeSimpleSelect(ctx *types.ExecutionContext, dbName 
 				return c.executeSystemViewResult(ctx, "pg_locks", rows, cols)
 			}
 		}
+		if strings.EqualFold(tblName, "pg_statistic") {
+			stats := optimizer.GlobalStatsRegistry.GetAll()
+			var rows []storage.Row
+			for _, s := range stats {
+				mcvStr := "[]"
+				if len(s.MCV) > 0 {
+					mcvStr = fmt.Sprintf("%v", s.MCV)
+				}
+				histStr := "[]"
+				if len(s.Histogram) > 0 {
+					histStr = fmt.Sprintf("%v", s.Histogram)
+				}
+				rows = append(rows, storage.Row{
+					s.TableName,
+					s.ColumnName,
+					s.NullFraction,
+					s.DistinctValues,
+					mcvStr,
+					histStr,
+				})
+			}
+			cols := []string{"table_name", "column_name", "null_fraction", "distinct_values", "mcv", "histogram"}
+			return c.executeSystemViewResult(ctx, "pg_statistic", rows, cols)
+		}
 	}
 	if !ctx.Storage.TableExists(dbName, c.stmt.TableName) {
 		viewQuery, err := loadViewQueryWithCtx(ctx, dbName, c.stmt.TableName)

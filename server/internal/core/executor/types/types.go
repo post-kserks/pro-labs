@@ -59,6 +59,8 @@ type SessionInterface interface {
 	ClearActiveTx()
 	CurrentDatabase() string
 	SetCurrentDatabase(name string)
+	SetVariable(name, value string)
+	GetVariable(name string) string
 	Execute(stmt parser.Statement) (*Result, error)
 	LogAudit(actor, action, target, detail string)
 	GetPreparedStatement(name string) (*PreparedStatement, bool)

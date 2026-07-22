@@ -26,7 +26,7 @@ func (m *mockStorageEngine) ListDatabases() ([]string, error) {
 	}
 	return nil, nil
 }
-func (m *mockStorageEngine) CreateTable(dbName string, schema *TableSchema) error { return nil }
+func (m *mockStorageEngine) CreateTable(dbName string, schema TableSchema) error { return nil }
 func (m *mockStorageEngine) DropTable(dbName, tableName string) error             { return nil }
 func (m *mockStorageEngine) ListTables(dbName string) ([]TableInfo, error) {
 	if m.listTablesFunc != nil {
@@ -105,8 +105,6 @@ func (m *mockStorageEngine) IndexRangeLookup(dbName, tableName, column, low, hig
 func (m *mockStorageEngine) IndexFTSLookup(dbName, tableName, column, query string) ([]int, bool) {
 	return nil, false
 }
-func (m *mockStorageEngine) CreateTable(dbName string, schema TableSchema) error { return nil }
-func (m *mockStorageEngine) DropTable(dbName, tableName string) error            { return nil }
 func (m *mockStorageEngine) InsertRows(dbName, tableName string, rows []Row) (int, error) {
 	return 0, nil
 }
@@ -117,6 +115,12 @@ func (m *mockStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	return 0, nil
 }
 func (m *mockStorageEngine) DeleteRows(dbName, tableName string, indices []int) (int, error) {
+	return 0, nil
+}
+func (m *mockStorageEngine) UpdateRowsVM(dbName, tableName string, positions []int, predicate func(rawTuple []byte) (bool, error), updateFn func(Row) (Row, error), preUpdate func([]int, []Row) error) (int, error) {
+	return 0, nil
+}
+func (m *mockStorageEngine) DeleteRowsVM(dbName, tableName string, positions []int, predicate func(rawTuple []byte) (bool, error), preDelete func([]int, []Row) error) (int, error) {
 	return 0, nil
 }
 func (m *mockStorageEngine) TruncateTable(dbName, tableName string) error { return nil }
@@ -151,8 +155,6 @@ func (m *mockStorageEngine) SetTableRLS(dbName, tableName string, enabled bool) 
 func (m *mockStorageEngine) AddPolicy(dbName, tableName string, policy RLSPolicy) error {
 	return nil
 }
-func (m *mockStorageEngine) CreateDatabase(name string) error { return nil }
-func (m *mockStorageEngine) DropDatabase(name string) error   { return nil }
 func (m *mockStorageEngine) FinalCheckpoint() error           { return nil }
 func (m *mockStorageEngine) Close() error                     { return nil }
 func (m *mockStorageEngine) DataDir() string                  { return "" }

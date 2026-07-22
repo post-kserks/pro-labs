@@ -39,43 +39,36 @@ Each WAL record has a fixed header plus variable-length payload:
 | `0x70` | `FullPageImage` | Complete 8KB page image |
 | `0xF0` | `Checkpoint` | Checkpoint marker |
 
-## Fsync Batching
+## Fsync Batching & synchronous_commit
 
-WAL appends are batched for performance:
+WAL appends and flush behaviors are controlled by batching settings and session durability configuration (`SET synchronous_commit = 'off' | 'on'`):
 
-- **Batch size**: 64 records (configurable)
-- **Behavior**: Records are buffered in memory; `fsync` is called every 64 appends
-- **Trade-off**: At most 64 unwritten records may be lost on crash, but throughput is significantly improved
+- **Synchronous Commit (`synchronous_commit = 'on'`)**: Each transaction commit invokes `AppendWithTx`, writing the WAL record and executing an immediate `fsync` syscall to enforce strict per-transaction durability.
+- **Asynchronous Write-Behind (`synchronous_commit = 'off'`)**: `COMMIT` invokes `AppendWithWriteBehind`, queuing records into an in-memory `WriteBehindBuffer`. Control returns to the client immediately without blocking for disk sync.
 
-## Group Commit
+## Group Commit Architecture (`internal/core/wal/group_commit.go`)
 
-Group commit batches multiple transaction commits into a single fsync operation for improved throughput.
+Group commit batches multiple pending transaction commit records into a single `fsync` operation, amortizing costly disk sync syscalls.
 
-### How It Works
+### Implementation Details
 
-1. Multiple transactions request commit simultaneously
-2. Their commit records are buffered in memory
-3. A single fsync operation writes all buffered commits to disk
-4. All transactions are considered durable after the fsync
+- **Worker Routine (`GroupCommit`)**: Instantiated via `EnableGroupCommit(batchSize, batchTime)`. Runs a dedicated background goroutine `flushWorker()`.
+- **Flush Triggers**:
+  1. **Batch Size Threshold**: `AppendBatch()` triggers a flush when `pending` records reach `batchSize` (default: 64).
+  2. **Batch Timeout**: A background ticker (`batchTime`) flushes partial batches periodically to bound latency.
+  3. **Graceful Shutdown**: Final flush during `Close()` guarantees zero record loss on orderly shutdown.
+- **Single Lock & Sync**: `doFlush()` drains the pending queue, writes all records under a single mutex section (`writeRecordRaw`), and issues a single `file.Sync()` (`fsync`) for the entire batch.
 
-### Benefits
+### Durability & Latency Trade-offs
 
-- **Reduced I/O**: Multiple commits share a single disk write
-- **Higher throughput**: Especially under concurrent load
-- **Lower latency**: Batching reduces per-commit overhead
+- **Performance**: 2-3x higher INSERT/UPDATE throughput under concurrent OLTP workloads.
+- **Trade-off**: When `synchronous_commit = 'off'`, up to `batchSize` unwritten in-memory records may be lost on ungraceful power loss or OS crash.
 
-### Configuration
+## Raft Log Consensus Replication (`internal/cluster/raft/`)
 
-```yaml
-server:
-  wal_sync_batch_size: 64  # Records between fsync calls
-```
-
-### Trade-offs
-
-- **Durability**: At most `wal_sync_batch_size` commits may be lost on crash
-- **Latency**: Individual commits may wait for batching
-- **Throughput**: Significantly improved under concurrent load
+In distributed deployments, WAL writes integrate with Raft consensus (`Replicator`):
+- **Local + Remote Log Append**: Leader nodes append records to the local WAL engine and dispatch `AppendEntries` RPCs to follower nodes.
+- **Quorum Durability**: A WAL record is acknowledged as committed only when a majority quorum (`(N/2) + 1`) of cluster nodes persist the log entry.
 
 ## Corruption Recovery
 

@@ -134,14 +134,53 @@ func EncodeRow(createdTx, deletedTx uint64, row Row) ([]byte, error) {
 	return tuple, nil
 }
 
+const TxIDMask = uint64(0x0000FFFFFFFFFFFF)
+
+const (
+	hotUpdatedFlag   = uint64(1) << 48
+	hotHeapTupleFlag = uint64(1) << 49
+	hotForwardShift  = 50
+	hotForwardMask   = uint64(0x3FFF)
+)
+
+func IsHOTUpdated(tuple []byte) bool {
+	val := binary.LittleEndian.Uint64(tuple[0:8])
+	return (val & hotUpdatedFlag) != 0
+}
+
+func IsHOTHeapTuple(tuple []byte) bool {
+	val := binary.LittleEndian.Uint64(tuple[0:8])
+	return (val & hotHeapTupleFlag) != 0
+}
+
+func GetForwardSlot(tuple []byte) uint16 {
+	val := binary.LittleEndian.Uint64(tuple[0:8])
+	return uint16((val >> hotForwardShift) & hotForwardMask)
+}
+
+func SetHOTUpdated(tuple []byte, forwardSlot uint16) {
+	val := binary.LittleEndian.Uint64(tuple[0:8])
+	val |= hotUpdatedFlag
+	val &= ^(hotForwardMask << hotForwardShift)
+	val |= (uint64(forwardSlot) & hotForwardMask) << hotForwardShift
+	binary.LittleEndian.PutUint64(tuple[0:8], val)
+}
+
+func SetHOTHeapTuple(tuple []byte) {
+	val := binary.LittleEndian.Uint64(tuple[0:8])
+	val |= hotHeapTupleFlag
+	binary.LittleEndian.PutUint64(tuple[0:8], val)
+}
+
 func DecodeRow(tuple []byte, schema *TableSchema) (createdTx, deletedTx uint64, row Row, err error) {
 	if len(tuple) < binTupleHeaderSize+binColCountSize {
 		return 0, 0, nil, fmt.Errorf("tuple too short")
 	}
 
-	createdTx = binary.LittleEndian.Uint64(tuple[0:8])
+	createdTx = binary.LittleEndian.Uint64(tuple[0:8]) & TxIDMask
 	deletedTx = binary.LittleEndian.Uint64(tuple[8:16])
 	colCount := binary.LittleEndian.Uint16(tuple[16:18])
+
 
 	headerSize := binTupleHeaderSize + binColCountSize + int(colCount)*binColOffsetSize
 	if len(tuple) < headerSize {

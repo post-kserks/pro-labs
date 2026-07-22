@@ -10,7 +10,6 @@ import (
 	"vaultdb/internal/core/audit"
 	"vaultdb/internal/core/executor"
 	"vaultdb/internal/core/metrics"
-	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
 	"vaultdb/internal/core/txmanager"
 	"vaultdb/internal/core/wal"
@@ -77,14 +76,16 @@ func (db *VaultDB) Query(dbName, sql string) (*Result, error) {
 
 // QueryContext executes a single SQL query with a context for cancellation.
 func (db *VaultDB) QueryContext(ctx context.Context, dbName, sql string) (*Result, error) {
-	stmt, err := parser.Parse(sql)
+	session := executor.NewSession(db.Storage, db.Metrics, db.TxManager, db.Broadcaster)
+	session.SetServerContext(ctx)
+	defer session.Close()
+
+	stmt, err := session.Parse(sql)
 	if err != nil {
 		return nil, err
 	}
 
-	session := executor.NewSession(db.Storage, db.Metrics, db.TxManager, db.Broadcaster)
-	session.SetServerContext(ctx)
-	defer session.Close()
+
 	if db.Embedder != nil {
 		session.SetEmbedder(db.Embedder)
 	}

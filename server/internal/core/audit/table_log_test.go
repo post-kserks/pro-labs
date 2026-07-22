@@ -63,18 +63,18 @@ func (m *mockStorage) ListDatabases() ([]string, error) {
 	return dbs, nil
 }
 
-func (m *mockStorage) CreateTable(dbName string, schema *storage.TableSchema) error {
+func (m *mockStorage) CreateTable(dbName string, schema storage.TableSchema) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	db, ok := m.databases[dbName]
 	if !ok {
 		return fmt.Errorf("database %q not found", dbName)
 	}
-	db[schema.Name] = &mockTable{schema: *schema}
+	db[schema.Name] = &mockTable{schema: schema}
 	return nil
 }
 
-func (m *mockStorage) CreateTableDirect(dbName string, schema *storage.TableSchema) error {
+func (m *mockStorage) CreateTableDirect(dbName string, schema storage.TableSchema) error {
 	return m.CreateTable(dbName, schema)
 }
 
@@ -108,10 +108,9 @@ func (m *mockStorage) ListTables(dbName string) ([]storage.TableInfo, error) {
 		return nil, fmt.Errorf("database %q not found", dbName)
 	}
 	var tables []storage.TableInfo
-	for name, t := range db {
+	for name := range db {
 		tables = append(tables, storage.TableInfo{
 			Name:        name,
-			ColumnCount: len(t.schema.Columns),
 		})
 	}
 	return tables, nil
@@ -224,24 +223,7 @@ func (m *mockStorage) ReadSampleRows(dbName, tableName string, limit int) ([]sto
 	return nil, nil
 }
 
-func (m *mockStorage) CreateTable(dbName string, schema storage.TableSchema) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.databases[dbName] == nil {
-		m.databases[dbName] = make(map[string]*mockTable)
-	}
-	m.databases[dbName][schema.Name] = &mockTable{schema: schema}
-	return nil
-}
 
-func (m *mockStorage) DropTable(dbName, tableName string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if db, ok := m.databases[dbName]; ok {
-		delete(db, tableName)
-	}
-	return nil
-}
 
 func (m *mockStorage) InsertRows(dbName, tableName string, rows []storage.Row) (int, error) {
 	m.mu.Lock()
@@ -266,7 +248,15 @@ func (m *mockStorage) UpdateRowsDirect(dbName, tableName string, indices []int, 
 	return 0, nil
 }
 
+func (m *mockStorage) UpdateRowsVM(dbName, tableName string, positions []int, predicate func(rawTuple []byte) (bool, error), updateFn func(storage.Row) (storage.Row, error), validateFn func([]int, []storage.Row) error) (int, error) {
+	return 0, nil
+}
+
 func (m *mockStorage) DeleteRows(dbName, tableName string, indices []int) (int, error) {
+	return 0, nil
+}
+
+func (m *mockStorage) DeleteRowsVM(dbName, tableName string, positions []int, predicate func(rawTuple []byte) (bool, error), preDelete func([]int, []storage.Row) error) (int, error) {
 	return 0, nil
 }
 
@@ -329,19 +319,7 @@ func (m *mockStorage) DropIndex(dbName, indexName string) error {
 	return nil
 }
 
-func (m *mockStorage) CreateDatabase(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.databases[name] = make(map[string]*mockTable)
-	return nil
-}
 
-func (m *mockStorage) DropDatabase(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.databases, name)
-	return nil
-}
 
 func (m *mockStorage) FinalCheckpoint() error { return nil }
 func (m *mockStorage) Close() error           { return nil }

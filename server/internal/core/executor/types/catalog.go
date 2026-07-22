@@ -355,6 +355,16 @@ const (
 
 const SystemTableName = "_objects"
 
+var SystemTableSchema = &storage.TableSchema{
+	Name: SystemTableName,
+	Columns: []storage.ColumnSchema{
+		{Name: "name", Type: "TEXT"},
+		{Name: "type", Type: "TEXT"},
+		{Name: "definition", Type: "TEXT"},
+		{Name: "created_at", Type: "INT"},
+	},
+}
+
 // EnsureSystemTable creates the _objects table if it does not exist yet.
 func EnsureSystemTable(ctx *ExecutionContext, dbName string) error {
 	if ctx.Storage.TableExists(dbName, SystemTableName) {
@@ -388,11 +398,9 @@ func StoreObject(ctx *ExecutionContext, dbName, objType, name string, definition
 		return fmt.Errorf("store object: %w", err)
 	}
 
-	var existingIdx []int
 	var createdAt int64
-	for i, row := range existing {
-		if len(row) >= 3 && ValuesEqual(row[0], name) && ValuesEqual(row[1], objType) {
-			existingIdx = append(existingIdx, i)
+	for _, row := range existing {
+		if len(row) >= 3 && ValuesEqualCaseInsensitive(row[0], name) && ValuesEqual(row[1], objType) {
 			if len(row) >= 4 {
 				if ts, ok := row[3].(int64); ok {
 					createdAt = ts
@@ -401,10 +409,19 @@ func StoreObject(ctx *ExecutionContext, dbName, objType, name string, definition
 		}
 	}
 
-	if len(existingIdx) > 0 {
-		if _, err := ctx.Storage.DeleteRows(dbName, SystemTableName, existingIdx); err != nil {
-			return fmt.Errorf("store object: delete old: %w", err)
+	// Delete existing object via DeleteRowsVM (single pass).
+	_, err = ctx.Storage.DeleteRowsVM(dbName, SystemTableName, nil, func(rawTuple []byte) (bool, error) {
+		_, _, row, errRow := storage.DecodeRow(rawTuple, SystemTableSchema)
+		if errRow != nil {
+			return false, nil
 		}
+		if len(row) >= 3 && ValuesEqualCaseInsensitive(row[0], name) && ValuesEqual(row[1], objType) {
+			return true, nil
+		}
+		return false, nil
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("store object: delete old: %w", err)
 	}
 
 	if createdAt == 0 {
@@ -429,6 +446,7 @@ func LoadObject(ctx *ExecutionContext, dbName, objType, name string) (map[string
 	for _, row := range rows {
 		if len(row) >= 3 && ValuesEqualCaseInsensitive(row[0], name) && ValuesEqual(row[1], objType) {
 			defJSON, _ := row[2].(string)
+			// read JSON: %s\n", defJSON)
 			if defJSON == "" {
 				return nil, nil
 			}
@@ -444,23 +462,17 @@ func LoadObject(ctx *ExecutionContext, dbName, objType, name string) (map[string
 
 // DeleteObject deletes a DDL object by name and type.
 func DeleteObject(ctx *ExecutionContext, dbName, objType, name string) error {
-	rows, err := ctx.Storage.ReadCurrentRows(dbName, SystemTableName)
-	if err != nil {
-		return fmt.Errorf("delete object: %w", err)
-	}
-
-	var indices []int
-	for i, row := range rows {
-		if len(row) >= 3 && ValuesEqual(row[0], name) && ValuesEqual(row[1], objType) {
-			indices = append(indices, i)
+	_, err := ctx.Storage.DeleteRowsVM(dbName, SystemTableName, nil, func(rawTuple []byte) (bool, error) {
+		_, _, row, errRow := storage.DecodeRow(rawTuple, SystemTableSchema)
+		if errRow != nil {
+			return false, nil
 		}
-	}
-
-	if len(indices) == 0 {
-		return fmt.Errorf("object '%s' not found", name)
-	}
-
-	if _, err := ctx.Storage.DeleteRows(dbName, SystemTableName, indices); err != nil {
+		if len(row) >= 3 && ValuesEqualCaseInsensitive(row[0], name) && ValuesEqual(row[1], objType) {
+			return true, nil
+		}
+		return false, nil
+	}, nil)
+	if err != nil {
 		return fmt.Errorf("delete object: %w", err)
 	}
 	return nil
@@ -477,6 +489,7 @@ func LoadAllObjectsByType(ctx *ExecutionContext, dbName, objType string) ([]map[
 	for _, row := range rows {
 		if len(row) >= 3 && ValuesEqual(row[1], objType) {
 			defJSON, _ := row[2].(string)
+			// read JSON: %s\n", defJSON)
 			if defJSON == "" {
 				continue
 			}
@@ -539,5 +552,7 @@ func AddViewPolicy(ctx *ExecutionContext, dbName, viewName string, policy storag
 	}
 	policies = append(policies, policy)
 	def["policies"] = policies
+	import_fmt := "fmt"
+	_ = import_fmt
 	return StoreObject(ctx, dbName, ObjTypeView, viewName, def)
 }

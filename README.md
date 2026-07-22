@@ -12,63 +12,64 @@ VaultDB is not another lightweight embedded database. It's a full-featured SQL e
 
 | Advantage | What it means |
 |-----------|---------------|
+| **PostgreSQL Wire Protocol** | Standard PostgreSQL wire compatibility (`pgwire`) — works out-of-the-box with `psql`, `pgx`, `lib/pq`, ORMs |
+| **Heap-Only Tuples (HOT)** | HOT chain updates eliminate index bloat for non-indexed column updates |
+| **Cost-Based Optimizer (CBO)** | Dynamic programming Join reordering with histogram & MCV selectivity estimation via `system.pg_statistic` (`ANALYZE`) |
+| **Bytecode VM & JIT Compiler** | AST-to-bytecode expression compiler and zero-reflection stack VM for blazing fast predicate execution |
+| **Transparent Data Encryption (TDE)** | Page & WAL level AES-256-GCM encryption with envelope key management (DEK/KEK) |
+| **Dynamic Data Masking** | Column-level dynamic data masking with `UNMASK` privilege security enforcement |
+| **Distributed Raft Consensus** | Multi-node Raft consensus replication with configurable `synchronous_commit = off|on` |
+| **AutoVacuum & Checkpointer** | Autonomous background workers for dead tuple reclamation and non-blocking dirty page flushing |
+| **Enterprise Observability** | PostgreSQL-compatible `pg_stat_activity` & `pg_locks` system views with session `KILL QUERY` control |
 | **Time Travel out of the box** | Query data as it was at any point in the past — no separate tooling needed |
-| **Transparent Data Encryption** | AES-256-GCM with envelope encryption (DEK/KEK), no config overhead |
-| **Built-in RBAC** | CREATE ROLE / GRANT / REVOKE with dynamic permissions via SQL — no external identity provider required |
+| **Built-in RBAC** | CREATE ROLE / GRANT / REVOKE with dynamic permissions via SQL |
 | **Crash-safe WAL** | Group commit, binary payloads, guaranteed recovery — no silent data loss |
-| **Native protocol** | Own TCP protocol with v2 handshake — no PostgreSQL wire compatibility baggage |
-| **WASM UDFs** | Run custom functions in a sandboxed WASM runtime with memory limits and export whitelist |
-| **Partition pruning** | RANGE and HASH partitioning with predicate-based partition elimination |
-| **Full-text search** | BM25 ranking with snippet highlighting built into the engine |
+| **WASM UDFs** | Run custom functions in a sandboxed WASM runtime with memory limits |
 | **Audit log with hash-chain** | SHA-256 chained audit trail with `VERIFY AUDIT LOG` for tamper detection |
-| **Production-grade security** | Token revocation, rate limiting, TLS enforcement, path sandboxing, 8-algorithm security audit |
 
 ---
 
 ## Features
 
-### SQL Engine
+### SQL Engine & Optimizer
 
-- **DML**: INSERT, UPDATE, DELETE, UPSERT (ON CONFLICT), MERGE, TRUNCATE, COPY FROM/TO
+- **DML**: INSERT, UPDATE, DELETE, UPSERT (ON CONFLICT), MERGE, TRUNCATE, COPY FROM/TO, `KILL QUERY`
 - **DQL**: SELECT with JOIN, CTE (recursive), window functions, subqueries, DISTINCT ON
+- **Optimizer**: Cost-Based Optimizer (CBO) with DP join reordering, `ANALYZE` support, `system.pg_statistic` MCV & Equi-depth Histograms
+- **Execution Engine**: AST-to-bytecode JIT compiler and zero-reflection Virtual Machine (VM)
 - **DDL**: CREATE/DROP/ALTER DATABASE/TABLE/INDEX/VIEW/TRIGGER/FUNCTION/PROCEDURE, UNIQUE constraints, UNIQUE indexes, FULLTEXT indexes
 - **Types**: INT, BIGINT, FLOAT, BOOL, TEXT, VARCHAR, NUMERIC, JSONB, VECTOR, TIMESTAMPTZ, BLOB, ARRAY
 - **JSONB operators**: `->`, `->>`, `@>`, `<@`, `||`, `?`
+- **System Views**: `pg_stat_activity`, `pg_locks` for live query monitoring and lock inspection
+- **Session Settings**: `SET synchronous_commit = 'off'|'on'` for tunable WAL write-behind latency
 - **Table partitioning**: RANGE and HASH partitioning with predicate-based pruning
 - **Full-text search**: BM25 ranking, snippet highlighting, stop words
 - **Stored functions**: PL/pgSQL interpreter (DECLARE, BEGIN/END, RETURN, RETURN QUERY)
-- **FTS operators**: FTS_MATCH, @@, bm25_score() relevance scoring
-- **MERGE**: MERGE with table, subquery, and VALUES sources
 - **HISTORY**: Query row version history with KEY and WHERE filters
 - **RBAC**: CREATE ROLE, DROP ROLE, GRANT, REVOKE with dynamic permissions
 
-### Security
+### Storage & High Availability
 
-- **TDE**: Transparent Data Encryption with AES-256-GCM, envelope encryption (DEK/KEK)
+- **HOT (Heap-Only Tuples)**: In-page tuple versioning chains to prevent Write Amplification & index bloat
+- **AutoVacuum Worker**: Background dead tuple reclamation based on active transaction IDs
+- **Checkpointer Worker**: Asynchronous batch page flusher for smooth I/O throughput
+- **Distributed Raft Consensus**: Multi-node Raft state machine and replicated WAL log engine
+- **Buffer Pool**: Clock-Sweep eviction, configurable size
+
+### Security & Privacy
+
+- **TDE**: Transparent Data Encryption (AES-256-GCM) for data pages and WAL log files
+- **Dynamic Data Masking**: Dynamic column masking policies (partial, full) with role privilege checks
 - **Authentication**: HMAC-SHA256 token-based auth with constant-time comparison
 - **Token revocation**: Revoke compromised tokens via SQL or HTTP API (persisted to disk)
-- **RBAC**: Role-based access control with SQL-managed roles (admin, writer, reader + custom)
 - **Audit log**: Hash-chain integrity, SHA-256, periodic verification, `VERIFY AUDIT LOG` command
 - **TLS**: Configurable enforcement, min version (1.2/1.3), mTLS support
-- **Path sandboxing**: COPY commands restricted to data directory
-- **WASM security**: Memory limits, export whitelist, no host filesystem access
-- **Rate limiting**: Per-IP token bucket with configurable RPS and burst
-- **Anti-replay**: Handshake nonce validation for protocol v2
 
-### Protocol
+### Protocols & Connectivity
 
-- **Protocol v2**: Handshake negotiation, versioning, feature detection, anti-replay
-- **Backward compatible**: v1 clients work without changes
-- **Official clients**: Go, Python, JavaScript/TypeScript, C++
-
-### Performance
-
-- **WAL**: Group commit, binary payloads, crash recovery
-- **Buffer pool**: Clock-Sweep eviction, configurable size (default 128MB)
-- **Query plan caching**: LRU cache with schema-aware invalidation
-- **Parallel queries**: Multi-goroutine execution for complex queries
-- **Partition pruning**: Predicate extraction eliminates irrelevant partitions early
-- **sync.Pool**: Hot Row allocation reuse
+- **PostgreSQL Wire Protocol (`pgwire`)**: Compatible with standard PostgreSQL drivers (`pgx`, `lib/pq`, `psql`, ORMs)
+- **Native TCP Protocol v2**: Handshake negotiation, versioning, feature detection, anti-replay
+- **Official SDKs**: Go, Python, JavaScript/TypeScript, C++
 
 ---
 

@@ -28,21 +28,27 @@ VaultDB supports a comprehensive subset of SQL including:
 - **JSONB operators**: Containment (`@>`), reverse containment (`<@`), merge (`||`)
 - **130+ built-in functions**: String, math, date/time, JSON, array, aggregate
 - **Prepared statements** with parameter binding (`$1`, `$2`, ...)
-- **EXPLAIN** and **EXPLAIN ANALYZE** for query plan inspection
+- **Cost-Based Optimizer (CBO)** utilizing `ANALYZE` statistics stored in `system.pg_statistic` for optimal join ordering and index selection
+- **EXPLAIN** and **EXPLAIN ANALYZE** for query execution plan inspection and runtime profiling
+- **Bytecode VM / JIT Compiler** for accelerated expression evaluation and predicate filtering
+- **System Views & Management**: `system.pg_stat_activity` for active session tracking, `system.pg_locks` for lock inspection, and `KILL QUERY <id>` for query cancellation
 - **COPY FROM/TO** for bulk CSV and JSON import/export
 - **Table partitioning** with RANGE and HASH strategies, automatic partition pruning
 - **BM25 full-text search** with tokenization, corpus management, and snippet generation
 
-### Storage Engine
+### Storage Engine & High Availability
 
 - **Page-based storage** with 8KB pages and PostgreSQL-style slotted layout
+- **HOT (Heap-Only Tuples)** for avoiding index updates when updating non-indexed columns
 - **Write-Ahead Logging (WAL)** with ARIES-style three-phase crash recovery
 - **MVCC** (Multi-Version Concurrency Control) enabling snapshot isolation and time-travel queries
+- **Raft Consensus HA**: High-availability clustering with automatic leader election and log replication (`internal/cluster/raft`)
 - **Buffer pool** with Clock-Sweep eviction and dirty-page tracking
 - **Free Space Map** for O(log n) page allocation
-- **Auto-vacuum** for dead tuple reclamation
+- **AutoVacuum** background worker for automatic dead tuple reclamation and page compaction
+- **Checkpointer** process for periodic WAL checkpoints and dirty page flushing
 - **Binary tuple encoding** for compact on-disk representation
-- **Transparent Data Encryption (TDE)** with AES-256-GCM page-level encryption
+- **Transparent Data Encryption (TDE)** with AES-256-GCM page-level & WAL encryption
 
 ### Index Types
 
@@ -54,29 +60,31 @@ VaultDB supports a comprehensive subset of SQL including:
 | **GiST** | Numeric range/overlap queries |
 | **Composite** | Multi-column index |
 
-### Concurrency
+### Concurrency & Performance
 
 - Three-level locking hierarchy (global → per-table → per-page)
 - Optimistic Concurrency Control (OCC) for transaction conflict detection
 - Per-page read/write locks for fine-grained concurrency
 - Automatic rollback on connection drop
+- **Bytecode VM / JIT Compiler** for fast expression execution
 
-### Interfaces
+### Interfaces & Wire Protocols
 
-- **TCP** (port 5432): Protocol v2 with JSON-based handshake for Go, Python, and JS clients
+- **PostgreSQL Wire Protocol (`pgwire`)** (port 5432 / 5433): Native wire protocol compatibility via `internal/protocol/pgwire` enabling standard Postgres drivers (`pgx`, `lib/pq`, `psql`, JDBC, `psycopg2`)
+- **Native JSON TCP Protocol (v2)** (port 5432): JSON-over-TCP protocol with handshake negotiation for official SDKs
 - **HTTP** (port 8080): REST API with SSE streaming, batch queries, and live subscriptions
-- **Monitor** (port 5433): Health checks and Prometheus metrics
+- **Monitor** (port 5433): Health checks (`/health`, `/ready`) and Prometheus metrics (`/metrics`)
 - **Go library**: Direct `vaultdb.Open()` / `vaultdb.Query()` for embedding
 - **Python client**: `vaultdb` package with Protocol v2 TCP support
-- **JS/TS client**: `vaultdb` package with Protocol v2 TCP support
+- **JS/TS client**: `@vaultdb/client` package with Protocol v2 TCP support
 
-### Security
+### Security & Data Protection
 
 - HMAC-SHA256 token authentication
-- TLS 1.2+ encryption
-- Mutual TLS (mTLS) for client certificate verification
+- TLS 1.2+ encryption and Mutual TLS (mTLS) for client certificate verification
 - Per-IP rate limiting and brute-force protection
 - Row-Level Security (RLS) policies
+- **Dynamic Data Masking**: Column-level sensitive data masking policies (email, SSN, credit cards)
 - **Transparent Data Encryption (TDE)** with AES-256-GCM and envelope encryption (KEK/DEK)
 - **Audit log** with hash-chain integrity (`SHA-256` chained entries) stored in `vaultdb_audit_log`
 - **Token revocation** via admin endpoint (`/admin/revoke-token`)
@@ -100,11 +108,17 @@ VaultDB supports a comprehensive subset of SQL including:
 |---------|---------|--------|------------|
 | Language | Go | C | C |
 | Embedded mode | Yes | Yes | No |
-| TCP protocol | Yes (v2) | No | Yes |
+| Wire Protocols | PostgreSQL Wire (`pgwire`) & Native JSON v2 | No | PostgreSQL Wire |
+| CBO & Statistics | Yes (`ANALYZE` & `system.pg_statistic`) | Query Planner | Yes (`ANALYZE`) |
+| Heap-Only Tuples (HOT) | Yes | No | Yes |
+| HA Clustering | Raft Consensus | No | Streaming / Patroni |
 | HTTP API | Built-in | No | Extension |
 | MVCC | Yes | No | Yes |
 | Time travel | Yes (`AS OF`) | No | Extension |
 | WAL recovery | ARIES | Rollback | ARIES |
+| Dynamic Data Masking | Native | No | Extension |
+| System Views & Cancellation | `pg_stat_activity`, `pg_locks`, `KILL QUERY` | No | `pg_stat_activity`, `pg_locks`, `pg_cancel_backend` |
+| AutoVacuum & Checkpointer | Automatic background workers | Auto-vacuum | Automatic background workers |
 | Index types | 5 | 5 | Many |
 | Window functions | Yes | 3.25+ | Yes |
 | JSON support | Native (JSONB ops) | Limited | Native |
@@ -114,8 +128,8 @@ VaultDB supports a comprehensive subset of SQL including:
 | TDE | AES-256-GCM | No | Extension |
 | COPY FROM/TO | CSV, JSON | No | Yes |
 | mTLS | Yes | No | Yes |
-| Clients | Go, Python, JS | C | Multi-lang |
-| Deployment | Single binary | Single binary | Multi-process |
+| Drivers / Clients | `psql`, `pgx`, `lib/pq`, Go, Python, JS, C++ | C | Multi-lang |
+| Deployment | Single binary / Cluster | Single binary | Multi-process |
 
 ## License
 

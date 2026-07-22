@@ -40,6 +40,16 @@ type ShowTablesStatement struct {
 	DatabaseName string // empty means current session database
 }
 
+type AnalyzeStatement struct {
+	TableName string // Table to analyze. If empty, analyze all tables in current DB.
+}
+
+type SetVariableStatement struct {
+	VariableName string
+	Value        string
+}
+
+
 type ShowEncryptionStatusStatement struct{}
 
 type DescribeTableStatement struct {
@@ -479,6 +489,8 @@ func (*DropDatabaseStatement) statementNode()         {}
 func (*UseDatabaseStatement) statementNode()          {}
 func (*ShowDatabasesStatement) statementNode()        {}
 func (*ShowTablesStatement) statementNode()           {}
+func (*AnalyzeStatement) statementNode()              {}
+func (*SetVariableStatement) statementNode()          {}
 func (*ShowEncryptionStatusStatement) statementNode() {}
 func (*DescribeTableStatement) statementNode()        {}
 func (*CreateTableStatement) statementNode()          {}
@@ -530,6 +542,8 @@ func (*DropDatabaseStatement) StatementType() string         { return "DROP_DATA
 func (*UseDatabaseStatement) StatementType() string          { return "USE_DATABASE" }
 func (*ShowDatabasesStatement) StatementType() string        { return "SHOW_DATABASES" }
 func (*ShowTablesStatement) StatementType() string           { return "SHOW_TABLES" }
+func (*AnalyzeStatement) StatementType() string              { return "ANALYZE" }
+func (*SetVariableStatement) StatementType() string          { return "SET_VARIABLE" }
 func (*ShowEncryptionStatusStatement) StatementType() string { return "SHOW_ENCRYPTION_STATUS" }
 func (*DescribeTableStatement) StatementType() string        { return "DESCRIBE_TABLE" }
 func (*CreateTableStatement) StatementType() string          { return "CREATE_TABLE" }

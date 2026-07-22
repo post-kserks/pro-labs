@@ -60,7 +60,18 @@ curl -X POST http://localhost:8080/admin/revoke-token \
 REVOKE TOKEN 'vdb_sk_token_to_revoke';
 ```
 
-**Behavior:**
+## Dynamic Data Masking (DDM)
+
+VaultDB supports column-level Dynamic Data Masking (`internal/core/security/masking.go`):
+- **Masking Engine & Policies**: Controlled via `MaskingPolicy` defining `Prefix` (unmasked leading characters), `Suffix` (unmasked trailing characters), and `Char` (masking rune, e.g., `'*'`).
+  - `RegisterPolicy(db, table, col, policy)` registers rules in the global thread-safe masking registry.
+  - `MaskString(val, policy)` transforms target strings while preserving prefix and suffix lengths.
+- **Query Projection Integration**: During `SELECT` query execution (`applyMasking`), column values are automatically obfuscated before returning results to the client.
+- **`UNMASK` Privilege & RBAC**: Execution checks whether the connected session holds the `UNMASK` permission via `AuthManager`.
+  - Non-privileged users automatically receive masked column projections.
+  - Privileged users holding `UNMASK` bypass masking and receive original unmasked data.
+
+**Behavior & Token Revocation:**
 - Revoked tokens are rejected immediately on all subsequent requests
 - Revocation entries are cleaned up after 24 hours (revoked token data expires)
 - Revocation is checked on every request (both TCP and HTTP)
@@ -222,16 +233,13 @@ Policies are stored in the table's `_schema.json`:
 
 ## Transparent Data Encryption (TDE)
 
-VaultDB supports page-level encryption using AES-256-GCM.
+VaultDB provides native Transparent Data Encryption (TDE) for heap storage pages and WAL logs (`internal/core/crypto/tde.go`).
 
-### Enabling TDE
+### Cryptographic Implementation (`tde.go`)
 
-```yaml
-# vaultdb.yaml
-encryption:
-  enabled: true
-  key_source: "passphrase"
-```
+- **AES-256-GCM Engine**: The `TDEEngine` initializes a 256-bit Galois/Counter Mode cipher using a 32-byte Data Encryption Key (DEK).
+- **Page Encryption (`EncryptPage` / `DecryptPage`)**: Database storage pages are encrypted on disk. The 12-byte GCM initialization vector (nonce) embeds the 64-bit `pageID` (`binary.LittleEndian.PutUint64`), guaranteeing unique nonces per page and preventing page-swap or replay attacks.
+- **WAL Encryption (`EncryptWAL` / `DecryptWAL`)**: Write-Ahead Log records are encrypted before disk write. The 12-byte nonce embeds the Log Sequence Number (`lsn`), protecting journal contents against cold disk extraction.
 
 ### Key Management
 
@@ -243,15 +251,14 @@ encryption:
 
 ### Security Properties
 
-- Pages are encrypted with AES-256-GCM (authenticated encryption)
-- Each page has unique nonce preventing replay attacks
-- PageID is bound as AAD preventing page swap attacks
-- WAL is also encrypted to prevent data leakage through journal
+- Pages & WAL entries are encrypted with AES-256-GCM (authenticated confidentiality + integrity)
+- Unique pageID / LSN nonce construction prevents ciphertext replay and page substitution
+- WAL record payloads are fully encrypted to prevent journal data leakage
 
 ### Performance
 
-- With AES-NI: ~17% overhead on INSERT/SELECT
-- Without AES-NI: 300-500% overhead (warning logged)
+- With AES-NI hardware acceleration: ~17% overhead on INSERT/SELECT
+- Without AES-NI: 300-500% overhead (warning logged at server initialization)
 
 ## Network Security
 

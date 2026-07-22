@@ -2,9 +2,12 @@ package sel
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 
+	"vaultdb/internal/core/executor/optimizer"
 	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
@@ -15,6 +18,28 @@ func (c *SelectCommand) executeJoins(ctx *types.ExecutionContext, dbName string,
 	currentRows := leftRows
 	// Reusable buffer for building combined rows during join iteration.
 	var combinedBuf storage.Row
+
+	canReorder := true
+	for _, join := range c.stmt.Joins {
+		if join.Type != "INNER" && join.Type != "" {
+			canReorder = false
+			break
+		}
+	}
+
+	if canReorder && len(c.stmt.Joins) > 1 {
+		sort.SliceStable(c.stmt.Joins, func(i, j int) bool {
+			s1 := optimizer.GlobalStatsRegistry.GetTableSize(dbName, c.stmt.Joins[i].TableName)
+			s2 := optimizer.GlobalStatsRegistry.GetTableSize(dbName, c.stmt.Joins[j].TableName)
+			if s1 == -1 {
+				s1 = math.MaxInt64 // Unknown table, put it last
+			}
+			if s2 == -1 {
+				s2 = math.MaxInt64
+			}
+			return s1 < s2
+		})
+	}
 
 	for _, join := range c.stmt.Joins {
 		if !ctx.Storage.TableExists(dbName, join.TableName) {

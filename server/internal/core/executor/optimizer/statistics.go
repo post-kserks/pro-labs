@@ -103,6 +103,33 @@ func (sc *StatisticsCollector) collectStats(dbName, tableName string) *TableStat
 		return stats
 	}
 
+	// Try to get stats from GlobalStatsRegistry (populated by ANALYZE)
+	useGlobalStats := false
+	for _, col := range schema.Columns {
+		if GlobalStatsRegistry.Get(dbName, tableName, col.Name) != nil {
+			useGlobalStats = true
+			break
+		}
+	}
+
+	if useGlobalStats {
+		for _, col := range schema.Columns {
+			gColStats := GlobalStatsRegistry.Get(dbName, tableName, col.Name)
+			if gColStats != nil {
+				colStats := &ColumnStatistics{
+					ColumnName:      col.Name,
+					DistinctCount:   int(gColStats.DistinctValues),
+					NullCount:       int(float64(rowCount) * gColStats.NullFraction),
+					HistogramBounds: gColStats.Histogram,
+				}
+				// MCV in GlobalStatsRegistry doesn't have frequencies explicitly,
+				// but we can just use the bounds for histograms.
+				stats.ColumnStats[strings.ToLower(col.Name)] = colStats
+			}
+		}
+		return stats
+	}
+
 	// For statistics collection, read a limited sample — without full scan.
 	rows, err := sc.storage.ReadSampleRows(dbName, tableName, defaultSampleSize)
 	if err != nil {

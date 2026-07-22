@@ -214,7 +214,15 @@ func (m *mockStorage) UpdateRowsDirect(dbName, tableName string, indices []int, 
 	return 0, nil
 }
 
+func (m *mockStorage) UpdateRowsVM(dbName, tableName string, positions []int, matchFn func(rawTuple []byte) (bool, error), updateFn func(storage.Row) (storage.Row, error), validateFn func(indices []int, newRows []storage.Row) error) (int, error) {
+	return 0, nil
+}
+
 func (m *mockStorage) DeleteRows(dbName, tableName string, indices []int) (int, error) {
+	return 0, nil
+}
+
+func (m *mockStorage) DeleteRowsVM(dbName, tableName string, positions []int, predicate func(rawTuple []byte) (bool, error), preDelete func(indices []int, rows []storage.Row) error) (int, error) {
 	return 0, nil
 }
 

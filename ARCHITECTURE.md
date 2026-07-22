@@ -16,27 +16,34 @@ This document describes the architecture of VaultDB — a SQL database engine wi
 │   ├── internal/
 │   │   ├── auth/              # HMAC-SHA256 token auth + rate limiter
 │   │   ├── backup/            # Backup and recovery infrastructure
+│   │   ├── cluster/           # Distributed Raft consensus and replication
+│   │   │   └── raft/          # Raft consensus node & log replication
 │   │   ├── config/            # YAML + env config loader
 │   │   ├── core/              # Core SQL database engine modules
 │   │   │   ├── ai/            # AI embedding provider (SEMANTIC_MATCH/AI_EMBED)
 │   │   │   ├── audit/         # Audit logging engine
-│   │   │   ├── crypto/        # Cryptographic operations and TDE primitives
-│   │   │   ├── executor/      # Command-pattern execution engine
+│   │   │   ├── crypto/        # Cryptographic operations, TDE page/WAL encryption
+│   │   │   ├── executor/      # Command-pattern execution engine & CBO Optimizer
+│   │   │   │   ├── eval/      # AST & VM JIT expression evaluation
+│   │   │   │   │   └── vm/    # Bytecode VM & expression compiler
+│   │   │   │   └── optimizer/ # DP Join Reordering & GlobalStatsRegistry
 │   │   │   ├── fts/           # Full-text search engine
 │   │   │   ├── index/         # B-Tree, GIN, GiST, Hash indexes
 │   │   │   ├── lexer/         # Hand-written SQL lexer
 │   │   │   ├── metrics/       # Prometheus-style metrics collector
 │   │   │   ├── parser/        # Recursive-descent SQL parser
-│   │   │   ├── storage/       # Page engine + binary encoding + buffer pool
+│   │   │   ├── security/      # Dynamic Data Masking policies
+│   │   │   ├── storage/       # Page engine + HOT + AutoVacuum + Checkpointer
 │   │   │   ├── txmanager/     # MVCC transaction manager
-│   │   │   ├── wal/           # Write-Ahead Log with ARIES recovery
+│   │   │   ├── wal/           # Write-Ahead Log with ARIES & Group Commit
 │   │   │   └── wasmudf/       # WebAssembly user-defined functions (Wasm UDF)
 │   │   ├── httpserver/        # HTTP/REST + embedded Web UI + ratelimit
 │   │   ├── iputil/            # IP utility and CIDR validation
 │   │   ├── logging/           # General logging infrastructure
 │   │   ├── osdisk/            # OS-level disk monitoring and I/O utilities
 │   │   ├── pool/              # Connection pool / tracker
-│   │   ├── protocol/          # TCP request/response wire format
+│   │   ├── protocol/          # Native TCP wire protocol v2
+│   │   │   └── pgwire/        # PostgreSQL Wire Protocol handler
 │   │   ├── security/          # Security utilities and TLS helpers
 │   │   ├── tls/               # TLS/mTLS config loader
 │   │   └── websocket/         # WebSocket bridge for live queries
@@ -281,60 +288,30 @@ graph TB
 
     AI --- Exec
     HTTPSrv --- WebUI
-    Exec -.-> Audit
-    Exec -.-> Log
-    Exec -.-> Metrics
-    PageEngine -.-> Metrics
-
-  end
-
-  subgraph Data ["Persistence"]
-
-    HeapFiles[(".heap Files<br/>(data/pagedb/…/)")]
-    WalFile[(".wal File<br/>(data/wal/vaultdb.wal)")]
-    SchemaFile[("_schema.json<br/>(per table)")]
-    CatalogFile[("_catalog.json<br/>(global)")]
-
-    PE_Heap --> HeapFiles
-    WAL --> WalFile
-    PE_Core --- SchemaFile
-    PE_Core --- CatalogFile
-
-  end
-
-  Lib -- "JSON-over-TCP (5432)" --> TCPSrv
-  Lib -- "mTLS (optional)" --> TCPSrv
-  WebUI -- "REST API (8080)" --> HTTPSrv
-  WS -- "WebSocket (/ws)" --> HTTPSrv
-
-```
-
----
-
-## 3. Component Overview
-
-### 3.1 SQL Pipeline (Lexer → Parser → Optimizer → Executor)
+    Exec -.-### 3.1 SQL Pipeline (Lexer → Parser → Optimizer → Bytecode VM → Executor)
 
 | Component | Package | Responsibility |
 |-----------|---------|----------------|
 | **Lexer** | `internal/core/lexer` | Hand-written rune-based tokenizer. Supports single-character operators (`=`, `!=`, `<`, `>`, `->`, `->>`, `@>`, `<@`, `?`, `||`), string escape sequences, negative number literals, `$N` param references. Returns line/col positions for error reporting. |
-| **Parser** | `internal/core/parser` | Recursive-descent parser dispatching to modular sub-parsers (DDL, DML, SELECT, expressions). AST nodes for all statement types including CTE/WITH, MERGE, TRIGGER, VIEW, FUNCTION, PROCEDURE, WINDOW, SET operations, LAT ERAL subqueries. |
-| **Optimizer** | `internal/core/executor/optimizer_*` | Cost-based optimizer. Uses table statistics (`internal/core/executor/statistics.go`) to choose between SeqScan and IndexScan. Supports predicate pushdown (`optimizer_pushdown.go`) and join ordering (`optimizer_join.go`). |
-| **Executor** | `internal/core/executor` | Command-pattern execution engine. Within `internal/core/executor`, `types/types.go` handles DDL object catalog (`_objects`), foreign keys, and sequence auto-increment, while `commands/` contains subpackages `ddl`, `dml`, `sel`, `tx`, `audit`, and `auth`. Each statement maps to a `Command` via `reflect`-based registry (initialized in `init()`). Supports transactions, prepared statements, live query broadcasting, plan/result caching. |
+| **Parser** | `internal/core/parser` | Recursive-descent parser dispatching to modular sub-parsers (DDL, DML, SELECT, expressions). AST nodes for all statement types including CTE/WITH, MERGE, TRIGGER, VIEW, FUNCTION, PROCEDURE, WINDOW, SET operations, LATERAL subqueries. |
+| **Optimizer** | `internal/core/executor/optimizer` | Cost-based optimizer (CBO). Uses `optimizer.GlobalStatsRegistry` (`system.pg_statistic` histograms & MCV) to choose between SeqScan and IndexScan. Dynamic programming (DP) Join Reordering (`join_reorder.go`) selects optimal physical join trees. |
+| **Bytecode VM & JIT Compiler** | `internal/core/executor/eval/vm` | AST-to-bytecode expression compiler and zero-reflection Virtual Machine (VM) for high-performance zero-allocation predicate evaluation. |
+| **Executor** | `internal/core/executor` | Command-pattern execution engine. Within `internal/core/executor`, `types/types.go` handles DDL object catalog (`_objects`), foreign keys, and sequence auto-increment, while `commands/` contains subpackages `ddl`, `dml`, `sel`, `tx`, `audit`, and `auth`. Each statement maps to a `Command` via `reflect`-based registry (initialized in `init()`). Supports transactions, prepared statements, live query broadcasting, plan/result caching, `KILL QUERY` command, and system views (`pg_stat_activity`, `pg_locks`). |
 | **Evaluator** | `internal/core/executor/eval*.go` | Expression evaluation engine with recursive descent. Handles math, string ops, JSONB operators, LIKE/FTS/Full-text, CASE/COALESCE/CAST, subqueries (ALL/ANY/EXISTS), window functions, aggregate functions (Welford online algorithm). |
 
-### 3.2 Storage Layer
+### 3.2 Storage Layer & Background Workers
 
 | Component | Package | Responsibility |
 |-----------|---------|----------------|
 | **Page Engine** | `internal/core/storage` | Full storage engine on top of page/heap layer. 16-byte tuple header (created_tx + deleted_tx LE uint64), JSON-encoded catalog with current TxID, last-modified tracking, row counts. |
+| **Heap-Only Tuples (HOT)** | `internal/core/storage` | In-page tuple versioning chains. Eliminates Write Amplification & index bloat on non-indexed column updates. |
+| **AutoVacuum Worker** | `internal/core/storage/vacuum.go` | Background worker for dead tuple reclamation based on active transaction IDs (`MinAge`). |
+| **Checkpointer Worker** | `internal/core/storage/checkpointer.go` | Asynchronous batch dirty page flusher to smooth disk I/O throughput. |
 | **Heap File** | `internal/core/storage/heap` | Low-level file manager: allocate/read/write 8KB pages. Pages are tracked in segments. Linked free page chain. |
 | **Page** | `internal/core/storage/page` | Page data structures: header with check/compression flags, tuple slot array, tuple data area. |
 | **FSM** | `internal/core/storage/fsm` | Free Space Map — tracks available space on pages for efficient INSERT placement. |
 | **Binary Encoding** | `internal/core/storage/binary_encoding.go` | Compact binary row format: header + col-count + offset array + typed values. Type tags: `i` int64, `f` float64, `b` bool, `s` string, `j` JSONB, `v` float64 vector, 0xFF null. |
 | **Buffer Pool** | `internal/core/storage/buffer_pool.go` | LRU-k page cache. Page pin/unpin with dirty tracking. Flush dirty pages up to a given LSN for checkpoint integration. |
-| **JSON Decoder** | `internal/core/storage/json_decode.go` | Legacy JSON decoder for migration from JSON-based storage. |
-| **Page Lock Manager** | `internal/core/storage/page_lock.go` | Per-page locking to coordinate concurrent access during DML. |
 
 ### 3.3 Indexes
 
@@ -347,36 +324,39 @@ graph TB
 | **Composite** | `internal/core/index/composite.go` | Multi-column index combining B-Tree entries. |
 | **Manager** | `internal/core/index/manager.go` | Central index manager per table — coordinates index creation, lookup, and lifecycle. |
 
-### 3.4 Transaction Manager
+### 3.4 Transaction Manager & Clustering
 
-**Package**: `internal/core/txmanager`
+**Package**: `internal/core/txmanager` & `internal/cluster/raft`
 
-MVCC-inspired transaction system:
+MVCC-inspired transaction system & Raft consensus:
 - **Snapshot isolation**: each transaction records table versions at first access; Commit checks for conflicts.
+- **Raft Consensus**: Multi-node Raft state machine and WAL replication (`internal/cluster/raft`) with configurable `synchronous_commit = off|on`.
 - **Per-table commit locks**: serializes commits touching the same table.
 - **Savepoints**: named markers within a transaction buffer with ROLLBACK TO support.
-- **Spill-to-disk**: when `SpillThreshold` (default 10000) ops accumulate, pending operations are serialized to a file (avoids OOM on bulk operations).
-- **Table version tracking**: atomic counters per table, bumped on every write.
+- **Spill-to-disk**: when `SpillThreshold` (default 10000) ops accumulate, pending operations are serialized to a file.
 
-### 3.5 Write-Ahead Log
+### 3.5 Write-Ahead Log & TDE Encryption
 
-**Package**: `internal/core/wal`
+**Package**: `internal/core/wal` & `internal/core/crypto`
 
-ARIES-inspired WAL with:
+ARIES-inspired WAL with Transparent Data Encryption:
 - **Fixed record format**: magic(4) + txID(8) + opType(1) + payloadLen(4) + payload + CRC32(4)
+- **TDE Encryption**: AES-256-GCM envelope encryption (`internal/core/crypto/tde.go`) for pages and WAL records.
 - **Operation types**: Insert/Update/Delete, Page operations (insert/delete/XMax), Schema writes, Full-page images, Rewrite (ALTER), Vacuum, Commit/Abort, Checkpoint
 - **Three-phase recovery**: Analysis → Redo → Undo
-- **Corruption resilience**: automatic truncation of corrupt tail with rename fallback
-- **Batch fsync**: configurable `SyncBatchSize` (default 64) to amortize fsync cost
-- **Full page images**: written before page modification to protect against torn pages
+- **Batch fsync**: configurable `synchronous_commit` (group commit / write-behind batching) to amortize fsync cost
 
-### 3.6 Networking & Server Infrastructure
-
-Directly under `server/internal/` reside the general infrastructure, networking, and service packages:
+### 3.6 Networking & Protocols
 
 | Component | Package / Path | Details |
 |-----------|----------------|---------|
-| **TCP Server** | `cmd/vaultdb-server/main.go` | JSON-over-TCP protocol on port 5432. Per-connection goroutine with rate limiter. |
+| **PostgreSQL Wire Protocol** | `internal/protocol/pgwire` | PG wire server on port 5433 / 5432. Simple query protocol, row descriptions, and authentication compatible with standard PostgreSQL drivers (`pgx`, `lib/pq`, `psql`). |
+| **Native TCP Server** | `cmd/vaultdb-server/main.go` | Custom binary/JSON-over-TCP protocol on port 5432. Per-connection goroutine with rate limiter. |
+| **HTTP Server** | `internal/httpserver` | REST API on port 8080 + health/monitor on port 5433. CORS configurable, request size limits. Embedded Web UI (`web/`) and rate limiter (`ratelimit/`). |
+| **Wire Protocol** | `internal/protocol` | Request/Response JSON types shared between TCP and HTTP. |
+| **Connection Pool** | `internal/pool` | Tracks active connections with max limit, idle cleanup, health-check. |
+| **TLS/mTLS** | `internal/tls` | Loads TLS config with optional mTLS (CA verification). |
+| **Auth & Data Masking** | `internal/auth` & `internal/core/security` | HMAC-SHA256 token hashing, per-IP rate limiter, and dynamic column data masking (`masking.go`). |. |
 | **HTTP Server** | `internal/httpserver` | REST API on port 8080 + health/monitor on port 5433. CORS configurable, request size limits. Embedded Web UI (`web/`) and rate limiter (`ratelimit/`). |
 | **Wire Protocol** | `internal/protocol` | Request/Response JSON types shared between TCP and HTTP. |
 | **Connection Pool** | `internal/pool` | Tracks active connections with max limit, idle cleanup, health-check. |

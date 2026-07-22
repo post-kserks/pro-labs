@@ -64,6 +64,41 @@ func (p *sqlParser) parseEnableRls() (Statement, error) {
 	return &EnableRlsStatement{TableName: tableName}, nil
 }
 
+func (p *sqlParser) parseSet() (Statement, error) {
+	if p.current().Type != lexer.TOKEN_SET {
+		return nil, fmt.Errorf("expected SET")
+	}
+	p.advance()
+
+	if p.current().Type != lexer.TOKEN_IDENT {
+		return nil, fmt.Errorf("expected variable name after SET, got %v", p.current().Type)
+	}
+	varName := p.current().Literal
+	p.advance()
+
+	if p.current().Type != lexer.TOKEN_EQ {
+		return nil, fmt.Errorf("expected = after variable name")
+	}
+	p.advance()
+
+	// The value might be an identifier (e.g. off), string literal, or number
+	var value string
+	if p.current().Type == lexer.TOKEN_IDENT || p.current().Type == lexer.TOKEN_STRING_LIT {
+		value = p.current().Literal
+		p.advance()
+	} else if p.current().Type == lexer.TOKEN_INT_LIT || p.current().Type == lexer.TOKEN_FLOAT_LIT {
+		value = p.current().Literal
+		p.advance()
+	} else {
+		return nil, fmt.Errorf("expected value for variable %s", varName)
+	}
+
+	return &SetVariableStatement{
+		VariableName: varName,
+		Value:        value,
+	}, nil
+}
+
 func (p *sqlParser) parseMigration(op string) (Statement, error) {
 	p.advance() // CREATE, APPLY, ROLLBACK, or PREVIEW
 	if p.current().Type == lexer.TOKEN_MIGRATION {
@@ -1651,4 +1686,17 @@ func (p *sqlParser) parsePartitionDef() (*PartitionDef, error) {
 	}
 
 	return &PartitionDef{Name: name, Bound: bound}, nil
+}
+
+func (p *sqlParser) parseAnalyze() (Statement, error) {
+	p.advance() // Consume ANALYZE
+
+	stmt := &AnalyzeStatement{}
+	
+	if p.current().Type == lexer.TOKEN_IDENT {
+		stmt.TableName = p.current().Literal
+		p.advance()
+	}
+
+	return stmt, nil
 }

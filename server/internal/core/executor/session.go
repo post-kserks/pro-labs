@@ -51,6 +51,9 @@ type Session struct {
 	// RBAC: token and role for permission checks.
 	token string
 	role  string
+
+	// Session variables (e.g. synchronous_commit)
+	Variables map[string]string
 }
 
 // SessionConfig contains all parameters for creating a session.
@@ -90,6 +93,7 @@ func NewSessionWithConfig(cfg SessionConfig) *Session {
 		resultCache:        NewResultCache(defaultResultCacheSize, defaultResultCacheTTL),
 		maxPreparedStmts:   defaultMaxPreparedStatements,
 		id:                 id,
+		Variables:          map[string]string{"synchronous_commit": "on"},
 	}
 	GlobalRegistry.RegisterSession(id, "", "", "", 0, nil)
 	GlobalRegistry.UpdateQuery(id, "", StateIdle, 0)
@@ -235,10 +239,47 @@ func (s *Session) Execute(stmt parser.Statement) (*Result, error) {
 	return s.executor.Run(stmt, s)
 }
 
+var globalASTCache = NewASTCache(10000)
+
+// Parse parses the given SQL string, utilizing the global AST cache for faster processing.
+// NOTE: We only cache DML/DQL queries, DDL might have side effects or be less recurrent.
+func (s *Session) Parse(sql string) (parser.Statement, error) {
+	if stmt := globalASTCache.Get(sql); stmt != nil {
+		return stmt, nil
+	}
+
+	stmt, err := parser.Parse(sql)
+	if err != nil {
+		return nil, err
+	}
+
+	if stmt != nil {
+		// Only cache SELECT, INSERT, UPDATE, DELETE
+		switch stmt.(type) {
+		case *parser.SelectStatement, *parser.InsertStatement, *parser.UpdateStatement, *parser.DeleteStatement:
+			globalASTCache.Put(sql, stmt)
+		}
+	}
+
+	return stmt, nil
+}
+
 func (s *Session) CurrentDatabase() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.currentDB
+}
+
+func (s *Session) SetVariable(name, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Variables[name] = value
+}
+
+func (s *Session) GetVariable(name string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Variables[name]
 }
 
 func (s *Session) SetCurrentDatabase(name string) {

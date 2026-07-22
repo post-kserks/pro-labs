@@ -11,6 +11,28 @@ BEGIN
   └── ROLLBACK → discards all buffered operations
 ```
 
+## Asynchronous & Group Commit (`synchronous_commit`)
+
+VaultDB supports configurable transaction durability modes via session variables:
+
+- **`SET synchronous_commit = 'on'` (Default)**:
+  - `COMMIT` calls `ctx.WAL.AppendWithTx(tx.ID, wal.OpCommit, nil)`.
+  - Performs a synchronous write and immediate `fsync` syscall, guaranteeing on-disk durability before returning to the caller.
+- **`SET synchronous_commit = 'off'`**:
+  - `COMMIT` calls `ctx.WAL.AppendWithWriteBehind(tx.ID, wal.OpCommit, nil)`.
+  - Queues commit records into the `WriteBehindBuffer` and `GroupCommit` worker (`internal/core/wal/group_commit.go`).
+  - Returns immediately to the client without waiting for disk sync. The background `flushWorker` flushes pending batches when the batch size threshold (`batchSize`) is met or when the timer (`batchTime`) expires, amortizing `fsync` cost across multiple transactions.
+
+## Distributed Raft Consensus Replication
+
+For high-availability clusters, transactions can be replicated using Raft log consensus (`internal/cluster/raft`):
+
+- **Raft State Engine (`node.go`)**: Each cluster node (`RaftNode`) operates as a `Follower`, `Candidate`, or `Leader`. Leaders maintain term counters, issue heartbeats, and process client mutations.
+- **Quorum Commit Protocol (`replication.go`)**: `Replicator.AppendWithTx` coordinates multi-node replication:
+  1. **Local Append**: Writes transaction records to the leader's local WAL.
+  2. **Peer Replication**: Concurrently dispatches `AppendEntries` RPCs to all registered peer nodes.
+  3. **Quorum Wait**: Waits until a strict majority (`(totalNodes / 2) + 1`) of cluster nodes acknowledge log entry persistence before committing and returning control to the caller.
+
 ## Basic Transactions
 
 ### Starting a Transaction
