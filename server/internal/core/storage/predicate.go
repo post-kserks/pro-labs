@@ -12,7 +12,7 @@ type PredicateLockManager struct {
 	// Tracks which transaction read which page/tuple (rw-conflict detection)
 	// Map of TxID -> map of (Table+PageNo) -> true
 	readDependencies map[uint64]map[string]bool
-	
+
 	// Tracks rw-conflicts (rw-edges in the serialization graph)
 	// Map of in-node TxID -> out-node TxID
 	rwConflicts map[uint64]map[uint64]bool
@@ -57,7 +57,7 @@ func (pm *PredicateLockManager) CheckAndRecordConflict(writingTxID uint64, db, t
 	}
 }
 
-// CheckSerializationFailure returns true if the transaction has dangerous structures 
+// CheckSerializationFailure returns true if the transaction has dangerous structures
 // (like two consecutive rw-edges: T1 -> T2 -> T3).
 func (pm *PredicateLockManager) CheckSerializationFailure(txID uint64) bool {
 	pm.mu.Lock()
@@ -71,7 +71,7 @@ func (pm *PredicateLockManager) CheckSerializationFailure(txID uint64) bool {
 			break
 		}
 	}
-	
+
 	hasOutgoing := len(pm.rwConflicts[txID]) > 0
 
 	return hasIncoming && hasOutgoing

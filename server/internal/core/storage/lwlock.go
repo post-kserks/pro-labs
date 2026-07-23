@@ -26,7 +26,7 @@ func (l *LWLock) Lock() {
 		if atomic.CompareAndSwapUint32(&l.state, lwLockFree, lwLockLocked) {
 			return
 		}
-		
+
 		spins++
 		if spins < 10 {
 			// Spin briefly
@@ -67,7 +67,7 @@ func (l *LWRLock) RLock() {
 				return
 			}
 		}
-		
+
 		spins++
 		if spins > 10 {
 			runtime.Gosched()
@@ -94,7 +94,7 @@ func (l *LWRLock) Lock() {
 		if atomic.CompareAndSwapInt32(&l.state, lwRLockFree, lwRLockWrite) {
 			return
 		}
-		
+
 		spins++
 		if spins > 10 {
 			runtime.Gosched()
