@@ -221,7 +221,3 @@ func (c *UpdateCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 
 	return &types.Result{Type: "affected", Affected: affected}, nil
 }
-
-func (c *UpdateCommand) executeReturningUpdate(ctx *types.ExecutionContext, dbName string, schema *storage.TableSchema, indices []int, newValues []storage.Row, oldValues []storage.Row) (*types.Result, error) {
-	return executeReturningGeneric(newValues, c.stmt.Returning, schema, ctx, oldValues...)
-}

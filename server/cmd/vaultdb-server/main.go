@@ -1,19 +1,18 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
+
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime/debug"
+
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,12 +25,12 @@ import (
 	"vaultdb/internal/core/audit"
 	"vaultdb/internal/core/executor"
 	"vaultdb/internal/core/metrics"
-	"vaultdb/internal/core/parser"
+
 	"vaultdb/internal/core/storage"
 	"vaultdb/internal/core/txmanager"
 	"vaultdb/internal/core/wal"
 	"vaultdb/internal/httpserver"
-	"vaultdb/internal/protocol"
+
 	"vaultdb/internal/protocol/pgwire"
 )
 
@@ -175,163 +174,6 @@ func (l *ConnectionRateLimiter) Allow() bool {
 		return true
 	}
 	return false
-}
-
-func handleConnection(ctx context.Context, conn net.Conn, store storage.StorageEngine, m *metrics.Collector, txm *txmanager.Manager, br *executor.Broadcaster, authManager *auth.Manager, embedder ai.Embedder, serverWAL *wal.WAL, logger *slog.Logger, maxRequestSize int, queryTimeoutSec int, maxRows int, tcpKeepAliveSec int, tcpIdleTimeoutSec int, maxPreparedStmts int, rateLimitRPS int, rateLimitBurst int, auditLog *audit.TableLog) {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Error("panic in connection handler",
-				"remote", conn.RemoteAddr(),
-				"panic", r,
-				"stack", string(debug.Stack()))
-			sendError(conn, "", "internal server error", logger)
-		}
-	}()
-	defer conn.Close()
-
-	// Set TCP keepalive and idle timeout
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tcpConn.SetKeepAlive(true)
-		tcpConn.SetKeepAlivePeriod(time.Duration(tcpKeepAliveSec) * time.Second)
-	}
-	conn.SetDeadline(time.Now().Add(time.Duration(tcpIdleTimeoutSec) * time.Second))
-
-	session := executor.NewSession(store, m, txm, br)
-	session.SetServerContext(ctx)
-	if embedder != nil {
-		session.SetEmbedder(embedder)
-	}
-	if authManager != nil {
-		session.SetAuthManager(authManager)
-	}
-	if serverWAL != nil {
-		session.SetWAL(serverWAL)
-	}
-	if queryTimeoutSec > 0 {
-		session.SetQueryTimeout(time.Duration(queryTimeoutSec) * time.Second)
-	}
-	if maxRows > 0 {
-		session.SetMaxRows(maxRows)
-	}
-	if maxPreparedStmts > 0 {
-		session.SetMaxPreparedStatements(maxPreparedStmts)
-	}
-	if auditLog != nil {
-		session.AuditTable = auditLog
-	}
-	defer func() {
-		if session.IsInTx() {
-			logger.Warn("connection closed with active transaction, rolling back",
-				"tx_id", session.ActiveTx.ID)
-			session.ActiveTx.Rollback(nil)
-		}
-	}()
-
-	// Per-connection rate limiter uses the same config as HTTP rate limiter
-	connLimiter := NewConnectionRateLimiter(rateLimitRPS, rateLimitBurst)
-
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxRequestSize)
-
-	for scanner.Scan() {
-		// Reset deadline on successful read
-		conn.SetDeadline(time.Now().Add(time.Duration(tcpIdleTimeoutSec) * time.Second))
-		line := scanner.Bytes()
-
-		// Rate limit check
-		if !connLimiter.Allow() {
-			if !sendError(conn, "", "rate limit exceeded", logger) {
-				return
-			}
-			continue
-		}
-
-		// Peek at message type to detect handshake
-		var rawMsg map[string]interface{}
-		if err := json.Unmarshal(line, &rawMsg); err != nil {
-			if !sendError(conn, "", "invalid JSON request", logger) {
-				return
-			}
-			continue
-		}
-
-		if msgType, _ := rawMsg["type"].(string); msgType == "handshake" {
-			var hs protocol.HandshakeRequest
-			if err := json.Unmarshal(line, &hs); err != nil {
-				if !sendError(conn, "", "invalid handshake", logger) {
-					return
-				}
-				continue
-			}
-
-			// Validate major version
-			if hs.ClientVersion != "" && len(hs.ClientVersion) > 0 && hs.ClientVersion[0] != '2' {
-				errResp := protocol.HandshakeResponse{
-					Type:            "handshake",
-					ProtocolVersion: "2.0",
-					Server:          "VaultDB",
-					ServerVersion:   version,
-				}
-				writeResponse(conn, errResp)
-				sendError(conn, "", "incompatible protocol version", logger)
-				return
-			}
-
-			resp := protocol.HandshakeResponse{
-				Type:              "handshake",
-				ProtocolVersion:   "2.0",
-				Server:            "VaultDB",
-				ServerVersion:     version,
-				SupportedFeatures: []string{"time_travel", "transactions", "prepared_statements"},
-			}
-			if err := writeResponse(conn, resp); err != nil {
-				return
-			}
-			continue
-		}
-
-		// Non-handshake: process as regular request (v1 compatible)
-
-		var req protocol.Request
-		if err := json.Unmarshal(line, &req); err != nil {
-			if !sendError(conn, "", "invalid JSON request", logger) {
-				return
-			}
-			continue
-		}
-
-		if !authManager.ValidateToken(req.Token) {
-			if !sendError(conn, req.ID, "unauthorized: invalid or missing token", logger) {
-				return
-			}
-			continue
-		}
-
-		stmt, err := parser.Parse(req.Query)
-		if err != nil {
-			if !sendError(conn, req.ID, err.Error(), logger) {
-				return
-			}
-			continue
-		}
-
-		result, err := session.Execute(stmt)
-		if err != nil {
-			if !sendError(conn, req.ID, err.Error(), logger) {
-				return
-			}
-			continue
-		}
-
-		if err := sendResult(conn, req.ID, result); err != nil {
-			logger.Warn("write response failed", "error", err)
-			return
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		logger.Warn("connection scanner error", "error", err)
-	}
 }
 
 func main() {

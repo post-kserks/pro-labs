@@ -5,7 +5,6 @@ package dml
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"vaultdb/internal/core/executor/types"
@@ -118,85 +117,8 @@ func tryIndexLookup(ctx *types.ExecutionContext, dbName, tableName string, where
 }
 
 // readRowsForDML attempts index lookup when applicable or falls back to ReadCurrentRows.
-func readRowsForDML(ctx *types.ExecutionContext, dbName, tableName string, where parser.Expression, allowIndex bool) ([]storage.Row, []int, bool, error) {
-	var rows []storage.Row
-	var rowPositions []int
-	usedIndex := false
-
-	if where != nil && allowIndex && !ctx.Session.IsInTx() {
-		if positions, ok := tryIndexLookup(ctx, dbName, tableName, where); ok && len(positions) > 0 {
-			sort.Ints(positions)
-			deduped := make([]int, 0, len(positions))
-			for i, p := range positions {
-				if i == 0 || p != positions[i-1] {
-					deduped = append(deduped, p)
-				}
-			}
-			positions = deduped
-			idxRows, err := ctx.Storage.ReadRowsByPositions(dbName, tableName, positions)
-			if err == nil && len(idxRows) == len(positions) {
-				rows = idxRows
-				rowPositions = positions
-				usedIndex = true
-			}
-		}
-	}
-
-	if !usedIndex {
-		var err error
-		rows, err = ctx.Storage.ReadCurrentRows(dbName, tableName)
-		if err != nil {
-			return nil, nil, false, err
-		}
-		rowPositions = make([]int, len(rows))
-		for i := range rows {
-			rowPositions[i] = i
-		}
-	}
-
-	return rows, rowPositions, usedIndex, nil
-}
 
 // filterRowsAndPositionsWithRLS applies RLS USING policies to filter rows and their logical positions.
-func filterRowsAndPositionsWithRLS(rows []storage.Row, positions []int, schema *storage.TableSchema, ctx *types.ExecutionContext, dbName, tableName string) ([]storage.Row, []int, error) {
-	if !schema.RLSEnabled {
-		return rows, positions, nil
-	}
-	if len(schema.Policies) == 0 {
-		return nil, nil, fmt.Errorf("RLS is enabled on table '%s' but no policies are defined", tableName)
-	}
-
-	filteredRows := make([]storage.Row, 0, len(rows))
-	filteredPos := make([]int, 0, len(positions))
-	for i, row := range rows {
-		visible := false
-		for _, policy := range schema.Policies {
-			if policy.UsingExpr == "" {
-				visible = true
-				break
-			}
-			expr, err := parser.ParseExpression(policy.UsingExpr)
-			if err != nil {
-				return nil, nil, fmt.Errorf("RLS policy '%s': invalid expression: %w", policy.Name, err)
-			}
-			ok, err := types.EvalOperand(expr, row, schema, ctx)
-			if err != nil {
-				continue
-			}
-			if b, ok := ok.(bool); ok && b {
-				visible = true
-				break
-			}
-		}
-		if visible {
-			filteredRows = append(filteredRows, row)
-			if i < len(positions) {
-				filteredPos = append(filteredPos, positions[i])
-			}
-		}
-	}
-	return filteredRows, filteredPos, nil
-}
 
 func executeReturningGeneric(rows []storage.Row, returningCols []parser.SelectColumn, schema *storage.TableSchema, ctx *types.ExecutionContext, oldRows ...storage.Row) (*types.Result, error) {
 	resultRows := make([][]string, 0, len(rows))
@@ -295,41 +217,6 @@ func enforceRLSPolicies(ctx *types.ExecutionContext, dbName, tableName string) e
 }
 
 // filterRowsWithRLS applies RLS USING policies to filter rows.
-func filterRowsWithRLS(rows []storage.Row, schema *storage.TableSchema, ctx *types.ExecutionContext, dbName, tableName string) ([]storage.Row, error) {
-	if !schema.RLSEnabled {
-		return rows, nil
-	}
-	if len(schema.Policies) == 0 {
-		return nil, fmt.Errorf("RLS is enabled on table '%s' but no policies are defined", tableName)
-	}
-
-	filtered := make([]storage.Row, 0, len(rows))
-	for _, row := range rows {
-		visible := false
-		for _, policy := range schema.Policies {
-			if policy.UsingExpr == "" {
-				visible = true
-				break
-			}
-			expr, err := parser.ParseExpression(policy.UsingExpr)
-			if err != nil {
-				return nil, fmt.Errorf("RLS policy '%s': invalid expression: %w", policy.Name, err)
-			}
-			ok, err := types.EvalOperand(expr, row, schema, ctx)
-			if err != nil {
-				continue
-			}
-			if b, ok := ok.(bool); ok && b {
-				visible = true
-				break
-			}
-		}
-		if visible {
-			filtered = append(filtered, row)
-		}
-	}
-	return filtered, nil
-}
 
 func enforceCheckConstraints(schema *storage.TableSchema, row storage.Row) error {
 	for _, c := range schema.Constraints {

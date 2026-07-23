@@ -67,7 +67,7 @@ func (e *PageStorageEngine) scanSlots(t *pageTable, visit slotVisitor) error {
 		h := pg.Header()
 		for slot := uint16(0); slot < h.NItems; slot++ {
 			tuple := pg.GetTuple(slot)
-			if tuple == nil || len(tuple) < 16 {
+			if len(tuple) < 16 {
 				continue
 			}
 			createdTx := binary.LittleEndian.Uint64(tuple[0:8]) & TxIDMask
@@ -231,7 +231,7 @@ func (e *PageStorageEngine) scanTuplesRaw(t *pageTable, visit rawTupleVisitor) e
 		h := pg.Header()
 		for slot := uint16(0); slot < h.NItems; slot++ {
 			tuple := pg.GetTuple(slot)
-			if tuple == nil || len(tuple) < 16 {
+			if len(tuple) < 16 {
 				continue
 			}
 			createdTx := binary.LittleEndian.Uint64(tuple[0:8]) & TxIDMask
@@ -635,7 +635,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 				pg, errPg := e.getPage(locSlot.PID, t.heap, dbName, tableName)
 				if errPg == nil {
 					tuple := pg.GetTuple(locSlot.Slot)
-					if tuple != nil && len(tuple) >= 16 {
+					if len(tuple) >= 16 {
 						createdTx := binary.LittleEndian.Uint64(tuple[0:8]) & TxIDMask
 						_, _, row, errRow := DecodeRow(tuple, t.schema)
 						if errRow == nil {
@@ -1501,7 +1501,7 @@ func (e *PageStorageEngine) ReadRowsByPositions(dbName, tableName string, positi
 				pg, errPg := e.getPage(loc.PID, t.heap, dbName, tableName)
 				if errPg == nil {
 					tuple := pg.GetTuple(loc.Slot)
-					if tuple != nil && len(tuple) >= 16 {
+					if len(tuple) >= 16 {
 						deletedTx := binary.LittleEndian.Uint64(tuple[8:16])
 						if deletedTx == 0 {
 							_, _, row, errRow := DecodeRow(tuple, t.schema)
@@ -1700,7 +1700,7 @@ func (e *PageStorageEngine) UpdateRowsVM(dbName, tableName string, positions []i
 			return 0, errPg
 		}
 		rawTuple := pg.GetTuple(loc.Slot)
-		if rawTuple != nil && len(rawTuple) >= 16 {
+		if len(rawTuple) >= 16 {
 			createdTx := binary.LittleEndian.Uint64(rawTuple[0:8]) & TxIDMask
 			deletedTx := binary.LittleEndian.Uint64(rawTuple[8:16])
 
@@ -1978,7 +1978,7 @@ func (e *PageStorageEngine) DeleteRowsVM(dbName, tableName string, positions []i
 			return 0, errPg
 		}
 		rawTuple := pg.GetTuple(loc.Slot)
-		if rawTuple != nil && len(rawTuple) >= 16 {
+		if len(rawTuple) >= 16 {
 			createdTx := binary.LittleEndian.Uint64(rawTuple[0:8]) & TxIDMask
 			deletedTx := binary.LittleEndian.Uint64(rawTuple[8:16])
 

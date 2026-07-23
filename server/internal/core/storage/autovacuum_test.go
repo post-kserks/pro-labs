@@ -14,8 +14,8 @@ type mockStorageEngine struct {
 	listTablesFunc        func(db string) ([]TableInfo, error)
 	vacuumFunc            func(db, table string) (*VacuumStats, error)
 	tableVersionStatsFunc func(db, table string) (*TableVersionStats, error)
-	tableModifiedFunc     func(db, table string, txID uint64) (bool, error)
-	lastTxID              uint64
+	// tableModifiedFunc     func(db, table string, txID uint64) (bool, error)
+	// lastTxID              uint64
 }
 
 func (m *mockStorageEngine) CreateDatabase(name string) error { return nil }

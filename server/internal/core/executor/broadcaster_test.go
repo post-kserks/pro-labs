@@ -275,10 +275,10 @@ func TestLiveQueryNoSnapshotSeesCurrent(t *testing.T) {
 	}
 }
 
-func (m *versionedMockStorage) DeleteRowsVM(dbName, tableName string, positions []int, predicate func([]byte) (bool, error), preDelete func([]int, []storage.Row) error) (int, error) {
+func (v *versionedMockStorage) DeleteRowsVM(dbName, tableName string, positions []int, predicate func([]byte) (bool, error), preDelete func([]int, []storage.Row) error) (int, error) {
 	return 0, nil
 }
-func (m *versionedMockStorage) UpdateRowsVM(dbName, tableName string, positions []int, matchFn func([]byte) (bool, error), updateFn func(storage.Row) (storage.Row, error), validateFn func([]int, []storage.Row) error) (int, error) {
+func (v *versionedMockStorage) UpdateRowsVM(dbName, tableName string, positions []int, matchFn func([]byte) (bool, error), updateFn func(storage.Row) (storage.Row, error), validateFn func([]int, []storage.Row) error) (int, error) {
 	return 0, nil
 }
 

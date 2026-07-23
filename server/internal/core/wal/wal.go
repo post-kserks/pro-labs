@@ -509,7 +509,7 @@ type WAL struct {
 	readHdrBuf   [34]byte
 	readCrcBuf   [4]byte
 	readNonceBuf [12]byte
-	readPayload  []byte
+	// readPayload  []byte
 }
 
 func Open(path string) (*WAL, error) {
