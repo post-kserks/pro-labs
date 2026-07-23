@@ -550,6 +550,19 @@ func (p *sqlParser) parseSelect() (Statement, error) {
 		}
 	}
 
+	if p.current().Type == lexer.TOKEN_FOR {
+		p.advance()
+		if p.current().Type == lexer.TOKEN_UPDATE {
+			p.advance()
+			stmt.ForUpdate = true
+		} else if p.current().Type == lexer.TOKEN_IDENT && strings.ToUpper(p.current().Literal) == "SHARE" {
+			p.advance()
+			stmt.ForShare = true
+		} else {
+			return nil, p.expectedError("UPDATE or SHARE after FOR", p.current())
+		}
+	}
+
 	return stmt, nil
 }
 

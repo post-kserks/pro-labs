@@ -693,9 +693,41 @@ func (c *SelectCommand) executeSimpleSelect(ctx *types.ExecutionContext, dbName 
 	}
 
 	if !usedIndex {
-		rows, asOfNote, err = c.resolveRows(ctx, dbName)
-		if err != nil {
-			return nil, err
+		if c.stmt.ForUpdate || c.stmt.ForShare {
+			mode := storage.LockModeShare
+			if c.stmt.ForUpdate {
+				mode = storage.LockModeUpdate
+			}
+			var compiledWhere []vm.OpCode
+			if c.stmt.Where != nil {
+				compiledWhere, _ = vm.Compile(c.stmt.Where, mainSchema)
+			}
+			var predicate func(rawTuple []byte) (bool, error)
+			if compiledWhere != nil {
+				predicate = func(rawTuple []byte) (bool, error) {
+					res, err := vm.ExecuteVMRaw(compiledWhere, rawTuple)
+					if err != nil {
+						return false, err
+					}
+					return res, nil
+				}
+			}
+			var txID uint64
+			if ctx.Session != nil {
+				activeTx := ctx.Session.GetActiveTx()
+				if activeTx != nil {
+					txID = activeTx.ID
+				}
+			}
+			rows, err = ctx.Storage.SelectForUpdateVM(dbName, c.stmt.TableName, predicate, txID, mode)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			rows, asOfNote, err = c.resolveRows(ctx, dbName)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	rowsScanned = len(rows)

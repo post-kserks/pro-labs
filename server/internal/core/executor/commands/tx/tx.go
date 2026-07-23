@@ -123,6 +123,7 @@ func (c *CommitCommand) Execute(ctx *types.ExecutionContext) (*types.Result, err
 		}
 	}
 
+	ctx.Storage.ReleaseRowLocks(tx.ID)
 	tx.Rollback(ctx.Storage)
 	ctx.Session.ClearActiveTx()
 
@@ -156,6 +157,7 @@ func (c *RollbackCommand) Execute(ctx *types.ExecutionContext) (*types.Result, e
 		}
 	}
 
+	ctx.Storage.ReleaseRowLocks(tx.ID)
 	tx.Rollback(ctx.Storage)
 	ctx.Session.ClearActiveTx()
 	return &types.Result{

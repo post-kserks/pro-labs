@@ -337,3 +337,11 @@ func TestAutoVacuumContextCancellation(t *testing.T) {
 		t.Error("expected at least one checkAndVacuum call before cancellation")
 	}
 }
+
+
+func (m *mockStorageEngine) SelectForUpdateVM(dbName, tableName string, predicate func(rawTuple []byte) (bool, error), txID uint64, mode LockMode) ([]Row, error) {
+	return nil, nil
+}
+
+func (m *mockStorageEngine) ReleaseRowLocks(txID uint64) {
+}

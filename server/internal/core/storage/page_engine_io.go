@@ -1267,7 +1267,7 @@ func (e *PageStorageEngine) readRowsVM(dbName, tableName string, asOf uint64, pr
 	defer t.mu.RUnlock()
 
 	rows := []Row{}
-	err = e.scanTuplesRaw(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, rawTuple []byte) (bool, error) {
+	err = e.scanTuplesRaw(t, func(pid page.PageID, _ *page.Page, slot uint16, createdTx, deletedTx uint64, rawTuple []byte) (bool, error) {
 		txID := asOf
 		if txID == 0 {
 			if e.txMgr != nil {
@@ -1336,6 +1336,107 @@ func (e *PageStorageEngine) readRowsVM(dbName, tableName string, asOf uint64, pr
 
 func (e *PageStorageEngine) SelectRows(dbName, tableName string) ([]Row, error) {
 	return e.readRows(dbName, tableName, 0)
+}
+
+
+func (e *PageStorageEngine) ReleaseRowLocks(txID uint64) {
+	if e.rowLock != nil {
+		e.rowLock.ReleaseAll(txID)
+	}
+}
+
+func (e *PageStorageEngine) SelectForUpdateVM(dbName, tableName string, predicate func(rawTuple []byte) (bool, error), txID uint64, mode LockMode) ([]Row, error) {
+	return e.readRowsVMLock(dbName, tableName, 0, predicate, txID, mode)
+}
+
+func (e *PageStorageEngine) readRowsVMLock(dbName, tableName string, asOf uint64, predicate func(rawTuple []byte) (bool, error), lockTxID uint64, mode LockMode) ([]Row, error) {
+	if predicate == nil {
+		return e.readRows(dbName, tableName, asOf)
+	}
+	t, err := e.getTableForRead(dbName, tableName)
+	if err != nil {
+		return nil, err
+	}
+	defer t.mu.RUnlock()
+
+	rows := []Row{}
+	err = e.scanTuplesRaw(t, func(pid page.PageID, _ *page.Page, slot uint16, createdTx, deletedTx uint64, rawTuple []byte) (bool, error) {
+		txID := asOf
+		if txID == 0 {
+			if e.txMgr != nil {
+				txID = e.txCounter.Load()
+			} else {
+				if deletedTx == 0 {
+					ok := true
+					var errPred error
+					if predicate != nil {
+						ok, errPred = predicate(rawTuple)
+					}
+					if errPred == nil && ok {
+						_, _, row, errRow := DecodeRow(rawTuple, t.schema)
+						if errRow == nil {
+							
+							if mode != LockModeNone && e.rowLock != nil && lockTxID > 0 {
+								key := fmt.Sprintf("%s/%s/%d/%d", dbName, tableName, pid, slot)
+								e.rowLock.Acquire(key, lockTxID, mode)
+							}
+							rows = append(rows, row)
+
+						}
+					}
+				}
+				return false, nil
+			}
+		}
+
+		ok, errPred := predicate(rawTuple)
+		if errPred != nil || !ok {
+			return false, nil
+		}
+
+		var snapshot map[uint64]bool
+		isAborted := false
+		if e.txMgr != nil {
+			snapshot = e.txMgr.GetSnapshot(txID)
+			if deletedTx > 0 {
+				isAborted = e.txMgr.IsAborted(deletedTx)
+			}
+		}
+
+		xmin := createdTx
+		xmax := deletedTx
+
+		xminVisible := (xmin == txID)
+		if !xminVisible && xmin <= txID && e.txMgr != nil && e.txMgr.IsCommitted(xmin) {
+			if snapshot == nil || !snapshot[xmin] {
+				xminVisible = true
+			}
+		}
+
+		if xminVisible {
+			xmaxVisible := (xmax == 0) || isAborted || (xmax > txID)
+			if !xmaxVisible && snapshot != nil && snapshot[xmax] {
+				xmaxVisible = true
+			}
+			if xmaxVisible {
+				_, _, row, errRow := DecodeRow(rawTuple, t.schema)
+				if errRow == nil {
+					
+							if mode != LockModeNone && e.rowLock != nil && lockTxID > 0 {
+								key := fmt.Sprintf("%s/%s/%d/%d", dbName, tableName, pid, slot)
+								e.rowLock.Acquire(key, lockTxID, mode)
+							}
+							rows = append(rows, row)
+
+				}
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func (e *PageStorageEngine) SelectRowsVM(dbName, tableName string, predicate func(rawTuple []byte) (bool, error)) ([]Row, error) {
@@ -1426,7 +1527,7 @@ func (e *PageStorageEngine) ReadRowsByPositions(dbName, tableName string, positi
 	result := make([]Row, 0, len(positions))
 	rowIdx := 0
 
-	err = e.scanSlots(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, rawTuple []byte) (bool, error) {
+	err = e.scanSlots(t, func(pid page.PageID, _ *page.Page, slot uint16, createdTx, deletedTx uint64, rawTuple []byte) (bool, error) {
 		if deletedTx != 0 {
 			return false, nil
 		}

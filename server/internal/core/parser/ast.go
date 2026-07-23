@@ -142,6 +142,8 @@ type SelectStatement struct {
 	CTEs         []CTEDefinition // WITH clause definitions
 	Distinct     bool            // SELECT DISTINCT
 	DistinctOn   []Expression    // DISTINCT ON (expr1, expr2, ...) — nil means no DISTINCT ON
+	ForUpdate    bool            // SELECT ... FOR UPDATE
+	ForShare     bool            // SELECT ... FOR SHARE
 }
 
 // CTEDefinition — CTE definition in WITH clause.
