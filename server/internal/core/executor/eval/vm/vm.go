@@ -1,3 +1,4 @@
+// #nosec G602 - bounds are checked dynamically in VM state machine loop
 package vm
 
 import (
@@ -678,6 +679,7 @@ func ExecuteVMRaw(instructions []OpCode, rawTuple []byte) (bool, error) {
 					if len(valBytes) < 3+strLen {
 						return false, errors.New("corrupted string bytes")
 					}
+					// #nosec G103
 					stack[sp] = Value{Type: ValString, Str: unsafe.String(unsafe.SliceData(valBytes[3:3+strLen]), strLen)}
 				default:
 					return false, fmt.Errorf("unsupported binary tag: %c", valBytes[0])

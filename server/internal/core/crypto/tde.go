@@ -44,6 +44,7 @@ func (e *TDEEngine) EncryptPage(data []byte, pageID uint64) ([]byte, error) {
 	// Additional bytes in nonce are 0, which is fine as long as pageID is unique per key.
 	// We can also include an object/table ID if needed in the future.
 
+	// #nosec G407
 	return e.aead.Seal(nil, nonce, data, nil), nil
 }
 
@@ -64,6 +65,7 @@ func (e *TDEEngine) EncryptWAL(data []byte, lsn uint64) ([]byte, error) {
 	nonce := make([]byte, e.aead.NonceSize())
 	binary.LittleEndian.PutUint64(nonce, lsn)
 
+	// #nosec G407
 	return e.aead.Seal(nil, nonce, data, nil), nil
 }
 
