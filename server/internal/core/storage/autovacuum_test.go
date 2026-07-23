@@ -27,7 +27,7 @@ func (m *mockStorageEngine) ListDatabases() ([]string, error) {
 	return nil, nil
 }
 func (m *mockStorageEngine) CreateTable(dbName string, schema TableSchema) error { return nil }
-func (m *mockStorageEngine) DropTable(dbName, tableName string) error             { return nil }
+func (m *mockStorageEngine) DropTable(dbName, tableName string) error            { return nil }
 func (m *mockStorageEngine) ListTables(dbName string) ([]TableInfo, error) {
 	if m.listTablesFunc != nil {
 		return m.listTablesFunc(dbName)
@@ -155,9 +155,9 @@ func (m *mockStorageEngine) SetTableRLS(dbName, tableName string, enabled bool) 
 func (m *mockStorageEngine) AddPolicy(dbName, tableName string, policy RLSPolicy) error {
 	return nil
 }
-func (m *mockStorageEngine) FinalCheckpoint() error           { return nil }
-func (m *mockStorageEngine) Close() error                     { return nil }
-func (m *mockStorageEngine) DataDir() string                  { return "" }
+func (m *mockStorageEngine) FinalCheckpoint() error { return nil }
+func (m *mockStorageEngine) Close() error           { return nil }
+func (m *mockStorageEngine) DataDir() string        { return "" }
 
 func TestAutoVacuumTriggersOnHighDeadRatio(t *testing.T) {
 	vacuumCalled := false
@@ -337,7 +337,6 @@ func TestAutoVacuumContextCancellation(t *testing.T) {
 		t.Error("expected at least one checkAndVacuum call before cancellation")
 	}
 }
-
 
 func (m *mockStorageEngine) SelectForUpdateVM(dbName, tableName string, predicate func(rawTuple []byte) (bool, error), txID uint64, mode LockMode) ([]Row, error) {
 	return nil, nil

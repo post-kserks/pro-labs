@@ -281,3 +281,10 @@ func (m *versionedMockStorage) DeleteRowsVM(dbName, tableName string, positions 
 func (m *versionedMockStorage) UpdateRowsVM(dbName, tableName string, positions []int, matchFn func([]byte) (bool, error), updateFn func(storage.Row) (storage.Row, error), validateFn func([]int, []storage.Row) error) (int, error) {
 	return 0, nil
 }
+
+func (m *MockStorage) SelectForUpdateVM(dbName, tableName string, predicate func(rawTuple []byte) (bool, error), txID uint64, mode storage.LockMode) ([]storage.Row, error) {
+	return nil, nil
+}
+
+func (m *MockStorage) ReleaseRowLocks(txID uint64) {
+}

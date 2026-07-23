@@ -49,7 +49,6 @@ type SetVariableStatement struct {
 	Value        string
 }
 
-
 type ShowEncryptionStatusStatement struct{}
 
 type DescribeTableStatement struct {

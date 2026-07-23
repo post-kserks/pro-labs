@@ -481,8 +481,6 @@ func TestPageLockUnlockWithoutEntry(t *testing.T) {
 
 // ── Row lock operations ───────────────────────────────────────────────────
 
-
-
 // ── Row pool ──────────────────────────────────────────────────────────────
 
 func TestGetRowPool(t *testing.T) {

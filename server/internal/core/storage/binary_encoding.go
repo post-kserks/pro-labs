@@ -181,7 +181,6 @@ func DecodeRow(tuple []byte, schema *TableSchema) (createdTx, deletedTx uint64, 
 	deletedTx = binary.LittleEndian.Uint64(tuple[8:16])
 	colCount := binary.LittleEndian.Uint16(tuple[16:18])
 
-
 	headerSize := binTupleHeaderSize + binColCountSize + int(colCount)*binColOffsetSize
 	if len(tuple) < headerSize {
 		return 0, 0, nil, fmt.Errorf("tuple header truncated")

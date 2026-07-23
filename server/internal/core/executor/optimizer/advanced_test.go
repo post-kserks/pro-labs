@@ -378,3 +378,10 @@ func TestEstimateCost_StructuredModel(t *testing.T) {
 		t.Errorf("expected accurate structured cost calculation, got cost=%v, rows=%v", plan.Cost.Cost, plan.Cost.EstimatedRows)
 	}
 }
+
+func (m *mockStorage) SelectForUpdateVM(dbName, tableName string, predicate func(rawTuple []byte) (bool, error), txID uint64, mode storage.LockMode) ([]storage.Row, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) ReleaseRowLocks(txID uint64) {
+}

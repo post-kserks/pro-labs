@@ -32,7 +32,7 @@ func (b *PageBitmap) Add(pageID uint64, slot uint16) {
 
 	// Find the correct position to keep the slice sorted
 	idx := sort.Search(len(slots), func(i int) bool { return slots[i] >= slot })
-	
+
 	// If it already exists, do nothing
 	if idx < len(slots) && slots[idx] == slot {
 		return
@@ -111,7 +111,7 @@ func (b *PageBitmap) Or(other *PageBitmap) *PageBitmap {
 				j++
 			}
 		}
-		
+
 		for i < len(slots1) {
 			union = append(union, slots1[i])
 			i++
@@ -131,7 +131,7 @@ func (b *PageBitmap) ToPositions() []RowPosition {
 	for pageID := range b.Pages {
 		pageIDs = append(pageIDs, pageID)
 	}
-	
+
 	// Sort pageIDs to ensure deterministic order
 	sort.Slice(pageIDs, func(i, j int) bool { return pageIDs[i] < pageIDs[j] })
 

@@ -47,7 +47,7 @@ func (p *sqlParser) parseCreateIndex() (Statement, error) {
 	if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
 		return nil, err
 	}
-	
+
 	var columns []string
 	isExpression := false
 	for {
@@ -55,7 +55,7 @@ func (p *sqlParser) parseCreateIndex() (Statement, error) {
 		if err != nil {
 			return nil, err
 		}
-		
+
 		if ident, ok := expr.(*ColumnRef); ok {
 			columns = append(columns, ident.Name)
 		} else {
@@ -72,9 +72,9 @@ func (p *sqlParser) parseCreateIndex() (Statement, error) {
 		}
 		return nil, p.expectedError("',' or ')'", p.current())
 	}
-	
+
 	p.advance() // Consume ')'
-	
+
 	var predicate interface{}
 	if p.current().Type == lexer.TOKEN_WHERE {
 		p.advance()

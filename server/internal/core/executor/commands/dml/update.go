@@ -117,7 +117,7 @@ func (c *UpdateCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 		return nil, fmt.Errorf("UPDATE FROM is not supported with VM engine yet")
 	}
 
-		var positions []int
+	var positions []int
 	if c.stmt.Where != nil {
 		pos, ok := tryIndexLookup(ctx, dbName, c.stmt.TableName, c.stmt.Where)
 		if ok && pos != nil {

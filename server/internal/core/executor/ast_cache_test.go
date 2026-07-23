@@ -33,7 +33,7 @@ func TestASTCache_LRUEviction(t *testing.T) {
 
 	cache.Put("Q1", stmt1)
 	cache.Put("Q2", stmt2)
-	
+
 	// Q1 should be accessible
 	if cache.Get("Q1") == nil {
 		t.Fatalf("Expected Q1 to be in cache")
@@ -64,7 +64,7 @@ func TestASTCache_Concurrent(t *testing.T) {
 			defer wg.Done()
 			sql := "SELECT " + string(rune('A'+id))
 			stmt := &parser.SelectStatement{TableName: "t"}
-			
+
 			// Put and Get multiple times
 			for j := 0; j < 100; j++ {
 				cache.Put(sql, stmt)

@@ -35,7 +35,7 @@ func NewPredicateLockManager() *PredicateLockManager {
 func (m *PredicateLockManager) AcquireSIREADLock(txID uint64, lock PredicateLock) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	lock.TxID = txID
 	m.locks = append(m.locks, lock)
 }

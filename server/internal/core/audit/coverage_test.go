@@ -1,6 +1,8 @@
 package audit
 
 import (
+	"vaultdb/internal/core/storage"
+
 	"testing"
 )
 
@@ -177,4 +179,11 @@ func TestMixedOperationChainIntegrity(t *testing.T) {
 			t.Errorf("entry %d: expected action %q, got %q", i, expected.Action, entry.Action)
 		}
 	}
+}
+
+func (m *mockStorage) SelectForUpdateVM(dbName, tableName string, predicate func(rawTuple []byte) (bool, error), txID uint64, mode storage.LockMode) ([]storage.Row, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) ReleaseRowLocks(txID uint64) {
 }

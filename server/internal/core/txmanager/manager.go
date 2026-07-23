@@ -70,7 +70,7 @@ type Transaction struct {
 
 	TableSnapshots map[string]uint64
 
-	Snapshot       map[uint64]bool
+	Snapshot map[uint64]bool
 
 	HasDependentReads bool
 	ReadSet           map[string]map[int]uint64 // "db/table" -> pos -> version

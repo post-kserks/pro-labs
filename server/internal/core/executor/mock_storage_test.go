@@ -994,4 +994,3 @@ func (m *MockStorage) DeleteRowsVM(dbName, tableName string, positions []int, pr
 func (m *MockStorage) UpdateRowsVM(dbName, tableName string, positions []int, matchFn func(rawTuple []byte) (bool, error), updateFn func(storage.Row) (storage.Row, error), validateFn func([]int, []storage.Row) error) (int, error) {
 	return 0, nil
 }
-

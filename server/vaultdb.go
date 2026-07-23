@@ -85,7 +85,6 @@ func (db *VaultDB) QueryContext(ctx context.Context, dbName, sql string) (*Resul
 		return nil, err
 	}
 
-
 	if db.Embedder != nil {
 		session.SetEmbedder(db.Embedder)
 	}

@@ -110,7 +110,7 @@ func (m *mockStorage) ListTables(dbName string) ([]storage.TableInfo, error) {
 	var tables []storage.TableInfo
 	for name := range db {
 		tables = append(tables, storage.TableInfo{
-			Name:        name,
+			Name: name,
 		})
 	}
 	return tables, nil
@@ -223,8 +223,6 @@ func (m *mockStorage) ReadSampleRows(dbName, tableName string, limit int) ([]sto
 	return nil, nil
 }
 
-
-
 func (m *mockStorage) InsertRows(dbName, tableName string, rows []storage.Row) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -318,8 +316,6 @@ func (m *mockStorage) CreateIndexMultiUnique(dbName, tableName, indexName string
 func (m *mockStorage) DropIndex(dbName, indexName string) error {
 	return nil
 }
-
-
 
 func (m *mockStorage) FinalCheckpoint() error { return nil }
 func (m *mockStorage) Close() error           { return nil }

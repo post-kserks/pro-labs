@@ -1692,7 +1692,7 @@ func (p *sqlParser) parseAnalyze() (Statement, error) {
 	p.advance() // Consume ANALYZE
 
 	stmt := &AnalyzeStatement{}
-	
+
 	if p.current().Type == lexer.TOKEN_IDENT {
 		stmt.TableName = p.current().Literal
 		p.advance()

@@ -306,7 +306,7 @@ func (m *IndexManager) InsertRow(row IndexableRow, rowPos int) {
 				key = fmt.Sprintf("%v", row.Data[colIdx])
 			}
 		}
-		
+
 		if key != "" {
 			idx.Insert(key, rowPos)
 		}

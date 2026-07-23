@@ -589,7 +589,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 	if err != nil {
 		return 0, err
 	}
-	
+
 	mutateLockReleased := false
 	defer func() {
 		if !mutateLockReleased {
@@ -749,7 +749,7 @@ func (e *PageStorageEngine) mutateRows(dbName, tableName string, indices []int, 
 		nv := newRows[i]
 		encoded := newVersions[i]
 		idx := indices[i]
-		
+
 		newSlot, ok := e.tryHOTInsert(dbName, tableName, t, PageSlot{PID: loc.pid, Slot: loc.slot}, loc.row, nv, encoded, txID, mgr)
 		if ok {
 			hotIndices = append(hotIndices, idx)
@@ -994,7 +994,7 @@ func (e *PageStorageEngine) UpdateRowsDirect(dbName, tableName string, indices [
 	for i, loc := range located {
 		nv := newRows[i]
 		encoded := newVersions[i]
-		
+
 		newSlot, ok := e.tryHOTInsert(dbName, tableName, t, PageSlot{PID: loc.pid, Slot: loc.slot}, loc.row, nv, encoded, txID, mgr)
 		if ok {
 			hotIndices = append(hotIndices, loc.rowIdx)
@@ -1338,7 +1338,6 @@ func (e *PageStorageEngine) SelectRows(dbName, tableName string) ([]Row, error) 
 	return e.readRows(dbName, tableName, 0)
 }
 
-
 func (e *PageStorageEngine) ReleaseRowLocks(txID uint64) {
 	if e.rowLock != nil {
 		e.rowLock.ReleaseAll(txID)
@@ -1375,7 +1374,7 @@ func (e *PageStorageEngine) readRowsVMLock(dbName, tableName string, asOf uint64
 					if errPred == nil && ok {
 						_, _, row, errRow := DecodeRow(rawTuple, t.schema)
 						if errRow == nil {
-							
+
 							if mode != LockModeNone && e.rowLock != nil && lockTxID > 0 {
 								key := fmt.Sprintf("%s/%s/%d/%d", dbName, tableName, pid, slot)
 								e.rowLock.Acquire(key, lockTxID, mode)
@@ -1421,12 +1420,12 @@ func (e *PageStorageEngine) readRowsVMLock(dbName, tableName string, asOf uint64
 			if xmaxVisible {
 				_, _, row, errRow := DecodeRow(rawTuple, t.schema)
 				if errRow == nil {
-					
-							if mode != LockModeNone && e.rowLock != nil && lockTxID > 0 {
-								key := fmt.Sprintf("%s/%s/%d/%d", dbName, tableName, pid, slot)
-								e.rowLock.Acquire(key, lockTxID, mode)
-							}
-							rows = append(rows, row)
+
+					if mode != LockModeNone && e.rowLock != nil && lockTxID > 0 {
+						key := fmt.Sprintf("%s/%s/%d/%d", dbName, tableName, pid, slot)
+						e.rowLock.Acquire(key, lockTxID, mode)
+					}
+					rows = append(rows, row)
 
 				}
 			}
@@ -1675,7 +1674,6 @@ func (e *PageStorageEngine) UpdateRowsVM(dbName, tableName string, positions []i
 		currentTxID = e.txCounter.Load()
 	}
 
-	
 	type iteratorItem struct {
 		idx int
 		loc PageSlot
@@ -1842,7 +1840,7 @@ func (e *PageStorageEngine) UpdateRowsVM(dbName, tableName string, positions []i
 		nv := newRows[i]
 		encoded := newVersions[i]
 		idx := indices[i]
-		
+
 		newSlot, ok := e.tryHOTInsert(dbName, tableName, t, PageSlot{PID: loc.pid, Slot: loc.slot}, loc.row, nv, encoded, txID, mgr)
 		if ok {
 			hotIndices = append(hotIndices, idx)
@@ -1893,7 +1891,6 @@ func (e *PageStorageEngine) UpdateRowsVM(dbName, tableName string, positions []i
 			e.updateIndexesOnUpdate(dbName, tableName, nonHotIndices, nonHotRows)
 		}
 	}
-
 
 	mutateLockReleased = true
 	t.mu.Unlock()
@@ -1955,7 +1952,6 @@ func (e *PageStorageEngine) DeleteRowsVM(dbName, tableName string, positions []i
 		currentTxID = e.txCounter.Load()
 	}
 
-	
 	type iteratorItem struct {
 		idx int
 		loc PageSlot
@@ -2208,4 +2204,3 @@ func (e *PageStorageEngine) tryHOTInsert(
 	e.bufPool.UnpinPageDirty(loc.PID, lsn)
 	return newSlot, true
 }
-
