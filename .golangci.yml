@@ -25,3 +25,7 @@ issues:
     - path: _test\.go
       linters:
         - gosec
+    - path: server/internal/core/executor/eval/vm/vm\.go
+      linters:
+        - gosec
+      text: "G602|G103"

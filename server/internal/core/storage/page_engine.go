@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,7 +38,7 @@ type TxManager interface {
 //
 // Secondary indexes are supported (Hash, BTree, GIN, GiST).
 type PageStorageEngine struct {
-	mu      sync.RWMutex
+	mu      LWRLock
 	rootDir string
 
 	tables  map[string]*pageTable // "db/table" → open table
@@ -52,7 +51,7 @@ type PageStorageEngine struct {
 	rowLock  *LockManager
 
 	indexes   map[string]*index.IndexManager // "db/table" → index manager
-	indexesMu sync.RWMutex
+	indexesMu LWRLock
 
 	// Deferred catalog save fields. DML mutations mark the catalog dirty
 	// instead of serializing to JSON after every batch. The catalog is saved
@@ -88,9 +87,9 @@ type pageTable struct {
 	heap    *heap.HeapFile
 	schema  *TableSchema
 	tableID uint32
-	mu      sync.RWMutex // per-table lock
+	mu      LWRLock // per-table lock
 
-	posMu             sync.RWMutex
+	posMu             LWRLock
 	posDirectory      []PageSlot
 	posDirectoryValid bool
 

@@ -5,7 +5,40 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sync"
 )
+
+var rowPools [32]*sync.Pool
+
+func init() {
+	for i := 0; i < 32; i++ {
+		size := i
+		rowPools[i] = &sync.Pool{
+			New: func() interface{} {
+				r := make(Row, size)
+				return &r
+			},
+		}
+	}
+}
+
+func AllocRow(cols int) Row {
+	if cols < 32 {
+		r := rowPools[cols].Get().(*Row)
+		for i := 0; i < cols; i++ {
+			(*r)[i] = nil
+		}
+		return *r
+	}
+	return make(Row, cols)
+}
+
+func FreeRow(r Row) {
+	cols := len(r)
+	if cols < 32 {
+		rowPools[cols].Put(&r)
+	}
+}
 
 // Binary tuple format:
 // [0:8]   createdTx uint64 LE
@@ -186,7 +219,7 @@ func DecodeRow(tuple []byte, schema *TableSchema) (createdTx, deletedTx uint64, 
 		return 0, 0, nil, fmt.Errorf("tuple header truncated")
 	}
 
-	row = make(Row, colCount)
+	row = AllocRow(int(colCount))
 	for i := uint16(0); i < colCount; i++ {
 		offIdx := binTupleHeaderSize + binColCountSize + int(i)*binColOffsetSize
 		valOffset := binary.LittleEndian.Uint16(tuple[offIdx : offIdx+binColOffsetSize])

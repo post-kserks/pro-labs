@@ -10,12 +10,14 @@ import (
 type Replicator struct {
 	node *RaftNode
 	wal  *wal.WAL
+	SynchronousCommit bool
 }
 
 func NewReplicator(node *RaftNode, w *wal.WAL) *Replicator {
 	return &Replicator{
 		node: node,
 		wal:  w,
+		SynchronousCommit: true,
 	}
 }
 
@@ -47,6 +49,16 @@ func (r *Replicator) AppendWithTx(ctx context.Context, txID uint64, opType byte,
 	acks := 1 // self
 
 	if acks >= majority {
+		return lsn, nil
+	}
+
+
+	if !r.SynchronousCommit {
+		for _, peer := range peers {
+			go func(p Peer) {
+				p.AppendEntries(term, id)
+			}(peer)
+		}
 		return lsn, nil
 	}
 

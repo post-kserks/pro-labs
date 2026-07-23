@@ -54,8 +54,11 @@ func (o *Optimizer) BuildPhysicalJoinTree(dbName string, plan *OptimizedPlan) *J
 	n := len(g.Relations)
 
 	if n > 7 {
-		o.reorderJoins(dbName, plan)
-		return nil
+		bestTree := o.applyGEQO(dbName, plan, g)
+		if bestTree != nil {
+			o.applyJoinTreeToPlan(bestTree, plan)
+		}
+		return bestTree
 	}
 
 	dp := make([]*JoinTree, 1<<n)
