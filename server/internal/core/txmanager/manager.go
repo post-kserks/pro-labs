@@ -133,6 +133,9 @@ type Manager struct {
 
 	activeMu  sync.RWMutex
 	ActiveTxs map[uint64]*Transaction
+
+	PredicateLocks *PredicateLockManager
+	SSITracker     *SSITracker
 }
 
 func NewManager() *Manager {
@@ -142,6 +145,8 @@ func NewManager() *Manager {
 		SpillThreshold: defaultSpillThreshold,
 		OCCConfig:      DefaultOCCConfig(),
 		ActiveTxs:      make(map[uint64]*Transaction),
+		PredicateLocks: NewPredicateLockManager(),
+		SSITracker:     NewSSITracker(),
 	}
 }
 
@@ -495,6 +500,11 @@ func (m *Manager) Commit(tx *Transaction, applyFn func([]PendingOp) error) error
 			m.activeMu.Unlock()
 		}
 	}()
+
+	if m.SSITracker.HasCycle(tx.ID) {
+		return ErrTxConflict
+	}
+
 	tables := make([]string, 0, len(tx.TableSnapshots))
 	for t := range tx.TableSnapshots {
 		tables = append(tables, t)
@@ -593,7 +603,23 @@ func (m *Manager) refreshSnapshots(tx *Transaction) {
 }
 
 // Rollback clears the buffer, deletes the spill file, and releases row locks.
-func (tx *Transaction) Rollback() {
+func (tx *Transaction) Rollback(catalog interface{}) {
+	if catalog != nil {
+		ops, _ := tx.ReadOps()
+		for i := len(ops) - 1; i >= 0; i-- {
+			op := ops[i]
+			if op.Type == "CREATE_TABLE" || op.Type == "DROP_TABLE" {
+				if payloadMap, ok := op.Payload.(map[string]interface{}); ok {
+					var payload DDLUndoOp
+					b, _ := json.Marshal(payloadMap)
+					json.Unmarshal(b, &payload)
+					RevertDDLOp(payload, catalog)
+				} else if payload, ok := op.Payload.(DDLUndoOp); ok {
+					RevertDDLOp(payload, catalog)
+				}
+			}
+		}
+	}
 	tx.Ops = nil
 	tx.State = TxIdle
 	tx.opCounter = 0
@@ -610,12 +636,12 @@ func (tx *Transaction) Rollback() {
 }
 
 // Rollback rolls back the transaction and releases all held row locks.
-func (m *Manager) Rollback(tx *Transaction) {
+func (m *Manager) Rollback(tx *Transaction, catalog interface{}) {
 	if tx != nil {
 		m.activeMu.Lock()
 		delete(m.ActiveTxs, tx.ID)
 		m.activeMu.Unlock()
-		tx.Rollback()
+		tx.Rollback(catalog)
 	}
 }
 
@@ -665,4 +691,9 @@ func CleanupSpillFiles(dir string) {
 			os.Remove(filepath.Join(dir, entry.Name()))
 		}
 	}
+}
+
+// AcquireSIREADLock delegates SIREAD lock acquisition to the PredicateLockManager.
+func (m *Manager) AcquireSIREADLock(txID uint64, lock PredicateLock) {
+	m.PredicateLocks.AcquireSIREADLock(txID, lock)
 }

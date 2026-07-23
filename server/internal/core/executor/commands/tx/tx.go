@@ -100,7 +100,7 @@ func (c *CommitCommand) Execute(ctx *types.ExecutionContext) (*types.Result, err
 			slog.Error("could not undo partial commit, data may be inconsistent",
 				"xid", tx.ID, "error", undoErr)
 		}
-		tx.Rollback()
+		tx.Rollback(ctx.Storage)
 		ctx.Session.ClearActiveTx()
 		if applied > 0 {
 			return nil, fmt.Errorf("commit failed after applying %d of %d operations; data may be partially updated: %w", applied, opsCount, applyErr)
@@ -117,13 +117,13 @@ func (c *CommitCommand) Execute(ctx *types.ExecutionContext) (*types.Result, err
 		}
 		if err != nil {
 			undoAppliedOps(ctx, ops)
-			tx.Rollback()
+			tx.Rollback(ctx.Storage)
 			ctx.Session.ClearActiveTx()
 			return nil, fmt.Errorf("wal commit failed, transaction rolled back: %w", err)
 		}
 	}
 
-	tx.Rollback()
+	tx.Rollback(ctx.Storage)
 	ctx.Session.ClearActiveTx()
 
 	return &types.Result{
@@ -156,7 +156,7 @@ func (c *RollbackCommand) Execute(ctx *types.ExecutionContext) (*types.Result, e
 		}
 	}
 
-	tx.Rollback()
+	tx.Rollback(ctx.Storage)
 	ctx.Session.ClearActiveTx()
 	return &types.Result{
 		Type:    "message",

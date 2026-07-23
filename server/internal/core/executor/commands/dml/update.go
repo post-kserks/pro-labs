@@ -128,9 +128,6 @@ func (c *UpdateCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 	var newValues []storage.Row
 
 	affected, err := ctx.Storage.UpdateRowsVM(dbName, c.stmt.TableName, positions, func(rawTuple []byte) (bool, error) {
-		if c.stmt.Where == nil {
-			return true, nil
-		}
 		_, _, row, errRow := storage.DecodeRow(rawTuple, schema)
 		if errRow != nil {
 			return false, errRow
@@ -160,6 +157,9 @@ func (c *UpdateCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 			}
 		}
 
+		if c.stmt.Where == nil {
+			return true, nil
+		}
 		match, errEval := types.EvalExpr(c.stmt.Where, row, schema, ctx)
 		if errEval != nil {
 			return false, errEval

@@ -1,6 +1,7 @@
 package index
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 )
@@ -277,4 +278,37 @@ func (m *IndexManager) SearchJSONBHasKey(column, key string) ([]int, bool) {
 	}
 
 	return nil, false
+}
+
+// InsertRow evaluates index predicates and expressions, then inserts the row into all applicable indexes.
+func (m *IndexManager) InsertRow(row IndexableRow, rowPos int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, idx := range m.indexes {
+		if predIdx, ok := idx.(interface{ Predicate() interface{} }); ok {
+			if pred := predIdx.Predicate(); pred != nil {
+				if ok, _ := EvaluateIndexPredicate(pred, row); !ok {
+					continue
+				}
+			}
+		}
+
+		key := ""
+		if exprIdx, ok := idx.(interface{ IsExpression() bool }); ok && exprIdx.IsExpression() {
+			if exprGet, ok := idx.(interface{ Expression() interface{} }); ok {
+				if extracted, err := ExtractExpressionKey(exprGet.Expression(), row); err == nil {
+					key = fmt.Sprintf("%v", extracted)
+				}
+			}
+		} else {
+			colIdx := idx.ColIndex()
+			if colIdx >= 0 && colIdx < len(row.Data) {
+				key = fmt.Sprintf("%v", row.Data[colIdx])
+			}
+		}
+		
+		if key != "" {
+			idx.Insert(key, rowPos)
+		}
+	}
 }

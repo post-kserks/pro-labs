@@ -223,7 +223,7 @@ func handleConnection(ctx context.Context, conn net.Conn, store storage.StorageE
 		if session.IsInTx() {
 			logger.Warn("connection closed with active transaction, rolling back",
 				"tx_id", session.ActiveTx.ID)
-			session.ActiveTx.Rollback()
+			session.ActiveTx.Rollback(nil)
 		}
 	}()
 

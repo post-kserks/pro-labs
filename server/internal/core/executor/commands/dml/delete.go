@@ -159,10 +159,10 @@ func (c *DeleteCommand) executeImmediateInner(ctx *types.ExecutionContext) (*typ
 		}
 		return match, nil
 	}, func(indices []int, rows []storage.Row) error {
-		if errFK := types.EnforceForeignKeysOnDelete(ctx, dbName, c.stmt.TableName, indices); errFK != nil {
+		if errFK := types.EnforceForeignKeysOnDelete(ctx, dbName, c.stmt.TableName, indices, rows); errFK != nil {
 			return errFK
 		}
-		if errCas := types.EnforceCascadeDeletes(ctx, dbName, c.stmt.TableName, indices); errCas != nil {
+		if errCas := types.EnforceCascadeDeletes(ctx, dbName, c.stmt.TableName, indices, rows); errCas != nil {
 			return errCas
 		}
 		deletedRows = append(deletedRows, rows...)

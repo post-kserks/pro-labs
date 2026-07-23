@@ -50,7 +50,7 @@ func (c *TruncateCommand) Execute(ctx *types.ExecutionContext) (*types.Result, e
 
 	// Begin implicit transaction for atomicity.
 	tx := ctx.TxManager.Begin()
-	defer tx.Rollback()
+	defer tx.Rollback(ctx.Storage)
 
 	// Register the table so Commit captures the version snapshot and
 	// detects concurrent modifications.

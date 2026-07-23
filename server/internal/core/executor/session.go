@@ -389,7 +389,7 @@ func (s *Session) Close() {
 	s.mu.Lock()
 	id := s.id
 	if s.ActiveTx != nil && s.ActiveTx.State == txmanager.TxActive {
-		s.ActiveTx.Rollback()
+		s.ActiveTx.Rollback(s.Storage)
 	}
 	s.PreparedStatements = make(map[string]*PreparedStatement)
 	s.ActiveTx = nil
@@ -402,7 +402,7 @@ func (s *Session) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ActiveTx != nil && s.ActiveTx.State == txmanager.TxActive {
-		s.ActiveTx.Rollback()
+		s.ActiveTx.Rollback(s.Storage)
 	}
 	s.ActiveTx = nil
 	s.currentDB = ""

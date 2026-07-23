@@ -328,12 +328,14 @@ type CopyOptions struct {
 
 // Index statements
 type CreateIndexStatement struct {
-	IndexName string
-	TableName string
-	Column    string
-	Columns   []string // multi-column index
-	Unique    bool
-	IndexType string // optional: GIN, BTREE, GIST, HASH
+	IndexName    string
+	TableName    string
+	Column       string
+	Columns      []string // multi-column index
+	Unique       bool
+	IndexType    string // optional: GIN, BTREE, GIST, HASH
+	IsExpression bool
+	Predicate    interface{}
 }
 
 type DropIndexStatement struct {

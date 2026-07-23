@@ -89,7 +89,7 @@ func TestRollbackFunc(t *testing.T) {
 	tx.Savepoint("sp1")
 	m.AddOp(tx, PendingOp{DB: "db", Table: "t"})
 
-	tx.Rollback()
+	tx.Rollback(nil)
 	if tx.State != TxIdle {
 		t.Fatal("expected state TxIdle after rollback")
 	}
@@ -114,7 +114,7 @@ func TestRollbackWithSpillFunc(t *testing.T) {
 		t.Fatal("expected spill")
 	}
 
-	tx.Rollback()
+	tx.Rollback(nil)
 	if tx.spilled {
 		t.Fatal("expected spilled to be false after rollback")
 	}

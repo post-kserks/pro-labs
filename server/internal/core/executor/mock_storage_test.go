@@ -951,7 +951,44 @@ func TestUpsertTOCTOU(t *testing.T) {
 }
 
 func (m *MockStorage) DeleteRowsVM(dbName, tableName string, positions []int, predicate func(rawTuple []byte) (bool, error), preDelete func([]int, []storage.Row) error) (int, error) {
-	return 0, nil
+	if m.deleteErr != nil {
+		return 0, m.deleteErr
+	}
+	rows := m.rows[dbName][tableName]
+	if rows == nil {
+		return 0, nil
+	}
+
+	var toDelete []int
+	var deletedRows []storage.Row
+
+	for i, row := range rows {
+		// Mock physical scan
+		rawTuple, err := storage.EncodeRow(0, 0, row)
+		if err != nil {
+			return 0, err
+		}
+		match, err := predicate(rawTuple)
+		if err != nil {
+			return 0, err
+		}
+		if match {
+			toDelete = append(toDelete, i)
+			deletedRows = append(deletedRows, row)
+		}
+	}
+
+	if preDelete != nil && len(toDelete) > 0 {
+		if err := preDelete(toDelete, deletedRows); err != nil {
+			return 0, err
+		}
+	}
+
+	if len(toDelete) == 0 {
+		return 0, nil
+	}
+
+	return m.DeleteRows(dbName, tableName, toDelete)
 }
 
 func (m *MockStorage) UpdateRowsVM(dbName, tableName string, positions []int, matchFn func(rawTuple []byte) (bool, error), updateFn func(storage.Row) (storage.Row, error), validateFn func([]int, []storage.Row) error) (int, error) {

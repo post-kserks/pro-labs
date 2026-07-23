@@ -47,18 +47,51 @@ func (p *sqlParser) parseCreateIndex() (Statement, error) {
 	if err := p.consume(lexer.TOKEN_LPAREN, "'('"); err != nil {
 		return nil, err
 	}
-	columns, err := p.parseIdentifierListUntilRParen("column name")
-	if err != nil {
-		return nil, err
+	
+	var columns []string
+	isExpression := false
+	for {
+		expr, err := p.parseExpression()
+		if err != nil {
+			return nil, err
+		}
+		
+		if ident, ok := expr.(*ColumnRef); ok {
+			columns = append(columns, ident.Name)
+		} else {
+			isExpression = true
+			columns = append(columns, FormatExpression(expr))
+		}
+
+		if p.current().Type == lexer.TOKEN_COMMA {
+			p.advance()
+			continue
+		}
+		if p.current().Type == lexer.TOKEN_RPAREN {
+			break
+		}
+		return nil, p.expectedError("',' or ')'", p.current())
 	}
-	if err := p.consume(lexer.TOKEN_RPAREN, "')'"); err != nil {
-		return nil, err
+	
+	p.advance() // Consume ')'
+	
+	var predicate interface{}
+	if p.current().Type == lexer.TOKEN_WHERE {
+		p.advance()
+		expr, err := p.parseExpression()
+		if err != nil {
+			return nil, err
+		}
+		predicate = expr
 	}
+
 	result := &CreateIndexStatement{
-		IndexName: indexName,
-		TableName: tableName,
-		Unique:    unique,
-		IndexType: indexType,
+		IndexName:    indexName,
+		TableName:    tableName,
+		Unique:       unique,
+		IndexType:    indexType,
+		IsExpression: isExpression,
+		Predicate:    predicate,
 	}
 	if len(columns) == 1 {
 		result.Column = columns[0]

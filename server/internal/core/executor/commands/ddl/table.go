@@ -3,12 +3,14 @@ package ddl
 // DDL commands for table and index operations.
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"vaultdb/internal/core/executor/types"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
+	"vaultdb/internal/core/txmanager"
 )
 
 type CreateTableCommand struct {
@@ -124,6 +126,22 @@ func (c *CreateTableCommand) Execute(ctx *types.ExecutionContext) (*types.Result
 		}
 	}
 
+	if ctx.Session.IsInTx() {
+		if tx := ctx.Session.GetActiveTx(); tx != nil {
+			// Save the old schema for DROP_TABLE, but for CREATE_TABLE we don't need OldSchema
+			ctx.TxManager.AddOp(tx, txmanager.PendingOp{
+				Type:  "CREATE_TABLE",
+				DB:    dbName,
+				Table: c.stmt.TableName,
+				Payload: txmanager.DDLUndoOp{
+					Type:      txmanager.OpCreateTable,
+					DBName:    dbName,
+					TableName: c.stmt.TableName,
+				},
+			})
+		}
+	}
+
 	if ctx.Session.GetAuditLog() != nil {
 		ctx.Session.GetAuditLog().LogDDL("CREATE TABLE", dbName, c.stmt.TableName, fmt.Sprintf("columns=%d", len(columns)))
 	}
@@ -157,11 +175,37 @@ func (c *DropTableCommand) Execute(ctx *types.ExecutionContext) (*types.Result, 
 		return &types.Result{Type: "message", Message: fmt.Sprintf("Table '%s' does not exist, skipping.", c.stmt.TableName)}, nil
 	}
 
+	var oldSchema []byte
+	if ctx.Session.IsInTx() {
+		if schema, err := ctx.Storage.GetTableSchema(dbName, c.stmt.TableName); err == nil {
+			if b, err := json.Marshal(schema); err == nil {
+				oldSchema = b
+			}
+		}
+	}
+
 	ctx.Session.InvalidatePlanCache(c.stmt.TableName)
 	ctx.Session.InvalidateResultCache(c.stmt.TableName)
 	if err := ctx.Storage.DropTable(dbName, c.stmt.TableName); err != nil {
 		return nil, err
 	}
+
+	if ctx.Session.IsInTx() {
+		if tx := ctx.Session.GetActiveTx(); tx != nil {
+			ctx.TxManager.AddOp(tx, txmanager.PendingOp{
+				Type:  "DROP_TABLE",
+				DB:    dbName,
+				Table: c.stmt.TableName,
+				Payload: txmanager.DDLUndoOp{
+					Type:      txmanager.OpDropTable,
+					DBName:    dbName,
+					TableName: c.stmt.TableName,
+					OldSchema: oldSchema,
+				},
+			})
+		}
+	}
+
 	if ctx.Session.GetAuditLog() != nil {
 		ctx.Session.GetAuditLog().LogDDL("DROP TABLE", dbName, c.stmt.TableName, "")
 	}

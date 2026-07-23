@@ -85,7 +85,7 @@ func EnforceForeignKeysOnInsert(ctx *ExecutionContext, dbName string, tableName 
 }
 
 // EnforceForeignKeysOnDelete checks that deleting rows won't break FK constraints.
-func EnforceForeignKeysOnDelete(ctx *ExecutionContext, dbName string, tableName string, indices []int) error {
+func EnforceForeignKeysOnDelete(ctx *ExecutionContext, dbName string, tableName string, indices []int, deletedRows []storage.Row) error {
 	if dbName == "" {
 		return nil
 	}
@@ -105,10 +105,7 @@ func EnforceForeignKeysOnDelete(ctx *ExecutionContext, dbName string, tableName 
 			if fk.Type != "FOREIGN_KEY" || fk.RefTable != tableName {
 				continue
 			}
-			parentRows, err := ctx.Storage.ReadCurrentRows(dbName, tableName)
-			if err != nil {
-				continue
-			}
+
 			childRows, err := ctx.Storage.ReadCurrentRows(dbName, info.Name)
 			if err != nil {
 				continue
@@ -117,11 +114,12 @@ func EnforceForeignKeysOnDelete(ctx *ExecutionContext, dbName string, tableName 
 			if err != nil {
 				continue
 			}
-			for _, idx := range indices {
-				if idx >= len(parentRows) {
+
+			for i := range indices {
+				if i >= len(deletedRows) {
 					continue
 				}
-				parentKey := BuildFKKey(parentRows[idx], parentSchema, fk.RefCols)
+				parentKey := BuildFKKey(deletedRows[i], parentSchema, fk.RefCols)
 				for ci, childRow := range childRows {
 					childKey := BuildFKKey(childRow, childSchema, fk.Columns)
 					if childKey == parentKey {
@@ -182,7 +180,7 @@ func EnforceForeignKeysOnUpdate(ctx *ExecutionContext, dbName string, tableName 
 }
 
 // EnforceCascadeDeletes performs cascade deletes for FK relationships.
-func EnforceCascadeDeletes(ctx *ExecutionContext, dbName string, tableName string, indices []int) error {
+func EnforceCascadeDeletes(ctx *ExecutionContext, dbName string, tableName string, indices []int, deletedRows []storage.Row) error {
 	if dbName == "" {
 		return nil
 	}
@@ -205,20 +203,20 @@ func EnforceCascadeDeletes(ctx *ExecutionContext, dbName string, tableName strin
 			if !fk.OnDeleteCascade {
 				continue
 			}
-			parentRows, err := ctx.Storage.ReadCurrentRows(dbName, tableName)
-			if err != nil {
-				continue
-			}
 			childRows, err := ctx.Storage.ReadCurrentRows(dbName, info.Name)
 			if err != nil {
 				continue
 			}
+			parentSchema, err := ctx.Storage.GetTableSchema(dbName, tableName)
+			if err != nil {
+				continue
+			}
 			var toDelete []int
-			for _, idx := range indices {
-				if idx >= len(parentRows) {
+			for i := range indices {
+				if i >= len(deletedRows) {
 					continue
 				}
-				parentKey := BuildFKKey(parentRows[idx], childSchema, fk.RefCols)
+				parentKey := BuildFKKey(deletedRows[i], parentSchema, fk.RefCols)
 				for ci, childRow := range childRows {
 					childKey := BuildFKKey(childRow, childSchema, fk.Columns)
 					if childKey == parentKey {
