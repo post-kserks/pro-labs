@@ -44,6 +44,10 @@ func (m *testTxManager) GetSnapshot(txID uint64) map[uint64]bool {
 	return nil
 }
 
+func (m *testTxManager) OldestActiveXID() uint64 {
+	return m.counter.Load()
+}
+
 func (m *testTxManager) Begin() interface{} {
 	m.counter.Add(1)
 	return nil

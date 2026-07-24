@@ -170,10 +170,12 @@ func EncodeRow(createdTx, deletedTx uint64, row Row) ([]byte, error) {
 const TxIDMask = uint64(0x0000FFFFFFFFFFFF)
 
 const (
-	hotUpdatedFlag   = uint64(1) << 48
-	hotHeapTupleFlag = uint64(1) << 49
-	hotForwardShift  = 50
-	hotForwardMask   = uint64(0x3FFF)
+	hotUpdatedFlag    = uint64(1) << 48
+	hotHeapTupleFlag  = uint64(1) << 49
+	hotForwardShift   = 50
+	hotForwardMask    = uint64(0x3FFF)
+	xminCommittedFlag = uint64(1) << 62
+	xmaxCommittedFlag = uint64(1) << 63
 )
 
 func IsHOTUpdated(tuple []byte) bool {
@@ -205,12 +207,34 @@ func SetHOTHeapTuple(tuple []byte) {
 	binary.LittleEndian.PutUint64(tuple[0:8], val)
 }
 
+func IsXMinCommitted(tuple []byte) bool {
+	val := binary.LittleEndian.Uint64(tuple[0:8])
+	return (val & xminCommittedFlag) != 0
+}
+
+func SetXMinCommitted(tuple []byte) {
+	val := binary.LittleEndian.Uint64(tuple[0:8])
+	val |= xminCommittedFlag
+	binary.LittleEndian.PutUint64(tuple[0:8], val)
+}
+
+func IsXMaxCommitted(tuple []byte) bool {
+	val := binary.LittleEndian.Uint64(tuple[0:8])
+	return (val & xmaxCommittedFlag) != 0
+}
+
+func SetXMaxCommitted(tuple []byte) {
+	val := binary.LittleEndian.Uint64(tuple[0:8])
+	val |= xmaxCommittedFlag
+	binary.LittleEndian.PutUint64(tuple[0:8], val)
+}
+
 func DecodeRow(tuple []byte, schema *TableSchema) (createdTx, deletedTx uint64, row Row, err error) {
 	if len(tuple) < binTupleHeaderSize+binColCountSize {
 		return 0, 0, nil, fmt.Errorf("tuple too short")
 	}
 
-	createdTx = binary.LittleEndian.Uint64(tuple[0:8]) & TxIDMask
+	createdTx = binary.LittleEndian.Uint64(tuple[0:8])
 	deletedTx = binary.LittleEndian.Uint64(tuple[8:16])
 	colCount := binary.LittleEndian.Uint16(tuple[16:18])
 

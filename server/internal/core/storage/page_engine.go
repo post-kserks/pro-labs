@@ -26,6 +26,7 @@ type TxManager interface {
 	IsCommitted(xid uint64) bool
 	IsAborted(xid uint64) bool
 	GetSnapshot(txID uint64) map[uint64]bool
+	OldestActiveXID() uint64
 }
 
 // PageStorageEngine implements StorageEngine on top of binary page-based

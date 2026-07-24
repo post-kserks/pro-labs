@@ -665,6 +665,21 @@ func (m *Manager) GetSnapshot(txID uint64) map[uint64]bool {
 	return nil
 }
 
+func (m *Manager) OldestActiveXID() uint64 {
+	m.activeMu.RLock()
+	defer m.activeMu.RUnlock()
+	if len(m.ActiveTxs) == 0 {
+		return m.counter.Load()
+	}
+	oldest := m.counter.Load()
+	for xid := range m.ActiveTxs {
+		if xid < oldest {
+			oldest = xid
+		}
+	}
+	return oldest
+}
+
 // EnsureCounterAtLeast guarantees the txid counter is at least n.
 // Used when loading catalog page engine so that previously allocated
 // txids are considered committed.

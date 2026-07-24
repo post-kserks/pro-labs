@@ -13,6 +13,10 @@ type PredicateLockManager struct {
 	// Map of TxID -> map of (Table+PageNo) -> true
 	readDependencies map[uint64]map[string]bool
 
+	// Tracks index ranges read by transactions to prevent phantom reads.
+	// Map of TxID -> map of (Table+IndexName+StartKey+EndKey) -> true
+	indexRangeDependencies map[uint64]map[string]bool
+
 	// Tracks rw-conflicts (rw-edges in the serialization graph)
 	// Map of in-node TxID -> out-node TxID
 	rwConflicts map[uint64]map[uint64]bool
@@ -20,9 +24,23 @@ type PredicateLockManager struct {
 
 func NewPredicateLockManager() *PredicateLockManager {
 	return &PredicateLockManager{
-		readDependencies: make(map[uint64]map[string]bool),
-		rwConflicts:      make(map[uint64]map[uint64]bool),
+		readDependencies:       make(map[uint64]map[string]bool),
+		indexRangeDependencies: make(map[uint64]map[string]bool),
+		rwConflicts:            make(map[uint64]map[uint64]bool),
 	}
+}
+
+// AcquireIndexRangeSIReadLock is called when a transaction reads an index range.
+func (pm *PredicateLockManager) AcquireIndexRangeSIReadLock(txID uint64, db, table, index, startKey, endKey string) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	if _, ok := pm.indexRangeDependencies[txID]; !ok {
+		pm.indexRangeDependencies[txID] = make(map[string]bool)
+	}
+
+	key := db + "/" + table + "/" + index + "/" + startKey + "/" + endKey
+	pm.indexRangeDependencies[txID][key] = true
 }
 
 // AcquireSIReadLock is called when a transaction reads a tuple or page.
