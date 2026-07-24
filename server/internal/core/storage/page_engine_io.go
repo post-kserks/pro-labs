@@ -76,21 +76,16 @@ func (e *PageStorageEngine) scanSlots(t *pageTable, visit slotVisitor) error {
 				cTx := createdRaw & TxIDMask
 				if cTx != 0 && (createdRaw&xminCommittedFlag) == 0 {
 					if e.txMgr.IsCommitted(cTx) {
-						SetXMinCommitted(tuple)
 						createdRaw |= xminCommittedFlag
-						isDirty = true
 					}
 				}
 				dTx := binary.LittleEndian.Uint64(tuple[8:16])
 				dTxID := dTx & TxIDMask
 				if dTxID != 0 && (createdRaw&xmaxCommittedFlag) == 0 {
 					if e.txMgr.IsCommitted(dTxID) {
-						SetXMaxCommitted(tuple)
 						createdRaw |= xmaxCommittedFlag
-						isDirty = true
 					}
 				}
-
 			}
 			createdRaw := binary.LittleEndian.Uint64(tuple[0:8])
 			deletedRaw := binary.LittleEndian.Uint64(tuple[8:16])
@@ -194,21 +189,16 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 				cTx := createdRaw & TxIDMask
 				if cTx != 0 && (createdRaw&xminCommittedFlag) == 0 {
 					if e.txMgr.IsCommitted(cTx) {
-						SetXMinCommitted(tuple)
 						createdRaw |= xminCommittedFlag
-						isDirty = true
 					}
 				}
 				dTx := binary.LittleEndian.Uint64(tuple[8:16])
 				dTxID := dTx & TxIDMask
 				if dTxID != 0 && (createdRaw&xmaxCommittedFlag) == 0 {
 					if e.txMgr.IsCommitted(dTxID) {
-						SetXMaxCommitted(tuple)
 						createdRaw |= xmaxCommittedFlag
-						isDirty = true
 					}
 				}
-				// We cannot prune here because Time Travel queries need history.
 			}
 			createdTx, deletedTx, row, err := decodePageTuple(tuple, t.schema)
 			if err != nil {
@@ -292,21 +282,16 @@ func (e *PageStorageEngine) scanTuplesRaw(t *pageTable, visit rawTupleVisitor) e
 				cTx := createdRaw & TxIDMask
 				if cTx != 0 && (createdRaw&xminCommittedFlag) == 0 {
 					if e.txMgr.IsCommitted(cTx) {
-						SetXMinCommitted(tuple)
 						createdRaw |= xminCommittedFlag
-						isDirty = true
 					}
 				}
 				dTx := binary.LittleEndian.Uint64(tuple[8:16])
 				dTxID := dTx & TxIDMask
 				if dTxID != 0 && (createdRaw&xmaxCommittedFlag) == 0 {
 					if e.txMgr.IsCommitted(dTxID) {
-						SetXMaxCommitted(tuple)
 						createdRaw |= xmaxCommittedFlag
-						isDirty = true
 					}
 				}
-				// We cannot prune here because Time Travel queries need history.
 			}
 			createdRaw := binary.LittleEndian.Uint64(tuple[0:8])
 			deletedRaw := binary.LittleEndian.Uint64(tuple[8:16])
