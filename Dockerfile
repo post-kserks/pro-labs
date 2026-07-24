@@ -9,7 +9,7 @@ RUN go mod download
 
 COPY server/ .
 
-ARG VERSION=dev
+ARG VERSION=2.0.0
 ARG TARGETARCH=amd64
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build \
@@ -22,7 +22,7 @@ RUN addgroup -S vaultdb && adduser -S vaultdb -G vaultdb
 
 FROM scratch
 
-ARG VERSION=dev
+ARG VERSION=2.0.0
 LABEL org.opencontainers.image.title="VaultDB" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.description="SQL-compatible database server" \
