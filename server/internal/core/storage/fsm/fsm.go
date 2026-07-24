@@ -189,7 +189,7 @@ func (f *FSM) Save() error {
 	copy(buf[8:], f.nodes[leafStart:leafStart+f.nPages])
 
 	tmp := f.path + ".tmp"
-	if err := os.WriteFile(tmp, buf, 0o644); err != nil {
+	if err := os.WriteFile(tmp, buf, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, f.path)

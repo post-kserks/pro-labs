@@ -65,7 +65,7 @@ func (e *PageStorageEngine) scanSlots(t *pageTable, visit slotVisitor) error {
 			return err
 		}
 		h := pg.Header()
-		var pruned bool
+		var pruned, isDirty bool
 		for slot := uint16(0); slot < h.NItems; slot++ {
 			tuple := pg.GetTuple(slot)
 			if len(tuple) < 16 {
@@ -78,7 +78,7 @@ func (e *PageStorageEngine) scanSlots(t *pageTable, visit slotVisitor) error {
 					if e.txMgr.IsCommitted(cTx) {
 						SetXMinCommitted(tuple)
 						createdRaw |= xminCommittedFlag
-						e.bufPool.UnpinPageDirty(pid, 0)
+						isDirty = true
 					}
 				}
 				dTx := binary.LittleEndian.Uint64(tuple[8:16])
@@ -87,7 +87,7 @@ func (e *PageStorageEngine) scanSlots(t *pageTable, visit slotVisitor) error {
 					if e.txMgr.IsCommitted(dTxID) {
 						SetXMaxCommitted(tuple)
 						createdRaw |= xmaxCommittedFlag
-						e.bufPool.UnpinPageDirty(pid, 0)
+						isDirty = true
 					}
 				}
 				if dTxID != 0 && (createdRaw&xmaxCommittedFlag) != 0 && dTxID < e.txMgr.OldestActiveXID() {
@@ -100,19 +100,19 @@ func (e *PageStorageEngine) scanSlots(t *pageTable, visit slotVisitor) error {
 			deletedRaw := binary.LittleEndian.Uint64(tuple[8:16])
 			stop, err := visit(pid, pg, slot, createdRaw, deletedRaw, tuple)
 			if err != nil {
-				e.unpinPage(pid, false)
+				e.unpinPage(pid, isDirty)
 				return err
 			}
 			if stop {
-				e.unpinPage(pid, false)
+				e.unpinPage(pid, isDirty)
 				return nil
 			}
 		}
 		if pruned {
 			pg.Compact()
-			e.bufPool.UnpinPageDirty(pid, 0)
+			isDirty = true
 		}
-		e.unpinPage(pid, false)
+		e.unpinPage(pid, isDirty)
 	}
 	return nil
 }
@@ -187,7 +187,7 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 			return err
 		}
 		h := pg.Header()
-		var pruned bool
+		var pruned, isDirty bool
 		for slot := uint16(0); slot < h.NItems; slot++ {
 			tuple := pg.GetTuple(slot)
 			if tuple == nil {
@@ -200,7 +200,7 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 					if e.txMgr.IsCommitted(cTx) {
 						SetXMinCommitted(tuple)
 						createdRaw |= xminCommittedFlag
-						e.bufPool.UnpinPageDirty(pid, 0)
+						isDirty = true
 					}
 				}
 				dTx := binary.LittleEndian.Uint64(tuple[8:16])
@@ -209,31 +209,31 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 					if e.txMgr.IsCommitted(dTxID) {
 						SetXMaxCommitted(tuple)
 						createdRaw |= xmaxCommittedFlag
-						e.bufPool.UnpinPageDirty(pid, 0)
+						isDirty = true
 					}
 				}
 				// We cannot prune here because Time Travel queries need history.
 			}
 			createdTx, deletedTx, row, err := decodePageTuple(tuple, t.schema)
 			if err != nil {
-				e.unpinPage(pid, false)
+				e.unpinPage(pid, isDirty)
 				return err
 			}
-			stop, err := visit(pid, pg, slot, createdTx, deletedTx, row)
+			stop, err := visit(pid, pg, slot, createdTx&TxIDMask, deletedTx&TxIDMask, row)
 			if err != nil {
-				e.unpinPage(pid, false)
+				e.unpinPage(pid, isDirty)
 				return err
 			}
 			if stop {
-				e.unpinPage(pid, false)
+				e.unpinPage(pid, isDirty)
 				return nil
 			}
 		}
 		if pruned {
 			pg.Compact()
-			e.bufPool.UnpinPageDirty(pid, 0)
+			isDirty = true
 		}
-		e.unpinPage(pid, false)
+		e.unpinPage(pid, isDirty)
 
 		// Trigger read-ahead for the next batch when we approach the edge
 		// of the currently prefetched window.
@@ -285,7 +285,7 @@ func (e *PageStorageEngine) scanTuplesRaw(t *pageTable, visit rawTupleVisitor) e
 			return err
 		}
 		h := pg.Header()
-		var pruned bool
+		var isDirty bool
 		for slot := uint16(0); slot < h.NItems; slot++ {
 			tuple := pg.GetTuple(slot)
 			if len(tuple) < 16 {
@@ -298,7 +298,7 @@ func (e *PageStorageEngine) scanTuplesRaw(t *pageTable, visit rawTupleVisitor) e
 					if e.txMgr.IsCommitted(cTx) {
 						SetXMinCommitted(tuple)
 						createdRaw |= xminCommittedFlag
-						e.bufPool.UnpinPageDirty(pid, 0)
+						isDirty = true
 					}
 				}
 				dTx := binary.LittleEndian.Uint64(tuple[8:16])
@@ -307,7 +307,7 @@ func (e *PageStorageEngine) scanTuplesRaw(t *pageTable, visit rawTupleVisitor) e
 					if e.txMgr.IsCommitted(dTxID) {
 						SetXMaxCommitted(tuple)
 						createdRaw |= xmaxCommittedFlag
-						e.bufPool.UnpinPageDirty(pid, 0)
+						isDirty = true
 					}
 				}
 				// We cannot prune here because Time Travel queries need history.
@@ -316,19 +316,16 @@ func (e *PageStorageEngine) scanTuplesRaw(t *pageTable, visit rawTupleVisitor) e
 			deletedRaw := binary.LittleEndian.Uint64(tuple[8:16])
 			stop, err := visit(pid, pg, slot, createdRaw, deletedRaw, tuple)
 			if err != nil {
-				e.unpinPage(pid, false)
+				e.unpinPage(pid, isDirty)
 				return err
 			}
 			if stop {
-				e.unpinPage(pid, false)
+				e.unpinPage(pid, isDirty)
 				return nil
 			}
 		}
-		if pruned {
-			pg.Compact()
-			e.bufPool.UnpinPageDirty(pid, 0)
-		}
-		e.unpinPage(pid, false)
+
+		e.unpinPage(pid, isDirty)
 
 		nextGlobal := g + 1
 		if nextGlobal < total && nextGlobal%readAheadPages == 0 {

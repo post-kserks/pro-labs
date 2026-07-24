@@ -36,13 +36,13 @@ func Restore(backupPath, dataDir string) error {
 		target := filepath.Join(dataDir, filepath.FromSlash(header.Name))
 
 		if header.Typeflag == tar.TypeDir {
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := os.MkdirAll(target, 0o750); err != nil {
 				return err
 			}
 			continue
 		}
 
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 			return err
 		}
 
@@ -50,7 +50,7 @@ func Restore(backupPath, dataDir string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(out, tr); err != nil {
+		if _, err := io.CopyN(out, tr, 1<<30); err != nil {
 			out.Close()
 			return err
 		}

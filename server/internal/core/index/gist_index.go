@@ -513,7 +513,7 @@ func (g *GiSTIndex) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, bytes, 0644) //nolint:gosec // index metadata, not sensitive
+	return os.WriteFile(path, bytes, 0600) //nolint:gosec // index metadata, not sensitive
 }
 
 func (g *GiSTIndex) Load(path string) error {

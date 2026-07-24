@@ -59,10 +59,10 @@ func segmentName(segNo uint16) string {
 // CreateHeapFile creates the table directory and its first segment.
 // Fails if a segment 0 already exists.
 func CreateHeapFile(dir string) (*HeapFile, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
-	f, err := openMmapFile(filepath.Join(dir, segmentName(0)), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := openMmapFile(filepath.Join(dir, segmentName(0)), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func OpenHeapFile(dir string) (*HeapFile, error) {
 
 	hf := &HeapFile{dir: dir}
 	for segNo := uint16(0); names[segmentName(segNo)]; segNo++ {
-		f, err := openMmapFile(filepath.Join(dir, segmentName(segNo)), os.O_RDWR, 0o644)
+		f, err := openMmapFile(filepath.Join(dir, segmentName(segNo)), os.O_RDWR, 0o600)
 		if err != nil {
 			hf.Close()
 			return nil, err
@@ -350,7 +350,7 @@ func (hf *HeapFile) AllocatePage(pageType uint8) (page.PageID, *page.Page, error
 
 	if pageNo >= page.PagesPerSegment {
 		segNo++
-		seg, err = openMmapFile(filepath.Join(hf.dir, segmentName(segNo)), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+		seg, err = openMmapFile(filepath.Join(hf.dir, segmentName(segNo)), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			return page.PageID{}, nil, err
 		}

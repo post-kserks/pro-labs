@@ -211,7 +211,7 @@ func TestTruncateConcurrent(t *testing.T) {
 
 	// Seed some rows.
 	for i := 0; i < 50; i++ {
-		if _, err := engine.InsertRows("testdb", "t1", []Row{Row{int64(i)}}); err != nil {
+		if _, err := engine.InsertRows("testdb", "t1", []Row{{int64(i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -226,7 +226,7 @@ func TestTruncateConcurrent(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 20; i++ {
 				id := int64(writer*1000 + i)
-				_, _ = engine.InsertRows("testdb", "t1", []Row{Row{id}})
+				_, _ = engine.InsertRows("testdb", "t1", []Row{{id}})
 			}
 		}(w)
 	}

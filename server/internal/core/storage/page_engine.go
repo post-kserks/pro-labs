@@ -130,7 +130,7 @@ const (
 // <dataDir>/pagedb.
 func NewPageStorageEngine(dataDir string, w *wal.WAL, txMgr TxManager, opts ...*StorageOptions) (*PageStorageEngine, error) {
 	root := filepath.Join(dataDir, "pagedb")
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o750); err != nil {
 		return nil, err
 	}
 
@@ -307,7 +307,8 @@ func (e *PageStorageEngine) recalculateCatalog() {
 
 	for key, t := range e.tables {
 		count := 0
-		if err := e.scanTuples(t, func(_ page.PageID, _ *page.Page, _ uint16, createdTx, deletedTx uint64, _ Row) (bool, error) {
+		if err := e.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, _ Row) (bool, error) {
+			slog.Info("recalculateCatalog tuple", "table", key, "slot", slot, "created", createdTx, "committed", e.txMgr != nil && e.txMgr.IsCommitted(createdTx))
 			if deletedTx == 0 {
 				if e.txMgr != nil && !e.txMgr.IsCommitted(createdTx) {
 					return false, nil
@@ -544,7 +545,7 @@ func (e *PageStorageEngine) redoSchemaWrite(p wal.WALSchemaWritePayload) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	return os.WriteFile(e.schemaPathFor(p.DB, p.Table), []byte(p.Schema), 0o644)
+	return os.WriteFile(e.schemaPathFor(p.DB, p.Table), []byte(p.Schema), 0o600)
 }
 
 func (e *PageStorageEngine) redoTruncateTable(p wal.WALTruncateTablePayload) error {
@@ -845,7 +846,7 @@ func (e *PageStorageEngine) saveCatalogLocked() error {
 		return err
 	}
 	tmp := e.catalogPath() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, e.catalogPath()); err != nil {
@@ -855,7 +856,7 @@ func (e *PageStorageEngine) saveCatalogLocked() error {
 	// Save binary catalog alongside JSON.
 	if binData, err := MarshalCatalog(&e.catalog, e.schemas); err == nil {
 		binTmp := e.catalogBinaryPath() + ".tmp"
-		if err := os.WriteFile(binTmp, binData, 0o644); err == nil {
+		if err := os.WriteFile(binTmp, binData, 0o600); err == nil {
 			_ = os.Rename(binTmp, e.catalogBinaryPath())
 		}
 	}
@@ -943,7 +944,7 @@ func (e *PageStorageEngine) CreateDatabase(name string) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("database '%s' already exists", name)
 	}
-	return os.MkdirAll(path, 0o755)
+	return os.MkdirAll(path, 0o750)
 }
 
 func (e *PageStorageEngine) DropDatabase(name string) error {
@@ -1083,7 +1084,7 @@ func (e *PageStorageEngine) writeSchemaLocked(db, table string, schema *TableSch
 			return err
 		}
 	}
-	return os.WriteFile(e.schemaPathFor(db, table), data, 0o644)
+	return os.WriteFile(e.schemaPathFor(db, table), data, 0o600)
 }
 
 // getTableForLock returns a table with the per-table mutex held.

@@ -160,7 +160,7 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 		os.RemoveAll(tmpPath)
 		return err
 	}
-	if err := os.WriteFile(tmpSchemaPath, schemaData, 0o644); err != nil {
+	if err := os.WriteFile(tmpSchemaPath, schemaData, 0o600); err != nil {
 		os.RemoveAll(tmpPath)
 		return err
 	}

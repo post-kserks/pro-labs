@@ -315,7 +315,7 @@ func (w *WAL) scanAndTruncate() (uint64, error) {
 					"FATAL: WAL is corrupt and cannot be truncated or renamed. "+
 						"Manual intervention required. Corrupt WAL: %s. Error: %w", w.path, renameErr)
 			}
-			newFile, openErr := os.OpenFile(w.path, os.O_CREATE|os.O_RDWR, 0o644)
+			newFile, openErr := os.OpenFile(w.path, os.O_CREATE|os.O_RDWR, 0o600)
 			if openErr != nil {
 				return 0, fmt.Errorf("failed to create new WAL after corrupt rename: %w", openErr)
 			}

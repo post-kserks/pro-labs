@@ -339,7 +339,7 @@ func (idx *BTreeIndex) Save(path string) error {
 		return err
 	}
 
-	return os.WriteFile(path, jsonData, 0644) //nolint:gosec // index metadata, not sensitive
+	return os.WriteFile(path, jsonData, 0600) //nolint:gosec // index metadata, not sensitive
 }
 
 // LoadBTreeIndex loads a B-tree index from a JSON file.

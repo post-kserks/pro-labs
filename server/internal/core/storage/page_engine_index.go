@@ -57,7 +57,7 @@ func (e *PageStorageEngine) saveIndexesMetadata(dbName, tableName string, mgr *i
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(e.indexMetadataPath(dbName, tableName), data, 0o644)
+	return os.WriteFile(e.indexMetadataPath(dbName, tableName), data, 0o600)
 }
 
 func (e *PageStorageEngine) rowsToIndexable(rows []Row) []index.IndexableRow {

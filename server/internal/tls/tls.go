@@ -86,7 +86,7 @@ func GenerateSelfSignedCert(host string) (*tls.Certificate, error) {
 
 // SaveCertToFile saves certificate and key to files.
 func SaveCertToFile(certPEM, keyPEM []byte, certFile, keyFile string) error {
-	if err := os.WriteFile(certFile, certPEM, 0640); err != nil {
+	if err := os.WriteFile(certFile, certPEM, 0600); err != nil {
 		return fmt.Errorf("write cert file: %w", err)
 	}
 	if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
