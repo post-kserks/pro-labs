@@ -88,12 +88,14 @@ func (c *AWSKMSClient) Decrypt(ctx context.Context, keyID string, ciphertext []b
 	return base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
 }
 
-// FileKMSClient reads encrypted DEK from a file (for testing).
+// FileKMSClient reads encrypted DEK from a file (FOR TESTING / NON-PRODUCTION ONLY).
 // The stored key is encrypted with a machine-specific key derived from hostname.
+// DO NOT USE IN PRODUCTION.
 type FileKMSClient struct {
 	path string
 }
 
+// NewFileKMSClient creates a FileKMSClient (for testing only).
 func NewFileKMSClient(path string) *FileKMSClient {
 	return &FileKMSClient{path: path}
 }

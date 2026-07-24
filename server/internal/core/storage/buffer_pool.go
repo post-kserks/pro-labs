@@ -111,13 +111,15 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile, dbTable ...s
 	// If cache is full — evict via clock-sweep
 	for bp.count >= bp.capacity {
 		if err := bp.evict(); err != nil {
-			// Could not evict (all pages are pinned)
-			break
+			return nil, 0, fmt.Errorf("buffer pool exhausted: all pages pinned: %w", err)
 		}
 	}
 
 	// Find free slot
-	idx := bp.findEmptySlot()
+	idx, err := bp.findEmptySlot()
+	if err != nil {
+		return nil, 0, err
+	}
 
 	// Add to cache
 	entry := &bufferEntry{
@@ -151,11 +153,16 @@ func (bp *BufferPool) CachePage(pid page.PageID, pg *page.Page, hf *heap.HeapFil
 
 	for bp.count >= bp.capacity {
 		if err := bp.evict(); err != nil {
-			break
+			slog.Error("buffer_pool: CachePage failed to evict page", "pid", pid, "error", err)
+			return
 		}
 	}
 
-	idx := bp.findEmptySlot()
+	idx, err := bp.findEmptySlot()
+	if err != nil {
+		slog.Error("buffer_pool: CachePage failed to find empty slot", "pid", pid, "error", err)
+		return
+	}
 
 	entry := &bufferEntry{
 		pid:        pid,
@@ -449,7 +456,11 @@ func (bp *BufferPool) PrefetchPages(pids []page.PageID, hf *heap.HeapFile) {
 				return
 			}
 		}
-		idx := bp.findEmptySlot()
+		idx, err := bp.findEmptySlot()
+		if err != nil {
+			bp.mu.Unlock()
+			return
+		}
 		bp.buffers[idx] = &bufferEntry{
 			pid:        pid,
 			page:       pg,
@@ -484,15 +495,19 @@ func (bp *BufferPool) Stats() BufferPoolStats {
 }
 
 // findEmptySlot finds the first empty slot in the buffer array.
-func (bp *BufferPool) findEmptySlot() int {
+func (bp *BufferPool) findEmptySlot() (int, error) {
 	n := len(bp.freeSlots)
 	if n > 0 {
 		idx := bp.freeSlots[n-1]
 		bp.freeSlots = bp.freeSlots[:n-1]
-		return idx
+		return idx, nil
 	}
-	// Should not happen if count < capacity
-	return bp.clockHand % bp.capacity
+	for i := 0; i < bp.capacity; i++ {
+		if bp.buffers[i] == nil {
+			return i, nil
+		}
+	}
+	return -1, fmt.Errorf("buffer_pool: no empty slot available (all slots occupied)")
 }
 
 // BufferPoolStats holds buffer pool statistics.
