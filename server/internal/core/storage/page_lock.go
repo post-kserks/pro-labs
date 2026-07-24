@@ -94,9 +94,6 @@ func (pm *PageLockManager) UnlockTable(pids []page.PageID) {
 	}
 }
 
-// evictIfTooLarge is a no-op for striped locks.
-func (pm *PageLockManager) evictIfTooLarge() {}
-
 // EvictUnused is a no-op for striped locks. Returns 0.
 func (pm *PageLockManager) EvictUnused() int { return 0 }
 
