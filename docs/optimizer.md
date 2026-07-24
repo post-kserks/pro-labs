@@ -31,15 +31,24 @@ SELECT * FROM orders o JOIN customers c ON o.cust_id = c.id
 WHERE c.country = 'US';
 ```
 
-### Join Reordering (DP Join Reordering)
+### Join Reordering (DP & GEQO)
 
-Tables are reordered using Dynamic Programming (`join_reorder.go`) for $N \le 7$ relations (or heuristics for larger joins) to minimize intermediate result sizes:
+Tables are reordered using Dynamic Programming (`join_reorder.go`) for $N \le 7$ relations to minimize intermediate result sizes:
 
 ```sql
 -- Optimizer builds JoinGraph and evaluates join trees to select optimal order:
 SELECT * FROM users u JOIN orders o ON u.id = o.cust_id
 JOIN products p ON o.prod_id = p.id;
 ```
+
+### Genetic Query Optimizer (GEQO)
+
+When joining $N > 7$ tables, exact dynamic programming search becomes computationally expensive. VaultDB switches automatically to the Genetic Query Optimizer (`internal/core/executor/optimizer/geqo.go`):
+
+- **Algorithm**: Heuristic genetic search over permutation trees.
+- **Population**: 20 join order chromosomes.
+- **Generations**: Evaluates 50 generations with Order Crossover (OX) and 10% mutation rate.
+- **Fitness Evaluation**: Evaluates overall JoinTree cost using `JoinGraph` statistics to find near-optimal join paths in sub-millisecond time.
 
 ### Projection Pushdown
 

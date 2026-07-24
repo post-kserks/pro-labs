@@ -64,12 +64,12 @@
 
 #### C3 — WASM Memory Limit is Dead Code
 
-- **File**: `server/internal/wasmudf/runtime.go`
+- **File**: `server/internal/core/wasmudf/runtime.go`
 - **Mitigation status**: **FIXED (2026-07-06)** — `NewRuntimeWithLimits()` enforces page cap via `wazero.NewRuntimeConfig().WithMemoryLimitPages()`. Default 256 pages (16 MB).
 
 #### C4 — WASI Gives Unrestricted Filesystem Access
 
-- **File**: `server/internal/wasmudf/runtime.go`
+- **File**: `server/internal/core/wasmudf/runtime.go`
 - **Mitigation status**: **FIXED (2026-07-06)** — WASI instantiation removed entirely. WASM UDFs get zero host filesystem/process access.
 
 ---
@@ -78,7 +78,7 @@
 
 #### H1 — WASM: No Default Execution Deadline
 
-- **File**: `server/internal/wasmudf/runtime.go`
+- **File**: `server/internal/core/wasmudf/runtime.go`
 - **Mitigation status**: **FIXED (2026-07-06)** — 30s default timeout always applied via `DefaultTimeout` constant.
 
 #### H2 — WASM `file://` Path Allows Traversal
@@ -118,13 +118,13 @@
 
 #### M2 — WASM: No Binary Validation Beyond Format
 
-- **File**: `server/internal/wasmudf/runtime.go:55`
+- **File**: `server/internal/core/wasmudf/runtime.go:55`
 - **Description**: `CompileModule` checks structural validity but not disallowed imports, excessive code sections, or suspicious exports.
 - **Mitigation**: None
 
 #### M3 — WASM: Silent `passArgs` Error Swallowing
 
-- **File**: `server/internal/wasmudf/runtime.go`
+- **File**: `server/internal/core/wasmudf/runtime.go`
 - **Mitigation status**: **FIXED (2026-07-06)** — Error now propagates to callers instead of being silently discarded.
 
 #### M4 — Protocol v2: Handshake Not Implemented Server-Side
@@ -168,7 +168,7 @@
 
 #### L4 — WASM: No Export Restriction
 
-- **File**: `server/internal/wasmudf/runtime.go`
+- **File**: `server/internal/core/wasmudf/runtime.go`
 - **Description**: Any WASM export is accepted. No restriction on dangerous exports like `memory.grow` loops.
 - **Mitigation**: None
 

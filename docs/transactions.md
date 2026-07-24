@@ -192,9 +192,15 @@ UPDATE accounts SET balance = balance - 100 WHERE id = 1;
 COMMIT;
 ```
 
-### SERIALIZABLE
+### SERIALIZABLE (Serializable Snapshot Isolation / SSI)
 
 The strictest isolation level. Transactions appear to execute serially, even if run concurrently.
+
+VaultDB implements full Serializable Snapshot Isolation (SSI) via the `PredicateLockManager` (`internal/core/storage/predicate.go`):
+
+- **SIREAD Locks**: Reads acquire SIREAD predicate locks on individual pages and index key ranges.
+- **RW-Conflict Graph**: Tracks `rw-anti-dependencies` (when transaction $T_1$ reads a tuple version that is subsequently modified by transaction $T_2$).
+- **Serialization Failure Detection**: If a cycle of two consecutive `rw-antidependencies` ($T_1 \to T_2 \to T_3$) is detected, the transaction is aborted with a serialization failure (`CheckSerializationFailure`).
 
 ```sql
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
@@ -203,7 +209,13 @@ UPDATE accounts SET balance = balance - 100 WHERE id = 1;
 COMMIT;
 ```
 
-**Note:** All isolation levels use Optimistic Concurrency Control (OCC) for conflict detection. Conflicts are detected at COMMIT time, and transactions are aborted if conflicts are found.
+## Two-Phase Commit (2PC)
+
+For distributed multi-node transactions, VaultDB provides a 2PC engine (`internal/cluster/tx2pc/2pc.go`):
+
+- **Coordinator & Participant**: Manages atomic commits across distributed cluster nodes.
+- **Phase 1 (Prepare)**: Coordinator sends `PREPARE` request to participants, which validate transaction invariants and lock required resources.
+- **Phase 2 (Commit / Abort)**: If all participants vote `PREPARED`, Coordinator sends `COMMIT`; otherwise sends `ABORT`.
 
 ## Spill-to-Disk
 

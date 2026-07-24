@@ -304,8 +304,8 @@ graph TB
 | Component | Package | Responsibility |
 |-----------|---------|----------------|
 | **Page Engine** | `internal/core/storage` | Full storage engine on top of page/heap layer. 16-byte tuple header (created_tx + deleted_tx LE uint64), JSON-encoded catalog with current TxID, last-modified tracking, row counts. |
-| **Heap-Only Tuples (HOT)** | `internal/core/storage` | In-page tuple versioning chains. Eliminates Write Amplification & index bloat on non-indexed column updates. |
-| **AutoVacuum Worker** | `internal/core/storage/vacuum.go` | Background worker for dead tuple reclamation based on active transaction IDs (`MinAge`). |
+| **Heap-Only Tuples (HOT)** | `internal/core/storage` | In-page tuple versioning header flags (`ItemFlagRedirect`) for in-place tuple updates. |
+| **AutoVacuum Worker** | `internal/core/storage/autovacuum.go` | Background worker for dead tuple reclamation based on active transaction IDs (`MinAge`). |
 | **Checkpointer Worker** | `internal/core/storage/checkpointer.go` | Asynchronous batch dirty page flusher to smooth disk I/O throughput. |
 | **Heap File** | `internal/core/storage/heap` | Low-level file manager: allocate/read/write 8KB pages. Pages are tracked in segments. Linked free page chain. |
 | **Page** | `internal/core/storage/page` | Page data structures: header with check/compression flags, tuple slot array, tuple data area. |
@@ -326,11 +326,12 @@ graph TB
 
 ### 3.4 Transaction Manager & Clustering
 
-**Package**: `internal/core/txmanager` & `internal/cluster/raft`
+**Package**: `internal/core/txmanager`, `internal/cluster/raft` & `internal/cluster/tx2pc`
 
-MVCC-inspired transaction system & Raft consensus:
+MVCC-inspired transaction system, 2PC & Raft consensus:
 - **Snapshot isolation**: each transaction records table versions at first access; Commit checks for conflicts.
 - **Raft Consensus**: Multi-node Raft state machine and WAL replication (`internal/cluster/raft`) with configurable `synchronous_commit = off|on`.
+- **Two-Phase Commit (2PC)**: Distributed atomic transaction coordinator and participant (`internal/cluster/tx2pc`).
 - **Per-table commit locks**: serializes commits touching the same table.
 - **Savepoints**: named markers within a transaction buffer with ROLLBACK TO support.
 - **Spill-to-disk**: when `SpillThreshold` (default 10000) ops accumulate, pending operations are serialized to a file.
