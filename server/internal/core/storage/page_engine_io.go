@@ -90,11 +90,7 @@ func (e *PageStorageEngine) scanSlots(t *pageTable, visit slotVisitor) error {
 						isDirty = true
 					}
 				}
-				if dTxID != 0 && (createdRaw&xmaxCommittedFlag) != 0 && dTxID < e.txMgr.OldestActiveXID() {
-					// pg.MarkDead(slot)
-					// pruned = true
-					// continue
-				}
+
 			}
 			createdRaw := binary.LittleEndian.Uint64(tuple[0:8])
 			deletedRaw := binary.LittleEndian.Uint64(tuple[8:16])
