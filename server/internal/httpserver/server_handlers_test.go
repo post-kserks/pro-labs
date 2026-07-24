@@ -1954,7 +1954,7 @@ func TestHTTPTransactionMultipleQueriesInTx(t *testing.T) {
 
 func TestHandleHandshakeValid(t *testing.T) {
 	srv, _ := newTestServerWithDB(t, mustAuth(t, false, nil))
-	srv.cfg.Version = "1.1.1"
+	srv.cfg.Version = "2.0.0"
 
 	body := fmt.Sprintf(`{"type":"handshake","client_version":"2.0","client_name":"test-client","supported_features":["params","database"],"nonce":"test-nonce-123","nonce_timestamp":%d}`, time.Now().Unix())
 	rec := httptest.NewRecorder()
@@ -1978,8 +1978,8 @@ func TestHandleHandshakeValid(t *testing.T) {
 	if resp["server"] != "VaultDB" {
 		t.Errorf("server = %v, want VaultDB", resp["server"])
 	}
-	if resp["server_version"] != "1.1.1" {
-		t.Errorf("server_version = %v, want 1.1.1", resp["server_version"])
+	if resp["server_version"] != "2.0.0" {
+		t.Errorf("server_version = %v, want 2.0.0", resp["server_version"])
 	}
 	features, ok := resp["supported_features"].([]interface{})
 	if !ok || len(features) != 3 {
