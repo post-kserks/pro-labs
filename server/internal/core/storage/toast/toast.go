@@ -63,7 +63,7 @@ func decompressGzip(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	out := new(bytes.Buffer)
-	if _, err := io.CopyN(out, zr, 1<<30); err != nil {
+	if _, err := io.Copy(out, io.LimitReader(zr, 1<<30)); err != nil {
 		return nil, err
 	}
 	if err := zr.Close(); err != nil {
