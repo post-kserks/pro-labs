@@ -82,7 +82,7 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 			rowsBefore++
 			createdTx := binary.LittleEndian.Uint64(tuple[0:8])
 			deletedTx := binary.LittleEndian.Uint64(tuple[8:16])
-			
+
 			isDead := false
 			if deletedTx != 0 {
 				if e.txMgr != nil {

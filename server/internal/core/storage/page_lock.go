@@ -20,7 +20,7 @@ func NewPageLockManager() *PageLockManager {
 
 // getLock returns a lock for a page based on a hash.
 func (pm *PageLockManager) getLock(pid page.PageID) *sync.RWMutex {
-	hash := (uint32(pid.TableID)*16777619) ^ (uint32(pid.SegmentNo) * 1140071481) ^ (pid.PageNo * 2654435761)
+	hash := (uint32(pid.TableID) * 16777619) ^ (uint32(pid.SegmentNo) * 1140071481) ^ (pid.PageNo * 2654435761)
 	return &pm.locks[hash%numPageLocks]
 }
 
@@ -50,7 +50,7 @@ func (pm *PageLockManager) LockTable(pids []page.PageID) {
 	hashes := make([]uint32, 0, len(pids))
 	seen := make(map[uint32]bool)
 	for _, pid := range pids {
-		hash := ((uint32(pid.TableID)*16777619) ^ (uint32(pid.SegmentNo) * 1140071481) ^ (pid.PageNo * 2654435761)) % numPageLocks
+		hash := ((uint32(pid.TableID) * 16777619) ^ (uint32(pid.SegmentNo) * 1140071481) ^ (pid.PageNo * 2654435761)) % numPageLocks
 		if !seen[hash] {
 			seen[hash] = true
 			hashes = append(hashes, hash)
@@ -75,13 +75,13 @@ func (pm *PageLockManager) UnlockTable(pids []page.PageID) {
 	hashes := make([]uint32, 0, len(pids))
 	seen := make(map[uint32]bool)
 	for _, pid := range pids {
-		hash := ((uint32(pid.TableID)*16777619) ^ (uint32(pid.SegmentNo) * 1140071481) ^ (pid.PageNo * 2654435761)) % numPageLocks
+		hash := ((uint32(pid.TableID) * 16777619) ^ (uint32(pid.SegmentNo) * 1140071481) ^ (pid.PageNo * 2654435761)) % numPageLocks
 		if !seen[hash] {
 			seen[hash] = true
 			hashes = append(hashes, hash)
 		}
 	}
-	
+
 	// Unlocking in reverse order is generally safe and a good habit, though not strictly required
 	for i := 1; i < len(hashes); i++ {
 		for j := i; j > 0 && hashes[j] < hashes[j-1]; j-- {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func Restore(backupPath, dataDir string) error {
@@ -33,10 +34,16 @@ func Restore(backupPath, dataDir string) error {
 			return fmt.Errorf("read tar entry: %w", err)
 		}
 
-		target := filepath.Join(dataDir, filepath.FromSlash(header.Name))
+		relPath := filepath.FromSlash(header.Name)
+		target := filepath.Join(dataDir, relPath)
+		cleanTarget := filepath.Clean(target)
+		cleanDataDir := filepath.Clean(dataDir)
+		if cleanTarget != cleanDataDir && !strings.HasPrefix(cleanTarget, cleanDataDir+string(filepath.Separator)) {
+			return fmt.Errorf("illegal path traversal in backup archive: %s", header.Name)
+		}
 
 		if header.Typeflag == tar.TypeDir {
-			if err := os.MkdirAll(target, 0o750); err != nil {
+			if err := os.MkdirAll(cleanTarget, 0o750); err != nil {
 				return err
 			}
 			continue
