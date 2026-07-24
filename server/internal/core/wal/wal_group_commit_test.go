@@ -106,8 +106,8 @@ func TestGroupCommitDataLoss(t *testing.T) {
 
 	wg.Wait()
 
-	// Let final flush complete
-	time.Sleep(200 * time.Millisecond)
+	// Flush and close group commit worker before reading recovery
+	gc.Close()
 
 	entries, err := w.Recover()
 	if err != nil {
