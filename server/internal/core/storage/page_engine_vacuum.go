@@ -80,7 +80,25 @@ func (e *PageStorageEngine) Vacuum(dbName, tableName string) (*VacuumStats, erro
 				continue
 			}
 			rowsBefore++
-			if binary.LittleEndian.Uint64(tuple[8:16]) == 0 {
+			createdTx := binary.LittleEndian.Uint64(tuple[0:8])
+			deletedTx := binary.LittleEndian.Uint64(tuple[8:16])
+			
+			isDead := false
+			if deletedTx != 0 {
+				if e.txMgr != nil {
+					if e.txMgr.IsCommitted(deletedTx) && deletedTx < e.txMgr.OldestActiveXID() {
+						isDead = true
+					}
+				} else {
+					isDead = true
+				}
+			} else if createdTx != 0 && e.txMgr != nil {
+				if e.txMgr.IsAborted(createdTx) {
+					isDead = true
+				}
+			}
+
+			if !isDead {
 				live = append(live, append([]byte(nil), tuple...))
 				rowsAfter++
 			}

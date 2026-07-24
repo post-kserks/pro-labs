@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -457,15 +458,24 @@ func (m *Manager) ValidateToken(token string) bool {
 	if token == "" {
 		return false
 	}
-	hash := m.hashToken(token)
+	hashBytes := []byte(m.hashToken(token))
 	m.mu.RLock()
-	_, ok := m.tokens[hash]
-	if ok {
-		_, revoked := m.revoked[hash]
-		ok = !revoked
+	defer m.mu.RUnlock()
+
+	var matchedHash string
+	var found bool
+	for storedHash := range m.tokens {
+		if len(storedHash) == len(hashBytes) && subtle.ConstantTimeCompare([]byte(storedHash), hashBytes) == 1 {
+			matchedHash = storedHash
+			found = true
+			break
+		}
 	}
-	m.mu.RUnlock()
-	return ok
+	if !found {
+		return false
+	}
+	_, revoked := m.revoked[matchedHash]
+	return !revoked
 }
 
 // GenerateToken creates a new bearer token with the given label and role,

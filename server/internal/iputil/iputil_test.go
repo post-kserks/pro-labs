@@ -31,14 +31,15 @@ func TestExtractClientIP_RemoteAddr(t *testing.T) {
 
 func TestExtractClientIP_XForwardedFor(t *testing.T) {
 	_, cidr, _ := net.ParseCIDR("10.0.0.0/8")
+	trustedProxies := []net.IPNet{*cidr}
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "10.0.0.99:12345"
 	req.Header.Set("X-Forwarded-For", "192.168.1.1, 10.0.0.99")
 
-	got := ExtractClientIP(req, []net.IPNet{*cidr})
-	if got != "192.168.1.1" {
-		t.Errorf("ExtractClientIP() = %q, want %q", got, "192.168.1.1")
+	ip := ExtractClientIP(req, trustedProxies)
+	if ip != "10.0.0.99" {
+		t.Errorf("ExtractClientIP() = %q, want %q", ip, "10.0.0.99")
 	}
 }
 

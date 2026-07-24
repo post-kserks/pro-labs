@@ -15,6 +15,7 @@ type AutoAnalyzeDaemon struct {
 	modCounts map[string]int
 	mu        sync.Mutex
 	cancel    context.CancelFunc
+	wg        sync.WaitGroup
 }
 
 func NewAutoAnalyzeDaemon(engine StorageEngine, threshold float64, interval time.Duration) *AutoAnalyzeDaemon {
@@ -37,7 +38,9 @@ func (d *AutoAnalyzeDaemon) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	d.cancel = cancel
 
+	d.wg.Add(1)
 	go func() {
+		defer d.wg.Done()
 		ticker := time.NewTicker(d.interval)
 		defer ticker.Stop()
 
@@ -56,6 +59,7 @@ func (d *AutoAnalyzeDaemon) Stop() {
 	if d.cancel != nil {
 		d.cancel()
 	}
+	d.wg.Wait()
 }
 
 func (d *AutoAnalyzeDaemon) analyzeTables() {

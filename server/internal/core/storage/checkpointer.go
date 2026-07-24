@@ -13,6 +13,7 @@ type CheckpointerWorker struct {
 	stopCh    chan struct{}
 	mu        sync.Mutex
 	running   bool
+	wg        sync.WaitGroup
 }
 
 // NewCheckpointerWorker creates a new CheckpointerWorker with given buffer pool, interval and batch size.
@@ -43,7 +44,9 @@ func (c *CheckpointerWorker) Start() {
 	interval := c.interval
 	c.mu.Unlock()
 
+	c.wg.Add(1)
 	go func() {
+		defer c.wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -69,6 +72,7 @@ func (c *CheckpointerWorker) Stop() {
 	if c.stopCh != nil {
 		close(c.stopCh)
 	}
+	c.wg.Wait()
 }
 
 // FlushBatch flushes up to batchSize dirty unpinned pages from the buffer pool cleanly.

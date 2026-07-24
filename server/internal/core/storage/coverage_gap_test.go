@@ -448,10 +448,10 @@ func TestPageLockEvictUnused(t *testing.T) {
 	pm.LockPage(pid)
 	pm.UnlockPageWrite(pid)
 
-	// Evict should remove the unused lock
+	// Evict should return 0 for striped locks (no-op)
 	removed := pm.EvictUnused()
-	if removed != 1 {
-		t.Fatalf("expected 1 removed, got %d", removed)
+	if removed != 0 {
+		t.Fatalf("expected 0 removed, got %d", removed)
 	}
 }
 
@@ -474,9 +474,11 @@ func TestPageLockSortPageIDs(t *testing.T) {
 
 func TestPageLockUnlockWithoutEntry(t *testing.T) {
 	pm := NewPageLockManager()
-	// Should not panic — just logs a warning
-	pm.UnlockPage(page.PageID{TableID: 999, SegmentNo: 0, PageNo: 0})
-	pm.UnlockPageWrite(page.PageID{TableID: 999, SegmentNo: 0, PageNo: 0})
+	pid := page.PageID{TableID: 999, SegmentNo: 0, PageNo: 0}
+	pm.RLockPage(pid)
+	pm.UnlockPage(pid)
+	pm.LockPage(pid)
+	pm.UnlockPageWrite(pid)
 }
 
 // ── Row lock operations ───────────────────────────────────────────────────
@@ -1516,40 +1518,7 @@ func TestCatalogGetTable(t *testing.T) {
 	}
 }
 
-// evictIfTooLarge — test that EvictUnused removes many unlocked entries
-func TestPageLockEvictUnusedMultiple(t *testing.T) {
-	pm := NewPageLockManager()
-	// Create many lock entries
-	for i := 0; i < 100; i++ {
-		pid := page.PageID{TableID: 1, SegmentNo: 0, PageNo: uint32(i)}
-		pm.LockPage(pid)
-		pm.UnlockPageWrite(pid)
-	}
-
-	countBefore := 0
-	pm.locks.Range(func(k, v any) bool {
-		countBefore++
-		return true
-	})
-	if countBefore != 100 {
-		t.Fatalf("expected 100 locks, got %d", countBefore)
-	}
-
-	// EvictUnused should remove all unlocked entries
-	removed := pm.EvictUnused()
-	if removed != 100 {
-		t.Fatalf("expected 100 removed, got %d", removed)
-	}
-
-	countAfter := 0
-	pm.locks.Range(func(k, v any) bool {
-		countAfter++
-		return true
-	})
-	if countAfter != 0 {
-		t.Fatalf("expected 0 locks after eviction, got %d", countAfter)
-	}
-}
+// Removed TestPageLockEvictUnusedMultiple as striped locks do not support Range and do not need eviction.
 
 // invertOp
 func TestInvertOp(t *testing.T) {
@@ -1607,30 +1576,7 @@ func TestSchemaVersionDirect(t *testing.T) {
 	}
 }
 
-// evictIfTooLarge — test internal function directly
-func TestEvictIfTooLarge(t *testing.T) {
-	pm := NewPageLockManager()
-	// Create more entries than the threshold
-	for i := 0; i < maxLocksBeforeEviction+100; i++ {
-		pid := page.PageID{TableID: 1, SegmentNo: 0, PageNo: uint32(i)}
-		pm.LockPage(pid)
-		pm.UnlockPageWrite(pid)
-	}
-
-	// Call evictIfTooLarge directly (same package)
-	pm.evictIfTooLarge()
-
-	count := 0
-	pm.locks.Range(func(k, v any) bool {
-		count++
-		return true
-	})
-	// After eviction, count should be reduced (but not necessarily below threshold)
-	// since eviction only removes unlocked entries
-	if count > maxLocksBeforeEviction+100 {
-		t.Fatalf("evictIfTooLarge should not increase count: %d", count)
-	}
-}
+// Removed TestEvictIfTooLarge as striped locks do not support Range and do not need eviction.
 
 // FinalCheckpoint — cover error path
 func TestFinalCheckpointError(t *testing.T) {

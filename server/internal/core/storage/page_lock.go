@@ -1,17 +1,16 @@
 package storage
 
 import (
-	"log/slog"
 	"sync"
 	"vaultdb/internal/core/storage/page"
 )
 
-const maxLocksBeforeEviction = 10000
+const numPageLocks = 16384
 
-// PageLockManager manages page-level locks.
-// Allows concurrent writes to different pages of the same table.
+// PageLockManager manages page-level locks using a striped lock array.
+// Allows concurrent writes to different pages of the same table without allocation overhead.
 type PageLockManager struct {
-	locks sync.Map // map[page.PageID]*sync.RWMutex
+	locks [numPageLocks]sync.RWMutex
 }
 
 // NewPageLockManager creates a new lock manager.
@@ -19,107 +18,87 @@ func NewPageLockManager() *PageLockManager {
 	return &PageLockManager{}
 }
 
-// getLock returns (or creates) a lock for a page.
-// The operation is atomic — eliminates the race between creating the entry and acquiring the lock.
+// getLock returns a lock for a page based on a hash.
 func (pm *PageLockManager) getLock(pid page.PageID) *sync.RWMutex {
-	if v, ok := pm.locks.Load(pid); ok {
-		return v.(*sync.RWMutex)
-	}
-	lock := &sync.RWMutex{}
-	actual, _ := pm.locks.LoadOrStore(pid, lock)
-	return actual.(*sync.RWMutex)
+	hash := (uint32(pid.TableID)*16777619) ^ (uint32(pid.SegmentNo) * 1140071481) ^ (pid.PageNo * 2654435761)
+	return &pm.locks[hash%numPageLocks]
 }
 
 // RLockPage locks the page for reads.
 func (pm *PageLockManager) RLockPage(pid page.PageID) {
-	lock := pm.getLock(pid)
-	lock.RLock()
+	pm.getLock(pid).RLock()
 }
 
 // UnlockPage releases read lock on page.
 func (pm *PageLockManager) UnlockPage(pid page.PageID) {
-	v, ok := pm.locks.Load(pid)
-	if ok {
-		v.(*sync.RWMutex).RUnlock()
-	} else {
-		slog.Warn("page lock not found on unlock", "pageID", pid)
-	}
+	pm.getLock(pid).RUnlock()
 }
 
 // LockPage locks the page for writes.
 func (pm *PageLockManager) LockPage(pid page.PageID) {
-	lock := pm.getLock(pid)
-	lock.Lock()
+	pm.getLock(pid).Lock()
 }
 
 // UnlockPageWrite releases write lock on page.
 func (pm *PageLockManager) UnlockPageWrite(pid page.PageID) {
-	v, ok := pm.locks.Load(pid)
-	if ok {
-		v.(*sync.RWMutex).Unlock()
-	} else {
-		slog.Warn("page lock not found on unlock", "pageID", pid)
-	}
+	pm.getLock(pid).Unlock()
 }
 
 // LockTable locks all pages of the table for writes (for ALTER TABLE, etc.).
 func (pm *PageLockManager) LockTable(pids []page.PageID) {
-	sortedPids := make([]page.PageID, len(pids))
-	copy(sortedPids, pids)
-	sortPageIDs(sortedPids)
+	// Gather unique hashes to prevent self-deadlock when multiple pages hash to the same lock
+	hashes := make([]uint32, 0, len(pids))
+	seen := make(map[uint32]bool)
+	for _, pid := range pids {
+		hash := ((uint32(pid.TableID)*16777619) ^ (uint32(pid.SegmentNo) * 1140071481) ^ (pid.PageNo * 2654435761)) % numPageLocks
+		if !seen[hash] {
+			seen[hash] = true
+			hashes = append(hashes, hash)
+		}
+	}
 
-	for _, pid := range sortedPids {
-		pm.LockPage(pid)
+	// Sort hashes to prevent deadlocks across concurrent table locks
+	for i := 1; i < len(hashes); i++ {
+		for j := i; j > 0 && hashes[j] < hashes[j-1]; j-- {
+			hashes[j], hashes[j-1] = hashes[j-1], hashes[j]
+		}
+	}
+
+	for _, hash := range hashes {
+		pm.locks[hash].Lock()
 	}
 }
 
 // UnlockTable releases locks on all pages of a table.
 func (pm *PageLockManager) UnlockTable(pids []page.PageID) {
+	// Must use the exact same unique hashes logic to avoid double unlocking
+	hashes := make([]uint32, 0, len(pids))
+	seen := make(map[uint32]bool)
 	for _, pid := range pids {
-		pm.UnlockPageWrite(pid)
+		hash := ((uint32(pid.TableID)*16777619) ^ (uint32(pid.SegmentNo) * 1140071481) ^ (pid.PageNo * 2654435761)) % numPageLocks
+		if !seen[hash] {
+			seen[hash] = true
+			hashes = append(hashes, hash)
+		}
+	}
+	
+	// Unlocking in reverse order is generally safe and a good habit, though not strictly required
+	for i := 1; i < len(hashes); i++ {
+		for j := i; j > 0 && hashes[j] < hashes[j-1]; j-- {
+			hashes[j], hashes[j-1] = hashes[j-1], hashes[j]
+		}
+	}
+
+	for _, hash := range hashes {
+		pm.locks[hash].Unlock()
 	}
 }
 
-// evictIfTooLarge removes lock entries not held by any goroutine.
-func (pm *PageLockManager) evictIfTooLarge() {
-	count := 0
-	pm.locks.Range(func(k, v any) bool {
-		count++
-		return true
-	})
-	if count <= maxLocksBeforeEviction {
-		return
-	}
-	target := maxLocksBeforeEviction / 2
-	pm.locks.Range(func(k, v any) bool {
-		if count <= target {
-			return false
-		}
-		lock := v.(*sync.RWMutex)
-		if lock.TryLock() {
-			lock.Unlock()
-			pm.locks.Delete(k)
-			count--
-		}
-		return true
-	})
-}
+// evictIfTooLarge is a no-op for striped locks.
+func (pm *PageLockManager) evictIfTooLarge() {}
 
-// EvictUnused is called externally for bulk cleanup.
-// Removes all unlocked entries. Returns the number removed.
-func (pm *PageLockManager) EvictUnused() int {
-	removed := 0
-	pm.locks.Range(func(k, v any) bool {
-		lock := v.(*sync.RWMutex)
-		if lock.TryLock() {
-			lock.Unlock()
-			pm.locks.Delete(k)
-			removed++
-		}
-		return true
-	})
-	return removed
-}
+// EvictUnused is a no-op for striped locks. Returns 0.
+func (pm *PageLockManager) EvictUnused() int { return 0 }
 
 // sortPageIDs sorts PageIDs to prevent deadlock.
 func sortPageIDs(pids []page.PageID) {

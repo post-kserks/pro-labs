@@ -42,11 +42,23 @@ func Restore(backupPath, dataDir string) error {
 			continue
 		}
 
-		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+		// Check for pre-existing symlink target
+		if fi, err := os.Lstat(cleanTarget); err == nil {
+			if fi.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("refusing to overwrite symlink target: %s", cleanTarget)
+			}
+		}
+
+		if err := os.MkdirAll(filepath.Dir(cleanTarget), 0o750); err != nil {
 			return err
 		}
 
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+		safeMode := os.FileMode(header.Mode) & 0o600
+		if safeMode == 0 {
+			safeMode = 0o600
+		}
+
+		out, err := os.OpenFile(cleanTarget, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, safeMode)
 		if err != nil {
 			return err
 		}

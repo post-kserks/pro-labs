@@ -39,6 +39,7 @@ type BufferPool struct {
 	count         int                 // current number of pages in cache
 	wal           *wal.WAL            // WAL for writing full page images
 	bgFlushCancel context.CancelFunc  // stops the background goroutine
+	bgFlushWg     sync.WaitGroup      // waits for background flush to finish
 }
 
 // bufferEntry — cache entry.
@@ -282,6 +283,9 @@ func (bp *BufferPool) evict() error {
 
 		// Evict this page
 		if buf.dirty && buf.hf != nil {
+			if bp.wal != nil {
+				_, _ = bp.wal.Flush() // ARIES: flush WAL before writing page to disk
+			}
 			if err := buf.hf.WritePage(buf.pid, buf.page); err != nil {
 				return fmt.Errorf("evict: flush dirty page %v: %w", buf.pid, err)
 			}
@@ -303,6 +307,10 @@ func (bp *BufferPool) FlushAll() error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
+	if bp.wal != nil {
+		_, _ = bp.wal.Flush() // ARIES: ensure WAL is durable before pages are flushed
+	}
+
 	for i := 0; i < bp.capacity; i++ {
 		entry := bp.buffers[i]
 		if entry != nil && entry.dirty && entry.hf != nil {
@@ -321,6 +329,10 @@ func (bp *BufferPool) FlushAll() error {
 func (bp *BufferPool) FlushDirtyPagesUpToLSN(maxLSN uint64) error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
+
+	if bp.wal != nil {
+		_, _ = bp.wal.Flush() // ARIES: ensure WAL is durable before pages are flushed
+	}
 
 	for i := 0; i < bp.capacity; i++ {
 		entry := bp.buffers[i]
@@ -386,7 +398,9 @@ func (bp *BufferPool) StartBackgroundFlush(ctx context.Context, interval time.Du
 	ctx, cancel := context.WithCancel(ctx)
 	bp.bgFlushCancel = cancel
 
+	bp.bgFlushWg.Add(1)
 	go func() {
+		defer bp.bgFlushWg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -415,6 +429,7 @@ func (bp *BufferPool) Close() {
 	if cancel != nil {
 		cancel()
 	}
+	bp.bgFlushWg.Wait()
 }
 
 // PrefetchPages loads pages into cache asynchronously for read-ahead during
@@ -559,6 +574,9 @@ func (bp *BufferPool) FlushPage(db, table string, pid page.PageID) error {
 		return ErrPagePinned
 	}
 	if entry.hf != nil {
+		if bp.wal != nil {
+			_, _ = bp.wal.Flush()
+		}
 		if err := entry.hf.WritePage(entry.pid, entry.page); err != nil {
 			return fmt.Errorf("FlushPage: %w", err)
 		}
