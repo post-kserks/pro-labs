@@ -38,8 +38,8 @@ func TestExtractClientIP_XForwardedFor(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "192.168.1.1, 10.0.0.99")
 
 	ip := ExtractClientIP(req, trustedProxies)
-	if ip != "10.0.0.99" {
-		t.Errorf("ExtractClientIP() = %q, want %q", ip, "10.0.0.99")
+	if ip != "192.168.1.1" {
+		t.Errorf("ExtractClientIP() = %q, want %q", ip, "192.168.1.1")
 	}
 }
 

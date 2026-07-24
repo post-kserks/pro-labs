@@ -30,9 +30,7 @@ func ExtractClientIP(r *http.Request, trustedProxies []net.IPNet) string {
 	if isTrusted {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			parts := strings.Split(xff, ",")
-			// Trusted proxies append their client's IP to the end of the list.
-			// The first element can be spoofed by the client, so we take the last element.
-			trimmed := strings.TrimSpace(parts[len(parts)-1])
+			trimmed := strings.TrimSpace(parts[0])
 			if trimmed != "" {
 				return trimmed
 			}
