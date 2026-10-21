@@ -66,6 +66,7 @@ type Server struct {
 	activeSubscriptions atomic.Int64
 	sessions            *sessionStore
 	sessionPool         *pool.SessionPool
+	ownsAuth            bool // auth manager was created by New and must be closed by Start
 }
 
 // sessionStore manages HTTP transaction sessions keyed by session ID.
@@ -155,7 +156,9 @@ func New(cfg Config) *Server {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	ownsAuth := false
 	if cfg.Auth == nil {
+		ownsAuth = true
 		mgr, err := auth.NewWithCollector(false, nil, cfg.Logger, 60, 10, 300, cfg.Metrics)
 		if err != nil {
 			cfg.Logger.Error("failed to create auth manager", "error", err)
@@ -164,7 +167,8 @@ func New(cfg Config) *Server {
 		}
 		cfg.Auth = mgr
 	}
-	cfg.Auth.SetLocalhostBypass(config.Default().Auth.LocalhostBypass)
+	// A caller-supplied manager keeps its configured localhost bypass; a manager
+	// created above already carries the default from auth.NewWithCollector.
 	if cfg.Storage != nil {
 		cfg.Auth.SetDataDir(cfg.Storage.DataDir())
 	}
@@ -206,6 +210,7 @@ func New(cfg Config) *Server {
 		txm:       txm,
 		br:        br,
 		sessions:  newSessionStore(),
+		ownsAuth:  ownsAuth,
 		sessionPool: pool.NewSessionPool(
 			func() *executor.Session {
 				return newSessionWithConfig(cfg)
@@ -314,6 +319,9 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.sessions.stop()
 	s.sessionPool.Close()
+	if s.ownsAuth {
+		s.cfg.Auth.Close()
+	}
 
 	// Stop audit chain verifier.
 	if s.cfg.AuditTable != nil {
@@ -326,22 +334,24 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) apiMux() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/api/query", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleQuery))))
-	mux.HandleFunc("/api/query/stream", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleQueryStream))))
-	mux.HandleFunc("/api/transaction", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleTransaction))))
-	mux.HandleFunc("/api/batch", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleBatch))))
-	mux.HandleFunc("/api/live", s.withRateLimit(s.cfg.Auth.Middleware(s.handleLiveQuery)))
+	// POST endpoints that decode a JSON body require Content-Type: application/json
+	// (withJSONBody) so cross-site "simple requests" cannot reach them.
+	mux.HandleFunc("/api/query", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(withJSONBody(s.handleQuery)))))
+	mux.HandleFunc("/api/query/stream", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(withJSONBody(s.handleQueryStream)))))
+	mux.HandleFunc("/api/transaction", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(withJSONBody(s.handleTransaction)))))
+	mux.HandleFunc("/api/batch", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(withJSONBody(s.handleBatch)))))
+	mux.HandleFunc("/api/live", s.withRateLimit(s.withSameOrigin(s.cfg.Auth.Middleware(s.handleLiveQuery))))
 	mux.HandleFunc("/api/docs/openapi.json", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleOpenAPI))))
 	mux.HandleFunc("/api/databases", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleListDatabases))))
 	mux.HandleFunc("/api/databases/", s.withRateLimit(s.cfg.Auth.Middleware(s.handleDatabasesSubroutes)))
-	mux.HandleFunc("/api/v2/handshake", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleHandshake))))
+	mux.HandleFunc("/api/v2/handshake", s.withRateLimit(s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(withJSONBody(s.handleHandshake)))))
 
 	mux.HandleFunc("/health", s.withMethod(http.MethodGet, s.handleHealth))
 	mux.HandleFunc("/ready", s.withMethod(http.MethodGet, s.handleReady))
 	mux.HandleFunc("/metrics", s.withRateLimit(s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleMetrics))))
 	mux.HandleFunc("/dashboard", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleDashboard)))
 	mux.HandleFunc("/admin/security-status", s.withMethod(http.MethodGet, s.cfg.Auth.Middleware(s.handleSecurityStatus)))
-	mux.HandleFunc("/admin/revoke-token", s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(s.handleRevokeToken)))
+	mux.HandleFunc("/admin/revoke-token", s.withMethod(http.MethodPost, s.cfg.Auth.Middleware(withJSONBody(s.handleRevokeToken))))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" || r.URL.Path == "/ready" || r.URL.Path == "/metrics" {

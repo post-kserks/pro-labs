@@ -93,3 +93,32 @@ func TestExtractClientIP_EmptyXForwardedForFallsToRemoteAddr(t *testing.T) {
 		t.Errorf("ExtractClientIP() = %q, want %q", got, "10.0.0.99")
 	}
 }
+
+func TestExtractClientIP_XForwardedForSpoofedLeftmostIgnored(t *testing.T) {
+	_, cidr, _ := net.ParseCIDR("10.0.0.0/8")
+	trusted := []net.IPNet{*cidr}
+
+	tests := []struct {
+		name string
+		xff  string
+		want string
+	}{
+		// Client sent "X-Forwarded-For: 127.0.0.1"; the proxy appended the real peer.
+		{"spoofed leftmost", "127.0.0.1, 203.0.113.7", "203.0.113.7"},
+		{"multiple trusted hops", "127.0.0.1, 203.0.113.7, 10.0.0.5, 10.0.0.6", "203.0.113.7"},
+		{"no spaces", "1.1.1.1,203.0.113.7,10.0.0.5", "203.0.113.7"},
+		{"all trusted falls back to host", "10.0.0.1, 10.0.0.2", "10.0.0.99"},
+		{"malformed hop falls back to host", "203.0.113.7, garbage, 10.0.0.5", "10.0.0.99"},
+		{"ipv6 client", "2001:db8::1", "2001:db8::1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.RemoteAddr = "10.0.0.99:12345"
+			req.Header.Set("X-Forwarded-For", tt.xff)
+			if got := ExtractClientIP(req, trusted); got != tt.want {
+				t.Errorf("ExtractClientIP() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

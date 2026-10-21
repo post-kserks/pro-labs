@@ -119,6 +119,7 @@ func TestWithMethod(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/test", nil)
+	req.Header.Set("Content-Type", "application/json")
 	handler(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -144,8 +145,9 @@ func TestExtractClientIPXForwardedForTrusted(t *testing.T) {
 
 	_, trusted, _ := net.ParseCIDR("10.0.0.0/8")
 	ip := iputil.ExtractClientIP(req, []net.IPNet{*trusted})
-	if ip != "1.2.3.4" {
-		t.Fatalf("X-Forwarded-For trusted: got %q, want %q", ip, "1.2.3.4")
+	// Rightmost untrusted hop wins; "1.2.3.4" is client-controlled.
+	if ip != "5.6.7.8" {
+		t.Fatalf("X-Forwarded-For trusted: got %q, want %q", ip, "5.6.7.8")
 	}
 }
 

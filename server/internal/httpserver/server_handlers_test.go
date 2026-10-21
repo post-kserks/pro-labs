@@ -61,6 +61,7 @@ func TestHandleQueryBasic(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -96,6 +97,7 @@ func TestHandleQueryDurationMsIsInteger(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -122,6 +124,7 @@ func TestHandleQueryEmpty(t *testing.T) {
 	body := `{"database":"testdb","query":""}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -142,6 +145,7 @@ func TestHandleQueryInvalidJSON(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -155,6 +159,7 @@ func TestHandleQueryParseError(t *testing.T) {
 	body := `{"database":"testdb","query":"INVALID SQL SYNTAX;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -176,6 +181,7 @@ func TestHandleQueryInsert(t *testing.T) {
 	body := `{"database":"testdb","query":"INSERT INTO items (id, name, value) VALUES (4, 'date', 4.5);"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -208,6 +214,7 @@ func TestHandleBatchMultipleQueries(t *testing.T) {
 	}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/batch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -238,6 +245,7 @@ func TestHandleBatchEmptyQueries(t *testing.T) {
 	body := `{"database":"testdb","queries":[]}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/batch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -258,6 +266,7 @@ func TestHandleBatchWithErrors(t *testing.T) {
 	}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/batch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -296,6 +305,7 @@ func TestHandleTransactionBegin(t *testing.T) {
 	body := `{"action":"begin","database":"testdb"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/transaction", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -322,6 +332,7 @@ func TestHandleTransactionCommit(t *testing.T) {
 	body := `{"action":"commit","database":"testdb"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/transaction", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	// Should fail because there's no active transaction
@@ -337,6 +348,7 @@ func TestHandleTransactionRollback(t *testing.T) {
 	body := `{"action":"rollback","database":"testdb"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/transaction", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	// Should fail because there's no active transaction
@@ -351,6 +363,7 @@ func TestHandleTransactionInvalidAction(t *testing.T) {
 	body := `{"action":"invalid","database":"testdb"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/transaction", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -364,6 +377,7 @@ func TestHandleStreaming(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -392,6 +406,7 @@ func TestHandleStreamingEmptyQuery(t *testing.T) {
 	body := `{"database":"testdb","query":""}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -405,6 +420,7 @@ func TestHandleStreamingTransactionsAccepted(t *testing.T) {
 	body := `{"database":"testdb","query":"BEGIN;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -508,6 +524,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query",
 		strings.NewReader(`{"database":"testdb","query":"SELECT * FROM items;"}`))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code == http.StatusTooManyRequests {
@@ -518,6 +535,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query",
 		strings.NewReader(`{"database":"testdb","query":"SELECT * FROM items;"}`))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusTooManyRequests {
@@ -540,6 +558,7 @@ func TestAuthMiddlewareEnabled(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query",
 		strings.NewReader(`{"database":"testdb","query":"SELECT * FROM items;"}`))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -550,6 +569,7 @@ func TestAuthMiddlewareEnabled(t *testing.T) {
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query",
 		strings.NewReader(`{"database":"testdb","query":"SELECT * FROM items;"}`))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer secret")
 	srv.apiMux().ServeHTTP(rec, req)
 
@@ -565,6 +585,7 @@ func TestAuthMiddlewareDisabled(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query",
 		strings.NewReader(`{"database":"testdb","query":"SELECT * FROM items;"}`))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -584,6 +605,7 @@ func TestBatchWithParams(t *testing.T) {
 	}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/batch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -619,6 +641,7 @@ func TestQueryWithDatabaseNotExists(t *testing.T) {
 	body := `{"database":"nonexistent","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	// Should fail because database doesn't exist
@@ -634,6 +657,7 @@ func TestTransactionWithInvalidDatabase(t *testing.T) {
 	body := `{"action":"begin","database":"nonexistent"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/transaction", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	// The begin itself may succeed or fail depending on implementation
@@ -650,6 +674,7 @@ func TestStreamingWithInvalidDatabase(t *testing.T) {
 	body := `{"database":"nonexistent","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	// Should fail because database doesn't exist
@@ -670,6 +695,7 @@ func TestBatchTransactionRejected(t *testing.T) {
 	}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/batch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -706,6 +732,7 @@ func TestQueryTimeout(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	// Should succeed (fast query)
@@ -721,6 +748,7 @@ func TestMaxRows(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -745,6 +773,7 @@ func TestQueryStreamWithParams(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items WHERE id = 1;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -802,6 +831,7 @@ func TestHandleListDatabasesMethodNotAllowed(t *testing.T) {
 	// POST not allowed
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/databases", nil)
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -818,6 +848,7 @@ func TestConcurrentRequests(t *testing.T) {
 			body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
 			srv.apiMux().ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusOK {
@@ -839,6 +870,7 @@ func TestQueryWithMultipleDatabases(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -866,6 +898,7 @@ func TestBatchEmptyQueryInList(t *testing.T) {
 	}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/batch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -899,6 +932,7 @@ func TestQueryInsertMultipleRows(t *testing.T) {
 	body := `{"database":"testdb","query":"INSERT INTO items (id, name, value) VALUES (10, 'x', 1.0), (11, 'y', 2.0), (12, 'z', 3.0);"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -924,6 +958,7 @@ func TestQueryCreateTable(t *testing.T) {
 	body := `{"database":"testdb","query":"CREATE TABLE newtable (col1 INT, col2 TEXT);"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -946,6 +981,7 @@ func TestStreamingInsert(t *testing.T) {
 	body := `{"database":"testdb","query":"INSERT INTO items (id, name, value) VALUES (100, 'test', 1.0);"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1027,6 +1063,7 @@ func TestQueryWithSpecialCharacters(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items WHERE name = 'apple';"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1056,6 +1093,7 @@ func TestBatchLargeQuery(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/batch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1085,6 +1123,7 @@ func TestQueryUpdate(t *testing.T) {
 	body := `{"database":"testdb","query":"UPDATE items SET value = 99.9 WHERE id = 1;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1110,6 +1149,7 @@ func TestQueryDelete(t *testing.T) {
 	body := `{"database":"testdb","query":"DELETE FROM items WHERE id = 1;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1141,6 +1181,7 @@ func TestBatchWithUpdateAndDelete(t *testing.T) {
 	}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/batch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1177,6 +1218,7 @@ func TestQueryWithNullValues(t *testing.T) {
 	body := `{"database":"testdb","query":"INSERT INTO items (id, name, value) VALUES (999, NULL, NULL);"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1187,6 +1229,7 @@ func TestQueryWithNullValues(t *testing.T) {
 	body = `{"database":"testdb","query":"SELECT * FROM items WHERE id = 999;"}`
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1210,6 +1253,7 @@ func TestQueryCountReturnsNumber(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT COUNT(*) AS cnt FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1254,6 +1298,7 @@ func TestQueryBoolReturnsBoolean(t *testing.T) {
 	createBody := `{"database":"testdb","query":"CREATE TABLE booltest (id INT, active BOOL);"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(createBody))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("create: status %d: %s", rec.Code, rec.Body.String())
@@ -1263,6 +1308,7 @@ func TestQueryBoolReturnsBoolean(t *testing.T) {
 	insertBody := `{"database":"testdb","query":"INSERT INTO booltest (id, active) VALUES (1, true), (2, false);"}`
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(insertBody))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("insert: status %d: %s", rec.Code, rec.Body.String())
@@ -1272,6 +1318,7 @@ func TestQueryBoolReturnsBoolean(t *testing.T) {
 	selectBody := `{"database":"testdb","query":"SELECT * FROM booltest;"}`
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(selectBody))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1318,6 +1365,7 @@ func TestStreamingLargeResult(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1339,6 +1387,7 @@ func TestTransactionSequence(t *testing.T) {
 	body := `{"action":"begin","database":"testdb"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/transaction", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("BEGIN failed: %d", rec.Code)
@@ -1348,6 +1397,7 @@ func TestTransactionSequence(t *testing.T) {
 	body = `{"database":"testdb","query":"INSERT INTO items (id, name, value) VALUES (50, 'trans', 1.0);"}`
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("INSERT failed: %d", rec.Code)
@@ -1357,6 +1407,7 @@ func TestTransactionSequence(t *testing.T) {
 	body = `{"action":"commit","database":"testdb"}`
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/transaction", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	// Note: Each HTTP request creates a new session, so COMMIT may fail
 	// because the transaction state is per-session, not per-request
@@ -1366,6 +1417,7 @@ func TestTransactionSequence(t *testing.T) {
 		body = `{"database":"testdb","query":"SELECT * FROM items WHERE id = 50;"}`
 		rec = httptest.NewRecorder()
 		req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
 		srv.apiMux().ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("SELECT failed: %d", rec.Code)
@@ -1389,6 +1441,7 @@ func TestTransactionRollbackSequence(t *testing.T) {
 	body := `{"action":"begin","database":"testdb"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/transaction", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("BEGIN failed: %d", rec.Code)
@@ -1398,6 +1451,7 @@ func TestTransactionRollbackSequence(t *testing.T) {
 	body = `{"database":"testdb","query":"INSERT INTO items (id, name, value) VALUES (60, 'rollback', 1.0);"}`
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("INSERT failed: %d", rec.Code)
@@ -1407,6 +1461,7 @@ func TestTransactionRollbackSequence(t *testing.T) {
 	body = `{"action":"rollback","database":"testdb"}`
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/transaction", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	// Note: Each HTTP request creates a new session, so ROLLBACK may fail
 	// because the transaction state is per-session, not per-request
@@ -1416,6 +1471,7 @@ func TestTransactionRollbackSequence(t *testing.T) {
 		body = `{"database":"testdb","query":"SELECT * FROM items WHERE id = 60;"}`
 		rec = httptest.NewRecorder()
 		req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
 		srv.apiMux().ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("SELECT failed: %d", rec.Code)
@@ -1613,6 +1669,7 @@ func TestHandleQueryStreamClientDisconnect(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 	w := &flushResponseWriter{httptest.NewRecorder()}
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(ctx)
 
 	done := make(chan struct{})
@@ -1635,6 +1692,7 @@ func TestErrorCodesForDifferentErrors(t *testing.T) {
 	createTableBody := `{"database":"testdb","query":"CREATE TABLE constrained (id INT PRIMARY KEY, name TEXT NOT NULL, value FLOAT);"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(createTableBody))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("create table failed: %d: %s", rec.Code, rec.Body.String())
@@ -1644,6 +1702,7 @@ func TestErrorCodesForDifferentErrors(t *testing.T) {
 	insertBody := `{"database":"testdb","query":"INSERT INTO constrained (id, name, value) VALUES (1, 'apple', 1.5);"}`
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(insertBody))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("initial insert failed: %d: %s", rec.Code, rec.Body.String())
@@ -1686,6 +1745,7 @@ func TestErrorCodesForDifferentErrors(t *testing.T) {
 			body := `{"database":"testdb","query":"` + tt.query + `"}`
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
 			srv.apiMux().ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusBadRequest {
@@ -1748,6 +1808,7 @@ func TestHTTPTransactionLifecycle(t *testing.T) {
 	body := `{"database":"testdb","query":"BEGIN;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1766,6 +1827,7 @@ func TestHTTPTransactionLifecycle(t *testing.T) {
 	body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"INSERT INTO items (id, name, value) VALUES (100, 'txitem', 9.9);"}`, sid)
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1776,6 +1838,7 @@ func TestHTTPTransactionLifecycle(t *testing.T) {
 	body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"COMMIT;"}`, sid)
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1786,6 +1849,7 @@ func TestHTTPTransactionLifecycle(t *testing.T) {
 	body = `{"database":"testdb","query":"SELECT * FROM items WHERE id = 100;"}`
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1808,6 +1872,7 @@ func TestHTTPTransactionRollback(t *testing.T) {
 	body := `{"database":"testdb","query":"BEGIN;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("BEGIN failed: %d: %s", rec.Code, rec.Body.String())
@@ -1820,6 +1885,7 @@ func TestHTTPTransactionRollback(t *testing.T) {
 	body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"INSERT INTO items (id, name, value) VALUES (200, 'rollback', 1.0);"}`, sid)
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("INSERT failed: %d: %s", rec.Code, rec.Body.String())
@@ -1829,6 +1895,7 @@ func TestHTTPTransactionRollback(t *testing.T) {
 	body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"ROLLBACK;"}`, sid)
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ROLLBACK failed: %d: %s", rec.Code, rec.Body.String())
@@ -1838,6 +1905,7 @@ func TestHTTPTransactionRollback(t *testing.T) {
 	body = `{"database":"testdb","query":"SELECT * FROM items WHERE id = 200;"}`
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("SELECT failed: %d: %s", rec.Code, rec.Body.String())
@@ -1856,6 +1924,7 @@ func TestHTTPTransactionCommitRequiresSessionID(t *testing.T) {
 	body := `{"database":"testdb","query":"COMMIT;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -1869,6 +1938,7 @@ func TestHTTPTransactionUnknownSessionID(t *testing.T) {
 	body := `{"database":"testdb","session_id":"nonexistent","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -1883,6 +1953,7 @@ func TestHTTPTransactionBackwardCompatible(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1907,6 +1978,7 @@ func TestHTTPTransactionMultipleQueriesInTx(t *testing.T) {
 	body := `{"database":"testdb","query":"BEGIN;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("BEGIN failed: %d: %s", rec.Code, rec.Body.String())
@@ -1921,6 +1993,7 @@ func TestHTTPTransactionMultipleQueriesInTx(t *testing.T) {
 		body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"INSERT INTO items (id, name, value) VALUES (%d, '%s', 1.0);"}`, sid, id, name)
 		rec = httptest.NewRecorder()
 		req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
 		srv.apiMux().ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("INSERT %d failed: %d: %s", id, rec.Code, rec.Body.String())
@@ -1931,6 +2004,7 @@ func TestHTTPTransactionMultipleQueriesInTx(t *testing.T) {
 	body = fmt.Sprintf(`{"database":"testdb","session_id":"%s","query":"COMMIT;"}`, sid)
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("COMMIT failed: %d: %s", rec.Code, rec.Body.String())
@@ -1940,6 +2014,7 @@ func TestHTTPTransactionMultipleQueriesInTx(t *testing.T) {
 	body = `{"database":"testdb","query":"SELECT * FROM items WHERE id >= 300 AND id <= 302;"}`
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("SELECT failed: %d: %s", rec.Code, rec.Body.String())
@@ -1959,6 +2034,7 @@ func TestHandleHandshakeValid(t *testing.T) {
 	body := fmt.Sprintf(`{"type":"handshake","client_version":"2.0","client_name":"test-client","supported_features":["params","database"],"nonce":"test-nonce-123","nonce_timestamp":%d}`, time.Now().Unix())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1993,6 +2069,7 @@ func TestHandleHandshakeVersionMismatch(t *testing.T) {
 	body := `{"type":"handshake","client_version":"1.0","client_name":"old-client"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -2023,6 +2100,7 @@ func TestHandleHandshakeMissingFields(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
 			srv.apiMux().ServeHTTP(rec, req)
 			if rec.Code != http.StatusBadRequest {
 				t.Errorf("status %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
@@ -2037,6 +2115,7 @@ func TestHandleHandshakeRequiresAuth(t *testing.T) {
 	body := `{"type":"handshake","client_version":"2.0","client_name":"test"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
