@@ -37,7 +37,7 @@ import (
 // version and buildDate are overwritten via ldflags at build time
 // (single source of truth — VERSION file in the repository root).
 var (
-	version   = "2.0.0"
+	version   = "2.1.0"
 	buildDate = "unknown"
 )
 

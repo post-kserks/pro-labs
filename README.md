@@ -2,7 +2,7 @@
 
 Enterprise SQL database engine with Go server, native TCP protocol, and official clients in Go, Python, and JavaScript/TypeScript.
 
-**Version: 2.0.0** | **License: MIT**
+**Version: 2.1.0** | **License: MIT**
 
 ---
 
