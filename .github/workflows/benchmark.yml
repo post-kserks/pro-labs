@@ -7,6 +7,8 @@ permissions:
   contents: read
   pull-requests: write
 
+# The 100K-row benchmarks (~2/3 of total runtime) run nightly instead:
+# see benchmark-nightly.yml.
 jobs:
   benchmark:
     name: Regression benchmarks
@@ -31,7 +33,7 @@ jobs:
         run: |
           # stderr (slog output, go download noise) goes to a separate file:
           # interleaved with results it breaks benchstat parsing.
-          go test -run=^$ -bench=. -benchmem -count=6 -timeout=30m \
+          go test -run=^$ -bench=. -skip='100K$' -benchmem -count=6 -timeout=30m \
             ./benchmarks/ > ${{ github.workspace }}/bench-new.txt \
             2> ${{ github.workspace }}/bench-new.log
 
@@ -53,7 +55,7 @@ jobs:
           fi
           # stderr (slog output, go download noise) goes to a separate file:
           # interleaved with results it breaks benchstat parsing.
-          go test -run=^$ -bench=. -benchmem -count=6 -timeout=30m \
+          go test -run=^$ -bench=. -skip='100K$' -benchmem -count=6 -timeout=30m \
             ./benchmarks/ > ${{ github.workspace }}/bench-old.txt \
             2> ${{ github.workspace }}/bench-old.log
 

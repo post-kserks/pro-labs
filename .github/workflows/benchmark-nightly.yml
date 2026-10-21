@@ -1,0 +1,77 @@
+name: Benchmark (nightly)
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write # save/restore the baseline cache
+
+# Full suite including the 100K-row benchmarks that PRs skip. Each run is
+# compared with the last passing nightly run; that run's results are kept in
+# the Actions cache as the baseline.
+jobs:
+  benchmark:
+    name: Full benchmarks (incl. 100K)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: true
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: Restore baseline
+        id: baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: bench-baseline.txt
+          key: bench-nightly-${{ github.run_id }}
+          restore-keys: bench-nightly-
+
+      - name: Run benchmarks
+        run: |
+          go test -run=^$ -bench=. -benchmem -count=6 -timeout=50m \
+            ./benchmarks/ > ${{ github.workspace }}/bench-new.txt \
+            2> ${{ github.workspace }}/bench-new.log
+
+      - name: Compare with baseline
+        if: steps.baseline.outputs.cache-matched-key != ''
+        run: |
+          ../tools/benchstat-gate.sh \
+            ${{ github.workspace }}/bench-baseline.txt \
+            ${{ github.workspace }}/bench-new.txt
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-nightly-${{ github.run_id }}
+          path: |
+            bench-new.txt
+            bench-new.log
+            bench-baseline.txt
+          if-no-files-found: ignore
+
+      # Runs only when the comparison passed (or there was no baseline yet), so
+      # a regression keeps failing against the last good results until fixed.
+      - name: Promote results to baseline
+        run: cp ${{ github.workspace }}/bench-new.txt ${{ github.workspace }}/bench-baseline.txt
+
+      - name: Save baseline
+        uses: actions/cache/save@v4
+        with:
+          path: bench-baseline.txt
+          key: bench-nightly-${{ github.run_id }}
