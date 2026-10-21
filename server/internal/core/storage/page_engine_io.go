@@ -71,22 +71,6 @@ func (e *PageStorageEngine) scanSlots(t *pageTable, visit slotVisitor) error {
 			if len(tuple) < 16 {
 				continue
 			}
-			if e.txMgr != nil {
-				createdRaw := binary.LittleEndian.Uint64(tuple[0:8])
-				cTx := createdRaw & TxIDMask
-				if cTx != 0 && (createdRaw&xminCommittedFlag) == 0 {
-					if e.txMgr.IsCommitted(cTx) {
-						createdRaw |= xminCommittedFlag
-					}
-				}
-				dTx := binary.LittleEndian.Uint64(tuple[8:16])
-				dTxID := dTx & TxIDMask
-				if dTxID != 0 && (createdRaw&xmaxCommittedFlag) == 0 {
-					if e.txMgr.IsCommitted(dTxID) {
-						createdRaw |= xmaxCommittedFlag
-					}
-				}
-			}
 			createdRaw := binary.LittleEndian.Uint64(tuple[0:8])
 			deletedRaw := binary.LittleEndian.Uint64(tuple[8:16])
 			stop, err := visit(pid, pg, slot, createdRaw, deletedRaw, tuple)
@@ -184,22 +168,6 @@ func (e *PageStorageEngine) scanTuples(t *pageTable, visit tupleVisitor) error {
 			if tuple == nil {
 				continue
 			}
-			if e.txMgr != nil {
-				createdRaw := binary.LittleEndian.Uint64(tuple[0:8])
-				cTx := createdRaw & TxIDMask
-				if cTx != 0 && (createdRaw&xminCommittedFlag) == 0 {
-					if e.txMgr.IsCommitted(cTx) {
-						createdRaw |= xminCommittedFlag
-					}
-				}
-				dTx := binary.LittleEndian.Uint64(tuple[8:16])
-				dTxID := dTx & TxIDMask
-				if dTxID != 0 && (createdRaw&xmaxCommittedFlag) == 0 {
-					if e.txMgr.IsCommitted(dTxID) {
-						createdRaw |= xmaxCommittedFlag
-					}
-				}
-			}
 			createdTx, deletedTx, row, err := decodePageTuple(tuple, t.schema)
 			if err != nil {
 				e.unpinPage(pid, isDirty)
@@ -276,22 +244,6 @@ func (e *PageStorageEngine) scanTuplesRaw(t *pageTable, visit rawTupleVisitor) e
 			tuple := pg.GetTuple(slot)
 			if len(tuple) < 16 {
 				continue
-			}
-			if e.txMgr != nil {
-				createdRaw := binary.LittleEndian.Uint64(tuple[0:8])
-				cTx := createdRaw & TxIDMask
-				if cTx != 0 && (createdRaw&xminCommittedFlag) == 0 {
-					if e.txMgr.IsCommitted(cTx) {
-						createdRaw |= xminCommittedFlag
-					}
-				}
-				dTx := binary.LittleEndian.Uint64(tuple[8:16])
-				dTxID := dTx & TxIDMask
-				if dTxID != 0 && (createdRaw&xmaxCommittedFlag) == 0 {
-					if e.txMgr.IsCommitted(dTxID) {
-						createdRaw |= xmaxCommittedFlag
-					}
-				}
 			}
 			createdRaw := binary.LittleEndian.Uint64(tuple[0:8])
 			deletedRaw := binary.LittleEndian.Uint64(tuple[8:16])
