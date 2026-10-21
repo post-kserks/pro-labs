@@ -123,7 +123,7 @@ describe('Query result parsing', () => {
       type: 'handshake',
       protocol_version: '2.0',
       server: 'VaultDB',
-      server_version: '1.0.0',
+      server_version: '2.0.0',
       supported_features: ['time_travel'],
     };
     const result: HandshakeResult = raw as any;

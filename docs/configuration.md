@@ -37,29 +37,15 @@ storage:
   # For large deployments:
   # buffer_pool_pages: 65536  # 512 MB
 
-autovacuum:
-  enabled: true
-  vacuum_threshold: 50       # Min dead tuples before vacuuming
-  nap_time_sec: 60           # Sleep interval between vacuum runs
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    min_version: "1.2"             # "1.2" or "1.3"
+    enforce: false                 # reject non-TLS connections when true
 
-checkpointer:
-  enabled: true
-  interval_sec: 300          # Checkpoint interval (5 minutes)
-  wal_threshold_mb: 64       # Checkpoint if WAL exceeds 64 MB
-
-raft:
-  enabled: false
-  node_id: "node-1"
-  cluster_peers: []          # List of peer nodes e.g. ["node-2@192.168.1.12:7000"]
-  election_timeout_ms: 1000
-  heartbeat_timeout_ms: 200
-
-tls:
-  enabled: false
-  cert_file: ""
-  key_file: ""
-  min_version: "1.2"             # "1.2" or "1.3"
-  enforce: false                 # reject non-TLS connections when true
+# AutoVacuum, Checkpointer, and Raft are configured programmatically
+# or overridden via environment variables (VAULTDB_AUTOVACUUM_ENABLED, etc.)
 
 auth:
   enabled: true

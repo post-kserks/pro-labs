@@ -22,8 +22,8 @@ VaultDB Version: latest (HEAD)
 **Description:** WAL uses `SyncBatchSize = 64` (default) — fsync is performed every 64 records, not after each one. On crash before fsync, up to the last 64 WAL records are lost.
 
 **Evidence:**
-- `server/internal/wal/wal.go:487` — `SyncBatchSize: 64`
-- `server/internal/wal/wal.go:745-757` — fsync batching logic
+- `server/internal/core/wal/wal.go:487` — `SyncBatchSize: 64`
+- `server/internal/core/wal/wal.go:745-757` — fsync batching logic
 
 **Reproduction:** Write 65 operations, trigger kill -9 before fsync. Recovery will show only the first 64 operations.
 
@@ -38,8 +38,8 @@ VaultDB Version: latest (HEAD)
 **Description:** When opening the WAL, `scanAndTruncate()` (`wal.go:1086-1173`) scans records, detects CRC32 mismatches, attempts resync via "VDB1" magic bytes, and truncates the file to the last valid position.
 
 **Evidence:**
-- `server/internal/wal/wal.go:1086-1173` — scanAndTruncate()
-- `server/internal/wal/corrupt_tail_test.go` — TestRecoverAfterCorruptTail
+- `server/internal/core/wal/wal.go:1086-1173` — scanAndTruncate()
+- `server/internal/core/wal/corrupt_tail_test.go` — TestRecoverAfterCorruptTail
 
 **Verdict:** CORRUPT WAL is correctly detected and handled.
 
@@ -50,8 +50,8 @@ VaultDB Version: latest (HEAD)
 **Description:** Each WAL record contains a CRC32 checksum covering all headers and payload (`wal.go:1014`). During reading, the checksum is verified incrementally (`wal.go:1057-1061`). Partial writes (torn records) result in a mismatch and the record is discarded.
 
 **Evidence:**
-- `server/internal/wal/wal.go:995-1018` — buildRecord with CRC32
-- `server/internal/wal/wal.go:1050-1061` — readEntryFrom with CRC check
+- `server/internal/core/wal/wal.go:995-1018` — buildRecord with CRC32
+- `server/internal/core/wal/wal.go:1050-1061` — readEntryFrom with CRC check
 
 ---
 
@@ -60,7 +60,7 @@ VaultDB Version: latest (HEAD)
 **Description:** When decrypting a WAL record, `DecryptPage()` is used (`wal.go:1069`). An incorrect key or corrupted data triggers a decryption error, which interrupts recovery.
 
 **Evidence:**
-- `server/internal/wal/wal.go:1063-1077` — decrypt branch
+- `server/internal/core/wal/wal.go:1063-1077` — decrypt branch
 
 ---
 
@@ -69,8 +69,8 @@ VaultDB Version: latest (HEAD)
 **Description:** WAL supports `OpFullPageImage` (`wal.go:52`) — before page modification, a full image (8KB) is written. During recovery, FPI is applied first, then DML operations.
 
 **Evidence:**
-- `server/internal/wal/wal.go:52` — OpFullPageImage constant
-- `server/internal/wal/wal.go:673-692` — WriteFullPageImage()
+- `server/internal/core/wal/wal.go:52` — OpFullPageImage constant
+- `server/internal/core/wal/wal.go:673-692` — WriteFullPageImage()
 - `server/internal/storage/crash_test.go:1033-1134` — TestFullPageWriteRecovery
 
 ---
@@ -80,7 +80,7 @@ VaultDB Version: latest (HEAD)
 **Description:** `doCheckpoint()` in the page engine performs: (1) writes checkpoint record to WAL, (2) saves catalog, (3) truncates WAL. If a crash occurs between (2) and (3), recovery restores the catalog from the checkpoint record LSN.
 
 **Evidence:**
-- `server/internal/wal/wal.go:543-583` — WriteCheckpointRecord() + TruncateWAL()
+- `server/internal/core/wal/wal.go:543-583` — WriteCheckpointRecord() + TruncateWAL()
 
 ---
 

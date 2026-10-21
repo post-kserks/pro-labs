@@ -34,6 +34,7 @@ func Restore(backupPath, dataDir string) error {
 			return fmt.Errorf("read tar entry: %w", err)
 		}
 
+		// Sanitize and validate path to prevent Zip Slip (Path Traversal)
 		relPath := filepath.FromSlash(header.Name)
 		target := filepath.Join(dataDir, relPath)
 		cleanTarget := filepath.Clean(target)
@@ -42,11 +43,17 @@ func Restore(backupPath, dataDir string) error {
 			return fmt.Errorf("illegal path traversal in backup archive: %s", header.Name)
 		}
 
-		if header.Typeflag == tar.TypeDir {
+		switch header.Typeflag {
+		case tar.TypeDir:
 			if err := os.MkdirAll(cleanTarget, 0o750); err != nil {
 				return err
 			}
 			continue
+		case tar.TypeReg, tar.TypeRegA:
+			// Regular files allowed
+		default:
+			// Reject symlinks, hardlinks, devices, etc.
+			return fmt.Errorf("unsupported entry type %v for %s", header.Typeflag, header.Name)
 		}
 
 		// Check for pre-existing symlink target

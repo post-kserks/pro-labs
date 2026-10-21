@@ -306,6 +306,11 @@ func executeRecursiveCTE(cte *parser.CTEDefinition, scope *CTEScope, ctx *Execut
 		if newRows == 0 || len(allRows) == prevCount {
 			break
 		}
+
+		if iter == maxCTEIterations-1 {
+			_ = ctx.Storage.DropTable(dbName, tmpTable)
+			return nil, fmt.Errorf("recursive CTE '%s' exceeded maximum allowed iterations (%d)", cte.Name, maxCTEIterations)
+		}
 	}
 
 	_ = ctx.Storage.DropTable(dbName, tmpTable)

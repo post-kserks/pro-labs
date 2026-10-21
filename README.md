@@ -50,10 +50,11 @@ VaultDB is not another lightweight embedded database. It's a full-featured SQL e
 
 ### Storage & High Availability
 
-- **HOT (Heap-Only Tuples)**: In-page tuple versioning chains to prevent Write Amplification & index bloat
+- **HOT (Heap-Only Tuples)**: In-page tuple versioning flags for efficient row updates
 - **AutoVacuum Worker**: Background dead tuple reclamation based on active transaction IDs
 - **Checkpointer Worker**: Asynchronous batch page flusher for smooth I/O throughput
 - **Distributed Raft Consensus**: Multi-node Raft state machine and replicated WAL log engine
+- **Two-Phase Commit (2PC)**: Distributed atomic transaction coordinator and participant (`internal/cluster/tx2pc`)
 - **Buffer Pool**: Clock-Sweep eviction, configurable size
 
 ### Security & Privacy

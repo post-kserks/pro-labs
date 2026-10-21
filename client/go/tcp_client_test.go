@@ -128,7 +128,7 @@ func TestTCPClientClose(t *testing.T) {
 			resp := map[string]interface{}{
 				"type":             "handshake",
 				"protocol_version": "2.0",
-				"server_version":   "1.0.0",
+				"server_version":   "2.0.0",
 			}
 			data, _ := json.Marshal(resp)
 			data = append(data, '\n')
@@ -144,8 +144,8 @@ func TestTCPClientClose(t *testing.T) {
 		t.Fatalf("TCPDial failed: %v", err)
 	}
 
-	if c.ServerVersion() != "1.0.0" {
-		t.Errorf("expected server version '1.0.0', got %q", c.ServerVersion())
+	if c.ServerVersion() != "2.0.0" {
+		t.Errorf("expected server version '2.0.0', got %q", c.ServerVersion())
 	}
 	if c.ProtocolVersion() != "2.0" {
 		t.Errorf("expected protocol version '2.0', got %q", c.ProtocolVersion())
@@ -222,7 +222,7 @@ func TestTCPClientQueryRoundTrip(t *testing.T) {
 			resp := map[string]interface{}{
 				"type":             "handshake",
 				"protocol_version": "2.0",
-				"server_version":   "1.0.0",
+				"server_version":   "2.0.0",
 			}
 			data, _ := json.Marshal(resp)
 			data = append(data, '\n')
@@ -303,7 +303,7 @@ func TestTCPClientQueryError(t *testing.T) {
 			resp := map[string]interface{}{
 				"type":             "handshake",
 				"protocol_version": "2.0",
-				"server_version":   "1.0.0",
+				"server_version":   "2.0.0",
 			}
 			data, _ := json.Marshal(resp)
 			data = append(data, '\n')
@@ -363,7 +363,7 @@ func TestTCPClientBeginCommitRollback(t *testing.T) {
 			resp := map[string]interface{}{
 				"type":             "handshake",
 				"protocol_version": "2.0",
-				"server_version":   "1.0.0",
+				"server_version":   "2.0.0",
 			}
 			data, _ := json.Marshal(resp)
 			data = append(data, '\n')

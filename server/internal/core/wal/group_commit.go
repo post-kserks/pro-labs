@@ -85,6 +85,7 @@ type GroupCommit struct {
 	wal       *WAL
 	pending   []*WALRecord
 	mu        sync.Mutex
+	closeOnce sync.Once
 	batchSize int
 	batchTime time.Duration
 	flushCh   chan struct{}
@@ -179,6 +180,8 @@ func (gc *GroupCommit) doFlush() {
 // Close signals the flush worker to stop, performs a final flush, and waits
 // for the worker goroutine to exit.
 func (gc *GroupCommit) Close() {
-	close(gc.done)
-	<-gc.stopped
+	gc.closeOnce.Do(func() {
+		close(gc.done)
+		<-gc.stopped
+	})
 }
