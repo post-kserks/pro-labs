@@ -5,7 +5,10 @@ import (
 	"vaultdb/internal/core/storage/page"
 )
 
-const numPageLocks = 16384
+// numPageLocks is the number of lock stripes. 4096 RWMutexes (~96 KiB per engine) keep the chance of
+// two concurrent writers sharing a stripe negligible; 16384 cost 384 KiB with no
+// measurable gain in concurrent benchmarks.
+const numPageLocks = 4096
 
 // PageLockManager manages page-level locks using a striped lock array.
 // Allows concurrent writes to different pages of the same table without allocation overhead.

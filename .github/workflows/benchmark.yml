@@ -35,6 +35,9 @@ jobs:
             ./benchmarks/ > ${{ github.workspace }}/bench-new.txt \
             2> ${{ github.workspace }}/bench-new.log
 
+      - name: Save benchmark harness
+        run: cp benchmarks/main_test.go ${{ runner.temp }}/bench_main_test.go
+
       - name: Checkout main branch
         uses: actions/checkout@v4
         with:
@@ -43,6 +46,11 @@ jobs:
 
       - name: Run benchmarks on main
         run: |
+          # Older main has no TestMain silencing logs; without it log lines
+          # land inside result lines and benchstat cannot parse them.
+          if ! grep -q "func TestMain" benchmarks/*_test.go; then
+            cp ${{ runner.temp }}/bench_main_test.go benchmarks/main_test.go
+          fi
           # stderr (slog output, go download noise) goes to a separate file:
           # interleaved with results it breaks benchstat parsing.
           go test -run=^$ -bench=. -benchmem -count=6 -timeout=30m \
