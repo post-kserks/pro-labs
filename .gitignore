@@ -69,3 +69,13 @@ tools/sqlfuzz/sqlfuzz
 # Python cache
 __pycache__/
 *.pyc
+
+# Build/profiling artifacts
+/benchmark
+*.prof
+mem.out
+server/escape_analysis.txt
+server/gosec*.json
+server/gosec_*.txt
+.venv/
+.agents/
