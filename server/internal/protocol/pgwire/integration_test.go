@@ -19,6 +19,13 @@ import (
 
 func startTestServer(t *testing.T) (*PGWireServer, int) {
 	t.Helper()
+	return startTestServerWith(t, nil)
+}
+
+// startTestServerWith starts a test server, applying configure (if non-nil)
+// before Start.
+func startTestServerWith(t *testing.T, configure func(*PGWireServer)) (*PGWireServer, int) {
+	t.Helper()
 	dir := t.TempDir()
 	txm := txmanager.NewManager()
 	store, err := storage.NewPageStorageEngine(dir, nil, txm)
@@ -48,6 +55,9 @@ func startTestServer(t *testing.T) (*PGWireServer, int) {
 		nil,
 		nil,
 	)
+	if configure != nil {
+		configure(srv)
+	}
 
 	ctx := context.Background()
 	if err := srv.Start(ctx); err != nil {
