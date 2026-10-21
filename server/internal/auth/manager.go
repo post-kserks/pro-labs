@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vaultdb/internal/iputil"
@@ -24,7 +26,40 @@ type AuditFunc func(actor, action, target, detail string)
 
 type contextKey string
 
-const tokenLabelContextKey contextKey = "token_label"
+const identityContextKey contextKey = "auth_identity"
+
+// requestIdentity is attached to the request context by Middleware for
+// token-authenticated requests.
+type requestIdentity struct {
+	token string
+	label string
+	role  string
+}
+
+// TokenFromContext returns the bearer token authenticated by Middleware, or ""
+// when the request was not token-authenticated (auth disabled, localhost bypass).
+func TokenFromContext(ctx context.Context) string {
+	if id, ok := ctx.Value(identityContextKey).(*requestIdentity); ok {
+		return id.token
+	}
+	return ""
+}
+
+// RoleFromContext returns the role of the token authenticated by Middleware, or "".
+func RoleFromContext(ctx context.Context) string {
+	if id, ok := ctx.Value(identityContextKey).(*requestIdentity); ok {
+		return id.role
+	}
+	return ""
+}
+
+// LabelFromContext returns the label of the token authenticated by Middleware, or "".
+func LabelFromContext(ctx context.Context) string {
+	if id, ok := ctx.Value(identityContextKey).(*requestIdentity); ok {
+		return id.label
+	}
+	return ""
+}
 
 // TokenInfo stores metadata about an authenticated token.
 type TokenInfo struct {
@@ -51,19 +86,24 @@ type GrantsProvider interface {
 // HMAC is bound to the secret — rainbow tables are useless.
 type Manager struct {
 	enabled         bool
-	localhostBypass bool
+	localhostBypass atomic.Bool
 	mu              sync.RWMutex
 	tokens          map[string]*TokenInfo // HMAC-SHA256(token, secret) hex → token info
 	revoked         map[string]time.Time  // HMAC-SHA256(token, secret) hex → revocation time
-	secret          []byte
-	warnedOnce      sync.Once
-	logger          *slog.Logger
-	rateLim         *authRateLimiter
-	auditFunc       AuditFunc
-	dataDir         string         // directory for persisting revoked tokens
-	fileMu          sync.Mutex     // mutex for disk writes/reads of revoked tokens
-	grantsProvider  GrantsProvider // dynamic RBAC grants from DB
-	collector       authMetricsCollector
+	// static holds hashes of tokens supplied via config/env or AddToken. They are
+	// re-registered on every restart, so their revocations must never be purged.
+	static         map[string]struct{}
+	stopCh         chan struct{}
+	stopOnce       sync.Once
+	secret         []byte
+	warnedOnce     sync.Once
+	logger         *slog.Logger
+	rateLim        *authRateLimiter
+	auditFunc      AuditFunc
+	dataDir        string         // directory for persisting revoked tokens
+	fileMu         sync.Mutex     // mutex for disk writes/reads of revoked tokens
+	grantsProvider GrantsProvider // dynamic RBAC grants from DB
+	collector      authMetricsCollector
 }
 
 // authMetricsCollector is a minimal interface for auth rate limiter metrics.
@@ -213,12 +253,15 @@ func NewWithCollector(enabled bool, tokens map[string]string, logger *slog.Logge
 	}
 
 	hashed := make(map[string]*TokenInfo, len(tokens))
+	static := make(map[string]struct{}, len(tokens))
 	now := time.Now()
 	for token, label := range tokens {
 		mac := hmac.New(sha256.New, secret)
 		mac.Write([]byte(token))
-		hashed[hex.EncodeToString(mac.Sum(nil))] = &TokenInfo{
-			Hash:      hex.EncodeToString(mac.Sum(nil)),
+		hash := hex.EncodeToString(mac.Sum(nil))
+		static[hash] = struct{}{}
+		hashed[hash] = &TokenInfo{
+			Hash:      hash,
 			Label:     label,
 			Role:      "admin", // default: full access for pre-configured tokens
 			CreatedAt: now,
@@ -226,17 +269,29 @@ func NewWithCollector(enabled bool, tokens map[string]string, logger *slog.Logge
 	}
 
 	m := &Manager{
-		enabled:         enabled,
-		localhostBypass: true, // default: backward-compatible bypass for localhost
-		tokens:          hashed,
-		revoked:         make(map[string]time.Time),
-		secret:          secret,
-		logger:          logger,
-		rateLim:         newAuthRateLimiter(rateWindowSec, maxFails, blockForSec, collector),
-		collector:       collector,
+		enabled:   enabled,
+		tokens:    hashed,
+		revoked:   make(map[string]time.Time),
+		static:    static,
+		stopCh:    make(chan struct{}),
+		secret:    secret,
+		logger:    logger,
+		rateLim:   newAuthRateLimiter(rateWindowSec, maxFails, blockForSec, collector),
+		collector: collector,
 	}
+	m.localhostBypass.Store(true) // default: backward-compatible bypass for localhost
 	go m.cleanupRevokedTokens()
 	return m, nil
+}
+
+// Close stops the background revoked-token cleanup goroutine. Safe to call
+// multiple times and on a manager created by NewDisabled.
+func (m *Manager) Close() {
+	m.stopOnce.Do(func() {
+		if m.stopCh != nil {
+			close(m.stopCh)
+		}
+	})
 }
 
 func (m *Manager) Enabled() bool {
@@ -246,20 +301,26 @@ func (m *Manager) Enabled() bool {
 // SetLocalhostBypass controls whether localhost (127.0.0.1, ::1, localhost)
 // requests skip authentication. Default is true for backward compatibility.
 func (m *Manager) SetLocalhostBypass(v bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.localhostBypass = v
+	m.localhostBypass.Store(v)
 }
 
-// RevokeToken marks a token as revoked. Revoked tokens are rejected by ValidateToken.
+// LocalhostBypass reports whether localhost requests skip authentication.
+func (m *Manager) LocalhostBypass() bool {
+	return m.localhostBypass.Load()
+}
+
+// RevokeToken marks a token as revoked and unregisters it, so it can never
+// become valid again in this process. The revoked entry is persisted so that
+// tokens re-registered from config/env on restart stay rejected.
 func (m *Manager) RevokeToken(token string) {
 	hash := m.hashToken(token)
 	m.mu.Lock()
 	m.revoked[hash] = time.Now()
-	if m.logger != nil {
-		if info, ok := m.tokens[hash]; ok {
+	if info, ok := m.tokens[hash]; ok {
+		if m.logger != nil {
 			m.logger.Info("token revoked", "label", info.Label)
 		}
+		delete(m.tokens, hash)
 	}
 	m.mu.Unlock()
 	m.SaveRevoked()
@@ -346,7 +407,7 @@ func (m *Manager) SaveRevoked() {
 		if m.logger != nil {
 			m.logger.Error("failed to rename revoked tokens file", "error", err)
 		}
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 	}
 }
 
@@ -389,24 +450,38 @@ func (m *Manager) LoadRevoked() {
 	defer m.mu.Unlock()
 	for _, e := range entries {
 		m.revoked[e.TokenHash] = e.RevokedAt
+		delete(m.tokens, e.TokenHash)
 	}
 }
 
-// cleanupRevokedTokens periodically removes revoked token entries older than 24h.
+// cleanupRevokedTokens periodically purges stale revoked token entries until Close is called.
 func (m *Manager) cleanupRevokedTokens() {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
-	for range ticker.C {
-		m.purgeExpiredRevokedTokens()
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			m.purgeExpiredRevokedTokens()
+		}
 	}
 }
 
-// purgeExpiredRevokedTokens removes revoked token entries older than 24h
-// and persists the updated map to disk.
+// purgeExpiredRevokedTokens removes revoked entries older than 24h and persists
+// the updated map to disk. Purging never re-enables a token: revoked tokens are
+// already removed from m.tokens, and entries for static (config/env/AddToken)
+// tokens — which are re-registered on restart — are kept forever.
 func (m *Manager) purgeExpiredRevokedTokens() {
 	m.mu.Lock()
 	now := time.Now()
 	for hash, revokedAt := range m.revoked {
+		if _, isStatic := m.static[hash]; isStatic {
+			continue
+		}
+		if _, live := m.tokens[hash]; live {
+			continue
+		}
 		if now.Sub(revokedAt) > 24*time.Hour {
 			delete(m.revoked, hash)
 		}
@@ -442,6 +517,10 @@ func (m *Manager) AddToken(token, label, role string) {
 	hash := m.hashToken(token)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.static == nil {
+		m.static = make(map[string]struct{})
+	}
+	m.static[hash] = struct{}{}
 	m.tokens[hash] = &TokenInfo{
 		Hash:      hash,
 		Label:     label,
@@ -457,15 +536,31 @@ func (m *Manager) ValidateToken(token string) bool {
 	if token == "" {
 		return false
 	}
-	hash := m.hashToken(token)
-	m.mu.RLock()
-	_, ok := m.tokens[hash]
-	if ok {
-		_, revoked := m.revoked[hash]
-		ok = !revoked
-	}
-	m.mu.RUnlock()
+	_, ok := m.lookupValid(token)
 	return ok
+}
+
+// lookupValid returns a copy of the info for a registered, non-revoked token.
+// The token is hashed exactly once.
+func (m *Manager) lookupValid(token string) (TokenInfo, bool) {
+	hashBytes := []byte(m.hashToken(token))
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var matched *TokenInfo
+	for storedHash, info := range m.tokens {
+		if len(storedHash) == len(hashBytes) && subtle.ConstantTimeCompare([]byte(storedHash), hashBytes) == 1 {
+			matched = info
+			break
+		}
+	}
+	if matched == nil {
+		return TokenInfo{}, false
+	}
+	if _, revoked := m.revoked[matched.Hash]; revoked {
+		return TokenInfo{}, false
+	}
+	return *matched, true
 }
 
 // GenerateToken creates a new bearer token with the given label and role,
@@ -524,20 +619,12 @@ func (m *Manager) CheckPermission(token, operation string) bool {
 	if gp != nil {
 		dynamicPerms, err := gp.GetRoleGrants(role)
 		if err == nil && dynamicPerms != nil {
-			// Check global grants (object "*").
-			if globalPrivs, ok := dynamicPerms["*"]; ok {
-				for _, p := range globalPrivs {
-					if p == "ALL" || strings.EqualFold(p, operation) {
-						return true
-					}
-				}
-			}
-			// Check object-specific grants.
-			for _, privs := range dynamicPerms {
-				for _, p := range privs {
-					if p == "ALL" || strings.EqualFold(p, operation) {
-						return true
-					}
+			// Only global grants (object "*") apply here: this check has no
+			// object context, so an object-specific grant must not be treated
+			// as permission on every object.
+			for _, p := range dynamicPerms["*"] {
+				if p == "ALL" || strings.EqualFold(p, operation) {
+					return true
 				}
 			}
 		}
@@ -579,7 +666,7 @@ func (m *Manager) Middleware(next http.HandlerFunc) http.HandlerFunc {
 
 		ip := iputil.ExtractClientIP(r, nil)
 		// Skip auth for localhost when bypass is enabled — web UI needs to make API calls without tokens
-		if m.localhostBypass && (ip == "127.0.0.1" || ip == "::1" || ip == "localhost") {
+		if m.localhostBypass.Load() && (ip == "127.0.0.1" || ip == "::1" || ip == "localhost") {
 			next(w, r)
 			return
 		}
@@ -594,7 +681,12 @@ func (m *Manager) Middleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		token := tokenFromRequest(r)
-		if token == "" || !m.ValidateToken(token) {
+		var info TokenInfo
+		ok := false
+		if token != "" {
+			info, ok = m.lookupValid(token)
+		}
+		if !ok {
 			m.rateLim.recordFailure(ip)
 			m.logAuthEvent(ip, "AUTH_LOGIN", "failed: invalid token")
 			w.Header().Set("Content-Type", "application/json")
@@ -607,8 +699,12 @@ func (m *Manager) Middleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		m.logAuthEvent(m.GetLabel(token), "AUTH_LOGIN", "success")
-		ctx := context.WithValue(r.Context(), tokenLabelContextKey, m.GetLabel(token))
+		m.logAuthEvent(info.Label, "AUTH_LOGIN", "success")
+		ctx := context.WithValue(r.Context(), identityContextKey, &requestIdentity{
+			token: token,
+			label: info.Label,
+			role:  info.Role,
+		})
 		next(w, r.WithContext(ctx))
 	}
 }

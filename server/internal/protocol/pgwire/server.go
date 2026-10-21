@@ -2,10 +2,13 @@ package pgwire
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"vaultdb/internal/auth"
 	"vaultdb/internal/core/ai"
@@ -28,6 +31,18 @@ type PGWireServer struct {
 	AuthManager *auth.Manager
 	Logger      *slog.Logger
 
+	// TLSConfig, when non-nil, enables TLS: SSLRequest is answered with 'S'
+	// and the connection is upgraded before the StartupMessage.
+	TLSConfig *tls.Config
+	// MaxConnections caps concurrent client connections. Connections beyond
+	// the limit are rejected with SQLSTATE 53300. <= 0 uses DefaultMaxConnections.
+	MaxConnections int
+	// HandshakeTimeout bounds the startup/TLS/authentication phase.
+	// <= 0 uses DefaultHandshakeTimeout.
+	HandshakeTimeout time.Duration
+
+	activeConns atomic.Int64
+
 	listener net.Listener
 	wg       sync.WaitGroup
 	ctx      context.Context
@@ -35,6 +50,34 @@ type PGWireServer struct {
 
 	mu          sync.Mutex
 	connections map[net.Conn]struct{}
+}
+
+const (
+	// DefaultMaxConnections is the default concurrent connection limit.
+	DefaultMaxConnections = 1000
+	// DefaultHandshakeTimeout is the default deadline for the startup and
+	// authentication phase of a connection.
+	DefaultHandshakeTimeout = 15 * time.Second
+
+	// rejectWriteTimeout bounds the write of a rejection message so a
+	// non-reading client cannot stall the accept loop.
+	rejectWriteTimeout = time.Second
+)
+
+// LoadTLSConfig builds a server TLS configuration from PEM certificate and key
+// files. It returns (nil, nil) when either path is empty (TLS disabled).
+func LoadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
+	if certFile == "" || keyFile == "" {
+		return nil, nil
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load TLS key pair: %w", err)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 // NewServer creates a new instance of PGWireServer.
@@ -61,6 +104,9 @@ func NewServer(
 		AuthManager: authMgr,
 		Logger:      logger,
 		connections: make(map[net.Conn]struct{}),
+
+		MaxConnections:   DefaultMaxConnections,
+		HandshakeTimeout: DefaultHandshakeTimeout,
 	}
 }
 
@@ -73,7 +119,11 @@ func (s *PGWireServer) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to listen on %s: %w", s.Addr, err)
 	}
 	s.listener = l
-	s.Logger.Info("PGWireServer started", "addr", s.Addr)
+	maxConns := int64(s.MaxConnections)
+	if maxConns <= 0 {
+		maxConns = DefaultMaxConnections
+	}
+	s.Logger.Info("PGWireServer started", "addr", s.Addr, "tls", s.TLSConfig != nil, "max_connections", maxConns)
 
 	s.wg.Add(1)
 	go func() {
@@ -90,6 +140,16 @@ func (s *PGWireServer) Start(ctx context.Context) error {
 				}
 			}
 
+			if s.activeConns.Add(1) > maxConns {
+				s.activeConns.Add(-1)
+				s.Logger.Warn("PGWire connection rejected: too many connections",
+					"remote", conn.RemoteAddr().String(), "max_connections", maxConns)
+				_ = conn.SetWriteDeadline(time.Now().Add(rejectWriteTimeout))
+				_ = writeFatalError(conn, "53300", "sorry, too many clients already")
+				_ = conn.Close()
+				continue
+			}
+
 			s.mu.Lock()
 			s.connections[conn] = struct{}{}
 			s.mu.Unlock()
@@ -98,7 +158,8 @@ func (s *PGWireServer) Start(ctx context.Context) error {
 			go func() {
 				defer s.wg.Done()
 				defer func() {
-					conn.Close()
+					s.activeConns.Add(-1)
+					_ = conn.Close()
 					s.mu.Lock()
 					delete(s.connections, conn)
 					s.mu.Unlock()
@@ -117,12 +178,12 @@ func (s *PGWireServer) Stop() {
 		s.cancel()
 	}
 	if s.listener != nil {
-		s.listener.Close()
+		_ = s.listener.Close()
 	}
 
 	s.mu.Lock()
 	for conn := range s.connections {
-		conn.Close()
+		_ = conn.Close()
 	}
 	s.mu.Unlock()
 

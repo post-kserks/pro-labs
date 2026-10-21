@@ -3,9 +3,11 @@ package pgwire
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"vaultdb/internal/core/executor"
 	"vaultdb/internal/core/parser"
@@ -211,14 +213,51 @@ func resolveSelectSchema(stmt *parser.SelectStatement, sess *executor.Session) (
 	return colNames, colTypes
 }
 
+// authenticate validates the cleartext password supplied by a PG client as an
+// API token against the server's AuthManager.
+func (s *PGWireServer) authenticate(_ map[string]string, password string) error {
+	if password == "" || !s.AuthManager.ValidateToken(password) {
+		return errors.New("invalid or revoked token")
+	}
+	return nil
+}
+
 func (s *PGWireServer) handleConn(conn net.Conn) {
 	defer conn.Close()
 
-	params, err := HandleHandshake(conn)
-	if err != nil {
-		s.Logger.Error("PGWire handshake failed", "error", err)
+	timeout := s.HandshakeTimeout
+	if timeout <= 0 {
+		timeout = DefaultHandshakeTimeout
+	}
+	// Bound the startup/TLS/auth phase so slow or idle clients cannot pin
+	// goroutines before authenticating. Cleared once the handshake succeeds.
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		s.Logger.Error("PGWire failed to set handshake deadline", "error", err)
 		return
 	}
+
+	opts := HandshakeOptions{TLSConfig: s.TLSConfig}
+	authEnabled := s.AuthManager != nil && s.AuthManager.Enabled()
+	if authEnabled {
+		opts.Authenticate = s.authenticate
+	}
+
+	res, err := HandleHandshakeWithOptions(conn, opts)
+	if err != nil {
+		if errors.Is(err, ErrAuthenticationFailed) {
+			s.Logger.Warn("PGWire authentication failed", "remote", conn.RemoteAddr().String(), "error", err)
+		} else {
+			s.Logger.Error("PGWire handshake failed", "error", err)
+		}
+		return
+	}
+	conn = res.Conn
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		s.Logger.Error("PGWire failed to clear handshake deadline", "error", err)
+		return
+	}
+	params := res.Params
 
 	dbName := params["database"]
 	user := params["user"]
@@ -232,6 +271,9 @@ func (s *PGWireServer) handleConn(conn net.Conn) {
 	}
 	if s.AuthManager != nil {
 		session.SetAuthManager(s.AuthManager)
+		if authEnabled {
+			session.SetToken(res.Password)
+		}
 	}
 	if s.WAL != nil {
 		session.SetWAL(s.WAL)

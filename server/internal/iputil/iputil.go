@@ -16,29 +16,47 @@ func ExtractClientIP(r *http.Request, trustedProxies []net.IPNet) string {
 		host = r.RemoteAddr
 	}
 
-	clientIP := net.ParseIP(host)
-	isTrusted := false
-	if clientIP != nil {
-		for _, cidr := range trustedProxies {
-			if cidr.Contains(clientIP) {
-				isTrusted = true
-				break
-			}
-		}
+	if !isTrusted(net.ParseIP(host), trustedProxies) {
+		return host
 	}
 
-	if isTrusted {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.Split(xff, ",")
-			trimmed := strings.TrimSpace(parts[0])
-			if trimmed != "" {
-				return trimmed
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Entries left of the last trusted hop are client-controlled, so walk
+		// right to left and return the first address not owned by a trusted proxy.
+		for xff != "" {
+			entry := xff
+			if i := strings.LastIndexByte(xff, ','); i >= 0 {
+				entry, xff = xff[i+1:], xff[:i]
+			} else {
+				xff = ""
+			}
+			entry = strings.TrimSpace(entry)
+			ip := net.ParseIP(entry)
+			if ip == nil {
+				// Malformed hop: nothing to its left can be trusted.
+				return host
+			}
+			if !isTrusted(ip, trustedProxies) {
+				return entry
 			}
 		}
-		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			return strings.TrimSpace(xri)
-		}
+		return host
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return strings.TrimSpace(xri)
 	}
 
 	return host
+}
+
+func isTrusted(ip net.IP, trustedProxies []net.IPNet) bool {
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range trustedProxies {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

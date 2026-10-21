@@ -79,6 +79,63 @@ func (s *Server) withMethod(method string, next http.HandlerFunc) http.HandlerFu
 	}
 }
 
+// withJSONBody rejects requests whose Content-Type is not application/json
+// (parameters such as charset are allowed) with 415. Browsers can send
+// text/plain, form or multipart bodies cross-origin without a CORS preflight —
+// which, with localhost bypass, would let any web page run SQL. Requiring JSON
+// forces a preflight that corsMiddleware only grants to AllowedOrigins.
+func withJSONBody(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !isJSONContentType(r.Header.Get("Content-Type")) {
+			writeError(w, http.StatusUnsupportedMediaType, errCodeBadRequest, "Content-Type must be application/json")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// isJSONContentType reports whether ct's media type is application/json.
+// It avoids mime.ParseMediaType to keep the per-request path allocation-free.
+func isJSONContentType(ct string) bool {
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	return strings.EqualFold(strings.TrimSpace(ct), "application/json")
+}
+
+// withSameOrigin rejects browser requests from foreign origins. Requests with no
+// Origin header (non-browser clients, same-origin GETs) are allowed, as are
+// origins whose host matches the request Host or that appear in AllowedOrigins.
+// Used for /api/live, which streams query results over a GET (EventSource or
+// WebSocket upgrade) and therefore is not protected by withJSONBody.
+func (s *Server) withSameOrigin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.originAllowed(r) {
+			writeError(w, http.StatusForbidden, errCodeBadRequest, "cross-origin request rejected")
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) originAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	for _, o := range s.cfg.AllowedOrigins {
+		if o == origin {
+			return true
+		}
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		// Includes the opaque "null" origin sent by sandboxed frames and file:// pages.
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
+}
+
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

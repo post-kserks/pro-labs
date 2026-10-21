@@ -65,9 +65,11 @@ async function apiFetch<T>(
   options: RequestInit = {},
   signal?: AbortSignal,
 ): Promise<T> {
+  // The server rejects JSON-body requests without Content-Type: application/json (CSRF protection).
+  const jsonHeaders: Record<string, string> = options.body ? { "Content-Type": "application/json" } : {};
   const resp = await fetch(url, {
     ...options,
-    headers: { ...authHeaders(token), ...(options.headers as Record<string, string> || {}) },
+    headers: { ...jsonHeaders, ...authHeaders(token), ...(options.headers as Record<string, string> || {}) },
     signal,
   });
   return parseResponse<T>(resp);

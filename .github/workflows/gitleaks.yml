@@ -1,5 +1,8 @@
 name: Gitleaks
 on: [pull_request, push]
+permissions:
+  contents: read
+  pull-requests: read
 jobs:
   gitleaks:
     runs-on: ubuntu-latest
@@ -8,3 +11,5 @@ jobs:
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

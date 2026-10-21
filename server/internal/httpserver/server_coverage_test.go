@@ -61,6 +61,7 @@ func TestHandleRevokeToken(t *testing.T) {
 	body := `{"token":"mytoken"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/admin/revoke-token", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer mytoken")
 	srv.apiMux().ServeHTTP(rec, req)
 
@@ -83,6 +84,7 @@ func TestHandleRevokeTokenEmptyToken(t *testing.T) {
 	body := `{"token":""}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/admin/revoke-token", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer tok")
 	srv.apiMux().ServeHTTP(rec, req)
 
@@ -96,6 +98,7 @@ func TestHandleRevokeTokenInvalidJSON(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/admin/revoke-token", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer tok")
 	srv.apiMux().ServeHTTP(rec, req)
 
@@ -110,6 +113,7 @@ func TestHandleRevokeTokenRequiresAuth(t *testing.T) {
 	body := `{"token":"tok"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/admin/revoke-token", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -258,6 +262,7 @@ func TestHandleQueryBodyTooLarge(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -272,6 +277,7 @@ func TestHandleBatchBodyTooLarge(t *testing.T) {
 	body := `{"database":"testdb","queries":[{"query":"SELECT 1;"}]}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/batch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -286,6 +292,7 @@ func TestHandleTransactionBodyTooLarge(t *testing.T) {
 	body := `{"action":"begin","database":"testdb"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/transaction", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -373,6 +380,7 @@ func TestHandleSchemaPostMethodNotAllowed(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/databases/testdb/tables/items/schema", nil)
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -521,6 +529,7 @@ func TestClassifyErrorShortMessage(t *testing.T) {
 	body := fmt.Sprintf(`{"database":"testdb","query":"SELECT * FROM %s;"}`, longMsg)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -749,6 +758,7 @@ func TestHandleQueryStreamBodyTooLarge(t *testing.T) {
 	body := `{"database":"testdb","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -761,6 +771,7 @@ func TestHandleQueryStreamInvalidJSON(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -774,6 +785,7 @@ func TestHandleQueryStreamParseError(t *testing.T) {
 	body := `{"database":"testdb","query":"INVALID SYNTAX;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -787,6 +799,7 @@ func TestHandleQueryStreamUnknownSession(t *testing.T) {
 	body := `{"database":"testdb","session_id":"nonexistent","query":"SELECT * FROM items;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -800,6 +813,7 @@ func TestHandleQueryStreamCommitRequiresSession(t *testing.T) {
 	body := `{"database":"testdb","query":"COMMIT;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -813,6 +827,7 @@ func TestHandleHandshakeInvalidNonce(t *testing.T) {
 	body := `{"type":"handshake","client_version":"2.0","client_name":"test","nonce":"","nonce_timestamp":0}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/handshake", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -828,6 +843,7 @@ func TestLiveQueryMethodNotAllowed(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/live?query=SELECT+1%3B", nil).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code >= 500 {
@@ -955,6 +971,7 @@ func TestHandleQueryStreamBeginTransaction(t *testing.T) {
 	body := `{"database":"testdb","query":"BEGIN;"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

@@ -54,7 +54,7 @@ After TCP connect, send a handshake message:
 Server responds:
 
 ```json
-{"type": "handshake", "protocol_version": "2.0", "server": "VaultDB", "server_version": "2.0.0", "supported_features": ["time_travel", "transactions", "prepared_statements"]}
+{"type": "handshake", "protocol_version": "2.0", "server": "VaultDB", "server_version": "2.1.0", "supported_features": ["time_travel", "transactions", "prepared_statements"]}
 ```
 
 ### Backward Compatibility

@@ -39,13 +39,13 @@ func Open(dataDir string) (*VaultDB, error) {
 
 	s, err := storage.NewPageStorageEngine(dataDir, w, txm)
 	if err != nil {
-		w.Close()
+		_ = w.Close()
 		return nil, fmt.Errorf("open vaultdb: %w", err)
 	}
 
 	if err := s.RecoverFromWAL(); err != nil {
-		s.Close()
-		w.Close()
+		_ = s.Close()
+		_ = w.Close()
 		return nil, fmt.Errorf("vaultdb WAL recovery: %w", err)
 	}
 

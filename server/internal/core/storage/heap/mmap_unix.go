@@ -19,7 +19,7 @@ func openMmapFile(path string, flag int, perm os.FileMode) (*mmapFile, error) {
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	size := info.Size()
@@ -27,7 +27,7 @@ func openMmapFile(path string, flag int, perm os.FileMode) (*mmapFile, error) {
 	if size > 0 {
 		data, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, err
 		}
 		mf.mmapData = data

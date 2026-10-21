@@ -22,6 +22,7 @@ type AutoVacuumWorker struct {
 	stopCh  chan struct{}
 	mu      sync.Mutex
 	running bool
+	wg      sync.WaitGroup
 }
 
 // NewAutoVacuumWorker creates a new AutoVacuumWorker with given engine and config.
@@ -38,17 +39,18 @@ func NewAutoVacuumWorker(e *PageStorageEngine, cfg AutoVacuumConfig) *AutoVacuum
 // Start launches the background ticker looping over RunVacuumAll.
 func (v *AutoVacuumWorker) Start() {
 	v.mu.Lock()
+	defer v.mu.Unlock()
 	if v.running {
-		v.mu.Unlock()
 		return
 	}
 	v.running = true
 	v.stopCh = make(chan struct{})
 	stopCh := v.stopCh
 	interval := v.config.Interval
-	v.mu.Unlock()
 
+	v.wg.Add(1)
 	go func() {
+		defer v.wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -66,14 +68,16 @@ func (v *AutoVacuumWorker) Start() {
 // Stop terminates the background worker cleanly and thread-safely.
 func (v *AutoVacuumWorker) Stop() {
 	v.mu.Lock()
-	defer v.mu.Unlock()
 	if !v.running {
+		v.mu.Unlock()
 		return
 	}
 	v.running = false
 	if v.stopCh != nil {
 		close(v.stopCh)
 	}
+	v.mu.Unlock()
+	v.wg.Wait()
 }
 
 // RunVacuumAll runs vacuum across all databases and tables.
@@ -124,7 +128,22 @@ func (v *AutoVacuumWorker) RunVacuumOnce(dbName, tableName string, minActiveTxID
 	defer t.mu.Unlock()
 
 	err = v.engine.scanTuples(t, func(pid page.PageID, pg *page.Page, slot uint16, createdTx, deletedTx uint64, row Row) (bool, error) {
-		if deletedTx != 0 && deletedTx < minActiveTxID {
+		isDead := false
+		if deletedTx != 0 {
+			if v.engine.txMgr != nil {
+				if v.engine.txMgr.IsCommitted(deletedTx) && deletedTx < minActiveTxID {
+					isDead = true
+				}
+			} else if deletedTx < minActiveTxID {
+				isDead = true
+			}
+		} else if createdTx != 0 && v.engine.txMgr != nil {
+			if v.engine.txMgr.IsAborted(createdTx) {
+				isDead = true
+			}
+		}
+
+		if isDead {
 			tuple := pg.GetTuple(slot)
 			if len(tuple) >= 16 {
 				for i := 0; i < 16; i++ {

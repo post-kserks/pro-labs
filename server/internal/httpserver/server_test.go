@@ -122,6 +122,7 @@ func TestQueryAcceptsTransactions(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query",
 		strings.NewReader(`{"database":"shop","query":"BEGIN;"}`))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -382,6 +383,7 @@ func TestQueryWithParams(t *testing.T) {
 	body := `{"database":"shop","query":"SELECT * FROM users WHERE name = $1;","params":["alice"]}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -403,6 +405,7 @@ func TestQueryWithMultipleParams(t *testing.T) {
 	body := `{"database":"shop","query":"SELECT * FROM users WHERE age >= $1 AND name = $2;","params":["0","bob"]}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -424,6 +427,7 @@ func TestQueryParamEscapesQuotes(t *testing.T) {
 	body := `{"database":"shop","query":"SELECT * FROM users WHERE name = $1;","params":["ali'ce"]}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -445,6 +449,7 @@ func TestQueryParamPlaceholderInsideString(t *testing.T) {
 	body := `{"database":"shop","query":"SELECT * FROM users WHERE name = '$1';","params":["alice"]}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	srv.apiMux().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

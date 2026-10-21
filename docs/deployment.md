@@ -226,7 +226,8 @@ docker compose up -d
 vaultdb-shell --token my-token
 
 # HTTP API
-curl -H "Authorization: Bearer my-token" http://localhost:8080/api/query \
+curl -H "Authorization: Bearer my-token" -H "Content-Type: application/json" \
+  http://localhost:8080/api/query \
   -d '{"database":"test","query":"SELECT 1;"}'
 ```
 

@@ -253,10 +253,14 @@ func (e *PageStorageEngine) RecoverFromWAL() error {
 		return fmt.Errorf("wal undo: %w", err)
 	}
 
-	// First fsync all heap files to ensure data is on disk
+	// First invalidate buffer pool cached pages for all tables, and fsync heap files
 	e.mu.RLock()
 	for _, t := range e.tables {
+		if e.bufPool != nil {
+			e.bufPool.InvalidateTableForce(t.tableID)
+		}
 		if t.heap != nil {
+			t.heap.InvalidatePageCount()
 			if err := t.heap.Sync(); err != nil {
 				e.mu.RUnlock()
 				return fmt.Errorf("heap sync during recovery: %w", err)
@@ -466,34 +470,15 @@ func (e *PageStorageEngine) redoInsert(p wal.WALPageInsertPayload) error {
 		pid = newPid
 	}
 
-	// Check if the tuple already exists at the expected slot.
-	// During normal operation, the buffer pool may flush a dirty page to disk
-	// before the crash. On recovery the page on disk already contains the
-	// tuples, so re-inserting them would fail with "page is full".
-	h := pg.Header()
-	if p.SlotNo < h.NItems {
-		existing := pg.GetTuple(p.SlotNo)
-		if existing != nil && len(existing) == len(p.TupleData) {
-			tupleMatches := true
-			for i := range existing {
-				if existing[i] != p.TupleData[i] {
-					tupleMatches = false
-					break
-				}
-			}
-			if tupleMatches {
-				// Tuple already on page — no-op.
-				return nil
-			}
-		}
-	}
-
-	if _, err := pg.InsertTuple(p.TupleData); err != nil {
+	if err := pg.InsertTupleAt(p.SlotNo, p.TupleData); err != nil {
 		return err
 	}
 
 	if err := t.heap.WritePage(pid, &pg); err != nil {
 		return err
+	}
+	if e.bufPool != nil {
+		e.bufPool.InvalidatePage(pid)
 	}
 
 	// Update catalog
@@ -682,6 +667,9 @@ func (e *PageStorageEngine) undoInsert(p wal.WALPageInsertPayload, xid uint64) e
 
 	if err := t.heap.WritePage(pid, &pg); err != nil {
 		return err
+	}
+	if e.bufPool != nil {
+		e.bufPool.InvalidatePage(pid)
 	}
 
 	// Update catalog

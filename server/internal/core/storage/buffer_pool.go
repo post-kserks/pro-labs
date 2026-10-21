@@ -39,6 +39,7 @@ type BufferPool struct {
 	count         int                 // current number of pages in cache
 	wal           *wal.WAL            // WAL for writing full page images
 	bgFlushCancel context.CancelFunc  // stops the background goroutine
+	bgFlushWg     sync.WaitGroup      // waits for background flush to finish
 }
 
 // bufferEntry — cache entry.
@@ -111,13 +112,19 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile, dbTable ...s
 	// If cache is full — evict via clock-sweep
 	for bp.count >= bp.capacity {
 		if err := bp.evict(); err != nil {
-			// Could not evict (all pages are pinned)
-			break
+			if errors.Is(err, errEvictWALFlush) {
+				// Dirty pages cannot be written while the WAL is not durable.
+				return nil, 0, fmt.Errorf("fetch page %v: %w", pid, err)
+			}
+			return nil, 0, fmt.Errorf("buffer pool exhausted: all pages pinned: %w", err)
 		}
 	}
 
 	// Find free slot
-	idx := bp.findEmptySlot()
+	idx, err := bp.findEmptySlot()
+	if err != nil {
+		return nil, 0, err
+	}
 
 	// Add to cache
 	entry := &bufferEntry{
@@ -151,11 +158,16 @@ func (bp *BufferPool) CachePage(pid page.PageID, pg *page.Page, hf *heap.HeapFil
 
 	for bp.count >= bp.capacity {
 		if err := bp.evict(); err != nil {
-			break
+			slog.Error("buffer_pool: CachePage failed to evict page", "pid", pid, "error", err)
+			return
 		}
 	}
 
-	idx := bp.findEmptySlot()
+	idx, err := bp.findEmptySlot()
+	if err != nil {
+		slog.Error("buffer_pool: CachePage failed to find empty slot", "pid", pid, "error", err)
+		return
+	}
 
 	entry := &bufferEntry{
 		pid:        pid,
@@ -259,6 +271,11 @@ func (bp *BufferPool) evict() error {
 	// Limit the number of passes to avoid infinite loop
 	maxAttempts := bp.capacity * 2
 
+	// WAL is flushed at most once per eviction. If that flush fails, dirty
+	// pages become unevictable (WAL-before-data) but clean pages can still go.
+	walFlushed := false
+	var walErr error
+
 	for i := 0; i < maxAttempts; i++ {
 		idx := bp.clockHand
 		bp.clockHand = (bp.clockHand + 1) % bp.capacity
@@ -282,6 +299,20 @@ func (bp *BufferPool) evict() error {
 
 		// Evict this page
 		if buf.dirty && buf.hf != nil {
+			if bp.wal != nil {
+				// ARIES WAL-before-data: never write the page if the WAL
+				// records describing it might not be durable.
+				if !walFlushed && walErr == nil {
+					if _, err := bp.wal.Flush(); err != nil {
+						walErr = err
+					} else {
+						walFlushed = true
+					}
+				}
+				if walErr != nil {
+					continue
+				}
+			}
 			if err := buf.hf.WritePage(buf.pid, buf.page); err != nil {
 				return fmt.Errorf("evict: flush dirty page %v: %w", buf.pid, err)
 			}
@@ -295,13 +326,27 @@ func (bp *BufferPool) evict() error {
 		return nil
 	}
 
+	if walErr != nil {
+		return fmt.Errorf("%w: %w", errEvictWALFlush, walErr)
+	}
 	return fmt.Errorf("evict: all pages pinned")
 }
+
+// errEvictWALFlush: no page could be evicted because only dirty pages were
+// candidates and the WAL could not be flushed before writing them.
+var errEvictWALFlush = errors.New("evict: cannot write dirty page, WAL flush failed")
 
 // FlushAll writes all dirty pages from cache to disk.
 func (bp *BufferPool) FlushAll() error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
+
+	if bp.wal != nil {
+		// ARIES WAL-before-data: do not write any page unless the WAL is durable.
+		if _, err := bp.wal.Flush(); err != nil {
+			return fmt.Errorf("FlushAll: flush WAL: %w", err)
+		}
+	}
 
 	for i := 0; i < bp.capacity; i++ {
 		entry := bp.buffers[i]
@@ -321,6 +366,13 @@ func (bp *BufferPool) FlushAll() error {
 func (bp *BufferPool) FlushDirtyPagesUpToLSN(maxLSN uint64) error {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
+
+	if bp.wal != nil {
+		// ARIES WAL-before-data: do not write any page unless the WAL is durable.
+		if _, err := bp.wal.Flush(); err != nil {
+			return fmt.Errorf("FlushDirtyPagesUpToLSN: flush WAL: %w", err)
+		}
+	}
 
 	for i := 0; i < bp.capacity; i++ {
 		entry := bp.buffers[i]
@@ -386,7 +438,9 @@ func (bp *BufferPool) StartBackgroundFlush(ctx context.Context, interval time.Du
 	ctx, cancel := context.WithCancel(ctx)
 	bp.bgFlushCancel = cancel
 
+	bp.bgFlushWg.Add(1)
 	go func() {
+		defer bp.bgFlushWg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -415,6 +469,7 @@ func (bp *BufferPool) Close() {
 	if cancel != nil {
 		cancel()
 	}
+	bp.bgFlushWg.Wait()
 }
 
 // PrefetchPages loads pages into cache asynchronously for read-ahead during
@@ -449,7 +504,11 @@ func (bp *BufferPool) PrefetchPages(pids []page.PageID, hf *heap.HeapFile) {
 				return
 			}
 		}
-		idx := bp.findEmptySlot()
+		idx, err := bp.findEmptySlot()
+		if err != nil {
+			bp.mu.Unlock()
+			return
+		}
 		bp.buffers[idx] = &bufferEntry{
 			pid:        pid,
 			page:       pg,
@@ -484,15 +543,19 @@ func (bp *BufferPool) Stats() BufferPoolStats {
 }
 
 // findEmptySlot finds the first empty slot in the buffer array.
-func (bp *BufferPool) findEmptySlot() int {
+func (bp *BufferPool) findEmptySlot() (int, error) {
 	n := len(bp.freeSlots)
 	if n > 0 {
 		idx := bp.freeSlots[n-1]
 		bp.freeSlots = bp.freeSlots[:n-1]
-		return idx
+		return idx, nil
 	}
-	// Should not happen if count < capacity
-	return bp.clockHand % bp.capacity
+	for i := 0; i < bp.capacity; i++ {
+		if bp.buffers[i] == nil {
+			return i, nil
+		}
+	}
+	return -1, fmt.Errorf("buffer_pool: no empty slot available (all slots occupied)")
 }
 
 // BufferPoolStats holds buffer pool statistics.
@@ -559,6 +622,12 @@ func (bp *BufferPool) FlushPage(db, table string, pid page.PageID) error {
 		return ErrPagePinned
 	}
 	if entry.hf != nil {
+		if bp.wal != nil {
+			// ARIES WAL-before-data: do not write the page unless the WAL is durable.
+			if _, err := bp.wal.Flush(); err != nil {
+				return fmt.Errorf("FlushPage: flush WAL: %w", err)
+			}
+		}
 		if err := entry.hf.WritePage(entry.pid, entry.page); err != nil {
 			return fmt.Errorf("FlushPage: %w", err)
 		}

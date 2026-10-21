@@ -92,13 +92,13 @@ func (a *ArchiverWorker) compressAndMove(src, dst string) error {
 
 	gw := gzip.NewWriter(out)
 	if _, err := io.Copy(gw, in); err != nil {
-		gw.Close()
+		_ = gw.Close()
 		return err
 	}
 	if err := gw.Close(); err != nil {
 		return err
 	}
 
-	in.Close() // Close before removing
+	_ = in.Close() // Close before removing
 	return os.Remove(src)
 }

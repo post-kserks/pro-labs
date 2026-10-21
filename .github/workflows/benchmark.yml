@@ -7,6 +7,8 @@ permissions:
   contents: read
   pull-requests: write
 
+# The 100K-row benchmarks (~2/3 of total runtime) run nightly instead:
+# see benchmark-nightly.yml.
 jobs:
   benchmark:
     name: Regression benchmarks
@@ -27,10 +29,11 @@ jobs:
       - name: Install benchstat
         run: go install golang.org/x/perf/cmd/benchstat@latest
 
-      - name: Run benchmarks on PR branch
-        run: |
-          go test -run=^$ -bench=. -benchmem -count=5 -timeout=30m \
-            ./benchmarks/ > ${{ github.workspace }}/bench-new.txt 2>&1
+      - name: Build PR benchmarks
+        run: go test -c -o ${{ runner.temp }}/bench-new.test ./benchmarks/
+
+      - name: Save benchmark harness
+        run: cp benchmarks/main_test.go ${{ runner.temp }}/bench_main_test.go
 
       - name: Checkout main branch
         uses: actions/checkout@v4
@@ -38,15 +41,34 @@ jobs:
           ref: main
           clean: false
 
-      - name: Run benchmarks on main
+      - name: Build main benchmarks
         run: |
-          go test -run=^$ -bench=. -benchmem -count=5 -timeout=30m \
-            ./benchmarks/ > ${{ github.workspace }}/bench-old.txt 2>&1
+          # Older main has no TestMain silencing logs; without it log lines
+          # land inside result lines and benchstat cannot parse them.
+          if ! grep -q "func TestMain" benchmarks/*_test.go; then
+            cp ${{ runner.temp }}/bench_main_test.go benchmarks/main_test.go
+          fi
+          go test -c -o ${{ runner.temp }}/bench-old.test ./benchmarks/
 
       - name: Switch back to PR branch for gate script
         uses: actions/checkout@v4
         with:
           clean: false
+
+      # Running all of one side and then all of the other turns runner drift
+      # (throttling, noisy neighbours) into a fake regression. Alternate the
+      # two binaries one -count at a time, swapping which goes first.
+      - name: Run benchmarks (interleaved)
+        run: |
+          run() {
+            "${{ runner.temp }}/bench-$1.test" -test.run='^$' -test.bench=. \
+              -test.skip='100K$' -test.benchmem -test.count=1 -test.timeout=30m \
+              >> "${{ github.workspace }}/bench-$1.txt" \
+              2>> "${{ github.workspace }}/bench-$1.log"
+          }
+          for i in 1 2 3 4 5 6; do
+            if [ $((i % 2)) -eq 1 ]; then run new; run old; else run old; run new; fi
+          done
 
       - name: Compare with benchstat
         id: benchstat

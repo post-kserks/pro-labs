@@ -19,6 +19,10 @@ func (s *PGWireServer) handleParse(conn net.Conn, session *executor.Session, pay
 	stmtName := readString(r)
 	query := readString(r)
 	numOIDs := readInt16(r)
+	if numOIDs < 0 || numOIDs > 1000 {
+		_ = sendErrorResponse(conn, fmt.Errorf("invalid numOIDs: %d", numOIDs))
+		return
+	}
 	paramOIDs := make([]uint32, numOIDs)
 	for i := 0; i < int(numOIDs); i++ {
 		paramOIDs[i] = uint32(readInt32(r))
@@ -54,12 +58,20 @@ func (s *PGWireServer) handleBind(conn net.Conn, session *executor.Session, payl
 	sourcePrep := readString(r)
 
 	numFormatCodes := readInt16(r)
+	if numFormatCodes < 0 || numFormatCodes > 1000 {
+		_ = sendErrorResponse(conn, fmt.Errorf("invalid numFormatCodes: %d", numFormatCodes))
+		return
+	}
 	formatCodes := make([]int16, numFormatCodes)
 	for i := 0; i < int(numFormatCodes); i++ {
 		formatCodes[i] = readInt16(r)
 	}
 
 	numValues := readInt16(r)
+	if numValues < 0 || numValues > 1000 {
+		_ = sendErrorResponse(conn, fmt.Errorf("invalid numValues: %d", numValues))
+		return
+	}
 	paramVals := make([]parser.Value, numValues)
 	prep, exists := prepared[sourcePrep]
 
@@ -68,6 +80,10 @@ func (s *PGWireServer) handleBind(conn net.Conn, session *executor.Session, payl
 		if length == -1 {
 			paramVals[i] = parser.Value{Type: "null"}
 			continue
+		}
+		if length < 0 || length > 16*1024*1024 { // max 16MB param limit
+			_ = sendErrorResponse(conn, fmt.Errorf("invalid or too large parameter length: %d", length))
+			return
 		}
 		valBytes := make([]byte, length)
 		if _, err := io.ReadFull(r, valBytes); err != nil {

@@ -44,7 +44,7 @@ func SetupSession(t *testing.T) *Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	session := NewSession(store, nil, txm, nil)
 
 	ExecuteSQL(t, session, "CREATE DATABASE mydb;")
@@ -62,7 +62,7 @@ func SetupSessionWithDB(t *testing.T, dbName string) *Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	session := NewSession(store, nil, txm, nil)
 
 	ExecuteSQL(t, session, "CREATE DATABASE "+dbName+";")

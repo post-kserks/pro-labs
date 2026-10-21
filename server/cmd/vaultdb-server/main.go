@@ -37,7 +37,7 @@ import (
 // version and buildDate are overwritten via ldflags at build time
 // (single source of truth — VERSION file in the repository root).
 var (
-	version   = "2.0.0"
+	version   = "2.1.0"
 	buildDate = "unknown"
 )
 
@@ -305,8 +305,9 @@ func main() {
 				logger.Warn("could not write token to file", "path", tokenPath, "error", werr)
 			} else if serr := f.Sync(); serr != nil {
 				logger.Warn("could not fsync token file", "path", tokenPath, "error", serr)
+				return
 			}
-			f.Close()
+			_ = f.Close()
 			logger.Warn("no API tokens configured; generated a one-time token",
 				"token_file", tokenPath,
 				"action", "read the token, then delete the file and set VAULTDB_API_TOKENS env var")
@@ -323,6 +324,7 @@ func main() {
 		logger.Error("failed to create auth manager", "error", err)
 		os.Exit(1)
 	}
+	defer authManager.Close()
 	authManager.SetLocalhostBypass(cfg.Auth.LocalhostBypass)
 
 	// Embedding provider for SEMANTIC_MATCH/AI_EMBED. Without configured AI,
@@ -354,10 +356,23 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	pgServer := pgwire.NewServer(addr, store, metricsCollector, txm, br, serverWAL, authManager, logger)
+	pgTLS, pgTLSErr := pgwire.LoadTLSConfig(*tlsCert, *tlsKey)
+	if pgTLSErr != nil {
+		// Fail closed: do not serve PGWire without the requested TLS; shut down.
+		logger.Error("failed to configure PGWire TLS", "error", pgTLSErr)
+		stop()
+	}
+	pgServer.TLSConfig = pgTLS
+	if pgTLSErr == nil && authManager != nil && authManager.Enabled() && pgTLS == nil {
+		logger.Warn("PGWire auth is enabled without TLS: client tokens are sent in cleartext; configure -tls-cert/-tls-key")
+	}
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		if pgTLSErr != nil {
+			return
+		}
 		if err := pgServer.Start(ctx); err != nil {
 			logger.Error("PGWire server failed", "error", err)
 		}

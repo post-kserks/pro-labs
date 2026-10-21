@@ -85,7 +85,7 @@ func (c *CopyFromCommand) Execute(ctx *types.ExecutionContext) (*types.Result, e
 	}
 	defer f.Close()
 	reader = f
-	closeFn = func() { f.Close() }
+	closeFn = func() { _ = f.Close() }
 	defer closeFn()
 
 	rows, err := readCopyData(reader, c.stmt.Options, schema)
@@ -153,7 +153,7 @@ func (c *CopyToCommand) Execute(ctx *types.ExecutionContext) (*types.Result, err
 	}
 	defer f.Close()
 	writer = f
-	closeFn = func() { f.Close() }
+	closeFn = func() { _ = f.Close() }
 	defer closeFn()
 
 	count, err := writeCopyData(writer, rows, c.stmt.Options, schema)

@@ -212,7 +212,7 @@ func (p *ConnectionLimiter) Close() {
 	defer p.mu.Unlock()
 
 	for _, conn := range p.connections {
-		conn.conn.Close()
+		_ = conn.conn.Close()
 	}
 	p.connections = nil
 }
@@ -313,7 +313,7 @@ func (p *ConnectionLimiter) cleanup() {
 			idleCount--
 			remaining = append(remaining, conn)
 		} else {
-			conn.conn.Close()
+			_ = conn.conn.Close()
 		}
 	}
 

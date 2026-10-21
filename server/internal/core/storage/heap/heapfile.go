@@ -84,7 +84,7 @@ func OpenHeapFile(dir string) (*HeapFile, error) {
 	for segNo := uint16(0); names[segmentName(segNo)]; segNo++ {
 		f, err := openMmapFile(filepath.Join(dir, segmentName(segNo)), os.O_RDWR, 0o600)
 		if err != nil {
-			hf.Close()
+			_ = hf.Close()
 			return nil, err
 		}
 		hf.segments = append(hf.segments, f)

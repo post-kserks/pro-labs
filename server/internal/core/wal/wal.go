@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -488,8 +489,19 @@ func readLPString(r *bytes.Reader) string {
 	return string(buf)
 }
 
+// File defines the filesystem interface required by WAL.
+type File interface {
+	io.Reader
+	io.Writer
+	io.Closer
+	io.Seeker
+	Sync() error
+	Truncate(size int64) error
+	Stat() (os.FileInfo, error)
+}
+
 type WAL struct {
-	file          *os.File
+	file          File
 	mu            sync.Mutex
 	nextTxID      atomic.Uint64
 	path          string
@@ -500,6 +512,19 @@ type WAL struct {
 	tde           *crypto.TDEEngine
 	groupCommit   *GroupCommit       // nil = no grouping
 	writeBehind   *WriteBehindBuffer // nil = no write-behind batching
+
+	// Durability tracking (see AppendCommitSync / syncUpTo).
+	// writeSeq counts records successfully written to the file (guarded by mu).
+	// syncedSeq is the highest writeSeq known to be fsynced. syncMu serializes
+	// commit fsyncs so that concurrent committers share a single fsync
+	// (leader/follower group commit) without holding mu during the fsync.
+	writeSeq  uint64
+	syncedSeq atomic.Uint64
+	syncMu    sync.Mutex
+	// writeErr is a sticky error set when a failed/partial write could not be
+	// rolled back. Appending after a torn record would make every later record
+	// unreachable for recovery, so all further writes are refused.
+	writeErr error
 
 	// PITR config
 	PITRTarget     *time.Time
@@ -572,6 +597,7 @@ func (w *WAL) Close() error {
 	if err := w.file.Sync(); err != nil {
 		return err
 	}
+	w.advanceSynced(w.writeSeq)
 	err := w.file.Close()
 	w.file = nil
 	return err
@@ -627,28 +653,22 @@ func (w *WAL) WriteFullPageImage(txID uint64, db, table string, segmentNo uint16
 }
 
 func (w *WAL) appendBytesLockedWithTx(txID uint64, opType byte, payload []byte) (uint64, error) {
+	if w.file == nil {
+		return 0, fmt.Errorf("wal file is closed")
+	}
 	record, err := buildRecord(txID, opType, payload, w.em, w.tde)
 	if err != nil {
 		return 0, err
 	}
 
-	if _, err := w.file.Write(record); err != nil {
-		return 0, fmt.Errorf("wal: write: %w", err)
+	if err := w.writeLocked(record); err != nil {
+		return 0, err
 	}
 
-	// Batching fsyncs: same tradeoff as appendBytesLocked.
-	if w.SyncBatchSize > 0 {
-		w.syncCounter++
-		if w.syncCounter >= w.SyncBatchSize {
-			w.syncCounter = 0
-			if err := w.file.Sync(); err != nil {
-				return 0, fmt.Errorf("wal: sync: %w", err)
-			}
-		}
-	} else {
-		if err := w.file.Sync(); err != nil {
-			return 0, fmt.Errorf("wal: sync: %w", err)
-		}
+	// Batching fsyncs: same tradeoff as appendBytesLocked. Commit records that
+	// must be durable go through AppendCommitSync instead.
+	if err := w.maybeSyncLocked(); err != nil {
+		return 0, err
 	}
 
 	if txID >= w.nextTxID.Load() {
@@ -663,6 +683,9 @@ func (w *WAL) appendBytesLockedWithTx(txID uint64, opType byte, payload []byte) 
 }
 
 func (w *WAL) appendBytesLocked(opType byte, payload []byte) (uint64, error) {
+	if w.file == nil {
+		return 0, fmt.Errorf("wal file is closed")
+	}
 	txID := w.nextTxID.Add(1)
 
 	record, err := buildRecord(txID, opType, payload, w.em, w.tde)
@@ -670,25 +693,15 @@ func (w *WAL) appendBytesLocked(opType byte, payload []byte) (uint64, error) {
 		return 0, err
 	}
 
-	if _, err := w.file.Write(record); err != nil {
-		return 0, fmt.Errorf("wal: write: %w", err)
+	if err := w.writeLocked(record); err != nil {
+		return 0, err
 	}
 
 	// Batching fsyncs: trading a small window of potential data loss on crash
 	// (at most SyncBatchSize unwritten records) for a significant throughput
 	// improvement by amortizing the cost of expensive fsync syscalls.
-	if w.SyncBatchSize > 0 {
-		w.syncCounter++
-		if w.syncCounter >= w.SyncBatchSize {
-			w.syncCounter = 0
-			if err := w.file.Sync(); err != nil {
-				return 0, fmt.Errorf("wal: sync: %w", err)
-			}
-		}
-	} else {
-		if err := w.file.Sync(); err != nil {
-			return 0, fmt.Errorf("wal: sync: %w", err)
-		}
+	if err := w.maybeSyncLocked(); err != nil {
+		return 0, err
 	}
 
 	if w.OnAppend != nil {
@@ -698,11 +711,186 @@ func (w *WAL) appendBytesLocked(opType byte, payload []byte) (uint64, error) {
 	return txID, nil
 }
 
+// AppendCommitSync writes an OpCommit record for txID and returns only once
+// that record — and therefore every record written before it — is fsynced.
+// This is the synchronous_commit = on path: the caller may acknowledge the
+// commit as soon as this returns without error.
+//
+// The fsync is performed outside w.mu, so data appends from other sessions
+// are not blocked while it runs, and concurrent committers are coalesced into
+// a single fsync (leader/follower group commit, see syncUpTo).
+func (w *WAL) AppendCommitSync(txID uint64, payload interface{}) (uint64, error) {
+	payloadBytes, err := EncodeWALPayloadBinary(payload)
+	if err != nil {
+		return 0, fmt.Errorf("wal: marshal payload: %w", err)
+	}
+
+	w.mu.Lock()
+	if w.file == nil {
+		w.mu.Unlock()
+		return 0, fmt.Errorf("wal file is closed")
+	}
+	record, err := buildRecord(txID, OpCommit, payloadBytes, w.em, w.tde)
+	if err != nil {
+		w.mu.Unlock()
+		return 0, err
+	}
+	if err := w.writeLocked(record); err != nil {
+		w.mu.Unlock()
+		return 0, err
+	}
+	seq := w.writeSeq
+	if txID >= w.nextTxID.Load() {
+		w.nextTxID.Store(txID + 1)
+	}
+	if w.OnAppend != nil {
+		w.OnAppend()
+	}
+	w.mu.Unlock()
+
+	if err := w.syncUpTo(seq); err != nil {
+		return 0, err
+	}
+	return txID, nil
+}
+
+// syncUpTo blocks until the record with write sequence seq is durable.
+// The first caller to arrive becomes the leader and fsyncs everything written
+// so far; callers whose records were covered by that fsync return without
+// issuing their own.
+func (w *WAL) syncUpTo(seq uint64) error {
+	if w.syncedSeq.Load() >= seq {
+		return nil
+	}
+	w.syncMu.Lock()
+	defer w.syncMu.Unlock()
+	if w.syncedSeq.Load() >= seq {
+		return nil
+	}
+
+	w.mu.Lock()
+	f := w.file
+	target := w.writeSeq
+	w.mu.Unlock()
+
+	if f == nil {
+		if w.syncedSeq.Load() >= seq {
+			return nil // Close() synced it
+		}
+		return fmt.Errorf("wal: commit sync: wal file is closed")
+	}
+	if err := f.Sync(); err != nil {
+		if w.syncedSeq.Load() >= seq {
+			return nil // synced concurrently (e.g. by Close) before the error
+		}
+		return fmt.Errorf("wal: commit sync: %w", err)
+	}
+	w.advanceSynced(target)
+	return nil
+}
+
+// UnsyncedRecords returns how many records have been written to the WAL file
+// but are not yet known to be fsynced. Intended for tests and monitoring.
+func (w *WAL) UnsyncedRecords() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	synced := w.syncedSeq.Load()
+	if synced >= w.writeSeq {
+		return 0
+	}
+	return w.writeSeq - synced
+}
+
+// advanceSynced raises syncedSeq to seq if it is higher (never lowers it).
+func (w *WAL) advanceSynced(seq uint64) {
+	for {
+		cur := w.syncedSeq.Load()
+		if seq <= cur || w.syncedSeq.CompareAndSwap(cur, seq) {
+			return
+		}
+	}
+}
+
+// maybeSyncLocked applies the SyncBatchSize policy after a data record was
+// written. Caller must hold w.mu.
+func (w *WAL) maybeSyncLocked() error {
+	if w.SyncBatchSize > 0 {
+		w.syncCounter++
+		if w.syncCounter < w.SyncBatchSize {
+			return nil
+		}
+		w.syncCounter = 0
+	}
+	if err := w.file.Sync(); err != nil {
+		return fmt.Errorf("wal: sync: %w", err)
+	}
+	w.advanceSynced(w.writeSeq)
+	return nil
+}
+
+// syncLocked fsyncs the WAL file and records everything written so far as
+// durable. Caller must hold w.mu.
+func (w *WAL) syncLocked() error {
+	if err := w.file.Sync(); err != nil {
+		return err
+	}
+	w.syncCounter = 0
+	w.advanceSynced(w.writeSeq)
+	return nil
+}
+
+// writeLocked appends one complete record at the current file position.
+// Caller must hold w.mu and have checked w.file != nil.
+//
+// If the write fails or is short, the partially written bytes are truncated
+// away so the next record does not land after a torn record (recovery stops
+// at the first torn record, which would silently drop everything after it).
+// The undo uses the byte count returned by Write, so the hot path costs no
+// extra syscalls.
+func (w *WAL) writeLocked(rec []byte) error {
+	if w.writeErr != nil {
+		return w.writeErr
+	}
+	n, err := w.file.Write(rec)
+	if err == nil && n != len(rec) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		if n > 0 {
+			w.undoPartialWriteLocked(n)
+		}
+		return fmt.Errorf("wal: write: %w", err)
+	}
+	w.writeSeq++
+	return nil
+}
+
+// undoPartialWriteLocked removes the n bytes of a failed write that ended at
+// the current file position. If that is impossible the WAL is poisoned.
+func (w *WAL) undoPartialWriteLocked(n int) {
+	cur, err := w.file.Seek(0, io.SeekCurrent)
+	if err == nil {
+		start := cur - int64(n)
+		if start < 0 {
+			err = fmt.Errorf("invalid offset %d after partial write of %d bytes", cur, n)
+		} else if err = w.file.Truncate(start); err == nil {
+			_, err = w.file.Seek(start, io.SeekStart)
+		}
+	}
+	if err != nil {
+		w.writeErr = fmt.Errorf("wal: torn record could not be removed, refusing further writes: %w", err)
+		slog.Error("wal: failed to roll back partial write", "bytes", n, "error", err)
+	}
+}
+
 // writeRecordRaw writes a pre-built record to the WAL file.
 // Caller must hold w.mu. Does NOT sync — the caller manages sync policy.
 func (w *WAL) writeRecordRaw(rec WALRecord) error {
-	if _, err := w.file.Write(rec.Data); err != nil {
-		return fmt.Errorf("wal: write record: %w", err)
+	if w.file == nil {
+		return fmt.Errorf("wal file is closed")
+	}
+	if err := w.writeLocked(rec.Data); err != nil {
+		return err
 	}
 	if rec.TxID >= w.nextTxID.Load() {
 		w.nextTxID.Store(rec.TxID + 1)
@@ -790,7 +978,11 @@ func (w *WAL) Flush() (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if err := w.file.Sync(); err != nil {
+	if w.file == nil {
+		return 0, fmt.Errorf("wal file is closed")
+	}
+
+	if err := w.syncLocked(); err != nil {
 		return 0, fmt.Errorf("wal flush: %w", err)
 	}
 

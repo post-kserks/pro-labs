@@ -9,6 +9,7 @@
 package page
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -212,6 +213,66 @@ func (p *Page) InsertTuple(data []byte) (uint16, error) {
 	p.writeHeader(h)
 
 	return h.NItems - 1, nil
+}
+
+// InsertTupleAt places a tuple at a specific slot number on the page (used during WAL redo recovery).
+func (p *Page) InsertTupleAt(slot uint16, data []byte) error {
+	if len(data) > MaxTupleLength {
+		return ErrPageFull
+	}
+	h := p.Header()
+	if slot < h.NItems {
+		ip := p.itemPointer(slot)
+		if ip.Flags() != ItemFlagDead && ip.Length() == uint16(len(data)) {
+			existing := p[ip.Offset() : ip.Offset()+ip.Length()]
+			// Check if created_tx (bytes 0:8) and row payload (bytes 16:) match.
+			// Ignore deleted_tx (bytes 8:16) which may have been modified after insert.
+			if len(existing) >= 16 && len(data) >= 16 {
+				if bytes.Equal(existing[0:8], data[0:8]) && bytes.Equal(existing[16:], data[16:]) {
+					return nil // tuple already on page — no-op
+				}
+			} else if bytes.Equal(existing, data) {
+				return nil
+			}
+		}
+		needed := uint16(len(data))
+		if p.FreeSpace() < needed {
+			return ErrPageFull
+		}
+		tupleOffset := h.Upper - uint16(len(data))
+		copy(p[tupleOffset:], data)
+		newIP := NewItemPointer(tupleOffset, uint16(len(data)), ItemFlagNormal)
+		binary.LittleEndian.PutUint32(p[itemPointerOffset(slot):], uint32(newIP))
+		h.Upper = tupleOffset
+		h.FreeSpace = h.Upper - h.Lower
+		p.writeHeader(h)
+		return nil
+	}
+
+	gapCount := (slot + 1) - h.NItems
+	needed := uint16(len(data)) + gapCount*ItemPointerSize
+	if p.FreeSpace() < needed {
+		return ErrPageFull
+	}
+
+	for i := h.NItems; i < slot; i++ {
+		deadIp := NewItemPointer(0, 0, ItemFlagDead)
+		binary.LittleEndian.PutUint32(p[h.Lower:], uint32(deadIp))
+		h.Lower += ItemPointerSize
+		h.NItems++
+	}
+
+	tupleOffset := h.Upper - uint16(len(data))
+	copy(p[tupleOffset:], data)
+	newIP := NewItemPointer(tupleOffset, uint16(len(data)), ItemFlagNormal)
+	binary.LittleEndian.PutUint32(p[h.Lower:], uint32(newIP))
+	h.Upper = tupleOffset
+	h.Lower += ItemPointerSize
+	h.NItems++
+	h.FreeSpace = h.Upper - h.Lower
+	p.writeHeader(h)
+
+	return nil
 }
 
 // GetTuple returns the tuple stored in the given slot, or nil if the slot

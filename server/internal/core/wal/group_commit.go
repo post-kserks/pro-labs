@@ -169,7 +169,7 @@ func (gc *GroupCommit) doFlush() {
 			return
 		}
 	}
-	if err := gc.wal.file.Sync(); err != nil {
+	if err := gc.wal.syncLocked(); err != nil {
 		gc.wal.mu.Unlock()
 		slog.Error("wal group commit: sync failed", "error", err)
 		return

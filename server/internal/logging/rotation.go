@@ -36,7 +36,7 @@ func NewRotator(filename string, maxSizeMB int, maxBackups int) (*Rotator, error
 
 	info, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, err
 	}
 	currentSize := info.Size()
@@ -121,7 +121,7 @@ func (r *Rotator) removeOldestBackup() {
 				oldest = b
 			}
 		}
-		os.Remove(filepath.Join(dir, oldest))
+		_ = os.Remove(filepath.Join(dir, oldest))
 
 		// Remove from list
 		for i, b := range backups {

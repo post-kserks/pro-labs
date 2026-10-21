@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"vaultdb/internal/auth"
 	"vaultdb/internal/core/executor"
 	"vaultdb/internal/core/parser"
 	"vaultdb/internal/core/storage"
@@ -73,6 +74,27 @@ func newSessionWithConfig(cfg Config) *executor.Session {
 		sess.AuditTable = cfg.AuditTable
 	}
 	return sess
+}
+
+// bindAuth propagates the token and role authenticated by auth.Middleware to
+// sess so the executor enforces RBAC. With auth disabled or localhost bypass the
+// token is "" and the executor skips permission checks. Always called, so a
+// reused transaction session never keeps a previous request's identity.
+func bindAuth(r *http.Request, sess *executor.Session) {
+	ctx := r.Context()
+	sess.SetToken(auth.TokenFromContext(ctx))
+	sess.SetRole(auth.RoleFromContext(ctx))
+}
+
+// denyWithoutPermission writes 403 and returns true when the request carries a
+// token whose role may not perform op. Used by handlers that bypass the executor.
+func (s *Server) denyWithoutPermission(w http.ResponseWriter, r *http.Request, op string) bool {
+	token := auth.TokenFromContext(r.Context())
+	if token == "" || s.cfg.Auth.CheckPermission(token, op) {
+		return false
+	}
+	writeError(w, http.StatusForbidden, errCodeBadRequest, fmt.Sprintf("permission denied: role %q cannot execute %s", auth.RoleFromContext(r.Context()), op))
+	return true
 }
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +178,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
+	bindAuth(r, session)
 	result, err := session.Execute(stmt)
 	duration := time.Since(start).Milliseconds()
 
@@ -244,6 +267,7 @@ func (s *Server) handleTransaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
+	bindAuth(r, session)
 	result, err := session.Execute(stmt)
 	if err != nil {
 		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
@@ -337,6 +361,7 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 		}
 
 		start := time.Now()
+		bindAuth(r, session)
 		result, err := session.Execute(stmt)
 		duration := time.Since(start).Milliseconds()
 		s.sessionPool.Put(session)
@@ -617,6 +642,10 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "only SELECT is supported for Live Queries", http.StatusBadRequest)
 		return
 	}
+	// Pushed updates bypass the executor, so check RBAC before subscribing.
+	if s.denyWithoutPermission(w, r, "SELECT") {
+		return
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -651,6 +680,8 @@ func (s *Server) handleLiveQuery(w http.ResponseWriter, r *http.Request) {
 	if db != "" {
 		sess.SetCurrentDatabase(db)
 	}
+
+	bindAuth(r, sess)
 
 	res, err := sess.Execute(selectStmt)
 	if err == nil {
@@ -725,6 +756,11 @@ func (s *Server) handleTableData(w http.ResponseWriter, r *http.Request, dbName,
 	case http.MethodGet:
 		s.handleGetTableData(w, r, dbName, tableName)
 	case http.MethodPost:
+		// Same CSRF guard as withJSONBody: no cross-site simple-request inserts.
+		if !isJSONContentType(r.Header.Get("Content-Type")) {
+			writeError(w, http.StatusUnsupportedMediaType, errCodeBadRequest, "Content-Type must be application/json")
+			return
+		}
 		s.handlePostTableData(w, r, dbName, tableName)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -788,6 +824,7 @@ func (s *Server) handleGetTableData(w http.ResponseWriter, r *http.Request, dbNa
 	}
 	defer s.sessionPool.Put(sess)
 	sess.SetCurrentDatabase(dbName)
+	bindAuth(r, sess)
 	res, err := sess.Execute(stmt)
 	if err != nil {
 		writeStorageError(w, http.StatusBadRequest, errCodeStorageError, err, s.cfg.Logger)
@@ -813,6 +850,10 @@ func filterLiteral(raw string) parser.Expression {
 }
 
 func (s *Server) handlePostTableData(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	// Rows are inserted directly into storage, bypassing executor RBAC.
+	if s.denyWithoutPermission(w, r, "INSERT") {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxRequestSizeBytes))
 	var body interface{}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -937,6 +978,8 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+
+	bindAuth(r, session)
 
 	result, err := session.Execute(stmt)
 	if err != nil {

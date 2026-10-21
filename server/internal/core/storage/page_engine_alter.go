@@ -30,7 +30,7 @@ func (e *PageStorageEngine) recoverRewrite(db, table string) error {
 	// Incomplete rewrite found — clean up temp directory
 	slog.Warn("recovering from incomplete ALTER TABLE rewrite",
 		"db", db, "table", table)
-	os.RemoveAll(tmpPath)
+	_ = os.RemoveAll(tmpPath)
 	return nil
 }
 
@@ -122,8 +122,8 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 	for _, row := range rows {
 		tuple, err := encodePageTuple(txID, 0, row)
 		if err != nil {
-			hf.Close()
-			os.RemoveAll(tmpPath)
+			_ = hf.Close()
+			_ = os.RemoveAll(tmpPath)
 			return err
 		}
 		tuples = append(tuples, tuple)
@@ -132,24 +132,24 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 	// Create a temporary pageTable for writing
 	tmpTable := &pageTable{heap: hf, schema: newSchema, tableID: t.tableID}
 	if _, err := e.appendTuplesLocked(tmpTable, tuples, e.nextTxID()); err != nil {
-		hf.Close()
-		os.RemoveAll(tmpPath)
+		_ = hf.Close()
+		_ = os.RemoveAll(tmpPath)
 		return err
 	}
 	if err := hf.Sync(); err != nil {
-		hf.Close()
-		os.RemoveAll(tmpPath)
+		_ = hf.Close()
+		_ = os.RemoveAll(tmpPath)
 		return err
 	}
 
 	// Flush all dirty pages for the temporary heap to disk before closing.
 	if err := e.bufPool.FlushAll(); err != nil {
-		hf.Close()
-		os.RemoveAll(tmpPath)
+		_ = hf.Close()
+		_ = os.RemoveAll(tmpPath)
 		return err
 	}
 	if err := hf.Close(); err != nil {
-		os.RemoveAll(tmpPath)
+		_ = os.RemoveAll(tmpPath)
 		return err
 	}
 
@@ -157,11 +157,11 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 	tmpSchemaPath := filepath.Join(tmpPath, "_schema.json")
 	schemaData, err := json.MarshalIndent(newSchema, "", "  ")
 	if err != nil {
-		os.RemoveAll(tmpPath)
+		_ = os.RemoveAll(tmpPath)
 		return err
 	}
 	if err := os.WriteFile(tmpSchemaPath, schemaData, 0o600); err != nil {
-		os.RemoveAll(tmpPath)
+		_ = os.RemoveAll(tmpPath)
 		return err
 	}
 
@@ -169,24 +169,24 @@ func (e *PageStorageEngine) rewriteTable(db, table string, newSchema *TableSchem
 	if e.wal != nil {
 		rewritePayload := wal.WALRewritePayload{DB: db, Table: table}
 		if _, err := e.wal.Append(wal.OpRewriteCommit, rewritePayload); err != nil {
-			os.RemoveAll(tmpPath)
+			_ = os.RemoveAll(tmpPath)
 			return err
 		}
 	}
 
 	// Atomically replace: close old heap, rename temp to original
 	if err := t.heap.Close(); err != nil {
-		os.RemoveAll(tmpPath)
+		_ = os.RemoveAll(tmpPath)
 		return err
 	}
 	e.bufPool.InvalidateTable(t.tableID)
 
 	if err := os.RemoveAll(originalPath); err != nil && !os.IsNotExist(err) {
-		os.RemoveAll(tmpPath)
+		_ = os.RemoveAll(tmpPath)
 		return err
 	}
 	if err := os.Rename(tmpPath, originalPath); err != nil {
-		os.RemoveAll(tmpPath)
+		_ = os.RemoveAll(tmpPath)
 		return err
 	}
 

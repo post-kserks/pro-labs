@@ -297,19 +297,19 @@ func writeOpsToFile(path string, ops []PendingOp) error {
 	for _, op := range ops {
 		b, err := encodeOp(op)
 		if err != nil {
-			f.Close()
-			os.Remove(path)
+			_ = f.Close()
+			_ = os.Remove(path)
 			return err
 		}
 		if _, err := w.Write(append(b, '\n')); err != nil {
-			f.Close()
-			os.Remove(path)
+			_ = f.Close()
+			_ = os.Remove(path)
 			return err
 		}
 	}
 	if err := w.Flush(); err != nil {
-		f.Close()
-		os.Remove(path)
+		_ = f.Close()
+		_ = os.Remove(path)
 		return err
 	}
 	return f.Close()
@@ -343,7 +343,7 @@ func (tx *Transaction) appendOpToFile(op PendingOp) {
 		return
 	}
 	if _, err := f.Write(append(b, '\n')); err != nil {
-		f.Close()
+		_ = f.Close()
 		tx.spillErr = fmt.Errorf("spill append write: %w", err)
 		return
 	}
@@ -439,7 +439,7 @@ func (tx *Transaction) RollbackToSavepoint(name string) error {
 	if tx.spilled {
 		if len(kept) == 0 {
 			if tx.spillPath != "" {
-				os.Remove(tx.spillPath)
+				_ = os.Remove(tx.spillPath)
 			}
 			tx.spilled = false
 			tx.spillPath = ""
@@ -629,7 +629,7 @@ func (tx *Transaction) Rollback(catalog interface{}) {
 	tx.ReadSet = nil
 	tx.HasDependentReads = false
 	if tx.spilled && tx.spillPath != "" {
-		os.Remove(tx.spillPath)
+		_ = os.Remove(tx.spillPath)
 		tx.spilled = false
 		tx.spillPath = ""
 	}
@@ -703,7 +703,7 @@ func CleanupSpillFiles(dir string) {
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".tmp" {
-			os.Remove(filepath.Join(dir, entry.Name()))
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
 		}
 	}
 }

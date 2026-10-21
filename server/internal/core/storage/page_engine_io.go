@@ -390,6 +390,7 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte, tx
 					}
 					lsn, err = e.wal.AppendWithTx(txID, wal.OpPageInsert, payload)
 					if err != nil {
+						e.bufPool.UnpinPage(pid, false)
 						e.pageLock.UnlockPageWrite(pid)
 						pageLocked = false
 						return nil, fmt.Errorf("wal insert: %w", err)
@@ -425,7 +426,17 @@ func (e *PageStorageEngine) appendTuplesLocked(t *pageTable, tuples [][]byte, tx
 func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (int, error) {
 	// Get txID without global lock — atomic counter.
 	txID := e.nextTxID()
+	return e.insertRowsInternal(dbName, tableName, txID, rows, true)
+}
 
+// InsertRowsUncommitted inserts rows into the table under a new atomic txID and writes OpPageInsert
+// records to WAL without issuing OpCommit. Used for testing active in-flight uncommitted transaction recovery.
+func (e *PageStorageEngine) InsertRowsUncommitted(dbName, tableName string, rows []Row) (int, error) {
+	txID := e.nextTxID()
+	return e.insertRowsInternal(dbName, tableName, txID, rows, false)
+}
+
+func (e *PageStorageEngine) insertRowsInternal(dbName, tableName string, txID uint64, rows []Row, autoCommit bool) (int, error) {
 	// Get table reference (releases e.mu)
 	t, err := e.getTableForWrite(dbName, tableName)
 	if err != nil {
@@ -568,6 +579,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 					}
 					lsn, err = e.wal.AppendWithTx(txID, wal.OpPageInsert, payload)
 					if err != nil {
+						e.bufPool.UnpinPage(pid, false)
 						e.pageLock.UnlockPageWrite(pid)
 						return 0, fmt.Errorf("wal insert: %w", err)
 					}
@@ -582,6 +594,7 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 				e.bufPool.UnpinPageDirty(pid, lsn)
 				e.pageLock.UnlockPageWrite(pid)
 				pageLocked = false
+				havePage = false
 				break
 			}
 			e.pageLock.UnlockPageWrite(pid)
@@ -624,8 +637,8 @@ func (e *PageStorageEngine) InsertRows(dbName, tableName string, rows []Row) (in
 	e.markCatalogDirty()
 	e.mu.Unlock()
 
-	// WAL: mark transaction committed so recovery replays rather than rolls back
-	if e.wal != nil {
+	// WAL: mark transaction committed if autoCommit is true
+	if autoCommit && e.wal != nil {
 		if _, err := e.wal.AppendWithTx(txID, wal.OpCommit, nil); err != nil {
 			return 0, fmt.Errorf("wal commit: %w", err)
 		}

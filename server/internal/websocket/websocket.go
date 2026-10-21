@@ -35,11 +35,11 @@ func Upgrade(w http.ResponseWriter, r *http.Request) (net.Conn, *bufio.ReadWrite
 		"Sec-WebSocket-Accept: " + accept + "\r\n\r\n"
 
 	if _, err := bufrw.WriteString(header); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, nil, err
 	}
 	if err := bufrw.Flush(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, nil, err
 	}
 
