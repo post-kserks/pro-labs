@@ -162,10 +162,10 @@ func TestSystemViews_SQLExecution(t *testing.T) {
 		}
 	})
 
-	t.Run("SELECT * FROM system.pg_stat_activity WHERE id = 999 (no matches)", func(t *testing.T) {
+	t.Run("SELECT * FROM system.pg_stat_activity WHERE id = <unused id> (no matches)", func(t *testing.T) {
 		exec, _, sess := setupTestExecutor(t)
 
-		stmt, err := parser.Parse("SELECT * FROM system.pg_stat_activity WHERE id = 999;")
+		stmt, err := parser.Parse("SELECT * FROM system.pg_stat_activity WHERE id = 999999999999;")
 		if err != nil {
 			t.Fatalf("failed to parse SQL: %v", err)
 		}

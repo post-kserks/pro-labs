@@ -29,8 +29,11 @@ jobs:
 
       - name: Run benchmarks on PR branch
         run: |
-          go test -run=^$ -bench=. -benchmem -count=5 -timeout=30m \
-            ./benchmarks/ > ${{ github.workspace }}/bench-new.txt 2>&1
+          # stderr (slog output, go download noise) goes to a separate file:
+          # interleaved with results it breaks benchstat parsing.
+          go test -run=^$ -bench=. -benchmem -count=6 -timeout=30m \
+            ./benchmarks/ > ${{ github.workspace }}/bench-new.txt \
+            2> ${{ github.workspace }}/bench-new.log
 
       - name: Checkout main branch
         uses: actions/checkout@v4
@@ -40,8 +43,11 @@ jobs:
 
       - name: Run benchmarks on main
         run: |
-          go test -run=^$ -bench=. -benchmem -count=5 -timeout=30m \
-            ./benchmarks/ > ${{ github.workspace }}/bench-old.txt 2>&1
+          # stderr (slog output, go download noise) goes to a separate file:
+          # interleaved with results it breaks benchstat parsing.
+          go test -run=^$ -bench=. -benchmem -count=6 -timeout=30m \
+            ./benchmarks/ > ${{ github.workspace }}/bench-old.txt \
+            2> ${{ github.workspace }}/bench-old.log
 
       - name: Switch back to PR branch for gate script
         uses: actions/checkout@v4

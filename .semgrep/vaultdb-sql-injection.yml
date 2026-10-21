@@ -31,6 +31,16 @@ rules:
     patterns:
       - pattern-inside: |
           func $FUNC(...) { ... }
+      # Functions that return the decrypted secret (or a derived value such as
+      # a path) hand it to the caller, which owns zeroizing it.
+      - pattern-not-inside: |
+          func $FUNC(...) ([]byte, error) { ... }
+      - pattern-not-inside: |
+          func $FUNC(...) []byte { ... }
+      - pattern-not-inside: |
+          func $FUNC(...) (string, error) { ... }
+      - pattern-not-inside: |
+          func $FUNC(...) string { ... }
       - metavariable-regex:
           metavariable: $FUNC
           regex: (?i)(decrypt|dek|passphrase)
