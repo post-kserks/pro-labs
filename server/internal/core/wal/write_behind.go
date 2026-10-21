@@ -101,7 +101,7 @@ func (wbb *WriteBehindBuffer) doFlush() {
 			return
 		}
 	}
-	if err := wbb.wal.file.Sync(); err != nil {
+	if err := wbb.wal.syncLocked(); err != nil {
 		wbb.wal.mu.Unlock()
 		slog.Error("wal write-behind: sync failed", "error", err)
 		return

@@ -112,6 +112,11 @@ func (bp *BufferPool) FetchPage(pid page.PageID, hf *heap.HeapFile, dbTable ...s
 	// If cache is full — evict via clock-sweep
 	for bp.count >= bp.capacity {
 		if err := bp.evict(); err != nil {
+			if errors.Is(err, errEvictWALFlush) {
+				// Falling through would overwrite a dirty page that must
+				// not be written (WAL not durable) and must not be lost.
+				return nil, 0, fmt.Errorf("fetch page %v: %w", pid, err)
+			}
 			// Could not evict (all pages are pinned)
 			break
 		}
@@ -260,6 +265,11 @@ func (bp *BufferPool) evict() error {
 	// Limit the number of passes to avoid infinite loop
 	maxAttempts := bp.capacity * 2
 
+	// WAL is flushed at most once per eviction. If that flush fails, dirty
+	// pages become unevictable (WAL-before-data) but clean pages can still go.
+	walFlushed := false
+	var walErr error
+
 	for i := 0; i < maxAttempts; i++ {
 		idx := bp.clockHand
 		bp.clockHand = (bp.clockHand + 1) % bp.capacity
@@ -284,7 +294,18 @@ func (bp *BufferPool) evict() error {
 		// Evict this page
 		if buf.dirty && buf.hf != nil {
 			if bp.wal != nil {
-				_, _ = bp.wal.Flush() // ARIES: flush WAL before writing page to disk
+				// ARIES WAL-before-data: never write the page if the WAL
+				// records describing it might not be durable.
+				if !walFlushed && walErr == nil {
+					if _, err := bp.wal.Flush(); err != nil {
+						walErr = err
+					} else {
+						walFlushed = true
+					}
+				}
+				if walErr != nil {
+					continue
+				}
 			}
 			if err := buf.hf.WritePage(buf.pid, buf.page); err != nil {
 				return fmt.Errorf("evict: flush dirty page %v: %w", buf.pid, err)
@@ -299,8 +320,15 @@ func (bp *BufferPool) evict() error {
 		return nil
 	}
 
+	if walErr != nil {
+		return fmt.Errorf("%w: %w", errEvictWALFlush, walErr)
+	}
 	return fmt.Errorf("evict: all pages pinned")
 }
+
+// errEvictWALFlush: no page could be evicted because only dirty pages were
+// candidates and the WAL could not be flushed before writing them.
+var errEvictWALFlush = errors.New("evict: cannot write dirty page, WAL flush failed")
 
 // FlushAll writes all dirty pages from cache to disk.
 func (bp *BufferPool) FlushAll() error {
@@ -308,7 +336,10 @@ func (bp *BufferPool) FlushAll() error {
 	defer bp.mu.Unlock()
 
 	if bp.wal != nil {
-		_, _ = bp.wal.Flush() // ARIES: ensure WAL is durable before pages are flushed
+		// ARIES WAL-before-data: do not write any page unless the WAL is durable.
+		if _, err := bp.wal.Flush(); err != nil {
+			return fmt.Errorf("FlushAll: flush WAL: %w", err)
+		}
 	}
 
 	for i := 0; i < bp.capacity; i++ {
@@ -331,7 +362,10 @@ func (bp *BufferPool) FlushDirtyPagesUpToLSN(maxLSN uint64) error {
 	defer bp.mu.Unlock()
 
 	if bp.wal != nil {
-		_, _ = bp.wal.Flush() // ARIES: ensure WAL is durable before pages are flushed
+		// ARIES WAL-before-data: do not write any page unless the WAL is durable.
+		if _, err := bp.wal.Flush(); err != nil {
+			return fmt.Errorf("FlushDirtyPagesUpToLSN: flush WAL: %w", err)
+		}
 	}
 
 	for i := 0; i < bp.capacity; i++ {
@@ -575,7 +609,10 @@ func (bp *BufferPool) FlushPage(db, table string, pid page.PageID) error {
 	}
 	if entry.hf != nil {
 		if bp.wal != nil {
-			_, _ = bp.wal.Flush()
+			// ARIES WAL-before-data: do not write the page unless the WAL is durable.
+			if _, err := bp.wal.Flush(); err != nil {
+				return fmt.Errorf("FlushPage: flush WAL: %w", err)
+			}
 		}
 		if err := entry.hf.WritePage(entry.pid, entry.page); err != nil {
 			return fmt.Errorf("FlushPage: %w", err)

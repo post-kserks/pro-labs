@@ -34,10 +34,10 @@ func (w *WAL) Checkpoint() error {
 	if err != nil {
 		return err
 	}
-	if _, err := w.file.Write(record); err != nil {
+	if err := w.writeLocked(record); err != nil {
 		return fmt.Errorf("wal: write checkpoint: %w", err)
 	}
-	if err := w.file.Sync(); err != nil {
+	if err := w.syncLocked(); err != nil {
 		return fmt.Errorf("wal: sync checkpoint: %w", err)
 	}
 	if err := w.file.Truncate(0); err != nil {
@@ -46,6 +46,7 @@ func (w *WAL) Checkpoint() error {
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("wal: seek after truncate: %w", err)
 	}
+	w.writeErr = nil // file is empty again: no torn record left behind
 	return nil
 }
 
@@ -70,10 +71,10 @@ func (w *WAL) WriteCheckpointRecord() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if _, err := w.file.Write(record); err != nil {
+	if err := w.writeLocked(record); err != nil {
 		return 0, fmt.Errorf("wal: write checkpoint: %w", err)
 	}
-	if err := w.file.Sync(); err != nil {
+	if err := w.syncLocked(); err != nil {
 		return 0, fmt.Errorf("wal: sync checkpoint: %w", err)
 	}
 	return txID, nil
@@ -96,6 +97,7 @@ func (w *WAL) TruncateWAL() error {
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("wal: seek after truncate: %w", err)
 	}
+	w.writeErr = nil // file is empty again: no torn record left behind
 	return nil
 }
 

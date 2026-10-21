@@ -111,12 +111,18 @@ func (c *CommitCommand) Execute(ctx *types.ExecutionContext) (*types.Result, err
 	if ctx.WAL != nil {
 		var err error
 		if ctx.Session.GetVariable("synchronous_commit") == "off" {
+			// Asynchronous commit: may be lost on crash, never waits for fsync.
 			_, err = ctx.WAL.AppendWithWriteBehind(tx.ID, wal.OpCommit, nil)
 		} else {
-			_, err = ctx.WAL.AppendWithTx(tx.ID, wal.OpCommit, nil)
+			// synchronous_commit = on: the commit record (and every data record
+			// written before it) must be fsynced before COMMIT is acknowledged.
+			_, err = ctx.WAL.AppendCommitSync(tx.ID, nil)
 		}
 		if err != nil {
-			undoAppliedOps(ctx, ops)
+			if undoErr := undoAppliedOps(ctx, ops); undoErr != nil {
+				slog.Error("could not undo applied ops after WAL commit failure, data may be inconsistent",
+					"xid", tx.ID, "error", undoErr)
+			}
 			tx.Rollback(ctx.Storage)
 			ctx.Session.ClearActiveTx()
 			return nil, fmt.Errorf("wal commit failed, transaction rolled back: %w", err)
@@ -152,7 +158,10 @@ func (c *RollbackCommand) Execute(ctx *types.ExecutionContext) (*types.Result, e
 	opsCount := len(ops)
 
 	if ctx.WAL != nil && opsCount > 0 {
-		if _, err := ctx.WAL.Append(wal.OpAbort, nil); err != nil {
+		// Use the transaction's own ID so recovery can match the abort to the
+		// transaction (Append would allocate a fresh, unrelated txID).
+		// No fsync needed: a lost abort record is equivalent to an abort.
+		if _, err := ctx.WAL.AppendWithTx(tx.ID, wal.OpAbort, nil); err != nil {
 			slog.Error("failed to write WAL abort record", "xid", tx.ID, "error", err)
 		}
 	}
