@@ -49,7 +49,7 @@ func Restore(backupPath, dataDir string) error {
 				return err
 			}
 			continue
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			// Regular files allowed
 		default:
 			// Reject symlinks, hardlinks, devices, etc.
