@@ -58,6 +58,9 @@ echo ""
 
 regression_found=0
 while IFS= read -r line; do
+  # geomean carries no significance test, so noise alone can push it over the
+  # threshold; per-benchmark deltas are only printed when significant.
+  case "$line" in geomean*) continue ;; esac
   # Match lines with a percentage delta like "+20.00%" or "+20%"
   if echo "$line" | grep -qE '\+[0-9]+\.[0-9]+%'; then
     pct=$(echo "$line" | grep -oE '\+[0-9]+\.[0-9]+%' | head -1 | tr -d '+%')
